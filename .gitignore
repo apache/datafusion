@@ -21,6 +21,7 @@
 *.o
 *.py[ocd]
 *.so
+*.so.*
 *.dylib
 .build_cache_dir
 MANIFEST
