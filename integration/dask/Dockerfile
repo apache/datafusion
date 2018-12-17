@@ -1,4 +1,3 @@
-#!/usr/bin/env bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -16,27 +15,17 @@
 # specific language governing permissions and limitations
 # under the License.
 
-set -e
+FROM arrow:python-3.6
 
-source_dir=${1:-/arrow/python}
-build_dir=${2:-/build/python}
+# setup /etc/localtime
+RUN DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y -q tzdata
 
-# For newer GCC per https://arrow.apache.org/docs/python/development.html#known-issues
-export CXXFLAGS="-D_GLIBCXX_USE_CXX11_ABI=0"
-export PYARROW_CXXFLAGS=$CXXFLAGS
-export PYARROW_CMAKE_GENERATOR=Ninja
-export PYARROW_BUILD_TYPE=${PYARROW_BUILD_TYPE:-debug}
+# install dask release from conda
+RUN conda install -c conda-forge dask pytest=3 && \
+    conda clean --all
 
-# Feature flags
-export PYARROW_WITH_ORC=${PYARROW_WITH_ORC:-1}
-export PYARROW_WITH_PARQUET=${PYARROW_WITH_PARQUET:-1}
-export PYARROW_WITH_PLASMA=${PYARROW_WITH_PLASMA:-1}
-
-# Build pyarrow
-pushd ${source_dir}
-
-python setup.py build --build-temp=${build_dir} \
-                install --single-version-externally-managed \
-                        --record=/build/python/record.txt
-
-popd
+# build and test
+CMD arrow/ci/docker_build_cpp.sh && \
+    arrow/ci/docker_build_python.sh && \
+    arrow/integration/dask/runtest.sh
