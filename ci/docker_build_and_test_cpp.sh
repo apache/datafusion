@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,12 +16,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rustlang/rust:nightly
+set -e
 
-# sadly cargo doesn't have a command to fetch and build the
-# dependencies without building the library itself
-ENV CARGO_TARGET_DIR=/build/rust
-COPY rust/Cargo.toml /arrow/rust/Cargo.toml
-WORKDIR /arrow/rust
-
-CMD ["cargo", "test"]
+/arrow/ci/docker_build_cpp.sh
+pushd /build/cpp
+ninja test
+popd
