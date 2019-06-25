@@ -20,7 +20,7 @@
 set -e
 
 # Install built wheel
-pip install -q /arrow/python/manylinux1/dist/*.whl
+pip install -q /arrow/python/$WHEEL_TAG/dist/*.whl
 
 # Runs tests on installed distribution from an empty directory
 python --version
@@ -34,6 +34,7 @@ import pyarrow.parquet
 import pyarrow.plasma
 
 if sys.version_info.major > 2:
+    import pyarrow.flight
     import pyarrow.gandiva
 "
 
