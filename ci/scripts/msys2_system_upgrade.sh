@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,13 +17,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# depends on a C GLib image
-ARG base
-FROM ${base}
+set -eux
 
-COPY ruby/ /arrow/ruby/
-RUN bundle install --gemfile /arrow/ruby/Gemfile
-RUN \
-  for package in /arrow/ruby/*; do \
-    bundle install --gemfile ${package}/Gemfile; \
-  done
+pacman \
+  --noconfirm \
+  --sync \
+  -uu \
+  -yy
