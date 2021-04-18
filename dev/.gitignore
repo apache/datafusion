@@ -18,3 +18,4 @@
 # Python virtual environments for dev tools
 .venv*/
 
+__pycache__
