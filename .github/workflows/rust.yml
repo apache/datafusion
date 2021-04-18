@@ -70,14 +70,13 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd rust
           cargo build
       # Ballista is currently not part of the main workspace so requires a separate build step
       - name: Build Ballista
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd rust/ballista/rust
+          cd ballista/rust
           # snmalloc requires cmake so build without default features
           cargo build --no-default-features
 
@@ -96,8 +95,8 @@ jobs:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow/arrow/testing/data
-        PARQUET_TEST_DATA: /__w/arrow/arrow/cpp/submodules/parquet-testing/data
+        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
+        PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
     steps:
       - uses: actions/checkout@v2
         with:
@@ -135,7 +134,7 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd rust/ballista/rust
+          cd ballista/rust
           # snmalloc requires cmake so build without default features
           cargo test --no-default-features
 
@@ -161,7 +160,7 @@ jobs:
         shell: bash
         run: |
           export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/cpp/submodules/parquet-testing/data
+          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
           cargo test
@@ -285,7 +284,7 @@ jobs:
           export CARGO_TARGET_DIR="/home/runner/target"
 
           export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/cpp/submodules/parquet-testing/data
+          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
 
           # 2020-11-15: There is a cargo-tarpaulin regression in 0.17.0
           # see https://github.com/xd009642/tarpaulin/issues/618
