@@ -17,170 +17,340 @@
   under the License.
 -->
 
-# Native Rust implementation of Apache Arrow
+# DataFusion
 
-[![Coverage Status](https://codecov.io/gh/apache/arrow/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow?branch=master)
+<img src="docs/images/DataFusion-Logo-Dark.svg" width="256"/>
 
-Welcome to the implementation of Arrow, the popular in-memory columnar format, in [Rust](https://www.rust-lang.org/).
+DataFusion is an extensible query execution framework, written in
+Rust, that uses [Apache Arrow](https://arrow.apache.org) as its
+in-memory format.
 
-This part of the Arrow project is divided in 4 main components:
+DataFusion supports both an SQL and a DataFrame API for building
+logical query plans as well as a query optimizer and execution engine
+capable of parallel execution against partitioned data sources (CSV
+and Parquet) using threads.
 
-| Crate     | Description | Documentation |
-|-----------|-------------|---------------|
-|Arrow        | Core functionality (memory layout, arrays, low level computations) | [(README)](arrow/README.md) |
-|Parquet      | Parquet support | [(README)](parquet/README.md) |
-|Arrow-flight | Arrow data between processes | [(README)](arrow-flight/README.md) |
-|DataFusion   | In-memory query engine with SQL support | [(README)](datafusion/README.md) |
-|Ballista     | Distributed query execution | [(README)](ballista/README.md) |
+## Use Cases
 
-Independently, they support a vast array of functionality for in-memory computations.
+DataFusion is used to create modern, fast and efficient data
+pipelines, ETL processes, and database systems, which need the
+performance of Rust and Apache Arrow and want to provide their users
+the convenience of an SQL interface or a DataFrame API.
 
-Together, they allow users to write an SQL query or a `DataFrame` (using the `datafusion` crate), run it against a parquet file (using the `parquet` crate), evaluate it in-memory using Arrow's columnar format (using the `arrow` crate), and send to another process (using the `arrow-flight` crate).
+## Why DataFusion?
 
-Generally speaking, the `arrow` crate offers functionality to develop code that uses Arrow arrays, and `datafusion` offers most operations typically found in SQL, with the notable exceptions of:
+* *High Performance*: Leveraging Rust and Arrow's memory model, DataFusion achieves very high performance
+* *Easy to Connect*: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem
+* *Easy to Embed*: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific usecase
+* *High Quality*:  Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.
 
-* `join`
-* `window` functions
+## Known Uses
 
-There are too many features to enumerate here, but some notable mentions:
+Here are some of the projects known to use DataFusion:
 
-* `Arrow` implements all formats in the specification except certain dictionaries
-* `Arrow` supports SIMD operations to some of its vertical operations
-* `DataFusion` supports `async` execution
-* `DataFusion` supports user-defined functions, aggregates, and whole execution nodes
+* [Ballista](https://github.com/ballista-compute/ballista) Distributed Compute Platform
+* [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
+* [Cube.js](https://github.com/cube-js/cube.js)
+* [datafusion-python](https://pypi.org/project/datafusion)
+* [delta-rs](https://github.com/delta-io/delta-rs)
+* [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
+* [ROAPI](https://github.com/roapi/roapi)
 
-You can find more details about each crate in their respective READMEs.
+(if you know of another project, please submit a PR to add a link!)
 
-## Arrow Rust Community
+## Example Usage
 
-We use the official [ASF Slack](https://s.apache.org/slack-invite) for informal discussions and coordination. This is 
-a great place to meet other contributors and get guidance on where to contribute. Join us in the `arrow-rust` channel.
+Run a SQL query against data stored in a CSV:
 
-We use [ASF JIRA](https://issues.apache.org/jira/secure/Dashboard.jspa) as the system of record for new features
-and bug fixes and this plays a critical role in the release process.
+```rust
+use datafusion::prelude::*;
+use arrow::util::pretty::print_batches;
+use arrow::record_batch::RecordBatch;
 
-For design discussions we generally collaborate on Google documents and file a JIRA linking to the document.
+#[tokio::main]
+async fn main() -> datafusion::error::Result<()> {
+  // register the table
+  let mut ctx = ExecutionContext::new();
+  ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new())?;
 
-There is also a bi-weekly Rust-specific sync call for the Arrow Rust community. This is hosted on Google Meet
-at https://meet.google.com/ctp-yujs-aee on alternate Wednesday's at 09:00 US/Pacific, 12:00 US/Eastern. During 
-US daylight savings time this corresponds to 16:00 UTC and at other times this is 17:00 UTC.
+  // create a plan to run a SQL query
+  let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")?;
 
-## Developer's guide to Arrow Rust
-
-### How to compile
-
-This is a standard cargo project with workspaces. To build it, you need to have `rust` and `cargo`:
-
-```bash
-cd /rust && cargo build
+  // execute and print results
+  let results: Vec<RecordBatch> = df.collect().await?;
+  print_batches(&results)?;
+  Ok(())
+}
 ```
 
-You can also use rust's official docker image:
+Use the DataFrame API to process data stored in a CSV:
 
-```bash
-docker run --rm -v $(pwd)/rust:/rust -it rust /bin/bash -c "cd /rust && cargo build"
+```rust
+use datafusion::prelude::*;
+use arrow::util::pretty::print_batches;
+use arrow::record_batch::RecordBatch;
+
+#[tokio::main]
+async fn main() -> datafusion::error::Result<()> {
+  // create the dataframe
+  let mut ctx = ExecutionContext::new();
+  let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
+
+  let df = df.filter(col("a").lt_eq(col("b")))?
+           .aggregate(vec![col("a")], vec![min(col("b"))])?
+           .limit(100)?;
+
+  // execute and print results
+  let results: Vec<RecordBatch> = df.collect().await?;
+  print_batches(&results)?;
+  Ok(())
+}
 ```
 
-The command above assumes that are in the root directory of the project, not in the same
-directory as this README.md.
+Both of these examples will produce
 
-You can also compile specific workspaces:
-
-```bash
-cd /rust/arrow && cargo build
+```text
++---+--------+
+| a | MIN(b) |
++---+--------+
+| 1 | 2      |
++---+--------+
 ```
 
-### Git Submodules
 
-Before running tests and examples, it is necessary to set up the local development environment.
 
-The tests rely on test data that is contained in git submodules.
+## Using DataFusion as a library
 
-To pull down this data run the following:
+DataFusion is [published on crates.io](https://crates.io/crates/datafusion), and is [well documented on docs.rs](https://docs.rs/datafusion/).
 
-```bash
-git submodule update --init
+To get started, add the following to your `Cargo.toml` file:
+
+```toml
+[dependencies]
+datafusion = "4.0.0-SNAPSHOT"
 ```
 
-This populates data in two git submodules:
+## Using DataFusion as a binary
 
-- `../cpp/submodules/parquet_testing/data` (sourced from https://github.com/apache/parquet-testing.git)
-- `../testing` (sourced from https://github.com/apache/arrow-testing)
+DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](docs/cli.md) for more information.
 
-By default, `cargo test` will look for these directories at their
-standard location. The following environment variables can be used to override the location:
+# Status
 
-```bash
-# Optionaly specify a different location for test data
-export PARQUET_TEST_DATA=$(cd ../cpp/submodules/parquet-testing/data; pwd)
-export ARROW_TEST_DATA=$(cd ../testing/data; pwd)
+## General
+
+- [x] SQL Parser
+- [x] SQL Query Planner
+- [x] Query Optimizer
+ - [x] Constant folding
+ - [x] Join Reordering
+ - [x] Limit Pushdown
+ - [x] Projection push down
+ - [x] Predicate push down
+- [x] Type coercion
+- [x] Parallel query execution
+
+## SQL Support
+
+- [x] Projection
+- [x] Filter (WHERE)
+- [x] Filter post-aggregate (HAVING)
+- [x] Limit
+- [x] Aggregate
+- [x] Common math functions
+- [x] cast
+- [x] try_cast
+- Postgres compatible String functions
+  - [x] ascii
+  - [x] bit_length
+  - [x] btrim
+  - [x] char_length
+  - [x] character_length
+  - [x] chr
+  - [x] concat
+  - [x] concat_ws
+  - [x] initcap
+  - [x] left
+  - [x] length
+  - [x] lpad
+  - [x] ltrim
+  - [x] octet_length
+  - [x] regexp_replace
+  - [x] repeat
+  - [x] replace
+  - [x] reverse
+  - [x] right
+  - [x] rpad
+  - [x] rtrim
+  - [x] split_part
+  - [x] starts_with
+  - [x] strpos
+  - [x] substr
+  - [x] to_hex
+  - [x] translate
+  - [x] trim
+- Miscellaneous/Boolean functions
+  - [x] nullif
+- Common date/time functions
+  - [ ] Basic date functions
+  - [ ] Basic time functions
+  - [x] Basic timestamp functions
+- nested functions
+  - [x] Array of columns
+- [x] Schema Queries
+  - [x] SHOW TABLES
+  - [x] SHOW COLUMNS
+  - [x] information_schema.{tables, columns}
+  - [ ] information_schema other views
+- [x] Sorting
+- [ ] Nested types
+- [ ] Lists
+- [x] Subqueries
+- [x] Common table expressions
+- [ ] Set Operations
+  - [x] UNION ALL
+  - [ ] UNION
+  - [ ] INTERSECT
+  - [ ] MINUS
+- [x] Joins
+  - [x] INNER JOIN
+  - [ ] CROSS JOIN
+  - [ ] OUTER JOIN
+- [ ] Window
+
+## Data Sources
+
+- [x] CSV
+- [x] Parquet primitive types
+- [ ] Parquet nested types
+
+
+## Extensibility
+
+DataFusion is designed to be extensible at all points. To that end, you can provide your own custom:
+
+- [x] User Defined Functions (UDFs)
+- [x] User Defined Aggregate Functions (UDAFs)
+- [x] User Defined Table Source (`TableProvider`) for tables
+- [x] User Defined `Optimizer` passes (plan rewrites)
+- [x] User Defined `LogicalPlan` nodes
+- [x] User Defined `ExecutionPlan` nodes
+
+
+# Supported SQL
+
+This library currently supports many SQL constructs, including
+
+* `CREATE EXTERNAL TABLE X STORED AS PARQUET LOCATION '...';` to register a table's locations
+* `SELECT ... FROM ...` together with any expression
+* `ALIAS` to name an expression
+* `CAST` to change types, including e.g. `Timestamp(Nanosecond, None)`
+* most mathematical unary and binary expressions such as `+`, `/`, `sqrt`, `tan`, `>=`.
+* `WHERE` to filter
+* `GROUP BY` together with one of the following aggregations: `MIN`, `MAX`, `COUNT`, `SUM`, `AVG`
+* `ORDER BY` together with an expression and optional `ASC` or `DESC` and also optional `NULLS FIRST` or `NULLS LAST`
+
+
+## Supported Functions
+
+DataFusion strives to implement a subset of the [PostgreSQL SQL dialect](https://www.postgresql.org/docs/current/functions.html) where possible. We explicitly choose a single dialect to maximize interoperability with other tools and allow reuse of the PostgreSQL documents and tutorials as much as possible.
+
+Currently, only a subset of the PosgreSQL dialect is implemented, and we will document any deviations.
+
+## Schema Metadata / Information Schema Support
+
+DataFusion supports the showing metadata about the tables available. This information can be accessed using the views of the ISO SQL `information_schema` schema or the DataFusion specific `SHOW TABLES` and `SHOW COLUMNS` commands.
+
+More information can be found in the [Postgres docs](https://www.postgresql.org/docs/13/infoschema-schema.html)).
+
+
+To show tables available for use in DataFusion, use the `SHOW TABLES`  command or the `information_schema.tables` view:
+
+```sql
+> show tables;
++---------------+--------------------+------------+------------+
+| table_catalog | table_schema       | table_name | table_type |
++---------------+--------------------+------------+------------+
+| datafusion    | public             | t          | BASE TABLE |
+| datafusion    | information_schema | tables     | VIEW       |
++---------------+--------------------+------------+------------+
+
+> select * from information_schema.tables;
+
++---------------+--------------------+------------+--------------+
+| table_catalog | table_schema       | table_name | table_type   |
++---------------+--------------------+------------+--------------+
+| datafusion    | public             | t          | BASE TABLE   |
+| datafusion    | information_schema | TABLES     | SYSTEM TABLE |
++---------------+--------------------+------------+--------------+
 ```
 
-From here on, this is a pure Rust project and `cargo` can be used to run tests, benchmarks, docs and examples as usual.
+To show the schema of a table in DataFusion, use the `SHOW COLUMNS`  command or the or `information_schema.columns` view:
 
+```sql
+> show columns from t;
++---------------+--------------+------------+-------------+-----------+-------------+
+| table_catalog | table_schema | table_name | column_name | data_type | is_nullable |
++---------------+--------------+------------+-------------+-----------+-------------+
+| datafusion    | public       | t          | a           | Int32     | NO          |
+| datafusion    | public       | t          | b           | Utf8      | NO          |
+| datafusion    | public       | t          | c           | Float32   | NO          |
++---------------+--------------+------------+-------------+-----------+-------------+
 
-### Running the tests
-
-Run tests using the Rust standard `cargo test` command:
-
-```bash
-# run all tests.
-cargo test
-
-
-# run only tests for the arrow crate
-cargo test -p arrow
+>   select table_name, column_name, ordinal_position, is_nullable, data_type from information_schema.columns;
++------------+-------------+------------------+-------------+-----------+
+| table_name | column_name | ordinal_position | is_nullable | data_type |
++------------+-------------+------------------+-------------+-----------+
+| t          | a           | 0                | NO          | Int32     |
+| t          | b           | 1                | NO          | Utf8      |
+| t          | c           | 2                | NO          | Float32   |
++------------+-------------+------------------+-------------+-----------+
 ```
 
-## Code Formatting
 
-Our CI uses `rustfmt` to check code formatting. Before submitting a
-PR be sure to run the following and check for lint issues:
 
-```bash
-cargo +stable fmt --all -- --check
-```
+## Supported Data Types
 
-## Clippy Lints
+DataFusion uses Arrow, and thus the Arrow type system, for query
+execution. The SQL types from
+[sqlparser-rs](https://github.com/ballista-compute/sqlparser-rs/blob/main/src/ast/data_type.rs#L57)
+are mapped to Arrow types according to the following table
 
-We recommend using `clippy` for checking lints during development. While we do not yet enforce `clippy` checks, we recommend not introducing new `clippy` errors or warnings.
 
-Run the following to check for clippy lints.
+| SQL Data Type   | Arrow DataType                   |
+| --------------- | -------------------------------- |
+| `CHAR`          | `Utf8`                           |
+| `VARCHAR`       | `Utf8`                           |
+| `UUID`          | *Not yet supported*              |
+| `CLOB`          | *Not yet supported*              |
+| `BINARY`        | *Not yet supported*              |
+| `VARBINARY`     | *Not yet supported*              |
+| `DECIMAL`       | `Float64`                        |
+| `FLOAT`         | `Float32`                        |
+| `SMALLINT`      | `Int16`                          |
+| `INT`           | `Int32`                          |
+| `BIGINT`        | `Int64`                          |
+| `REAL`          | `Float64`                        |
+| `DOUBLE`        | `Float64`                        |
+| `BOOLEAN`       | `Boolean`                        |
+| `DATE`          | `Date32`                         |
+| `TIME`          | `Time64(TimeUnit::Millisecond)`  |
+| `TIMESTAMP`     | `Date64`                         |
+| `INTERVAL`      | *Not yet supported*              |
+| `REGCLASS`      | *Not yet supported*              |
+| `TEXT`          | *Not yet supported*              |
+| `BYTEA`         | *Not yet supported*              |
+| `CUSTOM`        | *Not yet supported*              |
+| `ARRAY`         | *Not yet supported*              |
 
-```
-cargo clippy
-```
 
-If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `clippy` to run each time you save a file. See https://users.rust-lang.org/t/how-to-use-clippy-in-vs-code-with-rust-analyzer/41881.
+# Architecture Overview
 
-One of the concerns with `clippy` is that it often produces a lot of false positives, or that some recommendations may hurt readability. We do not have a policy of which lints are ignored, but if you disagree with a `clippy` lint, you may disable the lint and briefly justify it.
+There is no formal document describing DataFusion's architecture yet, but the following presentations offer a good overview of its different components and how they interact together.
 
-Search for `allow(clippy::` in the codebase to identify lints that are ignored/allowed. We currently prefer ignoring lints on the lowest unit possible.
-* If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
-* If you have several lints on a function or module, you may disable the lint on the function or module.
-* If a lint is pervasive across multiple modules, you may disable it at the crate level.
+* (March 2021): The DataFusion architecture is described in *Query Engine Design and the Rust-Based DataFusion in Apache Arrow*: [recording](https://www.youtube.com/watch?v=K6eCAVEk4kU) (DataFusion content starts ~ 15 minutes in) and [slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
+* (Feburary 2021): How DataFusion is used within the Ballista Project is described in *Ballista: Distributed Compute with Rust and Apache Arrow: [recording](https://www.youtube.com/watch?v=ZZHQaOap9pQ)
 
-## Git Pre-Commit Hook
 
-We can use [git pre-commit hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) to automate various kinds of git pre-commit checking/formatting.
+# Developer's guide
 
-Suppose you are in the root directory of the project.
-
-First check if the file already exists:
-
-```bash
-ls -l .git/hooks/pre-commit
-```
-
-If the file already exists, to avoid mistakenly **overriding**, you MAY have to check
-the link source or file content. Else if not exist, let's safely soft link [pre-commit.sh](pre-commit.sh) as file `.git/hooks/pre-commit`:
-
-```
-ln -s  ../../rust/pre-commit.sh .git/hooks/pre-commit
-```
-
-If sometimes you want to commit without checking, just run `git commit` with `--no-verify`:
-
-```bash
-git commit --no-verify -m "... commit message ..."
-```
+Please see [Developers Guide](DEVELOPERS.md) for information about developing DataFusion.
