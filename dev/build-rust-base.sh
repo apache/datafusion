@@ -16,13 +16,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+BALLISTA_VERSION=0.4.2-SNAPSHOT
 set -e
-./dev/build-rust.sh
-pushd rust/benchmarks/tpch
-./tpch-gen.sh
-
-docker-compose up -d
-docker-compose run ballista-client ./run.sh
-docker-compose down
-
-popd
+docker build -t ballistacompute/rust-base:$BALLISTA_VERSION -f dev/docker/rust-base.dockerfile .

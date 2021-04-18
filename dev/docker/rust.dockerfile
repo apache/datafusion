@@ -28,7 +28,8 @@ RUN apt-get -y install cmake
 RUN cargo install cargo-chef 
 
 FROM base as planner
-COPY rust .
+ADD datafusion .
+ADD ballista .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM base as cacher
@@ -36,7 +37,8 @@ COPY --from=planner /tmp/ballista/recipe.json recipe.json
 RUN cargo chef cook $RELEASE_FLAG --recipe-path recipe.json
 
 FROM base as builder
-COPY rust .
+ADD datafusion .
+ADD ballista .
 COPY --from=cacher /tmp/ballista/target target
 ARG RELEASE_FLAG=--release
 

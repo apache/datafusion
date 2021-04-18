@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,4 +17,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-rust/**/target
+BALLISTA_VERSION=0.4.2-SNAPSHOT
+
+set -e
+
+docker build -t ballistacompute/ballista-rust:$BALLISTA_VERSION -f dev/docker/rust.dockerfile .
