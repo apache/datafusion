@@ -28,8 +28,8 @@ edition = "2018"
 ballista = { path="../../client" }
 datafusion = { path = "../../../../datafusion" }
 
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "e023b4c" }
-parquet = { git = "https://github.com/apache/arrow-rs", rev = "e023b4c" }
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "08a662f" }
+parquet = { git = "https://github.com/apache/arrow-rs", rev = "08a662f" }
 
 env_logger = "0.8"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
