@@ -18,16 +18,9 @@
 name: Rust
 
 on:
+  # always trigger
   push:
-    paths:
-      - '.github/workflows/rust.yml'
-      - 'rust/**'
-      - 'format/Flight.proto'
   pull_request:
-    paths:
-      - '.github/workflows/rust.yml'
-      - 'rust/**'
-      - 'format/Flight.proto'
 
 jobs:
 
