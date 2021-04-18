@@ -21,4 +21,6 @@
 # This setup requires to all of our docker containers have arrow's source
 # as a mounted directory.
 
+ci
+dev
 **/target/*
