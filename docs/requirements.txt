@@ -1,5 +1,0 @@
-breathe
-ipython
-numpydoc
-sphinx==2.4.4
-pydata-sphinx-theme
