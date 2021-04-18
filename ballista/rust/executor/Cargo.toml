@@ -45,8 +45,8 @@ tokio-stream = "0.1"
 tonic = "0.4"
 uuid = { version = "0.8", features = ["v4"] }
 
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "e023b4c" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs", rev = "e023b4c" }
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "08a662f" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs", rev = "08a662f" }
 
 datafusion = { path = "../../../datafusion" }
 
