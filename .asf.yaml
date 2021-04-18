@@ -21,6 +21,13 @@ notifications:
   pullrequests: github@arrow.apache.org
   jira_options: link label worklog
 github:
+  description: "Apache Arrow DataFusion and Ballista query engines"
+  homepage: https://arrow.apache.org/
+  labels:
+    datafusion
+    ballista
+    bug
+    performance
   enabled_merge_buttons:
     squash: true
     merge: false
