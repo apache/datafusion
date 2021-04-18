@@ -20,3 +20,10 @@ notifications:
   issues:       github@arrow.apache.org
   pullrequests: github@arrow.apache.org
   jira_options: link label worklog
+github:
+  enabled_merge_buttons:
+    squash: true
+    merge: false
+    rebase: false    
+  features:
+    issues: true        
