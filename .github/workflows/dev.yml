@@ -31,66 +31,13 @@ jobs:
   lint:
     name: Lint C++, Python, R, Rust, Docker, RAT
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.event.pull_request.title, 'WIP') }}
     steps:
-      - name: Checkout Arrow
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-      - name: Fetch Submodules and Tags
-        run: ci/scripts/util_checkout.sh
-      - name: Free Up Disk Space
-        run: ci/scripts/util_cleanup.sh
+      - uses: actions/checkout@v2
       - name: Setup Python
         uses: actions/setup-python@v1
         with:
           python-version: 3.8
       - name: Setup Archery
         run: pip install -e dev/archery[docker]
-      - name: Execute Docker Build
-        run: |
-          sudo sysctl -w kernel.core_pattern="core.%e.%p"
-          ulimit -c unlimited
-          archery docker run ubuntu-lint
-      - name: Docker Push
-        if: success() && github.event_name == 'push' && github.repository == 'apache/arrow'
-        continue-on-error: true
-        run: archery docker push ubuntu-lint
-
-  release:
-    name: Source Release and Merge Script
-    runs-on: ubuntu-20.04
-    if: ${{ !contains(github.event.pull_request.title, 'WIP') }}
-    env:
-      GIT_AUTHOR_NAME: Github Actions
-      GIT_AUTHOR_EMAIL: github@actions
-      GIT_COMMITTER_NAME: Github Actions
-      GIT_COMMITTER_EMAIL: github@actions
-    steps:
-      - name: Checkout Arrow
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-      - name: Fetch Submodules and Tags
-        shell: bash
-        run: ci/scripts/util_checkout.sh
-      - name: Install Python
-        uses: actions/setup-python@v1
-        with:
-          python-version: '3.6'
-      - name: Install Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '2.6'
-      - name: Install Dependencies
-        shell: bash
-        run: |
-          pip install cython setuptools pytest jira
-      - name: Run Release Test
-        shell: bash
-        run: |
-          ci/scripts/release_test.sh $(pwd)
-      - name: Run Merge Script Test
-        shell: bash
-        run: |
-          pytest -v dev/test_merge_arrow_pr.py
+      - name: Lint
+        run: archery lint --rat
