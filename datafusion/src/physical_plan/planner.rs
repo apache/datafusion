@@ -52,6 +52,14 @@ use arrow::datatypes::{Schema, SchemaRef};
 use expressions::col;
 use log::debug;
 
+fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
+    // FIXME: finish this
+    match e {
+        Expr::Column(c) => Ok(c.name.clone()),
+        _ => e.name(&input_schema),
+    }
+}
+
 /// This trait exposes the ability to plan an [`ExecutionPlan`] out of a [`LogicalPlan`].
 pub trait ExtensionPlanner {
     /// Create a physical plan for a [`UserDefinedLogicalNode`].
@@ -144,8 +152,7 @@ impl DefaultPhysicalPlanner {
             } => {
                 // Initially need to perform the aggregate and then merge the partitions
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
-                let input_schema = input_exec.schema();
-                let physical_input_schema = input_exec.as_ref().schema();
+                let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
 
                 let groups = group_expr
@@ -155,9 +162,10 @@ impl DefaultPhysicalPlanner {
                             self.create_physical_expr(
                                 e,
                                 &physical_input_schema,
+                                &logical_input_schema,
                                 ctx_state,
                             ),
-                            e.name(&logical_input_schema),
+                            physical_name(e, &logical_input_schema),
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -178,11 +186,13 @@ impl DefaultPhysicalPlanner {
                     groups.clone(),
                     aggregates.clone(),
                     input_exec,
-                    input_schema.clone(),
+                    physical_input_schema.clone(),
                 )?);
 
-                let final_group: Vec<Arc<dyn PhysicalExpr>> =
-                    (0..groups.len()).map(|i| col(&groups[i].1)).collect();
+                // update group column indices based on partial aggregate plan evaluation
+                let final_group: Vec<Arc<dyn PhysicalExpr>> = (0..groups.len())
+                    .map(|i| col(&groups[i].1, &initial_aggr.schema()))
+                    .collect::<Result<_>>()?;
 
                 // construct a second aggregation, keeping the final column name equal to the first aggregation
                 // and the expressions corresponding to the respective aggregate
@@ -195,7 +205,7 @@ impl DefaultPhysicalPlanner {
                         .collect(),
                     aggregates,
                     initial_aggr,
-                    input_schema,
+                    physical_input_schema,
                 )?))
             }
             LogicalPlan::Projection { input, expr, .. } => {
@@ -208,9 +218,10 @@ impl DefaultPhysicalPlanner {
                             self.create_physical_expr(
                                 e,
                                 &input_exec.schema(),
+                                input_schema,
                                 &ctx_state,
                             ),
-                            e.name(&input_schema),
+                            physical_name(e, &input_schema),
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -219,11 +230,16 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Filter {
                 input, predicate, ..
             } => {
-                let input = self.create_initial_plan(input, ctx_state)?;
-                let input_schema = input.as_ref().schema();
-                let runtime_expr =
-                    self.create_physical_expr(predicate, &input_schema, ctx_state)?;
-                Ok(Arc::new(FilterExec::try_new(runtime_expr, input)?))
+                let physical_input = self.create_initial_plan(input, ctx_state)?;
+                let input_schema = physical_input.as_ref().schema();
+                let input_dfschema = input.as_ref().schema();
+                let runtime_expr = self.create_physical_expr(
+                    predicate,
+                    &input_schema,
+                    input_dfschema,
+                    ctx_state,
+                )?;
+                Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
             }
             LogicalPlan::Union { inputs, .. } => {
                 let physical_plans = inputs
@@ -236,8 +252,9 @@ impl DefaultPhysicalPlanner {
                 input,
                 partitioning_scheme,
             } => {
-                let input = self.create_initial_plan(input, ctx_state)?;
-                let input_schema = input.schema();
+                let physical_input = self.create_initial_plan(input, ctx_state)?;
+                let input_schema = physical_input.schema();
+                let input_dfschema = input.as_ref().schema();
                 let physical_partitioning = match partitioning_scheme {
                     LogicalPartitioning::RoundRobinBatch(n) => {
                         Partitioning::RoundRobinBatch(*n)
@@ -246,20 +263,26 @@ impl DefaultPhysicalPlanner {
                         let runtime_expr = expr
                             .iter()
                             .map(|e| {
-                                self.create_physical_expr(e, &input_schema, &ctx_state)
+                                self.create_physical_expr(
+                                    e,
+                                    &input_schema,
+                                    &input_dfschema,
+                                    &ctx_state,
+                                )
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Partitioning::Hash(runtime_expr, *n)
                     }
                 };
                 Ok(Arc::new(RepartitionExec::try_new(
-                    input,
+                    physical_input,
                     physical_partitioning,
                 )?))
             }
             LogicalPlan::Sort { expr, input, .. } => {
-                let input = self.create_initial_plan(input, ctx_state)?;
-                let input_schema = input.as_ref().schema();
+                let physical_input = self.create_initial_plan(input, ctx_state)?;
+                let input_schema = physical_input.as_ref().schema();
+                let input_dfschema = input.as_ref().schema();
 
                 let sort_expr = expr
                     .iter()
@@ -271,6 +294,7 @@ impl DefaultPhysicalPlanner {
                         } => self.create_physical_sort_expr(
                             expr,
                             &input_schema,
+                            &input_dfschema,
                             SortOptions {
                                 descending: !*asc,
                                 nulls_first: *nulls_first,
@@ -283,7 +307,7 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                Ok(Arc::new(SortExec::try_new(sort_expr, input)?))
+                Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?))
             }
             LogicalPlan::Join {
                 left,
@@ -292,37 +316,56 @@ impl DefaultPhysicalPlanner {
                 join_type,
                 ..
             } => {
-                let left = self.create_initial_plan(left, ctx_state)?;
-                let right = self.create_initial_plan(right, ctx_state)?;
+                let left_df_schema = left.schema();
+                let physical_left = self.create_initial_plan(left, ctx_state)?;
+                let right_df_schema = right.schema();
+                let physical_right = self.create_initial_plan(right, ctx_state)?;
                 let physical_join_type = match join_type {
                     JoinType::Inner => hash_utils::JoinType::Inner,
                     JoinType::Left => hash_utils::JoinType::Left,
                     JoinType::Right => hash_utils::JoinType::Right,
                 };
+                let join_on = keys
+                    .iter()
+                    .map(|(l, r)| {
+                        Ok((
+                            Column::new(&l.name, left_df_schema.index_of_column(&l)?),
+                            Column::new(&r.name, right_df_schema.index_of_column(&r)?),
+                        ))
+                    })
+                    .collect::<Result<hash_utils::JoinOn>>()?;
+
                 if ctx_state.config.concurrency > 1 && ctx_state.config.repartition_joins
                 {
-                    let left_expr = keys.iter().map(|x| col(&x.0)).collect();
-                    let right_expr = keys.iter().map(|x| col(&x.1)).collect();
+                    let (left_expr, right_expr) = join_on
+                        .iter()
+                        .map(|(l, r)| {
+                            (
+                                Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                                Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                            )
+                        })
+                        .unzip();
 
                     // Use hash partition by defualt to parallelize hash joins
                     Ok(Arc::new(HashJoinExec::try_new(
                         Arc::new(RepartitionExec::try_new(
-                            left,
+                            physical_left,
                             Partitioning::Hash(left_expr, ctx_state.config.concurrency),
                         )?),
                         Arc::new(RepartitionExec::try_new(
-                            right,
+                            physical_right,
                             Partitioning::Hash(right_expr, ctx_state.config.concurrency),
                         )?),
-                        &keys,
+                        join_on,
                         &physical_join_type,
                         PartitionMode::Partitioned,
                     )?))
                 } else {
                     Ok(Arc::new(HashJoinExec::try_new(
-                        left,
-                        right,
-                        &keys,
+                        physical_left,
+                        physical_right,
+                        join_on,
                         &physical_join_type,
                         PartitionMode::CollectLeft,
                     )?))
@@ -406,10 +449,10 @@ impl DefaultPhysicalPlanner {
                     "No installed planner was able to convert the custom node to an execution plan: {:?}", node
                 )))?;
 
-                // Ensure the ExecutionPlan's  schema matches the
+                // Ensure the ExecutionPlan's schema matches the
                 // declared logical schema to catch and warn about
                 // logic errors when creating user defined plans.
-                if plan.schema() != node.schema().as_ref().to_owned().into() {
+                if !node.schema().matches_arrow_schema(&plan.schema()) {
                     Err(DataFusionError::Plan(format!(
                         "Extension planner for {:?} created an ExecutionPlan with mismatched schema. \
                          LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
@@ -427,16 +470,19 @@ impl DefaultPhysicalPlanner {
         &self,
         e: &Expr,
         input_schema: &Schema,
+        input_dfschema: &DFSchema,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         match e {
-            Expr::Alias(expr, ..) => {
-                Ok(self.create_physical_expr(expr, input_schema, ctx_state)?)
-            }
-            Expr::Column(name) => {
-                // check that name exists
-                input_schema.field_with_name(&name)?;
-                Ok(Arc::new(Column::new(name)))
+            Expr::Alias(expr, ..) => Ok(self.create_physical_expr(
+                expr,
+                input_schema,
+                input_dfschema,
+                ctx_state,
+            )?),
+            Expr::Column(c) => {
+                let idx = input_dfschema.index_of_column(c)?;
+                Ok(Arc::new(Column::new(&c.name, idx)))
             }
             Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
             Expr::ScalarVariable(variable_names) => {
@@ -465,8 +511,18 @@ impl DefaultPhysicalPlanner {
                 }
             }
             Expr::BinaryExpr { left, op, right } => {
-                let lhs = self.create_physical_expr(left, input_schema, ctx_state)?;
-                let rhs = self.create_physical_expr(right, input_schema, ctx_state)?;
+                let lhs = self.create_physical_expr(
+                    left,
+                    input_schema,
+                    input_dfschema,
+                    ctx_state,
+                )?;
+                let rhs = self.create_physical_expr(
+                    right,
+                    input_schema,
+                    input_dfschema,
+                    ctx_state,
+                )?;
                 binary(lhs, *op, rhs, input_schema)
             }
             Expr::Case {
@@ -479,6 +535,7 @@ impl DefaultPhysicalPlanner {
                     Some(self.create_physical_expr(
                         e.as_ref(),
                         input_schema,
+                        input_dfschema,
                         ctx_state,
                     )?)
                 } else {
@@ -487,13 +544,23 @@ impl DefaultPhysicalPlanner {
                 let when_expr = when_then_expr
                     .iter()
                     .map(|(w, _)| {
-                        self.create_physical_expr(w.as_ref(), input_schema, ctx_state)
+                        self.create_physical_expr(
+                            w.as_ref(),
+                            input_schema,
+                            input_dfschema,
+                            ctx_state,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let then_expr = when_then_expr
                     .iter()
                     .map(|(_, t)| {
-                        self.create_physical_expr(t.as_ref(), input_schema, ctx_state)
+                        self.create_physical_expr(
+                            t.as_ref(),
+                            input_schema,
+                            input_dfschema,
+                            ctx_state,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let when_then_expr: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> =
@@ -507,6 +574,7 @@ impl DefaultPhysicalPlanner {
                     Some(self.create_physical_expr(
                         e.as_ref(),
                         input_schema,
+                        input_dfschema,
                         ctx_state,
                     )?)
                 } else {
@@ -519,35 +587,43 @@ impl DefaultPhysicalPlanner {
                 )?))
             }
             Expr::Cast { expr, data_type } => expressions::cast(
-                self.create_physical_expr(expr, input_schema, ctx_state)?,
+                self.create_physical_expr(expr, input_schema, input_dfschema, ctx_state)?,
                 input_schema,
                 data_type.clone(),
             ),
             Expr::TryCast { expr, data_type } => expressions::try_cast(
-                self.create_physical_expr(expr, input_schema, ctx_state)?,
+                self.create_physical_expr(expr, input_schema, input_dfschema, ctx_state)?,
                 input_schema,
                 data_type.clone(),
             ),
             Expr::Not(expr) => expressions::not(
-                self.create_physical_expr(expr, input_schema, ctx_state)?,
+                self.create_physical_expr(expr, input_schema, input_dfschema, ctx_state)?,
                 input_schema,
             ),
             Expr::Negative(expr) => expressions::negative(
-                self.create_physical_expr(expr, input_schema, ctx_state)?,
+                self.create_physical_expr(expr, input_schema, input_dfschema, ctx_state)?,
                 input_schema,
             ),
             Expr::IsNull(expr) => expressions::is_null(self.create_physical_expr(
                 expr,
                 input_schema,
+                input_dfschema,
                 ctx_state,
             )?),
             Expr::IsNotNull(expr) => expressions::is_not_null(
-                self.create_physical_expr(expr, input_schema, ctx_state)?,
+                self.create_physical_expr(expr, input_schema, input_dfschema, ctx_state)?,
             ),
             Expr::ScalarFunction { fun, args } => {
                 let physical_args = args
                     .iter()
-                    .map(|e| self.create_physical_expr(e, input_schema, ctx_state))
+                    .map(|e| {
+                        self.create_physical_expr(
+                            e,
+                            input_schema,
+                            input_dfschema,
+                            ctx_state,
+                        )
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 functions::create_physical_expr(fun, &physical_args, input_schema)
             }
@@ -557,6 +633,7 @@ impl DefaultPhysicalPlanner {
                     physical_args.push(self.create_physical_expr(
                         e,
                         input_schema,
+                        input_dfschema,
                         ctx_state,
                     )?);
                 }
@@ -573,11 +650,24 @@ impl DefaultPhysicalPlanner {
                 low,
                 high,
             } => {
-                let value_expr =
-                    self.create_physical_expr(expr, input_schema, ctx_state)?;
-                let low_expr = self.create_physical_expr(low, input_schema, ctx_state)?;
-                let high_expr =
-                    self.create_physical_expr(high, input_schema, ctx_state)?;
+                let value_expr = self.create_physical_expr(
+                    expr,
+                    input_schema,
+                    input_dfschema,
+                    ctx_state,
+                )?;
+                let low_expr = self.create_physical_expr(
+                    low,
+                    input_schema,
+                    input_dfschema,
+                    ctx_state,
+                )?;
+                let high_expr = self.create_physical_expr(
+                    high,
+                    input_schema,
+                    input_dfschema,
+                    ctx_state,
+                )?;
 
                 // rewrite the between into the two binary operators
                 let binary_expr = binary(
@@ -602,44 +692,54 @@ impl DefaultPhysicalPlanner {
                     Ok(expressions::lit(ScalarValue::Boolean(None)))
                 }
                 _ => {
-                    let value_expr =
-                        self.create_physical_expr(expr, input_schema, ctx_state)?;
+                    let value_expr = self.create_physical_expr(
+                        expr,
+                        input_schema,
+                        input_dfschema,
+                        ctx_state,
+                    )?;
                     let value_expr_data_type = value_expr.data_type(input_schema)?;
 
-                    let list_exprs =
-                        list.iter()
-                            .map(|expr| match expr {
-                                Expr::Literal(ScalarValue::Utf8(None)) => self
-                                    .create_physical_expr(expr, input_schema, ctx_state),
-                                _ => {
-                                    let list_expr = self.create_physical_expr(
-                                        expr,
-                                        input_schema,
-                                        ctx_state,
-                                    )?;
-                                    let list_expr_data_type =
-                                        list_expr.data_type(input_schema)?;
+                    let list_exprs = list
+                        .iter()
+                        .map(|expr| match expr {
+                            Expr::Literal(ScalarValue::Utf8(None)) => self
+                                .create_physical_expr(
+                                    expr,
+                                    input_schema,
+                                    input_dfschema,
+                                    ctx_state,
+                                ),
+                            _ => {
+                                let list_expr = self.create_physical_expr(
+                                    expr,
+                                    input_schema,
+                                    input_dfschema,
+                                    ctx_state,
+                                )?;
+                                let list_expr_data_type =
+                                    list_expr.data_type(input_schema)?;
 
-                                    if list_expr_data_type == value_expr_data_type {
-                                        Ok(list_expr)
-                                    } else if can_cast_types(
-                                        &list_expr_data_type,
-                                        &value_expr_data_type,
-                                    ) {
-                                        expressions::cast(
-                                            list_expr,
-                                            input_schema,
-                                            value_expr.data_type(input_schema)?,
-                                        )
-                                    } else {
-                                        Err(DataFusionError::Plan(format!(
-                                            "Unsupported CAST from {:?} to {:?}",
-                                            list_expr_data_type, value_expr_data_type
-                                        )))
-                                    }
+                                if list_expr_data_type == value_expr_data_type {
+                                    Ok(list_expr)
+                                } else if can_cast_types(
+                                    &list_expr_data_type,
+                                    &value_expr_data_type,
+                                ) {
+                                    expressions::cast(
+                                        list_expr,
+                                        input_schema,
+                                        value_expr.data_type(input_schema)?,
+                                    )
+                                } else {
+                                    Err(DataFusionError::Plan(format!(
+                                        "Unsupported CAST from {:?} to {:?}",
+                                        list_expr_data_type, value_expr_data_type
+                                    )))
                                 }
-                            })
-                            .collect::<Result<Vec<_>>>()?;
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
 
                     expressions::in_list(value_expr, list_exprs, negated)
                 }
@@ -662,7 +762,7 @@ impl DefaultPhysicalPlanner {
         // unpack aliased logical expressions, e.g. "sum(col) as total"
         let (name, e) = match e {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-            _ => (e.name(logical_input_schema)?, e),
+            _ => (physical_name(e, logical_input_schema)?, e),
         };
 
         match e {
@@ -675,7 +775,12 @@ impl DefaultPhysicalPlanner {
                 let args = args
                     .iter()
                     .map(|e| {
-                        self.create_physical_expr(e, physical_input_schema, ctx_state)
+                        self.create_physical_expr(
+                            e,
+                            physical_input_schema,
+                            logical_input_schema,
+                            ctx_state,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
                 aggregates::create_aggregate_expr(
@@ -690,7 +795,12 @@ impl DefaultPhysicalPlanner {
                 let args = args
                     .iter()
                     .map(|e| {
-                        self.create_physical_expr(e, physical_input_schema, ctx_state)
+                        self.create_physical_expr(
+                            e,
+                            physical_input_schema,
+                            logical_input_schema,
+                            ctx_state,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -708,11 +818,17 @@ impl DefaultPhysicalPlanner {
         &self,
         e: &Expr,
         input_schema: &Schema,
+        input_dfschema: &DFSchema,
         options: SortOptions,
         ctx_state: &ExecutionContextState,
     ) -> Result<PhysicalSortExpr> {
         Ok(PhysicalSortExpr {
-            expr: self.create_physical_expr(e, input_schema, ctx_state)?,
+            expr: self.create_physical_expr(
+                e,
+                input_schema,
+                input_dfschema,
+                ctx_state,
+            )?,
             options,
         })
     }
@@ -744,6 +860,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use async_trait::async_trait;
     use fmt::Debug;
+    use std::convert::TryFrom;
     use std::{any::Any, collections::HashMap, fmt};
 
     fn make_ctx_state() -> ExecutionContextState {
@@ -781,7 +898,7 @@ mod tests {
 
         // verify that the plan correctly casts u8 to i64
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = "BinaryExpr { left: Column { name: \"c7\" }, op: Lt, right: TryCastExpr { expr: Literal { value: UInt8(5) }, cast_type: Int64 } }";
+        let expected = "BinaryExpr { left: Column { name: \"c7\", index: 6 }, op: Lt, right: TryCastExpr { expr: Literal { value: UInt8(5) }, cast_type: Int64 } }";
         assert!(format!("{:?}", plan).contains(expected));
 
         Ok(())
@@ -790,12 +907,17 @@ mod tests {
     #[test]
     fn test_create_not() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
+        let dfschema = DFSchema::try_from(schema.clone())?;
 
         let planner = DefaultPhysicalPlanner::default();
 
-        let expr =
-            planner.create_physical_expr(&col("a").not(), &schema, &make_ctx_state())?;
-        let expected = expressions::not(expressions::col("a"), &schema)?;
+        let expr = planner.create_physical_expr(
+            &col("a").not(),
+            &schema,
+            &dfschema,
+            &make_ctx_state(),
+        )?;
+        let expected = expressions::not(expressions::col("a", &schema)?, &schema)?;
 
         assert_eq!(format!("{:?}", expr), format!("{:?}", expected));
 
@@ -816,7 +938,7 @@ mod tests {
 
         // c12 is f64, c7 is u8 -> cast c7 to f64
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\" }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\" } }";
+        let expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
         assert!(format!("{:?}", plan).contains(expected));
         Ok(())
     }
@@ -941,8 +1063,7 @@ mod tests {
             .build()?;
         let execution_plan = plan(&logical_plan)?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8
-        let expected = "InListExpr { expr: Column { name: \"c1\" }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false }";
-        println!("{:?}", execution_plan);
+        let expected = "InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false }";
         assert!(format!("{:?}", execution_plan).contains(expected));
 
         // expression: "a in (true, 'a')"

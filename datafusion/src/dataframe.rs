@@ -20,7 +20,7 @@
 use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use crate::logical_plan::{
-    DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, Partitioning,
+    Column, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, Partitioning,
 };
 use std::sync::Arc;
 
@@ -175,7 +175,12 @@ pub trait DataFrame: Send + Sync {
     ///     col("a").alias("a2"),
     ///     col("b").alias("b2"),
     ///     col("c").alias("c2")])?;
-    /// let join = left.join(right, JoinType::Inner, &["a", "b"], &["a2", "b2"])?;
+    /// let join = left.join(
+    ///     right,
+    ///     JoinType::Inner,
+    ///     vec![Column::from_name("a".to_string()), Column::from_name("b".to_string())],
+    ///     vec![Column::from_name("a2".to_string()), Column::from_name("b2".to_string())],
+    /// )?;
     /// let batches = join.collect().await?;
     /// # Ok(())
     /// # }
@@ -184,8 +189,8 @@ pub trait DataFrame: Send + Sync {
         &self,
         right: Arc<dyn DataFrame>,
         join_type: JoinType,
-        left_cols: &[&str],
-        right_cols: &[&str],
+        left_cols: Vec<Column>,
+        right_cols: Vec<Column>,
     ) -> Result<Arc<dyn DataFrame>>;
 
     /// Repartition a DataFrame based on a logical partitioning scheme.

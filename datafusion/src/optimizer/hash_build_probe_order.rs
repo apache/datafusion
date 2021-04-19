@@ -120,10 +120,7 @@ impl OptimizerRule for HashBuildProbeOrder {
                     Ok(LogicalPlan::Join {
                         left: Arc::new(right),
                         right: Arc::new(left),
-                        on: on
-                            .iter()
-                            .map(|(l, r)| (r.to_string(), l.to_string()))
-                            .collect(),
+                        on: on.iter().map(|(l, r)| (r.clone(), l.clone())).collect(),
                         join_type: swap_join_type(*join_type),
                         schema: schema.clone(),
                     })
@@ -234,7 +231,7 @@ mod tests {
     #[test]
     fn test_swap_order() {
         let lp_left = LogicalPlan::TableScan {
-            table_name: "left".to_string(),
+            table_name: Some("left".to_string()),
             projection: None,
             source: Arc::new(TestTableProvider { num_rows: 1000 }),
             projected_schema: Arc::new(DFSchema::empty()),
@@ -243,7 +240,7 @@ mod tests {
         };
 
         let lp_right = LogicalPlan::TableScan {
-            table_name: "right".to_string(),
+            table_name: Some("right".to_string()),
             projection: None,
             source: Arc::new(TestTableProvider { num_rows: 100 }),
             projected_schema: Arc::new(DFSchema::empty()),

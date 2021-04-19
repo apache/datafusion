@@ -17,6 +17,7 @@
 
 //! Execution plan for reading Parquet files
 
+use std::convert::TryFrom;
 use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
@@ -37,7 +38,7 @@ use crate::{
 use crate::{
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,
-    logical_plan::{Expr, Operator},
+    logical_plan::{Column, DFSchema, Expr, Operator},
     optimizer::utils,
     prelude::ExecutionConfig,
 };
@@ -235,6 +236,7 @@ impl ParquetExec {
                 schemas.len()
             )));
         }
+        // FIXME: what if schemas has size 0?
         let schema = schemas[0].clone();
         let predicate_builder = predicate.and_then(|predicate_expr| {
             RowGroupPredicateBuilder::try_new(&predicate_expr, schema.clone()).ok()
@@ -371,7 +373,7 @@ impl ParquetPartition {
 pub struct RowGroupPredicateBuilder {
     parquet_schema: Schema,
     predicate_expr: Arc<dyn PhysicalExpr>,
-    stat_column_req: Vec<(String, StatisticsType, Field)>,
+    stat_column_req: Vec<(Column, StatisticsType, Field)>,
 }
 
 impl RowGroupPredicateBuilder {
@@ -381,19 +383,16 @@ impl RowGroupPredicateBuilder {
     /// then convert it to a DataFusion PhysicalExpression and cache it for later use by build_row_group_predicate.
     pub fn try_new(expr: &Expr, parquet_schema: Schema) -> Result<Self> {
         // build predicate expression once
-        let mut stat_column_req = Vec::<(String, StatisticsType, Field)>::new();
+        let mut stat_column_req = Vec::<(Column, StatisticsType, Field)>::new();
         let logical_predicate_expr =
             build_predicate_expression(expr, &parquet_schema, &mut stat_column_req)?;
-        // println!(
-        //     "RowGroupPredicateBuilder::try_new, logical_predicate_expr: {:?}",
-        //     logical_predicate_expr
-        // );
         // build physical predicate expression
         let stat_fields = stat_column_req
             .iter()
             .map(|(_, _, f)| f.clone())
             .collect::<Vec<_>>();
         let stat_schema = Schema::new(stat_fields);
+        let stat_dfschema = DFSchema::try_from(stat_schema.clone())?;
         let execution_context_state = ExecutionContextState {
             catalog_list: Arc::new(MemoryCatalogList::new()),
             scalar_functions: HashMap::new(),
@@ -404,12 +403,9 @@ impl RowGroupPredicateBuilder {
         let predicate_expr = DefaultPhysicalPlanner::default().create_physical_expr(
             &logical_predicate_expr,
             &stat_schema,
+            &stat_dfschema,
             &execution_context_state,
         )?;
-        // println!(
-        //     "RowGroupPredicateBuilder::try_new, predicate_expr: {:?}",
-        //     predicate_expr
-        // );
         Ok(Self {
             parquet_schema,
             predicate_expr,
@@ -475,12 +471,12 @@ impl RowGroupPredicateBuilder {
 fn build_statistics_record_batch(
     row_groups: &[RowGroupMetaData],
     parquet_schema: &Schema,
-    stat_column_req: &[(String, StatisticsType, Field)],
+    stat_column_req: &[(Column, StatisticsType, Field)],
 ) -> Result<RecordBatch> {
     let mut fields = Vec::<Field>::new();
     let mut arrays = Vec::<ArrayRef>::new();
-    for (column_name, statistics_type, stat_field) in stat_column_req {
-        if let Some((column_index, _)) = parquet_schema.column_with_name(column_name) {
+    for (column, statistics_type, stat_field) in stat_column_req {
+        if let Some((column_index, _)) = parquet_schema.column_with_name(&column.name) {
             let statistics = row_groups
                 .iter()
                 .map(|g| g.column(column_index).statistics())
@@ -500,11 +496,11 @@ fn build_statistics_record_batch(
 }
 
 struct StatisticsExpressionBuilder<'a> {
-    column_name: String,
+    column: Column,
     column_expr: &'a Expr,
     scalar_expr: &'a Expr,
     parquet_field: &'a Field,
-    stat_column_req: &'a mut Vec<(String, StatisticsType, Field)>,
+    stat_column_req: &'a mut Vec<(Column, StatisticsType, Field)>,
     reverse_operator: bool,
 }
 
@@ -513,14 +509,14 @@ impl<'a> StatisticsExpressionBuilder<'a> {
         left: &'a Expr,
         right: &'a Expr,
         parquet_schema: &'a Schema,
-        stat_column_req: &'a mut Vec<(String, StatisticsType, Field)>,
+        stat_column_req: &'a mut Vec<(Column, StatisticsType, Field)>,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
-        let mut left_columns = HashSet::<String>::new();
+        let mut left_columns = HashSet::<Column>::new();
         utils::expr_to_column_names(left, &mut left_columns)?;
-        let mut right_columns = HashSet::<String>::new();
+        let mut right_columns = HashSet::<Column>::new();
         utils::expr_to_column_names(right, &mut right_columns)?;
-        let (column_expr, scalar_expr, column_names, reverse_operator) =
+        let (column_expr, scalar_expr, columns, reverse_operator) =
             match (left_columns.len(), right_columns.len()) {
                 (1, 0) => (left, right, left_columns, false),
                 (0, 1) => (right, left, right_columns, true),
@@ -532,8 +528,8 @@ impl<'a> StatisticsExpressionBuilder<'a> {
                     ));
                 }
             };
-        let column_name = column_names.iter().next().unwrap().clone();
-        let field = match parquet_schema.column_with_name(&column_name) {
+        let column = columns.iter().next().unwrap().clone();
+        let field = match parquet_schema.column_with_name(&column.flat_name()) {
             Some((_, f)) => f,
             _ => {
                 // field not found in parquet schema
@@ -544,7 +540,7 @@ impl<'a> StatisticsExpressionBuilder<'a> {
         };
 
         Ok(Self {
-            column_name,
+            column,
             column_expr,
             scalar_expr,
             parquet_field: field,
@@ -582,7 +578,7 @@ impl<'a> StatisticsExpressionBuilder<'a> {
     fn is_stat_column_missing(&self, statistics_type: StatisticsType) -> bool {
         self.stat_column_req
             .iter()
-            .filter(|(c, t, _f)| c == &self.column_name && t == &statistics_type)
+            .filter(|(c, t, _f)| c == &self.column && t == &statistics_type)
             .count()
             == 0
     }
@@ -592,22 +588,21 @@ impl<'a> StatisticsExpressionBuilder<'a> {
         stat_type: StatisticsType,
         suffix: &str,
     ) -> Result<Expr> {
-        let stat_column_name = format!("{}_{}", self.column_name, suffix);
+        let stat_column = Column {
+            relation: self.column.relation.clone(),
+            name: format!("{}_{}", self.column.flat_name(), suffix),
+        };
         let stat_field = Field::new(
-            stat_column_name.as_str(),
+            stat_column.flat_name().as_str(),
             self.parquet_field.data_type().clone(),
             self.parquet_field.is_nullable(),
         );
         if self.is_stat_column_missing(stat_type) {
             // only add statistics column if not previously added
             self.stat_column_req
-                .push((self.column_name.clone(), stat_type, stat_field));
+                .push((self.column.clone(), stat_type, stat_field));
         }
-        rewrite_column_expr(
-            self.column_expr,
-            self.column_name.as_str(),
-            stat_column_name.as_str(),
-        )
+        rewrite_column_expr(self.column_expr, &self.column, &stat_column)
     }
 
     fn min_column_expr(&mut self) -> Result<Expr> {
@@ -622,18 +617,18 @@ impl<'a> StatisticsExpressionBuilder<'a> {
 /// replaces a column with an old name with a new name in an expression
 fn rewrite_column_expr(
     expr: &Expr,
-    column_old_name: &str,
-    column_new_name: &str,
+    column_old: &Column,
+    column_new: &Column,
 ) -> Result<Expr> {
     let expressions = utils::expr_sub_expressions(&expr)?;
     let expressions = expressions
         .iter()
-        .map(|e| rewrite_column_expr(e, column_old_name, column_new_name))
+        .map(|e| rewrite_column_expr(e, column_old, column_new))
         .collect::<Result<Vec<_>>>()?;
 
-    if let Expr::Column(name) = expr {
-        if name == column_old_name {
-            return Ok(Expr::Column(column_new_name.to_string()));
+    if let Expr::Column(c) = expr {
+        if c == column_old {
+            return Ok(Expr::Column(column_new.clone()));
         }
     }
     utils::rewrite_expression(&expr, &expressions)
@@ -643,7 +638,7 @@ fn rewrite_column_expr(
 fn build_predicate_expression(
     expr: &Expr,
     parquet_schema: &Schema,
-    stat_column_req: &mut Vec<(String, StatisticsType, Field)>,
+    stat_column_req: &mut Vec<(Column, StatisticsType, Field)>,
 ) -> Result<Expr> {
     use crate::logical_plan;
     // predicate expression can only be a binary expression
@@ -914,7 +909,6 @@ fn read_files(
         loop {
             match batch_reader.next() {
                 Some(Ok(batch)) => {
-                    //println!("ParquetExec got new batch from {}", filename);
                     total_rows += batch.num_rows();
                     send_result(&response_tx, Ok(batch))?;
                     if limit.map(|l| total_rows >= l).unwrap_or(false) {
@@ -1267,8 +1261,9 @@ mod tests {
         ]);
         // test AND operator joining supported c1 < 1 expression and unsupported c2 > c3 expression
         let expr = col("c1").lt(lit(1)).and(col("c2").lt(col("c3")));
-        let expected_expr = "#c1_min Lt Int32(1) And Boolean(true)";
         let predicate_expr = build_predicate_expression(&expr, &schema, &mut vec![])?;
+        dbg!(&predicate_expr);
+        let expected_expr = "#c1_min Lt Int32(1) And Boolean(true)";
         assert_eq!(format!("{:?}", predicate_expr), expected_expr);
 
         Ok(())
@@ -1310,18 +1305,30 @@ mod tests {
         let c1_min_field = Field::new("c1_min", DataType::Int32, false);
         assert_eq!(
             stat_column_req[0],
-            ("c1".to_owned(), StatisticsType::Min, c1_min_field)
+            (
+                Column::from_name("c1".to_string()),
+                StatisticsType::Min,
+                c1_min_field
+            )
         );
         // c2 = 2 should add c2_min and c2_max
         let c2_min_field = Field::new("c2_min", DataType::Int32, false);
         assert_eq!(
             stat_column_req[1],
-            ("c2".to_owned(), StatisticsType::Min, c2_min_field)
+            (
+                Column::from_name("c2".to_string()),
+                StatisticsType::Min,
+                c2_min_field
+            )
         );
         let c2_max_field = Field::new("c2_max", DataType::Int32, false);
         assert_eq!(
             stat_column_req[2],
-            ("c2".to_owned(), StatisticsType::Max, c2_max_field)
+            (
+                Column::from_name("c2".to_string()),
+                StatisticsType::Max,
+                c2_max_field
+            )
         );
         // c2 = 3 shouldn't add any new statistics fields
         assert_eq!(stat_column_req.len(), 3);

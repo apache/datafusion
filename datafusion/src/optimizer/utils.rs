@@ -23,8 +23,8 @@ use arrow::datatypes::Schema;
 
 use super::optimizer::OptimizerRule;
 use crate::logical_plan::{
-    Expr, LogicalPlan, Operator, Partitioning, PlanType, Recursion, StringifiedPlan,
-    ToDFSchema,
+    Column, Expr, LogicalPlan, Operator, Partitioning, PlanType, Recursion,
+    StringifiedPlan, ToDFSchema,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
@@ -40,7 +40,7 @@ const CASE_ELSE_MARKER: &str = "__DATAFUSION_CASE_ELSE__";
 /// names referenced in the expression
 pub fn exprlist_to_column_names(
     expr: &[Expr],
-    accum: &mut HashSet<String>,
+    accum: &mut HashSet<Column>,
 ) -> Result<()> {
     for e in expr {
         expr_to_column_names(e, accum)?;
@@ -51,17 +51,17 @@ pub fn exprlist_to_column_names(
 /// Recursively walk an expression tree, collecting the unique set of column names
 /// referenced in the expression
 struct ColumnNameVisitor<'a> {
-    accum: &'a mut HashSet<String>,
+    accum: &'a mut HashSet<Column>,
 }
 
 impl ExpressionVisitor for ColumnNameVisitor<'_> {
     fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
         match expr {
-            Expr::Column(name) => {
-                self.accum.insert(name.clone());
+            Expr::Column(qc) => {
+                self.accum.insert(qc.clone());
             }
             Expr::ScalarVariable(var_names) => {
-                self.accum.insert(var_names.join("."));
+                self.accum.insert(Column::from_name(var_names.join(".")));
             }
             Expr::Alias(_, _) => {}
             Expr::Literal(_) => {}
@@ -88,7 +88,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
 
 /// Recursively walk an expression tree, collecting the unique set of column names
 /// referenced in the expression
-pub fn expr_to_column_names(expr: &Expr, accum: &mut HashSet<String>) -> Result<()> {
+pub fn expr_to_column_names(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
     expr.accept(ColumnNameVisitor { accum })?;
     Ok(())
 }
@@ -263,10 +263,8 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         }
         Expr::Cast { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
         Expr::TryCast { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
-        Expr::Column(_) => Ok(vec![]),
+        Expr::Column(_) | Expr::Literal(_) | Expr::ScalarVariable(_) => Ok(vec![]),
         Expr::Alias(expr, ..) => Ok(vec![expr.as_ref().to_owned()]),
-        Expr::Literal(_) => Ok(vec![]),
-        Expr::ScalarVariable(_) => Ok(vec![]),
         Expr::Not(expr) => Ok(vec![expr.as_ref().to_owned()]),
         Expr::Negative(expr) => Ok(vec![expr.as_ref().to_owned()]),
         Expr::Sort { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
@@ -368,9 +366,6 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
         }
         Expr::Not(_) => Ok(Expr::Not(Box::new(expressions[0].clone()))),
         Expr::Negative(_) => Ok(Expr::Negative(Box::new(expressions[0].clone()))),
-        Expr::Column(_) => Ok(expr.clone()),
-        Expr::Literal(_) => Ok(expr.clone()),
-        Expr::ScalarVariable(_) => Ok(expr.clone()),
         Expr::Sort {
             asc, nulls_first, ..
         } => Ok(Expr::Sort {
@@ -399,10 +394,13 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
                 Ok(expr)
             }
         }
-        Expr::InList { .. } => Ok(expr.clone()),
         Expr::Wildcard { .. } => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
         )),
+        Expr::InList { .. }
+        | Expr::Column(_)
+        | Expr::Literal(_)
+        | Expr::ScalarVariable(_) => Ok(expr.clone()),
     }
 }
 
@@ -415,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_collect_expr() -> Result<()> {
-        let mut accum: HashSet<String> = HashSet::new();
+        let mut accum: HashSet<Column> = HashSet::new();
         expr_to_column_names(
             &Expr::Cast {
                 expr: Box::new(col("a")),
@@ -431,7 +429,7 @@ mod tests {
             &mut accum,
         )?;
         assert_eq!(1, accum.len());
-        assert!(accum.contains("a"));
+        assert!(accum.contains(&Column::from_name("a".to_string())));
         Ok(())
     }
 

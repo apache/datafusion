@@ -161,11 +161,9 @@ async fn topk_query() -> Result<()> {
 async fn topk_plan() -> Result<()> {
     let mut ctx = setup_table(make_topk_context()).await?;
 
-    let expected = vec![
-        "| logical_plan after topk                 | TopK: k=3                                      |",
-        "|                                         |   Projection: #customer_id, #revenue           |",
-        "|                                         |     TableScan: sales projection=Some([0, 1])   |",
-    ].join("\n");
+    let expected = "| logical_plan after topk                 | TopK: k=3                                          |\
+                  \n|                                         |   Projection: #sales.customer_id, #sales.revenue   |\
+                  \n|                                         |     TableScan: sales projection=Some([0, 1])       |";
 
     let explain_query = format!("EXPLAIN VERBOSE {}", QUERY);
     let actual_output = exec_sql(&mut ctx, &explain_query).await?;
@@ -173,7 +171,18 @@ async fn topk_plan() -> Result<()> {
     // normalize newlines (output on windows uses \r\n)
     let actual_output = actual_output.replace("\r\n", "\n");
 
-    assert!(actual_output.contains(&expected) , "Expected output not present in actual output\nExpected:\n---------\n{}\nActual:\n--------\n{}", expected, actual_output);
+    assert!(
+        actual_output.contains(&expected),
+        "Expected output not present in actual output\
+        \nExpected:\
+        \n---------\
+        \n{}\
+        \nActual:\
+        \n--------\
+        \n{}",
+        expected,
+        actual_output
+    );
     Ok(())
 }
 

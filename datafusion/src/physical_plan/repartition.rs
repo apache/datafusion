@@ -297,6 +297,7 @@ impl RecordBatchStream for RepartitionStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
     use arrow::array::UInt32Array;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -370,12 +371,7 @@ mod tests {
         let output_partitions = repartition(
             &schema,
             partitions,
-            Partitioning::Hash(
-                vec![Arc::new(crate::physical_plan::expressions::Column::new(
-                    &"c0",
-                ))],
-                8,
-            ),
+            Partitioning::Hash(vec![col("c0", &schema)?], 8),
         )
         .await?;
 

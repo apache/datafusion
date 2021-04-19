@@ -15,7 +15,7 @@
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
-use crate::logical_plan::{and, LogicalPlan};
+use crate::logical_plan::{and, Column, LogicalPlan};
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -55,15 +55,15 @@ pub struct FilterPushDown {}
 #[derive(Debug, Clone, Default)]
 struct State {
     // (predicate, columns on the predicate)
-    filters: Vec<(Expr, HashSet<String>)>,
+    filters: Vec<(Expr, HashSet<Column>)>,
 }
 
-type Predicates<'a> = (Vec<&'a Expr>, Vec<&'a HashSet<String>>);
+type Predicates<'a> = (Vec<&'a Expr>, Vec<&'a HashSet<Column>>);
 
 /// returns all predicates in `state` that depend on any of `used_columns`
 fn get_predicates<'a>(
     state: &'a State,
-    used_columns: &HashSet<String>,
+    used_columns: &HashSet<Column>,
 ) -> Predicates<'a> {
     state
         .filters
@@ -88,19 +88,19 @@ fn get_join_predicates<'a>(
     left: &DFSchema,
     right: &DFSchema,
 ) -> (
-    Vec<&'a HashSet<String>>,
-    Vec<&'a HashSet<String>>,
+    Vec<&'a HashSet<Column>>,
+    Vec<&'a HashSet<Column>>,
     Predicates<'a>,
 ) {
     let left_columns = &left
         .fields()
         .iter()
-        .map(|f| f.name().clone())
+        .map(|f| f.qualified_column())
         .collect::<HashSet<_>>();
     let right_columns = &right
         .fields()
         .iter()
-        .map(|f| f.name().clone())
+        .map(|f| f.qualified_column())
         .collect::<HashSet<_>>();
 
     let filters = state
@@ -172,9 +172,9 @@ fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
 
 // remove all filters from `filters` that are in `predicate_columns`
 fn remove_filters(
-    filters: &[(Expr, HashSet<String>)],
-    predicate_columns: &[&HashSet<String>],
-) -> Vec<(Expr, HashSet<String>)> {
+    filters: &[(Expr, HashSet<Column>)],
+    predicate_columns: &[&HashSet<Column>],
+) -> Vec<(Expr, HashSet<Column>)> {
     filters
         .iter()
         .filter(|(_, columns)| !predicate_columns.contains(&columns))
@@ -184,9 +184,9 @@ fn remove_filters(
 
 // keeps all filters from `filters` that are in `predicate_columns`
 fn keep_filters(
-    filters: &[(Expr, HashSet<String>)],
-    predicate_columns: &[&HashSet<String>],
-) -> Vec<(Expr, HashSet<String>)> {
+    filters: &[(Expr, HashSet<Column>)],
+    predicate_columns: &[&HashSet<Column>],
+) -> Vec<(Expr, HashSet<Column>)> {
     filters
         .iter()
         .filter(|(_, columns)| predicate_columns.contains(&columns))
@@ -198,7 +198,7 @@ fn keep_filters(
 /// in `state` depend on the columns `used_columns`.
 fn issue_filters(
     mut state: State,
-    used_columns: HashSet<String>,
+    used_columns: HashSet<Column>,
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
     let (predicates, predicate_columns) = get_predicates(&state, &used_columns);
@@ -240,7 +240,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             predicates
                 .into_iter()
                 .try_for_each::<_, Result<()>>(|predicate| {
-                    let mut columns: HashSet<String> = HashSet::new();
+                    let mut columns: HashSet<Column> = HashSet::new();
                     utils::expr_to_column_names(predicate, &mut columns)?;
                     // collect the predicate
                     state.filters.push((predicate.clone(), columns));
@@ -264,7 +264,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     expr => expr.clone(),
                 };
 
-                projection.insert(field.name().clone(), expr);
+                projection.insert(field.qualified_name().clone(), expr);
             });
 
             // re-write all filters based on this projection
@@ -294,7 +294,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             let agg_columns = aggr_expr
                 .iter()
-                .map(|x| x.name(input.schema()))
+                .map(|x| Ok(Column::from_name(x.name(input.schema())?)))
                 .collect::<Result<HashSet<_>>>()?;
             used_columns.extend(agg_columns);
 
@@ -310,7 +310,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .schema()
                 .fields()
                 .iter()
-                .map(|f| f.name().clone())
+                .map(|f| f.qualified_column())
                 .collect::<HashSet<_>>();
             issue_filters(state, used_columns, plan)
         }
@@ -387,7 +387,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .schema()
                 .fields()
                 .iter()
-                .map(|f| f.name().clone())
+                .map(|f| f.qualified_column())
                 .collect::<HashSet<_>>();
             issue_filters(state, used_columns, plan)
         }
@@ -420,8 +420,8 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
         .map(|e| rewrite(e, &projection))
         .collect::<Result<Vec<_>>>()?;
 
-    if let Expr::Column(name) = expr {
-        if let Some(expr) = projection.get(name) {
+    if let Expr::Column(c) = expr {
+        if let Some(expr) = projection.get(&c.flat_name()) {
             return Ok(expr.clone());
         }
     }
@@ -456,8 +456,8 @@ mod tests {
             .build()?;
         // filter is before projection
         let expected = "\
-            Projection: #a, #b\
-            \n  Filter: #a Eq Int64(1)\
+            Projection: #test.a, #test.b\
+            \n  Filter: #test.a Eq Int64(1)\
             \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -473,9 +473,9 @@ mod tests {
             .build()?;
         // filter is before single projection
         let expected = "\
-            Filter: #a Eq Int64(1)\
+            Filter: #test.a Eq Int64(1)\
             \n  Limit: 10\
-            \n    Projection: #a, #b\
+            \n    Projection: #test.a, #test.b\
             \n      TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -491,9 +491,9 @@ mod tests {
             .build()?;
         // filter is before double projection
         let expected = "\
-            Projection: #c, #b\
-            \n  Projection: #a, #b, #c\
-            \n    Filter: #a Eq Int64(1)\
+            Projection: #test.c, #test.b\
+            \n  Projection: #test.a, #test.b, #test.c\
+            \n    Filter: #test.a Eq Int64(1)\
             \n      TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -508,8 +508,8 @@ mod tests {
             .build()?;
         // filter of key aggregation is commutative
         let expected = "\
-            Aggregate: groupBy=[[#a]], aggr=[[SUM(#b) AS total_salary]]\
-            \n  Filter: #a Gt Int64(10)\
+            Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b) AS total_salary]]\
+            \n  Filter: #test.a Gt Int64(10)\
             \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -525,7 +525,7 @@ mod tests {
         // filter of aggregate is after aggregation since they are non-commutative
         let expected = "\
             Filter: #b Gt Int64(10)\
-            \n  Aggregate: groupBy=[[#a]], aggr=[[SUM(#b) AS b]]\
+            \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b) AS b]]\
             \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -541,8 +541,8 @@ mod tests {
             .build()?;
         // filter is before projection
         let expected = "\
-            Projection: #a AS b, #c\
-            \n  Filter: #a Eq Int64(1)\
+            Projection: #test.a AS b, #test.c\
+            \n  Filter: #test.a Eq Int64(1)\
             \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -581,14 +581,14 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #b Eq Int64(1)\
-            \n  Projection: #a Multiply Int32(2) Plus #c AS b, #c\
+            \n  Projection: #test.a Multiply Int32(2) Plus #test.c AS b, #test.c\
             \n    TableScan: test projection=None"
         );
 
         // filter is before projection
         let expected = "\
-            Projection: #a Multiply Int32(2) Plus #c AS b, #c\
-            \n  Filter: #a Multiply Int32(2) Plus #c Eq Int64(1)\
+            Projection: #test.a Multiply Int32(2) Plus #test.c AS b, #test.c\
+            \n  Filter: #test.a Multiply Int32(2) Plus #test.c Eq Int64(1)\
             \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -613,16 +613,16 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #a Eq Int64(1)\
-            \n  Projection: #b Multiply Int32(3) AS a, #c\
-            \n    Projection: #a Multiply Int32(2) Plus #c AS b, #c\
+            \n  Projection: #b Multiply Int32(3) AS a, #test.c\
+            \n    Projection: #test.a Multiply Int32(2) Plus #test.c AS b, #test.c\
             \n      TableScan: test projection=None"
         );
 
         // filter is before the projections
         let expected = "\
-        Projection: #b Multiply Int32(3) AS a, #c\
-        \n  Projection: #a Multiply Int32(2) Plus #c AS b, #c\
-        \n    Filter: #a Multiply Int32(2) Plus #c Multiply Int32(3) Eq Int64(1)\
+        Projection: #b Multiply Int32(3) AS a, #test.c\
+        \n  Projection: #test.a Multiply Int32(2) Plus #test.c AS b, #test.c\
+        \n    Filter: #test.a Multiply Int32(2) Plus #test.c Multiply Int32(3) Eq Int64(1)\
         \n      TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -638,26 +638,26 @@ mod tests {
             .project(vec![col("a").alias("b"), col("c")])?
             .aggregate(vec![col("b")], vec![sum(col("c"))])?
             .filter(col("b").gt(lit(10i64)))?
-            .filter(col("SUM(c)").gt(lit(10i64)))?
+            .filter(col("SUM(test.c)").gt(lit(10i64)))?
             .build()?;
 
         // not part of the test, just good to know:
         assert_eq!(
             format!("{:?}", plan),
             "\
-            Filter: #SUM(c) Gt Int64(10)\
+            Filter: #SUM(test.c) Gt Int64(10)\
             \n  Filter: #b Gt Int64(10)\
-            \n    Aggregate: groupBy=[[#b]], aggr=[[SUM(#c)]]\
-            \n      Projection: #a AS b, #c\
+            \n    Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
+            \n      Projection: #test.a AS b, #test.c\
             \n        TableScan: test projection=None"
         );
 
         // filter is before the projections
         let expected = "\
-        Filter: #SUM(c) Gt Int64(10)\
-        \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#c)]]\
-        \n    Projection: #a AS b, #c\
-        \n      Filter: #a Gt Int64(10)\
+        Filter: #SUM(test.c) Gt Int64(10)\
+        \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
+        \n    Projection: #test.a AS b, #test.c\
+        \n      Filter: #test.a Gt Int64(10)\
         \n        TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
 
@@ -674,8 +674,8 @@ mod tests {
             .project(vec![col("a").alias("b"), col("c")])?
             .aggregate(vec![col("b")], vec![sum(col("c"))])?
             .filter(and(
-                col("SUM(c)").gt(lit(10i64)),
-                and(col("b").gt(lit(10i64)), col("SUM(c)").lt(lit(20i64))),
+                col("SUM(test.c)").gt(lit(10i64)),
+                and(col("b").gt(lit(10i64)), col("SUM(test.c)").lt(lit(20i64))),
             ))?
             .build()?;
 
@@ -683,18 +683,18 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "\
-            Filter: #SUM(c) Gt Int64(10) And #b Gt Int64(10) And #SUM(c) Lt Int64(20)\
-            \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#c)]]\
-            \n    Projection: #a AS b, #c\
+            Filter: #SUM(test.c) Gt Int64(10) And #b Gt Int64(10) And #SUM(test.c) Lt Int64(20)\
+            \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
+            \n    Projection: #test.a AS b, #test.c\
             \n      TableScan: test projection=None"
         );
 
         // filter is before the projections
         let expected = "\
-        Filter: #SUM(c) Gt Int64(10) And #SUM(c) Lt Int64(20)\
-        \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#c)]]\
-        \n    Projection: #a AS b, #c\
-        \n      Filter: #a Gt Int64(10)\
+        Filter: #SUM(test.c) Gt Int64(10) And #SUM(test.c) Lt Int64(20)\
+        \n  Aggregate: groupBy=[[#b]], aggr=[[SUM(#test.c)]]\
+        \n    Projection: #test.a AS b, #test.c\
+        \n      Filter: #test.a Gt Int64(10)\
         \n        TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
 
@@ -714,11 +714,11 @@ mod tests {
             .build()?;
         // filter does not just any of the limits
         let expected = "\
-            Projection: #a, #b\
-            \n  Filter: #a Eq Int64(1)\
+            Projection: #test.a, #test.b\
+            \n  Filter: #test.a Eq Int64(1)\
             \n    Limit: 10\
             \n      Limit: 20\
-            \n        Projection: #a, #b\
+            \n        Projection: #test.a, #test.b\
             \n          TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -740,20 +740,20 @@ mod tests {
         // not part of the test
         assert_eq!(
             format!("{:?}", plan),
-            "Filter: #a GtEq Int64(1)\
-             \n  Projection: #a\
+            "Filter: #test.a GtEq Int64(1)\
+             \n  Projection: #test.a\
              \n    Limit: 1\
-             \n      Filter: #a LtEq Int64(1)\
-             \n        Projection: #a\
+             \n      Filter: #test.a LtEq Int64(1)\
+             \n        Projection: #test.a\
              \n          TableScan: test projection=None"
         );
 
         let expected = "\
-        Projection: #a\
-        \n  Filter: #a GtEq Int64(1)\
+        Projection: #test.a\
+        \n  Filter: #test.a GtEq Int64(1)\
         \n    Limit: 1\
-        \n      Projection: #a\
-        \n        Filter: #a LtEq Int64(1)\
+        \n      Projection: #test.a\
+        \n        Filter: #test.a LtEq Int64(1)\
         \n          TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -774,16 +774,16 @@ mod tests {
         // not part of the test
         assert_eq!(
             format!("{:?}", plan),
-            "Projection: #a\
-            \n  Filter: #a GtEq Int64(1)\
-            \n    Filter: #a LtEq Int64(1)\
+            "Projection: #test.a\
+            \n  Filter: #test.a GtEq Int64(1)\
+            \n    Filter: #test.a LtEq Int64(1)\
             \n      Limit: 1\
             \n        TableScan: test projection=None"
         );
 
         let expected = "\
-        Projection: #a\
-        \n  Filter: #a GtEq Int64(1) And #a LtEq Int64(1)\
+        Projection: #test.a\
+        \n  Filter: #test.a GtEq Int64(1) And #test.a LtEq Int64(1)\
         \n    Limit: 1\
         \n      TableScan: test projection=None";
 
@@ -804,7 +804,7 @@ mod tests {
 
         let expected = "\
             TestUserDefined\
-             \n  Filter: #a LtEq Int64(1)\
+             \n  Filter: #test.a LtEq Int64(1)\
              \n    TableScan: test projection=None";
 
         // not part of the test
@@ -823,7 +823,12 @@ mod tests {
             .project(vec![col("a")])?
             .build()?;
         let plan = LogicalPlanBuilder::from(&left)
-            .join(&right, JoinType::Inner, &["a"], &["a"])?
+            .join(
+                &right,
+                JoinType::Inner,
+                vec![Column::from_name("a".to_string())],
+                vec![Column::from_name("a".to_string())],
+            )?
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 
@@ -831,20 +836,20 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "\
-            Filter: #a LtEq Int64(1)\
-            \n  Join: a = a\
+            Filter: #test.a LtEq Int64(1)\
+            \n  Join: #test.a = #test.a\
             \n    TableScan: test projection=None\
-            \n    Projection: #a\
+            \n    Projection: #test.a\
             \n      TableScan: test projection=None"
         );
 
         // filter sent to side before the join
         let expected = "\
-        Join: a = a\
-        \n  Filter: #a LtEq Int64(1)\
+        Join: #test.a = #test.a\
+        \n  Filter: #test.a LtEq Int64(1)\
         \n    TableScan: test projection=None\
-        \n  Projection: #a\
-        \n    Filter: #a LtEq Int64(1)\
+        \n  Projection: #test.a\
+        \n    Filter: #test.a LtEq Int64(1)\
         \n      TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -861,7 +866,12 @@ mod tests {
             .project(vec![col("a"), col("b")])?
             .build()?;
         let plan = LogicalPlanBuilder::from(&left)
-            .join(&right, JoinType::Inner, &["a"], &["a"])?
+            .join(
+                &right,
+                JoinType::Inner,
+                vec![Column::from_name("a".to_string())],
+                vec![Column::from_name("a".to_string())],
+            )?
             // "b" and "c" are not shared by either side: they are only available together after the join
             .filter(col("c").lt_eq(col("b")))?
             .build()?;
@@ -870,11 +880,11 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "\
-            Filter: #c LtEq #b\
-            \n  Join: a = a\
-            \n    Projection: #a, #c\
+            Filter: #test.c LtEq #test.b\
+            \n  Join: #test.a = #test.a\
+            \n    Projection: #test.a, #test.c\
             \n      TableScan: test projection=None\
-            \n    Projection: #a, #b\
+            \n    Projection: #test.a, #test.b\
             \n      TableScan: test projection=None"
         );
 
@@ -895,7 +905,12 @@ mod tests {
             .project(vec![col("a"), col("c")])?
             .build()?;
         let plan = LogicalPlanBuilder::from(&left)
-            .join(&right, JoinType::Inner, &["a"], &["a"])?
+            .join(
+                &right,
+                JoinType::Inner,
+                vec![Column::from_name("a".to_string())],
+                vec![Column::from_name("a".to_string())],
+            )?
             .filter(col("b").lt_eq(lit(1i64)))?
             .build()?;
 
@@ -903,20 +918,20 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "\
-            Filter: #b LtEq Int64(1)\
-            \n  Join: a = a\
-            \n    Projection: #a, #b\
+            Filter: #test.b LtEq Int64(1)\
+            \n  Join: #test.a = #test.a\
+            \n    Projection: #test.a, #test.b\
             \n      TableScan: test projection=None\
-            \n    Projection: #a, #c\
+            \n    Projection: #test.a, #test.c\
             \n      TableScan: test projection=None"
         );
 
         let expected = "\
-        Join: a = a\
-        \n  Projection: #a, #b\
-        \n    Filter: #b LtEq Int64(1)\
+        Join: #test.a = #test.a\
+        \n  Projection: #test.a, #test.b\
+        \n    Filter: #test.b LtEq Int64(1)\
         \n      TableScan: test projection=None\
-        \n  Projection: #a, #c\
+        \n  Projection: #test.a, #test.c\
         \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -966,14 +981,15 @@ mod tests {
     fn table_scan_with_pushdown_provider(
         filter_support: TableProviderFilterPushDown,
     ) -> Result<LogicalPlan> {
+        use std::convert::TryFrom;
+
         let test_provider = PushDownProvider { filter_support };
 
         let table_scan = LogicalPlan::TableScan {
-            table_name: "".into(),
+            table_name: None,
             filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from_qualified(
-                "",
-                &*test_provider.schema(),
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
             )?),
             projection: None,
             source: Arc::new(test_provider),

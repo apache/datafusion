@@ -1391,12 +1391,12 @@ async fn csv_explain() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
     let actual = execute(&mut ctx, sql).await;
-    let expected = vec![
-        vec![
-            "logical_plan",
-            "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=None"
-        ]
-    ];
+    let expected = vec![vec![
+        "logical_plan",
+        "Projection: #aggregate_test_100.c1\
+            \n  Filter: #aggregate_test_100.c2 Gt Int64(10)\
+            \n    TableScan: aggregate_test_100 projection=None",
+    ]];
     assert_eq!(expected, actual);
 
     // Also, expect same result with lowercase explain
@@ -1420,7 +1420,11 @@ async fn csv_explain_verbose() {
     // pain). Instead just check for a few key pieces.
     assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
     assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
-    assert!(actual.contains("#c2 Gt Int64(10)"), "Actual: '{}'", actual);
+    assert!(
+        actual.contains("#aggregate_test_100.c2 Gt Int64(10)"),
+        "Actual: '{}'",
+        actual
+    );
 }
 
 fn aggr_test_schema() -> SchemaRef {

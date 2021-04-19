@@ -160,7 +160,7 @@ mod test {
         // Should push the limit down to table provider
         // When it has a select
         let expected = "Limit: 1000\
-        \n  Projection: #a\
+        \n  Projection: #test.a\
         \n    TableScan: test projection=None, limit=1000";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -199,7 +199,7 @@ mod test {
 
         // Limit should *not* push down aggregate node
         let expected = "Limit: 1000\
-        \n  Aggregate: groupBy=[[#a]], aggr=[[MAX(#b)]]\
+        \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -241,7 +241,7 @@ mod test {
 
         // Limit should use deeper LIMIT 1000, but Limit 10 shouldn't push down aggregation
         let expected = "Limit: 10\
-        \n  Aggregate: groupBy=[[#a]], aggr=[[MAX(#b)]]\
+        \n  Aggregate: groupBy=[[#test.a]], aggr=[[MAX(#test.b)]]\
         \n    Limit: 1000\
         \n      TableScan: test projection=None, limit=1000";
 

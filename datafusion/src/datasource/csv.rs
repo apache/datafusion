@@ -33,7 +33,7 @@
 //! let schema = csvdata.schema();
 //! ```
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use std::any::Any;
 use std::string::String;
 use std::sync::Arc;
@@ -123,10 +123,18 @@ impl TableProvider for CsvFile {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let fields = self
+            .schema
+            .fields()
+            .iter()
+            .map(|f| f.clone())
+            .collect::<Vec<_>>();
+        let schema = Schema::new(fields);
+
         Ok(Arc::new(CsvExec::try_new(
             &self.path,
             CsvReadOptions::new()
-                .schema(&self.schema)
+                .schema(&schema)
                 .has_header(self.has_header)
                 .delimiter(self.delimiter)
                 .file_extension(self.file_extension.as_str()),

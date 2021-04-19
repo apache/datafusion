@@ -23,7 +23,7 @@ use crate::{
     error::Result,
     physical_plan::{
         coalesce_batches::CoalesceBatchesExec, filter::FilterExec,
-        hash_join::HashJoinExec, repartition::RepartitionExec,
+        hash_join::HashJoinExec, repartition::RepartitionExec, Partitioning,
     },
 };
 use std::sync::Arc;
@@ -37,6 +37,7 @@ impl CoalesceBatches {
         Self {}
     }
 }
+
 impl PhysicalOptimizerRule for CoalesceBatches {
     fn optimize(
         &self,
@@ -58,7 +59,17 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         // See https://issues.apache.org/jira/browse/ARROW-11068
         let wrap_in_coalesce = plan_any.downcast_ref::<FilterExec>().is_some()
             || plan_any.downcast_ref::<HashJoinExec>().is_some()
-            || plan_any.downcast_ref::<RepartitionExec>().is_some();
+            || {
+                match plan_any.downcast_ref::<RepartitionExec>() {
+                    Some(p) => match p.partitioning() {
+                        // do not coalesce hash partitions since other plans like partitioned hash
+                        // join depends on it empty batches for outter joins
+                        Partitioning::Hash(_, _) => false,
+                        _ => true,
+                    },
+                    None => false,
+                }
+            };
 
         //TODO we should also do this for HashAggregateExec but we need to update tests
         // as part of this work - see https://issues.apache.org/jira/browse/ARROW-11068

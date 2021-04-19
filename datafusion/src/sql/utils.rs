@@ -18,7 +18,7 @@
 use crate::logical_plan::{DFSchema, Expr, LogicalPlan};
 use crate::{
     error::{DataFusionError, Result},
-    logical_plan::{ExpressionVisitor, Recursion},
+    logical_plan::{Column, ExpressionVisitor, Recursion},
 };
 use std::collections::HashMap;
 
@@ -28,7 +28,7 @@ pub(crate) fn expand_wildcard(expr: &Expr, schema: &DFSchema) -> Vec<Expr> {
         Expr::Wildcard => schema
             .fields()
             .iter()
-            .map(|f| Expr::Column(f.name().to_string()))
+            .map(|f| Expr::Column(f.qualified_column()))
             .collect::<Vec<Expr>>(),
         _ => vec![expr.clone()],
     }
@@ -127,7 +127,7 @@ where
 pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
         Expr::Column(_) => Ok(expr.clone()),
-        _ => Ok(Expr::Column(expr.name(&plan.schema())?)),
+        _ => Ok(Expr::Column(Column::from_name(expr.name(&plan.schema())?))),
     }
 }
 
@@ -335,7 +335,7 @@ where
                 asc: *asc,
                 nulls_first: *nulls_first,
             }),
-            Expr::Column(_) | Expr::Literal(_) | Expr::ScalarVariable(_) => {
+            Expr::Column { .. } | Expr::Literal(_) | Expr::ScalarVariable(_) => {
                 Ok(expr.clone())
             }
             Expr::Wildcard => Ok(Expr::Wildcard),
@@ -364,8 +364,8 @@ pub(crate) fn resolve_aliases_to_exprs(
     aliases: &HashMap<String, Expr>,
 ) -> Result<Expr> {
     clone_with_replacement(expr, &|nested_expr| match nested_expr {
-        Expr::Column(name) => {
-            if let Some(aliased_expr) = aliases.get(name) {
+        Expr::Column(c) if c.relation.is_none() => {
+            if let Some(aliased_expr) = aliases.get(&c.name) {
                 Ok(Some(aliased_expr.clone()))
             } else {
                 Ok(None)
