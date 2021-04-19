@@ -272,11 +272,7 @@ impl LogicalPlanBuilder {
     }
     /// Apply a cross join
     pub fn cross_join(&self, right: &LogicalPlan) -> Result<Self> {
-        let left_fields = self.plan.schema().fields().iter();
-        let right_fields = right.schema().fields();
-        let fields = left_fields.chain(right_fields).cloned().collect();
-
-        let schema = DFSchema::new(fields)?;
+        let schema = self.plan.schema().join(right.schema())?;
 
         Ok(Self::from(&LogicalPlan::CrossJoin {
             left: Arc::new(self.plan.clone()),
