@@ -158,7 +158,7 @@ impl ExecutionPlan for CrossJoinExec {
                     *build_side = Some(batches.clone());
 
                     debug!(
-                        "Built build-side of cartesian join containing {} rows in {} ms",
+                        "Built build-side of cross join containing {} rows in {} ms",
                         num_rows,
                         start.elapsed().as_millis()
                     );
