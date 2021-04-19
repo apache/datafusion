@@ -18,15 +18,13 @@
 //! Defines the join plan for executing partitions in parallel and then joining the results
 //! into a set of partitions.
 
-use futures::StreamExt;
-use std::{any::Any, sync::Arc};
+use futures::{lock::Mutex, StreamExt};
+use std::{any::Any, sync::Arc, task::Poll};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use futures::{Stream, TryStreamExt};
-
-use futures::lock::Mutex;
 
 use super::{hash_utils::check_join_is_valid, merge::MergeExec};
 use crate::{
@@ -175,6 +173,8 @@ impl ExecutionPlan for CrossJoinExec {
             schema: self.schema.clone(),
             left_data,
             right: stream,
+            right_batch: Arc::new(std::sync::Mutex::new(None)),
+            left_index: 0,
             num_input_batches: 0,
             num_input_rows: 0,
             num_output_batches: 0,
@@ -192,6 +192,10 @@ struct CrossJoinStream {
     left_data: JoinLeftData,
     /// right
     right: SendableRecordBatchStream,
+    /// Current value on the left
+    left_index: usize,
+    /// Current batch being processed from the right side
+    right_batch: Arc<std::sync::Mutex<Option<RecordBatch>>>,
     /// number of input batches
     num_input_batches: usize,
     /// number of input rows
@@ -210,38 +214,33 @@ impl RecordBatchStream for CrossJoinStream {
     }
 }
 fn build_batch(
+    left_index: usize,
     batch: &RecordBatch,
     left_data: &RecordBatch,
     schema: &Schema,
 ) -> ArrowResult<RecordBatch> {
-    let mut batches = Vec::new();
-    let mut num_rows = 0;
-    for i in 0..left_data.num_rows() {
-        // for each value on the left, repeat the value of the right
-        let arrays = left_data
-            .columns()
-            .iter()
-            .map(|arr| {
-                let scalar = ScalarValue::try_from_array(arr, i)?;
-                Ok(scalar.to_array_of_size(batch.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()
-            .map_err(|x| x.into_arrow_external_error())?;
+    // Repeat value on the left n times
+    let arrays = left_data
+        .columns()
+        .iter()
+        .map(|arr| {
+            let scalar = ScalarValue::try_from_array(arr, left_index)?;
+            Ok(scalar.to_array_of_size(batch.num_rows()))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map_err(|x| x.into_arrow_external_error())?;
 
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            arrays
-                .iter()
-                .chain(batch.columns().iter())
-                .cloned()
-                .collect(),
-        )?;
-        num_rows += batch.num_rows();
-        batches.push(batch);
-    }
-    concat_batches(&Arc::new(schema.clone()), &batches, num_rows)
+    RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        arrays
+            .iter()
+            .chain(batch.columns().iter())
+            .cloned()
+            .collect(),
+    )
 }
 
+#[async_trait]
 impl Stream for CrossJoinStream {
     type Item = ArrowResult<RecordBatch>;
 
@@ -249,12 +248,32 @@ impl Stream for CrossJoinStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
+        if self.left_index > 0 && self.left_index < self.left_data.num_rows() {
+            let start = Instant::now();
+            let right_batch = self.right_batch.lock().unwrap().clone().unwrap();
+            let result =
+                build_batch(self.left_index, &right_batch, &self.left_data, &self.schema);
+            self.num_input_rows += right_batch.num_rows();
+            if let Ok(ref batch) = result {
+                self.join_time += start.elapsed().as_millis() as usize;
+                self.num_output_batches += 1;
+                self.num_output_rows += batch.num_rows();
+            }
+            self.left_index += 1;
+            return Poll::Ready(Some(result));
+        }
+        self.left_index = 0;
         self.right
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(batch)) => {
                     let start = Instant::now();
-                    let result = build_batch(&batch, &self.left_data, &self.schema);
+                    let result = build_batch(
+                        self.left_index,
+                        &batch,
+                        &self.left_data,
+                        &self.schema,
+                    );
                     self.num_input_batches += 1;
                     self.num_input_rows += batch.num_rows();
                     if let Ok(ref batch) = result {
@@ -262,6 +281,11 @@ impl Stream for CrossJoinStream {
                         self.num_output_batches += 1;
                         self.num_output_rows += batch.num_rows();
                     }
+                    self.left_index = 1;
+
+                    let mut right_batch = self.right_batch.lock().unwrap();
+                    *right_batch = Some(batch.clone());
+
                     Some(result)
                 }
                 other => {
