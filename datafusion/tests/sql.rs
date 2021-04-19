@@ -1289,8 +1289,8 @@ async fn equijoin_implicit_syntax_reversed() -> Result<()> {
 }
 
 #[tokio::test]
-async fn cross_join() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+async fn cross_join() {
+    let mut ctx = create_join_context("t1_id", "t2_id").unwrap();
 
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1, t2 ORDER BY t1_id";
     let actual = execute(&mut ctx, sql).await;
@@ -1329,7 +1329,17 @@ async fn cross_join() -> Result<()> {
         ]
     );
 
-    Ok(())
+    // Two partitions (from UNION) on the left
+    let sql = "SELECT * FROM (SELECT t1_id, t1_name FROM t1 UNION ALL SELECT t1_id, t1_name FROM t1) t1 CROSS JOIN t2";
+    let actual = execute(&mut ctx, sql).await;
+
+    assert_eq!(4 * 4 * 2, actual.len());
+
+    // Two partitions (from UNION) on the right
+    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN (SELECT t2_name FROM t2 UNION ALL SELECT t2_name FROM t2)";
+    let actual = execute(&mut ctx, sql).await;
+
+    assert_eq!(4 * 4 * 2, actual.len());
 }
 
 fn create_join_context(

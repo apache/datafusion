@@ -46,7 +46,6 @@ impl fmt::Debug for MemoryExec {
         write!(f, "partitions: [...]")?;
         write!(f, "schema: {:?}", self.schema)?;
         write!(f, "projection: {:?}", self.projection)
-
     }
 }
 
