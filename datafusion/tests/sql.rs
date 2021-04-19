@@ -1289,7 +1289,7 @@ async fn equijoin_implicit_syntax_reversed() -> Result<()> {
 }
 
 #[tokio::test]
-async fn cartesian_join() -> Result<()> {
+async fn cross_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
 
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1, t2 ORDER BY t1_id";

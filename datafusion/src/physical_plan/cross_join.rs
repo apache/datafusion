@@ -41,7 +41,7 @@ use crate::physical_plan::coalesce_batches::concat_batches;
 use log::debug;
 
 /// Data of the left side
-type JoinLeftData = Vec<RecordBatch>;
+type JoinLeftData = RecordBatch;
 
 /// executes partitions in parallel and combines them into a set of
 /// partitions by combining all values from the left with all values on the right
@@ -154,8 +154,9 @@ impl ExecutionPlan for CrossJoinExec {
                             Ok(acc)
                         })
                         .await?;
-
-                    *build_side = Some(batches.clone());
+                    let merged_batch =
+                        concat_batches(&self.left.schema(), &batches, num_rows)?;
+                    *build_side = Some(merged_batch.clone());
 
                     debug!(
                         "Built build-side of cross join containing {} rows in {} ms",
@@ -163,7 +164,7 @@ impl ExecutionPlan for CrossJoinExec {
                         start.elapsed().as_millis()
                     );
 
-                    batches
+                    merged_batch
                 }
             }
         };
@@ -210,36 +211,33 @@ impl RecordBatchStream for CrossJoinStream {
 }
 fn build_batch(
     batch: &RecordBatch,
-    left_data: &[RecordBatch],
+    left_data: &RecordBatch,
     schema: &Schema,
 ) -> ArrowResult<RecordBatch> {
     let mut batches = Vec::new();
     let mut num_rows = 0;
-    for left in left_data.iter() {
-        for i in 0..left.num_rows() {
-            // for each value on the left, repeat the value of the right
-            let arrays = left
-                .columns()
+    for i in 0..left_data.num_rows() {
+        // for each value on the left, repeat the value of the right
+        let arrays = left_data
+            .columns()
+            .iter()
+            .map(|arr| {
+                let scalar = ScalarValue::try_from_array(arr, i)?;
+                Ok(scalar.to_array_of_size(batch.num_rows()))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map_err(|x| x.into_arrow_external_error())?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            arrays
                 .iter()
-                .map(|arr| {
-                    let scalar = ScalarValue::try_from_array(arr, i)?;
-                    Ok(scalar.to_array_of_size(batch.num_rows()))
-                })
-                .collect::<Result<Vec<_>>>()
-                .map_err(|x| x.into_arrow_external_error())?;
-
-            let batch = RecordBatch::try_new(
-                Arc::new(schema.clone()),
-                arrays
-                    .iter()
-                    .chain(batch.columns().iter())
-                    .cloned()
-                    .collect(),
-            )?;
-
-            batches.push(batch);
-            num_rows += left.num_rows();
-        }
+                .chain(batch.columns().iter())
+                .cloned()
+                .collect(),
+        )?;
+        num_rows += batch.num_rows();
+        batches.push(batch);
     }
     concat_batches(&Arc::new(schema.clone()), &batches, num_rows)
 }
