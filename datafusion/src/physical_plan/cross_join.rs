@@ -294,7 +294,7 @@ impl Stream for CrossJoinStream {
                     self.left_index = 1;
 
                     let mut right_batch = self.right_batch.lock().unwrap();
-                    *right_batch = Some(batch.clone());
+                    *right_batch = Some(batch);
 
                     Some(result)
                 }
