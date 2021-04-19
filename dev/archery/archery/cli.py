@@ -289,8 +289,7 @@ def decorate_lint_command(cmd):
 
 
 @archery.command(short_help="Check Arrow source tree for errors")
-@click.option("--src", metavar="<arrow_src>", default=None,
-              callback=validate_arrow_sources,
+@click.option("--src", metavar="<arrow_src>", default=".",
               help="Specify Arrow source directory")
 @click.option("--fix", is_flag=True, type=BOOL, default=False,
               help="Toggle fixing the lint errors if the linter supports it.")
@@ -301,6 +300,8 @@ def decorate_lint_command(cmd):
 @decorate_lint_command
 @click.pass_context
 def lint(ctx, src, fix, iwyu_all, **checks):
+    src = ArrowSources(src)
+
     if checks.pop('all'):
         # "--all" is given => enable all non-selected checks
         for k, v in checks.items():

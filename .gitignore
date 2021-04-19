@@ -85,3 +85,9 @@ cpp/Brewfile.lock.json
 target
 Cargo.lock
 
+rusty-tags.vi
+.history
+.flatbuffers/
+
+.vscode
+venv/*
