@@ -21,9 +21,11 @@
 use futures::{lock::Mutex, StreamExt};
 use std::{any::Any, sync::Arc, task::Poll};
 
+use crate::physical_plan::memory::MemoryStream;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+
 use futures::{Stream, TryStreamExt};
 
 use super::{hash_utils::check_join_is_valid, merge::MergeExec};
@@ -168,6 +170,14 @@ impl ExecutionPlan for CrossJoinExec {
         };
 
         let stream = self.right.execute(partition).await?;
+
+        if left_data.num_rows() == 0 {
+            return Ok(Box::pin(MemoryStream::try_new(
+                vec![],
+                self.schema.clone(),
+                None,
+            )?))
+        }
 
         Ok(Box::pin(CrossJoinStream {
             schema: self.schema.clone(),
