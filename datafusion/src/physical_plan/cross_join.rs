@@ -60,7 +60,7 @@ pub struct CrossJoinExec {
 impl CrossJoinExec {
     /// Tries to create a new [CrossJoinExec].
     /// # Error
-    /// This function errors when it is not possible to join the left and right sides on keys `on`.
+    /// This function errors when left and right schema's can't be combined
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
