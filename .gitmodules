@@ -1,3 +1,6 @@
 [submodule "parquet-testing"]
 	path = parquet-testing
 	url = https://github.com/apache/parquet-testing.git
+[submodule "testing"]
+	path = testing
+	url = https://github.com/apache/arrow-testing
