@@ -176,7 +176,7 @@ impl ExecutionPlan for CrossJoinExec {
                 vec![],
                 self.schema.clone(),
                 None,
-            )?))
+            )?));
         }
 
         Ok(Box::pin(CrossJoinStream {
