@@ -333,9 +333,9 @@ pub trait Accumulator: Send + Sync + Debug {
 
 pub mod aggregates;
 pub mod array_expressions;
-pub mod cross_join;
 pub mod coalesce_batches;
 pub mod common;
+pub mod cross_join;
 #[cfg(feature = "crypto_expressions")]
 pub mod crypto_expressions;
 pub mod csv;

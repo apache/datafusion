@@ -367,9 +367,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         left: &LogicalPlan,
         right: &LogicalPlan,
     ) -> Result<LogicalPlan> {
-        LogicalPlanBuilder::from(&left)
-            .cross_join(&right)?
-            .build()
+        LogicalPlanBuilder::from(&left).cross_join(&right)?.build()
     }
 
     fn parse_join(
@@ -499,9 +497,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                     }
                     if join_keys.is_empty() {
-                        left = LogicalPlanBuilder::from(&left)
-                            .cross_join(right)?
-                            .build()?;
+                        left =
+                            LogicalPlanBuilder::from(&left).cross_join(right)?.build()?;
                     } else {
                         let left_keys: Vec<_> =
                             join_keys.iter().map(|(l, _)| *l).collect();
@@ -529,9 +526,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     let mut left = plans[0].clone();
                     for right in plans.iter().skip(1) {
-                        left = LogicalPlanBuilder::from(&left)
-                            .cross_join(right)?
-                            .build()?;
+                        left =
+                            LogicalPlanBuilder::from(&left).cross_join(right)?.build()?;
                     }
                     Ok(left)
                 }
