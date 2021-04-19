@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the join plan for executing partitions in parallel and then joining the results
-//! into a set of partitions.
+//! Defines the cross join plan for loading the left side of the cross join
+//! and producing batches in parallel for the right partitions
 
 use futures::{lock::Mutex, StreamExt};
 use std::{any::Any, sync::Arc, task::Poll};
