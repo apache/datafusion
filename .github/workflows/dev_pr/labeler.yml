@@ -16,7 +16,7 @@
 # under the License.
 
 datafusion:
-  - rust/datafusion/**/*
+  - datafusion/**/*
 
 ballista:
-  - rust/ballista/**/*
+  - ballista/**/*
