@@ -45,13 +45,7 @@ class ArrowSources:
         ----------
         path : src
         """
-        path = Path(path)
-        # validate by checking a specific path in the arrow source tree
-        if not (path / 'cpp' / 'CMakeLists.txt').exists():
-            raise InvalidArrowSource(
-                "No Arrow C++ sources found in {}.".format(path)
-            )
-        self.path = path
+        self.path = Path(path)
 
     @property
     def archery(self):
