@@ -88,8 +88,6 @@ jobs:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
     steps:
       - uses: actions/checkout@v2
         with:
@@ -115,6 +113,8 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
+          export ARROW_TEST_DATA=$(pwd)/testing/data
+          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           # run tests on all workspace members with default feature list
           cargo test
           # test datafusion examples
@@ -127,6 +127,8 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
+          export ARROW_TEST_DATA=$(pwd)/testing/data
+          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           cd ballista/rust
           # snmalloc requires cmake so build without default features
           cargo test --no-default-features
