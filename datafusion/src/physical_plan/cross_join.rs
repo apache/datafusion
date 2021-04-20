@@ -260,7 +260,10 @@ impl Stream for CrossJoinStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         if self.left_index > 0 && self.left_index < self.left_data.num_rows() {
             let start = Instant::now();
-            let right_batch = self.right_batch.lock().unwrap().clone().unwrap();
+            let right_batch = {
+                let right_batch = self.right_batch.lock();
+                right_batch.clone().unwrap()
+            };
             let result =
                 build_batch(self.left_index, &right_batch, &self.left_data, &self.schema);
             self.num_input_rows += right_batch.num_rows();
