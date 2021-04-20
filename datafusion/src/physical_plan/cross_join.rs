@@ -261,7 +261,7 @@ impl Stream for CrossJoinStream {
         if self.left_index > 0 && self.left_index < self.left_data.num_rows() {
             let start = Instant::now();
             let right_batch = {
-                let right_batch = self.right_batch.lock();
+                let right_batch = self.right_batch.lock().unwrap();
                 right_batch.clone().unwrap()
             };
             let result =
