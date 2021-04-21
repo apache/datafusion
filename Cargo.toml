@@ -17,9 +17,14 @@
 
 [workspace]
 members = [
-        "datafusion",
-        "datafusion-examples",
+    "datafusion",
+    "datafusion-examples",
 	"benchmarks",
+    "ballista/rust/benchmarks/tpch",
+    "ballista/rust/client",
+    "ballista/rust/core",
+    "ballista/rust/executor",
+    "ballista/rust/scheduler",
 ]
 
 # this package is excluded because it requires different compilation flags, thereby significantly changing
