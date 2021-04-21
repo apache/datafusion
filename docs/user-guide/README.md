@@ -16,21 +16,15 @@
   specific language governing permissions and limitations
   under the License.
 -->
-# Ballista User Guide Source
+# DataFusion User Guide Source
 
-This directory contains the sources for the user guide that is published at https://ballistacompute.org/docs/.
+This directory contains the sources for the DataFusion user guide.
 
 ## Generate HTML
+
+To generate the user guide in HTML format, run the following commands:
 
 ```bash
 cargo install mdbook
 mdbook build
-```
-
-## Deploy User Guide to Web Site
-
-Requires ssh certificate to be available.
-
-```bash
-./deploy.sh
 ```
