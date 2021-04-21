@@ -31,5 +31,5 @@ futures = "0.3"
 log = "0.4"
 tokio = "1.0"
 
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "08a662f" }
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "3d7cefb" }
 datafusion = { path = "../../../datafusion" }
