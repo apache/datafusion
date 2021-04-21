@@ -17,36 +17,28 @@
   under the License.
 -->
 
-## Overview
+# DataFusion
 
-Ballista is a distributed compute platform primarily implemented in Rust, and powered by Apache Arrow. It is 
-built on an architecture that allows other programming languages to be supported as first-class citizens without paying
-a penalty for serialization costs.
+DataFusion is an extensible query execution framework, written in
+Rust, that uses [Apache Arrow](https://arrow.apache.org) as its
+in-memory format.
 
-The foundational technologies in Ballista are:
+DataFusion supports both an SQL and a DataFrame API for building
+logical query plans as well as a query optimizer and execution engine
+capable of parallel execution against partitioned data sources (CSV
+and Parquet) using threads.
 
-- [Apache Arrow](https://arrow.apache.org/) memory model and compute kernels for efficient processing of data.
-- [Apache Arrow Flight Protocol](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for efficient data transfer between processes.
-- [Google Protocol Buffers](https://developers.google.com/protocol-buffers) for serializing query plans.
-- [Docker](https://www.docker.com/) for packaging up executors along with user-defined code.
+## Use Cases
 
-## Architecture
+DataFusion is used to create modern, fast and efficient data
+pipelines, ETL processes, and database systems, which need the
+performance of Rust and Apache Arrow and want to provide their users
+the convenience of an SQL interface or a DataFrame API.
 
-The following diagram highlights some of the integrations that will be possible with this unique architecture. Note that not all components shown here are available yet.
+## Why DataFusion?
 
-![Ballista Architecture Diagram](img/ballista-architecture.png)
+* *High Performance*: Leveraging Rust and Arrow's memory model, DataFusion achieves very high performance
+* *Easy to Connect*: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem
+* *Easy to Embed*: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific usecase
+* *High Quality*:  Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.
 
-## How does this compare to Apache Spark?
-
-Although Ballista is largely inspired by Apache Spark, there are some key differences.
-
-- The choice of Rust as the main execution language means that memory usage is deterministic and avoids the overhead of GC pauses.
-- Ballista is designed from the ground up to use columnar data, enabling a number of efficiencies such as vectorized 
-processing (SIMD and GPU) and efficient compression. Although Spark does have some columnar support, it is still 
-largely row-based today.
-- The combination of Rust and Arrow provides excellent memory efficiency and memory usage can be 5x - 10x lower than Apache Spark in some cases, which means that more processing can fit on a single node, reducing the overhead of distributed compute.
-- The use of Apache Arrow as the memory model and network protocol means that data can be exchanged between executors in any programming language with minimal serialization overhead.
-  
-## Status
-
-Ballista is at the proof-of-concept phase currently but is under active development by a growing community.
