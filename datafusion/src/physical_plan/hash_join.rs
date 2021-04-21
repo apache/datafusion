@@ -1243,7 +1243,7 @@ mod tests {
 
     #[test]
     fn join_with_hash_collision() -> Result<()> {
-        let mut hashmap_left = HashMap::with_hasher(IdHashBuilder {});
+        let mut hashmap_left = HashMap::with_capacity_and_hasher(2, IdHashBuilder {});
         let left = build_table_i32(
             ("a", &vec![10, 20]),
             ("x", &vec![100, 200]),
@@ -1256,8 +1256,18 @@ mod tests {
             create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
 
         // Create hash collisions
-        hashmap_left.insert(hashes[0], smallvec![0, 1]);
-        hashmap_left.insert(hashes[1], smallvec![0, 1]);
+        match hashmap_left.raw_entry_mut().from_hash(hashes[0], |_| true) {
+            hashbrown::hash_map::RawEntryMut::Vacant(entry) => {
+                entry.insert_hashed_nocheck(hashes[0], (), smallvec![0, 1])
+            }
+            _ => unreachable!("Hash should not be vacant"),
+        };
+        match hashmap_left.raw_entry_mut().from_hash(hashes[1], |_| true) {
+            hashbrown::hash_map::RawEntryMut::Vacant(entry) => {
+                entry.insert_hashed_nocheck(hashes[1], (), smallvec![0, 1])
+            }
+            _ => unreachable!("Hash should not be vacant"),
+        };
 
         let right = build_table_i32(
             ("a", &vec![10, 20]),
