@@ -821,7 +821,7 @@ pub fn create_hashes<'a>(
                 hash_array_primitive!(UInt32Array, col, u32, hashes_buffer, random_state);
             }
             DataType::UInt64 => {
-                hash_array!(UInt64Array, col, u64, hashes_buffer, random_state);
+                hash_array_primitive!(UInt64Array, col, u64, hashes_buffer, random_state);
             }
             DataType::Int8 => {
                 hash_array_primitive!(Int8Array, col, i8, hashes_buffer, random_state);
@@ -830,13 +830,13 @@ pub fn create_hashes<'a>(
                 hash_array_primitive!(Int16Array, col, i16, hashes_buffer, random_state);
             }
             DataType::Int32 => {
-                hash_array!(Int32Array, col, i32, hashes_buffer, random_state);
+                hash_array_primitive!(Int32Array, col, i32, hashes_buffer, random_state);
             }
             DataType::Int64 => {
-                hash_array!(Int64Array, col, i64, hashes_buffer, random_state);
+                hash_array_primitive!(Int64Array, col, i64, hashes_buffer, random_state);
             }
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                hash_array!(
+                hash_array_primitive!(
                     TimestampMicrosecondArray,
                     col,
                     i64,
@@ -845,7 +845,7 @@ pub fn create_hashes<'a>(
                 );
             }
             DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                hash_array!(
+                hash_array_primitive!(
                     TimestampNanosecondArray,
                     col,
                     i64,
@@ -854,7 +854,7 @@ pub fn create_hashes<'a>(
                 );
             }
             DataType::Boolean => {
-                hash_array!(BooleanArray, col, u8, hashes_buffer, random_state);
+                hash_array_primitive!(BooleanArray, col, u8, hashes_buffer, random_state);
             }
             DataType::Utf8 => {
                 hash_array!(StringArray, col, str, hashes_buffer, random_state);
