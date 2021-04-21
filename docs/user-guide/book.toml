@@ -16,8 +16,8 @@
 # under the License.
 
 [book]
-authors = ["Andy Grove"]
+authors = ["Apache Arrow"]
 language = "en"
 multilingual = false
 src = "src"
-title = "Ballista User Guide"
+title = "DataFusion User Guide"
