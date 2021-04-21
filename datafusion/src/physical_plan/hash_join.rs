@@ -706,9 +706,9 @@ impl BuildHasher for IdHashBuilder {
 
 // Combines two hashes into one hash
 #[inline]
-fn combine_hashes(mut l: u64, r: u64) -> u64 {
-    l ^= r + 0x9e3779b9 + (l << 6) + (l >> 2);
-    return l;
+fn combine_hashes(l: u64, r: u64) -> u64 {
+    let hash = (17 * 37u64).wrapping_add(l);
+    hash.wrapping_mul(37).wrapping_add(r)
 }
 
 macro_rules! equal_rows_elem {
