@@ -345,6 +345,7 @@ pub mod aggregates;
 pub mod array_expressions;
 pub mod coalesce_batches;
 pub mod common;
+pub mod cross_join;
 #[cfg(feature = "crypto_expressions")]
 pub mod crypto_expressions;
 pub mod csv;

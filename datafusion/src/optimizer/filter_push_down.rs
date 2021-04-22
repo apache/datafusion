@@ -314,7 +314,8 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .collect::<HashSet<_>>();
             issue_filters(state, used_columns, plan)
         }
-        LogicalPlan::Join { left, right, .. } => {
+        LogicalPlan::Join { left, right, .. }
+        | LogicalPlan::CrossJoin { left, right, .. } => {
             let (pushable_to_left, pushable_to_right, keep) =
                 get_join_predicates(&state, &left.schema(), &right.schema());
 

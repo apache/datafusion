@@ -17,6 +17,7 @@
 
 //! Execution plan for reading in-memory batches of data
 
+use core::fmt;
 use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -31,7 +32,6 @@ use async_trait::async_trait;
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
-#[derive(Debug)]
 pub struct MemoryExec {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
@@ -39,6 +39,14 @@ pub struct MemoryExec {
     schema: SchemaRef,
     /// Optional projection
     projection: Option<Vec<usize>>,
+}
+
+impl fmt::Debug for MemoryExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "partitions: [...]")?;
+        write!(f, "schema: {:?}", self.schema)?;
+        write!(f, "projection: {:?}", self.projection)
+    }
 }
 
 #[async_trait]
