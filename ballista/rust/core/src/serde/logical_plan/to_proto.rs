@@ -24,7 +24,7 @@ use std::{
     convert::{TryFrom, TryInto},
 };
 
-use crate::datasource::DFTableAdapter;
+use crate::datasource::DfTableAdapter;
 use crate::serde::{protobuf, BallistaError};
 
 use arrow::datatypes::{DataType, Schema};
@@ -679,7 +679,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
 
                 // unwrap the DFTableAdapter to get to the real TableProvider
                 let source = if let Some(adapter) =
-                    source.as_any().downcast_ref::<DFTableAdapter>()
+                    source.as_any().downcast_ref::<DfTableAdapter>()
                 {
                     match &adapter.logical_plan {
                         LogicalPlan::TableScan { source, .. } => Ok(source.as_any()),

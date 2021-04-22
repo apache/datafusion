@@ -30,7 +30,7 @@ use ballista_core::serde::protobuf::{
 };
 use ballista_core::{
     client::BallistaClient,
-    datasource::DFTableAdapter,
+    datasource::DfTableAdapter,
     error::{BallistaError, Result},
     memory_stream::MemoryStream,
     utils::create_datafusion_context,
@@ -151,7 +151,7 @@ impl BallistaContext {
             let execution_plan = ctx.create_physical_plan(&plan)?;
             ctx.register_table(
                 TableReference::Bare { table: name },
-                Arc::new(DFTableAdapter::new(plan, execution_plan)),
+                Arc::new(DfTableAdapter::new(plan, execution_plan)),
             )?;
         }
         let df = ctx.sql(sql)?;
