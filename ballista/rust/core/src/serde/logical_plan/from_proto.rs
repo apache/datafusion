@@ -436,6 +436,7 @@ impl TryInto<arrow::datatypes::DataType> for &protobuf::arrow_type::ArrowTypeEnu
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<arrow::datatypes::DataType> for protobuf::PrimitiveScalarType {
     fn into(self) -> arrow::datatypes::DataType {
         use arrow::datatypes::DataType;
@@ -1170,6 +1171,7 @@ impl TryFrom<i32> for protobuf::FileType {
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<datafusion::sql::parser::FileType> for protobuf::FileType {
     fn into(self) -> datafusion::sql::parser::FileType {
         use datafusion::sql::parser::FileType;

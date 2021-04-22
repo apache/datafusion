@@ -1020,7 +1020,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let expr: Vec<protobuf::LogicalExprNode> = args
                     .iter()
-                    .map(|e| Ok(e.try_into()?))
+                    .map(|e| e.try_into())
                     .collect::<Result<Vec<protobuf::LogicalExprNode>, BallistaError>>()?;
                 Ok(protobuf::LogicalExprNode {
                     expr_type: Some(
@@ -1163,6 +1163,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<protobuf::Schema> for &Schema {
     fn into(self) -> protobuf::Schema {
         protobuf::Schema {

@@ -72,6 +72,7 @@ impl TryInto<PartitionId> for protobuf::PartitionId {
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<PartitionStats> for protobuf::PartitionStats {
     fn into(self) -> PartitionStats {
         PartitionStats::new(

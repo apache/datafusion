@@ -75,6 +75,7 @@ pub struct ExecutorMeta {
     pub port: u16,
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<protobuf::ExecutorMetadata> for ExecutorMeta {
     fn into(self) -> protobuf::ExecutorMetadata {
         protobuf::ExecutorMetadata {
