@@ -18,7 +18,7 @@
 //! Defines the execution plan for the hash aggregate operation
 
 use std::any::Any;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use ahash::RandomState;
@@ -95,7 +95,7 @@ pub struct HashAggregateExec {
     /// to the partial aggregate
     input_schema: SchemaRef,
     /// Metric to track number of output rows
-    output_rows: Arc<Mutex<SQLMetric>>,
+    output_rows: Arc<SQLMetric>,
 }
 
 fn create_schema(
@@ -144,7 +144,7 @@ impl HashAggregateExec {
 
         let schema = Arc::new(schema);
 
-        let output_rows = SQLMetric::counter("outputRows");
+        let output_rows = SQLMetric::counter();
 
         Ok(HashAggregateExec {
             mode,
@@ -253,10 +253,7 @@ impl ExecutionPlan for HashAggregateExec {
 
     fn metrics(&self) -> HashMap<String, SQLMetric> {
         let mut metrics = HashMap::new();
-        metrics.insert(
-            "outputRows".to_owned(),
-            self.output_rows.lock().unwrap().clone(),
-        );
+        metrics.insert("outputRows".to_owned(), (*self.output_rows).clone());
         metrics
     }
 }
@@ -292,7 +289,7 @@ pin_project! {
         #[pin]
         output: futures::channel::oneshot::Receiver<ArrowResult<RecordBatch>>,
         finished: bool,
-        output_rows: Arc<Mutex<SQLMetric>>,
+        output_rows: Arc<SQLMetric>,
     }
 }
 
@@ -644,7 +641,7 @@ impl GroupedHashAggregateStream {
         group_expr: Vec<Arc<dyn PhysicalExpr>>,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
-        output_rows: Arc<Mutex<SQLMetric>>,
+        output_rows: Arc<SQLMetric>,
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
 
@@ -702,7 +699,6 @@ impl Stream for GroupedHashAggregateStream {
                 };
 
                 if let Ok(batch) = &result {
-                    let mut output_rows = output_rows.lock().unwrap();
                     output_rows.add(batch.num_rows())
                 }
 

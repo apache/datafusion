@@ -18,7 +18,8 @@
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
 use std::fmt::{Debug, Display};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::{any::Any, pin::Pin};
 
 use crate::execution::context::ExecutionContextState;
@@ -58,44 +59,53 @@ pub enum MetricType {
 
 /// SQL metric such as counter (number of input or output rows) or timing information about
 /// a physical operator.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SQLMetric {
-    /// Metric name
-    name: String,
     /// Metric value
-    value: usize,
+    value: AtomicUsize,
     /// Metric type
     metric_type: MetricType,
 }
 
+impl Clone for SQLMetric {
+    fn clone(&self) -> Self {
+        Self {
+            value: AtomicUsize::new(self.value.load(Ordering::Relaxed)),
+            metric_type: self.metric_type.clone(),
+        }
+    }
+}
+
 impl SQLMetric {
+    // relaxed ordering for operations on `value` poses no issues
+    // we're purely using atomic ops with no associated memory ops
+
     /// Create a new metric for tracking a counter
-    pub fn counter(name: &str) -> Arc<Mutex<SQLMetric>> {
-        Arc::new(Mutex::new(SQLMetric::new(name, MetricType::Counter)))
+    pub fn counter() -> Arc<SQLMetric> {
+        Arc::new(SQLMetric::new(MetricType::Counter))
     }
 
     /// Create a new metric for tracking time in nanoseconds
-    pub fn time_nanos(name: &str) -> Arc<Mutex<SQLMetric>> {
-        Arc::new(Mutex::new(SQLMetric::new(name, MetricType::TimeNanos)))
+    pub fn time_nanos() -> Arc<SQLMetric> {
+        Arc::new(SQLMetric::new(MetricType::TimeNanos))
     }
 
     /// Create a new SQLMetric
-    pub fn new(name: &str, metric_type: MetricType) -> Self {
+    pub fn new(metric_type: MetricType) -> Self {
         Self {
-            name: name.to_owned(),
-            value: 0,
+            value: AtomicUsize::new(0),
             metric_type,
         }
     }
 
     /// Add to the value
-    pub fn add(&mut self, n: usize) {
-        self.value += n;
+    pub fn add(&self, n: usize) {
+        self.value.fetch_add(n, Ordering::Relaxed);
     }
 
     /// Get the current value
     pub fn value(&self) -> usize {
-        self.value
+        self.value.load(Ordering::Relaxed)
     }
 }
 
