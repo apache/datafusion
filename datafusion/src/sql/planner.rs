@@ -355,11 +355,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinOperator::Inner(constraint) => {
                 self.parse_join(left, &right, constraint, JoinType::Inner)
             }
+            JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
             other => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported JOIN operator {:?}",
                 other
             ))),
         }
+    }
+    fn parse_cross_join(
+        &self,
+        left: &LogicalPlan,
+        right: &LogicalPlan,
+    ) -> Result<LogicalPlan> {
+        LogicalPlanBuilder::from(&left).cross_join(&right)?.build()
     }
 
     fn parse_join(
@@ -489,9 +497,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                     }
                     if join_keys.is_empty() {
-                        return Err(DataFusionError::NotImplemented(
-                            "Cartesian joins are not supported".to_string(),
-                        ));
+                        left =
+                            LogicalPlanBuilder::from(&left).cross_join(right)?.build()?;
                     } else {
                         let left_keys: Vec<_> =
                             join_keys.iter().map(|(l, _)| *l).collect();
@@ -517,9 +524,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if plans.len() == 1 {
                     Ok(plans[0].clone())
                 } else {
-                    Err(DataFusionError::NotImplemented(
-                        "Cartesian joins are not supported".to_string(),
-                    ))
+                    let mut left = plans[0].clone();
+                    for right in plans.iter().skip(1) {
+                        left =
+                            LogicalPlanBuilder::from(&left).cross_join(right)?.build()?;
+                    }
+                    Ok(left)
                 }
             }
         };
