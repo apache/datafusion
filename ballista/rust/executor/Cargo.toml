@@ -26,7 +26,6 @@ authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2018"
 
 [features]
-default = ["snmalloc"]
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
