@@ -99,6 +99,6 @@ requirements.txt
 *.scss
 .gitattributes
 rust-toolchain
-ballista/rust/benchmarks/tpch/queries/q*.sql
+/benchmarks/queries/q*.sql
 ballista/rust/scheduler/testdata/*
 ballista/ui/scheduler/yarn.lock
