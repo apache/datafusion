@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
 
@@ -52,9 +52,9 @@ pub struct SortExec {
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     /// Output rows
-    output_rows: Arc<Mutex<SQLMetric>>,
+    output_rows: Arc<SQLMetric>,
     /// Time to sort batches
-    sort_time_nanos: Arc<Mutex<SQLMetric>>,
+    sort_time_nanos: Arc<SQLMetric>,
 }
 
 impl SortExec {
@@ -66,8 +66,8 @@ impl SortExec {
         Ok(Self {
             expr,
             input,
-            output_rows: SQLMetric::counter("outputRows"),
-            sort_time_nanos: SQLMetric::time_nanos("sortTime"),
+            output_rows: SQLMetric::counter(),
+            sort_time_nanos: SQLMetric::time_nanos(),
         })
     }
 
@@ -147,14 +147,8 @@ impl ExecutionPlan for SortExec {
 
     fn metrics(&self) -> HashMap<String, SQLMetric> {
         let mut metrics = HashMap::new();
-        metrics.insert(
-            "outputRows".to_owned(),
-            self.output_rows.lock().unwrap().clone(),
-        );
-        metrics.insert(
-            "sortTime".to_owned(),
-            self.sort_time_nanos.lock().unwrap().clone(),
-        );
+        metrics.insert("outputRows".to_owned(), (*self.output_rows).clone());
+        metrics.insert("sortTime".to_owned(), (*self.sort_time_nanos).clone());
         metrics
     }
 }
@@ -224,7 +218,7 @@ pin_project! {
         output: futures::channel::oneshot::Receiver<ArrowResult<Option<RecordBatch>>>,
         finished: bool,
         schema: SchemaRef,
-        output_rows: Arc<Mutex<SQLMetric>>,
+        output_rows: Arc<SQLMetric>,
     }
 }
 
@@ -232,8 +226,8 @@ impl SortStream {
     fn new(
         input: SendableRecordBatchStream,
         expr: Vec<PhysicalSortExpr>,
-        output_rows: Arc<Mutex<SQLMetric>>,
-        sort_time: Arc<Mutex<SQLMetric>>,
+        output_rows: Arc<SQLMetric>,
+        sort_time: Arc<SQLMetric>,
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
 
@@ -246,7 +240,6 @@ impl SortStream {
                 .and_then(move |batches| {
                     let now = Instant::now();
                     let result = sort_batches(&batches, &schema, &expr);
-                    let mut sort_time = sort_time.lock().unwrap();
                     sort_time.add(now.elapsed().as_nanos() as usize);
                     result
                 });
@@ -288,7 +281,6 @@ impl Stream for SortStream {
                 };
 
                 if let Some(Ok(batch)) = &result {
-                    let mut output_rows = output_rows.lock().unwrap();
                     output_rows.add(batch.num_rows());
                 }
 
@@ -431,8 +423,8 @@ mod tests {
         assert_eq!(DataType::Float64, *sort_exec.schema().field(1).data_type());
 
         let result: Vec<RecordBatch> = collect(sort_exec.clone()).await?;
-        assert!(sort_exec.metrics().get("sortTime").unwrap().value > 0);
-        assert_eq!(sort_exec.metrics().get("outputRows").unwrap().value, 8);
+        assert!(sort_exec.metrics().get("sortTime").unwrap().value() > 0);
+        assert_eq!(sort_exec.metrics().get("outputRows").unwrap().value(), 8);
         assert_eq!(result.len(), 1);
 
         let columns = result[0].columns();
