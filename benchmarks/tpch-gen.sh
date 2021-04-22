@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-BALLISTA_VERSION=0.4.2-SNAPSHOT
+BALLISTA_VERSION=0.5.0-SNAPSHOT
 
 #set -e
 
