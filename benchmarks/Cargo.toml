@@ -31,8 +31,8 @@ simd = ["datafusion/simd"]
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "08a662f" }
-parquet = { git = "https://github.com/apache/arrow-rs", rev = "08a662f" }
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "c3fe3bab9905739fdda75301dab07a18c91731bd" }
+parquet = { git = "https://github.com/apache/arrow-rs", rev = "c3fe3bab9905739fdda75301dab07a18c91731bd" }
 datafusion = { path = "../datafusion" }
 structopt = { version = "0.3", default-features = false }
 tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread"] }
