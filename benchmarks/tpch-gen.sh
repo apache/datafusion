@@ -15,11 +15,19 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-set -e
 
-# This bash script is meant to be run inside the docker-compose environment. Check the README for instructions
+BALLISTA_VERSION=0.5.0-SNAPSHOT
 
-for query in 1 3 5 6 10 12
-do
-  /tpch benchmark --host ballista-scheduler --port 50050 --query $query --path /data --format tbl --iterations 1 --debug
-done
+#set -e
+
+docker build -t ballistacompute/ballista-tpchgen:$BALLISTA_VERSION -f tpchgen.dockerfile .
+
+# Generate data into the ./data directory if it does not already exist
+FILE=./data/supplier.tbl
+if test -f "$FILE"; then
+    echo "$FILE exists."
+else
+  mkdir data 2>/dev/null
+  docker run -v `pwd`/data:/data -it --rm ballistacompute/ballista-tpchgen:$BALLISTA_VERSION
+  ls -l data
+fi

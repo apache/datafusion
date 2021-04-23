@@ -20,7 +20,6 @@ members = [
     "datafusion",
     "datafusion-examples",
 	"benchmarks",
-    "ballista/rust/benchmarks/tpch",
     "ballista/rust/client",
     "ballista/rust/core",
     "ballista/rust/executor",
