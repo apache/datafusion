@@ -34,6 +34,7 @@ snmalloc = ["snmalloc-rs"]
 arrow = { git = "https://github.com/apache/arrow-rs", rev = "c3fe3bab9905739fdda75301dab07a18c91731bd" }
 parquet = { git = "https://github.com/apache/arrow-rs", rev = "c3fe3bab9905739fdda75301dab07a18c91731bd" }
 datafusion = { path = "../datafusion" }
+ballista = { path = "../ballista/rust/client" }
 structopt = { version = "0.3", default-features = false }
 tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread"] }
 futures = "0.3"
