@@ -30,20 +30,20 @@ use datafusion::{
 /// TableProvider which is effectively a wrapper around a physical plan. We need to be able to
 /// register tables so that we can create logical plans from SQL statements that reference these
 /// tables.
-pub struct DFTableAdapter {
+pub struct DfTableAdapter {
     /// DataFusion logical plan
     pub logical_plan: LogicalPlan,
     /// DataFusion execution plan
     plan: Arc<dyn ExecutionPlan>,
 }
 
-impl DFTableAdapter {
+impl DfTableAdapter {
     pub fn new(logical_plan: LogicalPlan, plan: Arc<dyn ExecutionPlan>) -> Self {
         Self { logical_plan, plan }
     }
 }
 
-impl TableProvider for DFTableAdapter {
+impl TableProvider for DfTableAdapter {
     fn as_any(&self) -> &dyn Any {
         self
     }

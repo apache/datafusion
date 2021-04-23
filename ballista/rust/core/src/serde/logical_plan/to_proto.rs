@@ -24,7 +24,7 @@ use std::{
     convert::{TryFrom, TryInto},
 };
 
-use crate::datasource::DFTableAdapter;
+use crate::datasource::DfTableAdapter;
 use crate::serde::{protobuf, BallistaError};
 
 use arrow::datatypes::{DataType, Schema};
@@ -679,7 +679,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
 
                 // unwrap the DFTableAdapter to get to the real TableProvider
                 let source = if let Some(adapter) =
-                    source.as_any().downcast_ref::<DFTableAdapter>()
+                    source.as_any().downcast_ref::<DfTableAdapter>()
                 {
                     match &adapter.logical_plan {
                         LogicalPlan::TableScan { source, .. } => Ok(source.as_any()),
@@ -1021,7 +1021,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let expr: Vec<protobuf::LogicalExprNode> = args
                     .iter()
-                    .map(|e| Ok(e.try_into()?))
+                    .map(|e| e.try_into())
                     .collect::<Result<Vec<protobuf::LogicalExprNode>, BallistaError>>()?;
                 Ok(protobuf::LogicalExprNode {
                     expr_type: Some(
@@ -1164,6 +1164,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<protobuf::Schema> for &Schema {
     fn into(self) -> protobuf::Schema {
         protobuf::Schema {

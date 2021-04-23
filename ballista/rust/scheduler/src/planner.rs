@@ -25,7 +25,7 @@ use std::time::Instant;
 use std::{collections::HashMap, future::Future};
 
 use ballista_core::client::BallistaClient;
-use ballista_core::datasource::DFTableAdapter;
+use ballista_core::datasource::DfTableAdapter;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::serde::scheduler::ExecutorMeta;
 use ballista_core::serde::scheduler::PartitionId;
@@ -138,7 +138,7 @@ impl DistributedPlanner {
             stages.append(&mut child_stages);
         }
 
-        if let Some(adapter) = execution_plan.as_any().downcast_ref::<DFTableAdapter>() {
+        if let Some(adapter) = execution_plan.as_any().downcast_ref::<DfTableAdapter>() {
             // remove Repartition rule because that isn't supported yet
             let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
                 Arc::new(CoalesceBatches::new()),
