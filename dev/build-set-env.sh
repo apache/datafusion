@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -16,17 +17,4 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#set -e
-
-. ./dev/build-set-env.sh
-docker build -t ballistacompute/ballista-tpchgen:$BALLISTA_VERSION -f tpchgen.dockerfile .
-
-# Generate data into the ./data directory if it does not already exist
-FILE=./data/supplier.tbl
-if test -f "$FILE"; then
-    echo "$FILE exists."
-else
-  mkdir data 2>/dev/null
-  docker run -v `pwd`/data:/data -it --rm ballistacompute/ballista-tpchgen:$BALLISTA_VERSION
-  ls -l data
-fi
+export BALLISTA_VERSION=$(awk -F'[ ="]+' '$1 == "version" { print $2 }' ballista/rust/core/Cargo.toml)
