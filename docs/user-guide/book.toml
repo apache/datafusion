@@ -15,16 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-
-members = [
-    "benchmarks/tpch",
-    "client",
-    "core",
-    "executor",
-    "scheduler",
-]
-
-#[profile.release]
-#lto = true
-#codegen-units = 1
+[book]
+authors = ["Apache Arrow"]
+language = "en"
+multilingual = false
+src = "src"
+title = "DataFusion User Guide"

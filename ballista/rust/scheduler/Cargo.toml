@@ -19,7 +19,7 @@
 name = "ballista-scheduler"
 description = "Ballista Distributed Compute - Scheduler"
 license = "Apache-2.0"
-version = "0.4.2-SNAPSHOT"
+version = "0.5.0-SNAPSHOT"
 homepage = "https://github.com/apache/arrow"
 repository = "https://github.com/apache/arrow"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -52,7 +52,7 @@ tonic = "0.4"
 tower = { version = "0.4" }
 warp = "0.3"
 
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "3d7cefb" }
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "c3fe3bab9905739fdda75301dab07a18c91731bd" }
 datafusion = { path = "../../../datafusion" }
 
 [dev-dependencies]

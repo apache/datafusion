@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Boolean comparision rule rewrites redudant comparison expression involing boolean literal into
+//! Boolean comparison rule rewrites redundant comparison expression involving boolean literal into
 //! unary expression.
 
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use crate::scalar::ScalarValue;
 
 /// Optimizer that simplifies comparison expressions involving boolean literals.
 ///
-/// Recursively go through all expressionss and simplify the following cases:
+/// Recursively go through all expressions and simplify the following cases:
 /// * `expr = true` and `expr != false` to `expr` when `expr` is of boolean type
 /// * `expr = false` and `expr != true` to `!expr` when `expr` is of boolean type
 /// * `true = true` and `false = false` to `true`
@@ -72,7 +72,8 @@ impl OptimizerRule for ConstantFolding {
             | LogicalPlan::Explain { .. }
             | LogicalPlan::Limit { .. }
             | LogicalPlan::Union { .. }
-            | LogicalPlan::Join { .. } => {
+            | LogicalPlan::Join { .. }
+            | LogicalPlan::CrossJoin { .. } => {
                 // apply the optimization to all inputs of the plan
                 let inputs = plan.inputs();
                 let new_inputs = inputs
@@ -253,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_expr_null_comparision() -> Result<()> {
+    fn optimize_expr_null_comparison() -> Result<()> {
         let schema = expr_test_schema();
         let mut rewriter = ConstantRewriter {
             schemas: vec![&schema],

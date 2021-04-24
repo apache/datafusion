@@ -37,6 +37,7 @@ pub(crate) enum GroupByScalar {
     Int32(i32),
     Int64(i64),
     Utf8(Box<String>),
+    LargeUtf8(Box<String>),
     Boolean(bool),
     TimeMillisecond(i64),
     TimeMicrosecond(i64),
@@ -74,6 +75,9 @@ impl TryFrom<&ScalarValue> for GroupByScalar {
                 GroupByScalar::TimeNanosecond(*v)
             }
             ScalarValue::Utf8(Some(v)) => GroupByScalar::Utf8(Box::new(v.clone())),
+            ScalarValue::LargeUtf8(Some(v)) => {
+                GroupByScalar::LargeUtf8(Box::new(v.clone()))
+            }
             ScalarValue::Float32(None)
             | ScalarValue::Float64(None)
             | ScalarValue::Boolean(None)
@@ -116,6 +120,7 @@ impl From<&GroupByScalar> for ScalarValue {
             GroupByScalar::UInt32(v) => ScalarValue::UInt32(Some(*v)),
             GroupByScalar::UInt64(v) => ScalarValue::UInt64(Some(*v)),
             GroupByScalar::Utf8(v) => ScalarValue::Utf8(Some(v.to_string())),
+            GroupByScalar::LargeUtf8(v) => ScalarValue::LargeUtf8(Some(v.to_string())),
             GroupByScalar::TimeMillisecond(v) => {
                 ScalarValue::TimestampMillisecond(Some(*v))
             }
@@ -191,14 +196,14 @@ mod tests {
     #[test]
     fn from_scalar_unsupported() {
         // Use any ScalarValue type not supported by GroupByScalar.
-        let scalar_value = ScalarValue::LargeUtf8(Some("1.1".to_string()));
+        let scalar_value = ScalarValue::Binary(Some(vec![1, 2]));
         let result = GroupByScalar::try_from(&scalar_value);
 
         match result {
             Err(DataFusionError::Internal(error_message)) => assert_eq!(
                 error_message,
                 String::from(
-                    "Cannot convert a ScalarValue with associated DataType LargeUtf8"
+                    "Cannot convert a ScalarValue with associated DataType Binary"
                 )
             ),
             _ => panic!("Unexpected result"),

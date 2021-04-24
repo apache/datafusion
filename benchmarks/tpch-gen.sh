@@ -1,3 +1,4 @@
+#!/bin/bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,9 +16,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[book]
-authors = ["Andy Grove"]
-language = "en"
-multilingual = false
-src = "src"
-title = "Ballista User Guide"
+BALLISTA_VERSION=0.5.0-SNAPSHOT
+
+#set -e
+
+docker build -t ballistacompute/ballista-tpchgen:$BALLISTA_VERSION -f tpchgen.dockerfile .
+
+# Generate data into the ./data directory if it does not already exist
+FILE=./data/supplier.tbl
+if test -f "$FILE"; then
+    echo "$FILE exists."
+else
+  mkdir data 2>/dev/null
+  docker run -v `pwd`/data:/data -it --rm ballistacompute/ballista-tpchgen:$BALLISTA_VERSION
+  ls -l data
+fi

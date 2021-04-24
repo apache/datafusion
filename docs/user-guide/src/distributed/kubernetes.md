@@ -33,8 +33,7 @@ The k8s deployment consists of:
 Ballista is at an early stage of development and therefore has some significant limitations:
 
 - There is no support for shared object stores such as S3. All data must exist locally on each node in the 
-  cluster, including where any client process runs  (until 
-  [#473](https://github.com/ballista-compute/ballista/issues/473) is resolved).
+  cluster, including where any client process runs.
 - Only a single scheduler instance is currently supported unless the scheduler is configured to use `etcd` as a 
   backing store.
 

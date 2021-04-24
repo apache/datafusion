@@ -1289,15 +1289,57 @@ async fn equijoin_implicit_syntax_reversed() -> Result<()> {
 }
 
 #[tokio::test]
-async fn cartesian_join() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+async fn cross_join() {
+    let mut ctx = create_join_context("t1_id", "t2_id").unwrap();
+
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1, t2 ORDER BY t1_id";
-    let maybe_plan = ctx.create_logical_plan(&sql);
+    let actual = execute(&mut ctx, sql).await;
+
+    assert_eq!(4 * 4, actual.len());
+
+    let sql = "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE 1=1 ORDER BY t1_id";
+    let actual = execute(&mut ctx, sql).await;
+
+    assert_eq!(4 * 4, actual.len());
+
+    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2";
+    let actual = execute(&mut ctx, sql).await;
+
+    assert_eq!(4 * 4, actual.len());
+
     assert_eq!(
-        "This feature is not implemented: Cartesian joins are not supported",
-        &format!("{}", maybe_plan.err().unwrap())
+        actual,
+        [
+            ["11", "a", "z"],
+            ["11", "a", "y"],
+            ["11", "a", "x"],
+            ["11", "a", "w"],
+            ["22", "b", "z"],
+            ["22", "b", "y"],
+            ["22", "b", "x"],
+            ["22", "b", "w"],
+            ["33", "c", "z"],
+            ["33", "c", "y"],
+            ["33", "c", "x"],
+            ["33", "c", "w"],
+            ["44", "d", "z"],
+            ["44", "d", "y"],
+            ["44", "d", "x"],
+            ["44", "d", "w"]
+        ]
     );
-    Ok(())
+
+    // Two partitions (from UNION) on the left
+    let sql = "SELECT * FROM (SELECT t1_id, t1_name FROM t1 UNION ALL SELECT t1_id, t1_name FROM t1) t1 CROSS JOIN t2";
+    let actual = execute(&mut ctx, sql).await;
+
+    assert_eq!(4 * 4 * 2, actual.len());
+
+    // Two partitions (from UNION) on the right
+    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN (SELECT t2_name FROM t2 UNION ALL SELECT t2_name FROM t2)";
+    let actual = execute(&mut ctx, sql).await;
+
+    assert_eq!(4 * 4 * 2, actual.len());
 }
 
 fn create_join_context(
