@@ -395,7 +395,7 @@ fn update_hash(
         .map(|name| Ok(col(name).evaluate(batch)?.into_array(batch.num_rows())))
         .collect::<Result<Vec<_>>>()?;
 
-    // update the hash map
+    // calculate the hash values
     let hash_values = create_hashes(&keys_values, &random_state, hashes_buffer)?;
 
     // insert hashes to key of the hashmap
