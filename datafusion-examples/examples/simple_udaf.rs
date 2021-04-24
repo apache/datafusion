@@ -17,7 +17,7 @@
 
 /// In this example we will declare a single-type, single return type UDAF that computes the geometric mean.
 /// The geometric mean is described here: https://en.wikipedia.org/wiki/Geometric_mean
-use arrow::{
+use datafusion::arrow::{
     array::Float32Array, array::Float64Array, datatypes::DataType,
     record_batch::RecordBatch,
 };
@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 // create local execution context with an in-memory table
 fn create_context() -> Result<ExecutionContext> {
-    use arrow::datatypes::{Field, Schema};
+    use datafusion::arrow::datatypes::{Field, Schema};
     use datafusion::datasource::MemTable;
     // define a schema.
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));

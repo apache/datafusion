@@ -28,17 +28,21 @@ use std::{
 
 use futures::StreamExt;
 
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::util::pretty;
 use ballista::context::BallistaContext;
+
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::arrow::util::pretty;
+
 use datafusion::datasource::parquet::ParquetTable;
 use datafusion::datasource::{CsvFile, MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::collect;
 use datafusion::prelude::*;
-use parquet::basic::Compression;
-use parquet::file::properties::WriterProperties;
+
+use datafusion::parquet::basic::Compression;
+use datafusion::parquet::file::properties::WriterProperties;
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -149,9 +153,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn benchmark_datafusion(
-    opt: BenchmarkOpt,
-) -> Result<Vec<arrow::record_batch::RecordBatch>> {
+async fn benchmark_datafusion(opt: BenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let config = ExecutionConfig::new()
         .with_concurrency(opt.concurrency)
@@ -186,7 +188,7 @@ async fn benchmark_datafusion(
 
     let mut millis = vec![];
     // run benchmark
-    let mut result: Vec<arrow::record_batch::RecordBatch> = Vec::with_capacity(1);
+    let mut result: Vec<RecordBatch> = Vec::with_capacity(1);
     for i in 0..opt.iterations {
         let start = Instant::now();
         let plan = create_logical_plan(&mut ctx, opt.query)?;
@@ -299,7 +301,7 @@ async fn execute_query(
     ctx: &mut ExecutionContext,
     plan: &LogicalPlan,
     debug: bool,
-) -> Result<Vec<arrow::record_batch::RecordBatch>> {
+) -> Result<Vec<RecordBatch>> {
     if debug {
         println!("Logical plan:\n{:?}", plan);
     }
@@ -523,9 +525,8 @@ mod tests {
     use std::env;
     use std::sync::Arc;
 
-    use arrow::array::*;
-    use arrow::record_batch::RecordBatch;
-    use arrow::util::display::array_value_to_string;
+    use datafusion::arrow::array::*;
+    use datafusion::arrow::util::display::array_value_to_string;
 
     use datafusion::logical_plan::Expr;
     use datafusion::logical_plan::Expr::Cast;

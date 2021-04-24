@@ -66,7 +66,7 @@ impl FlightService for FlightServiceImpl {
 
         let table = ParquetTable::try_new(&request.path[0], num_cpus::get()).unwrap();
 
-        let options = arrow::ipc::writer::IpcWriteOptions::default();
+        let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
         let schema_result = arrow_flight::utils::flight_schema_from_arrow_schema(
             table.schema().as_ref(),
             &options,
@@ -87,7 +87,7 @@ impl FlightService for FlightServiceImpl {
                 // create local execution context
                 let mut ctx = ExecutionContext::new();
 
-                let testdata = arrow::util::test_util::parquet_test_data();
+                let testdata = datafusion::arrow::util::test_util::parquet_test_data();
 
                 // register parquet file with the execution context
                 ctx.register_parquet(
@@ -106,7 +106,7 @@ impl FlightService for FlightServiceImpl {
                 }
 
                 // add an initial FlightData message that sends schema
-                let options = arrow::ipc::writer::IpcWriteOptions::default();
+                let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
                 let schema_flight_data =
                     arrow_flight::utils::flight_data_from_arrow_schema(
                         &df.schema().clone().into(),
