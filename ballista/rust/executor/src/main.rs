@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
             None => StandaloneClient::try_new_temporary()
                 .context("Could not create standalone config backend")?,
         };
-        
+
         let server =
             SchedulerGrpcServer::new(SchedulerServer::new(Arc::new(client), namespace));
         let addr = format!("{}:{}", bind_host, scheduler_port);
