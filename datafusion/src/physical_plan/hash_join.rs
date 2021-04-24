@@ -657,6 +657,9 @@ fn build_join_indexes(
                             )? {
                                 left_indices.append_value(i)?;
                                 right_indices.append_value(row as u32)?;
+                            } else {
+                                left_indices.append_null()?;
+                                right_indices.append_value(row as u32)?;
                             }
                         }
                     }
