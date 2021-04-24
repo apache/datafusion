@@ -77,3 +77,8 @@ name = "concurrent_tasks"
 type = "usize"
 default = "4"
 doc = "Max concurrent tasks."
+
+[[param]]
+name = "scheduler_data_path"
+type = "String"
+doc = "Path for standalone data"
