@@ -152,7 +152,7 @@ impl BallistaContext {
                 Arc::new(DfTableAdapter::new(plan, execution_plan)),
             )?;
         }
-        ctx.sql(sql).map_err(|e| e.into())
+        ctx.sql(sql)
     }
 
     pub async fn collect(
