@@ -1,5 +1,6 @@
 *.npmrc
 *.gitignore
+*.dockerignore
 .gitmodules
 *_generated.h
 *_generated.js
