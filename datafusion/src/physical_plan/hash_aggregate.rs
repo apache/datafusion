@@ -59,7 +59,8 @@ use ordered_float::OrderedFloat;
 use pin_project_lite::pin_project;
 
 use arrow::array::{
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    LargeStringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray,
 };
 use async_trait::async_trait;
 
@@ -540,6 +541,14 @@ fn create_key_for_col(col: &ArrayRef, row: usize, vec: &mut Vec<u8>) -> Result<(
             // store the string value
             vec.extend_from_slice(value.as_bytes());
         }
+        DataType::LargeUtf8 => {
+            let array = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            let value = array.value(row);
+            // store the size
+            vec.extend_from_slice(&value.len().to_le_bytes());
+            // store the string value
+            vec.extend_from_slice(value.as_bytes());
+        }
         DataType::Date32 => {
             let array = col.as_any().downcast_ref::<Date32Array>().unwrap();
             vec.extend_from_slice(&array.value(row).to_le_bytes());
@@ -953,6 +962,9 @@ fn create_batch_from_map(
                     GroupByScalar::Utf8(str) => {
                         Arc::new(StringArray::from(vec![&***str]))
                     }
+                    GroupByScalar::LargeUtf8(str) => {
+                        Arc::new(LargeStringArray::from(vec![&***str]))
+                    }
                     GroupByScalar::Boolean(b) => Arc::new(BooleanArray::from(vec![*b])),
                     GroupByScalar::TimeMillisecond(n) => {
                         Arc::new(TimestampMillisecondArray::from(vec![*n]))
@@ -1101,6 +1113,10 @@ fn create_group_by_value(col: &ArrayRef, row: usize) -> Result<GroupByScalar> {
         }
         DataType::Utf8 => {
             let array = col.as_any().downcast_ref::<StringArray>().unwrap();
+            Ok(GroupByScalar::Utf8(Box::new(array.value(row).into())))
+        }
+        DataType::LargeUtf8 => {
+            let array = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
             Ok(GroupByScalar::Utf8(Box::new(array.value(row).into())))
         }
         DataType::Boolean => {
