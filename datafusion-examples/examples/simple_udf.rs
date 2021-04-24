@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{
+use datafusion::arrow::{
     array::{ArrayRef, Float32Array, Float64Array},
     datatypes::DataType,
     record_batch::RecordBatch,
@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 // create local execution context with an in-memory table
 fn create_context() -> Result<ExecutionContext> {
-    use arrow::datatypes::{Field, Schema};
+    use datafusion::arrow::datatypes::{Field, Schema};
     use datafusion::datasource::MemTable;
     // define a schema.
     let schema = Arc::new(Schema::new(vec![

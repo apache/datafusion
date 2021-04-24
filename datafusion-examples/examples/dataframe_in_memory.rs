@@ -17,10 +17,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Int32Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
-use arrow::util::pretty;
+use datafusion::arrow::array::{Int32Array, StringArray};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::arrow::util::pretty;
 
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
