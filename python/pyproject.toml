@@ -1,0 +1,3 @@
+[build-system]
+requires = ["maturin"]
+build-backend = "maturin"

@@ -1,0 +1,39 @@
+[package]
+name = "datafusion"
+version = "0.2.1"
+authors = ["Jorge C. Leitao <jorgecarleitao@gmail.com>"]
+description = "Build and run queries against data"
+readme = "README.md"
+repository = "https://github.com/jorgecarleitao/datafusion-python"
+license = "MIT OR Apache-2.0"
+edition = "2018"
+
+[dependencies]
+tokio = "0.2.22"
+rand = "0.7"
+pyo3 = { version = "0.12.1", features = ["extension-module"] }
+datafusion = { git = "https://github.com/apache/arrow.git", rev = "f945eba", features = ["simd"] }
+arrow = { git = "https://github.com/apache/arrow.git", rev = "f945eba", features = ["simd"] }
+
+[lib]
+name = "datafusion"
+crate-type = ["cdylib"]
+
+[package.metadata.maturin]
+requires-dist = ["pyarrow>=1"]
+
+classifier = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python",
+    "Programming Language :: Rust",
+]

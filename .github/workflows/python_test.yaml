@@ -1,0 +1,41 @@
+name: Tests
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: nightly-2020-11-24
+        default: true
+        components: rustfmt
+    - name: Cache Cargo
+      uses: actions/cache@v2
+      with:
+        path: /home/runner/.cargo
+        key: cargo-maturin-cache-
+    - name: Cache Rust dependencies
+      uses: actions/cache@v2
+      with:
+        path: /home/runner/target
+        key: target-maturin-cache-
+    - uses: actions/setup-python@v2
+      with:
+        python-version: '3.7'
+    - name: Install Python dependencies
+      run: python -m pip install --upgrade pip setuptools wheel
+    - name: Run tests
+      run: |
+        cd python/
+        export CARGO_HOME="/home/runner/.cargo"
+        export CARGO_TARGET_DIR="/home/runner/target"
+
+        python -m venv venv
+        source venv/bin/activate
+
+        pip install maturin==0.8.2 toml==0.10.1 pyarrow==1.0.0
+        maturin develop
+
+        python -m unittest discover tests
