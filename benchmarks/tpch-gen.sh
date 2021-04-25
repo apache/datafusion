@@ -18,7 +18,9 @@
 
 #set -e
 
+pushd ..
 . ./dev/build-set-env.sh
+popd
 docker build -t ballistacompute/ballista-tpchgen:$BALLISTA_VERSION -f tpchgen.dockerfile .
 
 # Generate data into the ./data directory if it does not already exist
