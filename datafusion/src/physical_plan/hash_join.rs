@@ -432,6 +432,9 @@ struct HashJoinStream {
     join_time: usize,
     /// Random state used for hashing initialization
     random_state: RandomState,
+    /// Whether we should create rows for left side data when right side partition is coalesced to
+    /// None
+    preserve_left: bool,
 }
 
 impl HashJoinStream {
@@ -445,6 +448,10 @@ impl HashJoinStream {
         column_indices: Vec<ColumnIndex>,
         random_state: RandomState,
     ) -> Self {
+        let preserve_left = match join_type {
+            JoinType::Left => left_data.0.len() > 0,
+            JoinType::Inner | JoinType::Right => false,
+        };
         HashJoinStream {
             schema,
             on_left,
@@ -459,6 +466,7 @@ impl HashJoinStream {
             num_output_rows: 0,
             join_time: 0,
             random_state,
+            preserve_left,
         }
     }
 }
@@ -871,7 +879,6 @@ impl Stream for HashJoinStream {
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(batch)) => {
                     let start = Instant::now();
-
                     let result = build_batch(
                         &batch,
                         &self.left_data,
@@ -884,6 +891,36 @@ impl Stream for HashJoinStream {
                     );
                     self.num_input_batches += 1;
                     self.num_input_rows += batch.num_rows();
+                    if let Ok(ref batch) = result {
+                        self.join_time += start.elapsed().as_millis() as usize;
+                        self.num_output_batches += 1;
+                        self.num_output_rows += batch.num_rows();
+                    }
+                    Some(result)
+                }
+                // If maybe_batch is None and num_output_rows is 0, that means right side batch was
+                // empty and has been coalesced to None. Fill right side with Null if preserve_left
+                // is true.
+                None if self.preserve_left && self.num_output_rows == 0 => {
+                    let start = Instant::now();
+                    let num_rows = self.left_data.1.num_rows();
+                    let mut columns: Vec<Arc<dyn Array>> =
+                        Vec::with_capacity(self.schema.fields().len());
+                    for (idx, column_index) in self.column_indices.iter().enumerate() {
+                        let array = if column_index.is_left {
+                            let array = self.left_data.1.column(column_index.index);
+                            array.clone()
+                        } else {
+                            let datatype = self.schema.field(idx).data_type();
+                            arrow::array::new_null_array(datatype, num_rows)
+                        };
+
+                        columns.push(array);
+                    }
+                    let result = RecordBatch::try_new(self.schema.clone(), columns);
+
+                    self.num_input_batches += 1;
+                    self.num_input_rows += num_rows;
                     if let Ok(ref batch) = result {
                         self.join_time += start.elapsed().as_millis() as usize;
                         self.num_output_batches += 1;
