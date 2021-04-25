@@ -259,8 +259,8 @@ async fn benchmark_ballista(opt: BenchmarkOpt) -> Result<()> {
             .sql(&sql)
             .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))?;
         let mut batches = vec![];
-        let mut stream = df
-            .collect()
+        let mut stream = ctx
+            .collect(&df.to_logical_plan())
             .await
             .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))?;
         while let Some(result) = stream.next().await {
