@@ -17,8 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-BALLISTA_VERSION=0.5.0-SNAPSHOT
-
 set -e
 
+. ./dev/build-set-env.sh
 docker build -t ballistacompute/ballista-rust:$BALLISTA_VERSION -f dev/docker/rust.dockerfile .
