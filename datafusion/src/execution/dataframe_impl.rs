@@ -23,8 +23,8 @@ use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use crate::execution::context::{ExecutionContext, ExecutionContextState};
 use crate::logical_plan::{
-    col, Column, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan,
-    LogicalPlanBuilder, Partitioning,
+    col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Partitioning,
 };
 use crate::{
     dataframe::*,
@@ -106,11 +106,16 @@ impl DataFrame for DataFrameImpl {
         &self,
         right: Arc<dyn DataFrame>,
         join_type: JoinType,
-        left_cols: Vec<Column>,
-        right_cols: Vec<Column>,
+        left_cols: &[&str],
+        right_cols: &[&str],
     ) -> Result<Arc<dyn DataFrame>> {
         let plan = LogicalPlanBuilder::from(&self.plan)
-            .join(&right.to_logical_plan(), join_type, left_cols, right_cols)?
+            .join(
+                &right.to_logical_plan(),
+                join_type,
+                left_cols.to_vec(),
+                right_cols.to_vec(),
+            )?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
     }
@@ -252,12 +257,7 @@ mod tests {
         let right = test_table()?.select_columns(&["c1", "c3"])?;
         let left_rows = left.collect().await?;
         let right_rows = right.collect().await?;
-        let join = left.join(
-            right,
-            JoinType::Inner,
-            vec![Column::from_name("c1".to_string())],
-            vec![Column::from_name("c1".to_string())],
-        )?;
+        let join = left.join(right, JoinType::Inner, &["c1"], &["c1"])?;
         let join_rows = join.collect().await?;
         assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
         assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());

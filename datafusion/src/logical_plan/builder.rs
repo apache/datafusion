@@ -274,8 +274,8 @@ impl LogicalPlanBuilder {
         &self,
         right: &LogicalPlan,
         join_type: JoinType,
-        left_keys: Vec<Column>,
-        right_keys: Vec<Column>,
+        left_keys: Vec<impl Into<Column>>,
+        right_keys: Vec<impl Into<Column>>,
     ) -> Result<Self> {
         if left_keys.len() != right_keys.len() {
             return Err(DataFusionError::Plan(
@@ -285,12 +285,12 @@ impl LogicalPlanBuilder {
 
         let left_keys: Vec<Column> = left_keys
             .into_iter()
-            .map(|c| c.normalize(&self.plan.all_schemas()))
+            .map(|c| c.into().normalize(&self.plan.all_schemas()))
             .collect::<Result<_>>()?;
         let right_keys: Vec<Column> = right_keys
             .into_iter()
             // FIXME: write a test for this
-            .map(|c| c.normalize(&right.all_schemas()))
+            .map(|c| c.into().normalize(&right.all_schemas()))
             .collect::<Result<_>>()?;
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
         let join_schema = build_join_schema(
@@ -315,16 +315,16 @@ impl LogicalPlanBuilder {
         &self,
         right: &LogicalPlan,
         join_type: JoinType,
-        using_keys: Vec<Column>,
+        using_keys: Vec<impl Into<Column> + Clone>,
     ) -> Result<Self> {
         let left_keys: Vec<Column> = using_keys
             .clone()
             .into_iter()
-            .map(|c| c.normalize(&self.plan.all_schemas()))
+            .map(|c| c.into().normalize(&self.plan.all_schemas()))
             .collect::<Result<_>>()?;
         let right_keys: Vec<Column> = using_keys
             .into_iter()
-            .map(|c| c.normalize(&right.all_schemas()))
+            .map(|c| c.into().normalize(&right.all_schemas()))
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();

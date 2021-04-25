@@ -24,7 +24,6 @@ use arrow::{
 };
 
 use datafusion::error::Result;
-use datafusion::logical_plan::Column;
 use datafusion::{datasource::MemTable, prelude::JoinType};
 
 use datafusion::execution::context::ExecutionContext;
@@ -70,12 +69,7 @@ async fn join() -> Result<()> {
 
     let df2 = ctx.table("aaa")?;
 
-    let a = df1.join(
-        df2,
-        JoinType::Inner,
-        vec![Column::from_name("a".to_string())],
-        vec![Column::from_name("a".to_string())],
-    )?;
+    let a = df1.join(df2, JoinType::Inner, &["a"], &["a"])?;
 
     let batches = a.collect().await?;
 

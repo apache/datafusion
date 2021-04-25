@@ -53,6 +53,7 @@ impl Column {
         }
     }
 
+    /// Deserialize a flat name string into a column
     pub fn from_flat_name(flat_name: &str) -> Self {
         use sqlparser::tokenizer::Token;
 
@@ -75,6 +76,7 @@ impl Column {
         }
     }
 
+    /// Serialize column into a flat name string
     pub fn flat_name(&self) -> String {
         match &self.relation {
             Some(r) => format!("{}.{}", r, self.name),
@@ -98,6 +100,12 @@ impl Column {
             "Column {} not found in provided schemas",
             self
         )));
+    }
+}
+
+impl From<&str> for Column {
+    fn from(c: &str) -> Self {
+        Self::from_flat_name(c)
     }
 }
 
@@ -1020,7 +1028,7 @@ pub fn or(left: Expr, right: Expr) -> Expr {
 
 /// Create a column expression based on a qualified or unqualified column name
 pub fn col(ident: &str) -> Expr {
-    Expr::Column(Column::from_flat_name(ident))
+    Expr::Column(ident.into())
 }
 
 /// Recursively normalize all Column expressions in a given expression tree
