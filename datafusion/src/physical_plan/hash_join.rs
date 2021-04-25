@@ -901,6 +901,9 @@ impl Stream for HashJoinStream {
                 // If maybe_batch is None and num_output_rows is 0, that means right side batch was
                 // empty and has been coalesced to None. Fill right side with Null if preserve_left
                 // is true.
+                //
+                // TODO: generalize this to keep track of unmatched left rows across batches, see
+                // https://issues.apache.org/jira/browse/ARROW-10971
                 None if self.preserve_left && self.num_output_rows == 0 => {
                     let start = Instant::now();
                     let num_rows = self.left_data.1.num_rows();
