@@ -58,7 +58,6 @@ pub struct BallistaClient {
 impl BallistaClient {
     /// Create a new BallistaClient to connect to the executor listening on the specified
     /// host and port
-
     pub async fn try_new(host: &str, port: u16) -> Result<Self> {
         let addr = format!("http://{}:{}", host, port);
         debug!("BallistaClient connecting to {}", addr);

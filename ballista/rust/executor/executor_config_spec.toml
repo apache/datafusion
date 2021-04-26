@@ -49,8 +49,7 @@ doc = "Local IP address to bind to."
 [[param]]
 name = "external_host"
 type = "String"
-default = "std::string::String::from(\"localhost\")"
-doc = "Host name or IP address to register with scheduler so that other executors can connect to this executor."
+doc = "Host name or IP address to register with scheduler so that other executors can connect to this executor. If none is provided, the scheduler will use the connecting IP address to communicate with the executor."
 
 [[param]]
 abbr = "p"
