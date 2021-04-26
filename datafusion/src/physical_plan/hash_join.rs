@@ -952,7 +952,7 @@ pub fn create_hashes<'a>(
                 );
             }
             DataType::Boolean => {
-                hash_array_primitive!(
+                hash_array!(
                     BooleanArray,
                     col,
                     u8,
