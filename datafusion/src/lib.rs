@@ -211,4 +211,4 @@ pub mod test;
 extern crate lazy_static;
 
 #[cfg(doctest)]
-doc_comment::doctest!("../README.md", readme_example_test);
+doc_comment::doctest!("../../README.md", readme_example_test);
