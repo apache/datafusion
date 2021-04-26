@@ -1,7 +1,7 @@
 [package]
 name = "datafusion"
 version = "0.2.1"
-authors = ["Jorge C. Leitao <jorgecarleitao@gmail.com>"]
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
 description = "Build and run queries against data"
 readme = "README.md"
 repository = "https://github.com/jorgecarleitao/datafusion-python"
