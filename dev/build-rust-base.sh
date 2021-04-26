@@ -16,6 +16,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-BALLISTA_VERSION=0.4.2-SNAPSHOT
 set -e
+
+. ./dev/build-set-env.sh
 docker build -t ballistacompute/rust-base:$BALLISTA_VERSION -f dev/docker/rust-base.dockerfile .

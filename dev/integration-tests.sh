@@ -19,11 +19,11 @@
 set -e
 ./dev/build-rust-base.sh
 ./dev/build-rust.sh
-pushd ballista/rust/benchmarks/tpch
+pushd benchmarks
 ./tpch-gen.sh
 
 docker-compose up -d
-docker-compose run ballista-client ./run.sh
+docker-compose run ballista-client /run.sh
 docker-compose down
 
 popd

@@ -23,4 +23,6 @@
 
 ci
 dev
+testing
+parquet-testing
 **/target/*

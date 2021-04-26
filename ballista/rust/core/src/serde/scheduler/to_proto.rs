@@ -55,6 +55,7 @@ impl TryInto<protobuf::ExecutePartition> for ExecutePartition {
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<protobuf::PartitionId> for PartitionId {
     fn into(self) -> protobuf::PartitionId {
         protobuf::PartitionId {
@@ -77,6 +78,7 @@ impl TryInto<protobuf::PartitionLocation> for PartitionLocation {
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<protobuf::PartitionStats> for PartitionStats {
     fn into(self) -> protobuf::PartitionStats {
         let none_value = -1_i64;

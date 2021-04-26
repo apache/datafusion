@@ -1,5 +1,6 @@
 *.npmrc
 *.gitignore
+*.dockerignore
 .gitmodules
 *_generated.h
 *_generated.js
@@ -7,7 +8,8 @@
 *.csv
 *.json
 *.snap
-.github/ISSUE_TEMPLATE/question.md
+.github/ISSUE_TEMPLATE/*.md
+.github/pull_request_template.md
 ci/etc/rprofile
 ci/etc/*.patch
 ci/vcpkg/*.patch
@@ -99,6 +101,6 @@ requirements.txt
 *.scss
 .gitattributes
 rust-toolchain
-ballista/rust/benchmarks/tpch/queries/q*.sql
+benchmarks/queries/q*.sql
 ballista/rust/scheduler/testdata/*
 ballista/ui/scheduler/yarn.lock

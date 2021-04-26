@@ -49,6 +49,7 @@ pub enum BallistaError {
     TokioError(tokio::task::JoinError),
 }
 
+#[allow(clippy::from_over_into)]
 impl<T> Into<Result<T>> for BallistaError {
     fn into(self) -> Result<T> {
         Err(self)

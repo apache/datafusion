@@ -1,4 +1,3 @@
-#!/bin/bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,11 +14,25 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-set -e
 
-# This bash script is meant to be run inside the docker-compose environment. Check the README for instructions
+# Turn .dockerignore to .dockerallow by excluding everything and explicitly
+# allowing specific files and directories. This enables us to quickly add
+# dependency files to the docker content without scanning the whole directory.
+# This setup requires to all of our docker containers have arrow's source
+# as a mounted directory.
 
-for query in 1 3 5 6 10 12
-do
-  /tpch benchmark --host ballista-scheduler --port 50050 --query $query --path /data --format tbl --iterations 1 --debug
-done
+FROM node:14.16.0-alpine as build
+WORKDIR /app
+ENV PATH /app/node_modules/.bin:$PATH
+
+COPY package.json ./
+COPY yarn.lock ./
+RUN yarn
+
+COPY . ./
+RUN yarn build
+
+FROM nginx:stable-alpine
+COPY --from=build /app/build /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

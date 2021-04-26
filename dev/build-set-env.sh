@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,16 +17,4 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-
-members = [
-    "benchmarks/tpch",
-    "client",
-    "core",
-    "executor",
-    "scheduler",
-]
-
-#[profile.release]
-#lto = true
-#codegen-units = 1
+export BALLISTA_VERSION=$(awk -F'[ ="]+' '$1 == "version" { print $2 }' ballista/rust/core/Cargo.toml)

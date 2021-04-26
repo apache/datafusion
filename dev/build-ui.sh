@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,9 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[book]
-authors = ["Andy Grove"]
-language = "en"
-multilingual = false
-src = "src"
-title = "Ballista User Guide"
+set -e
+
+. ./dev/build-set-env.sh
+docker build -t ballistacompute/ballista-scheduler-ui:$BALLISTA_VERSION -f dev/docker/ui.scheduler.dockerfile ballista/ui/scheduler

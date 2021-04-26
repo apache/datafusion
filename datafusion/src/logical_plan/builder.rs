@@ -344,6 +344,16 @@ impl LogicalPlanBuilder {
             schema: DFSchemaRef::new(join_schema),
         }))
     }
+    /// Apply a cross join
+    pub fn cross_join(&self, right: &LogicalPlan) -> Result<Self> {
+        let schema = self.plan.schema().join(right.schema())?;
+
+        Ok(Self::from(&LogicalPlan::CrossJoin {
+            left: Arc::new(self.plan.clone()),
+            right: Arc::new(right.clone()),
+            schema: DFSchemaRef::new(schema),
+        }))
+    }
 
     /// Repartition
     pub fn repartition(&self, partitioning_scheme: Partitioning) -> Result<Self> {

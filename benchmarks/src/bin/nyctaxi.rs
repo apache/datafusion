@@ -22,8 +22,9 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::util::pretty;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::util::pretty;
+
 use datafusion::error::Result;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 

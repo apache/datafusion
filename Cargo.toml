@@ -17,12 +17,11 @@
 
 [workspace]
 members = [
-        "datafusion",
-        "datafusion-examples",
+    "datafusion",
+    "datafusion-examples",
 	"benchmarks",
+    "ballista/rust/client",
+    "ballista/rust/core",
+    "ballista/rust/executor",
+    "ballista/rust/scheduler",
 ]
-
-# this package is excluded because it requires different compilation flags, thereby significantly changing
-# how it is compiled within the workspace, causing the whole workspace to be compiled from scratch
-# this way, this is a stand-alone package that compiles independently of the others.
-exclude = ["ballista"]

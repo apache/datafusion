@@ -856,6 +856,9 @@ pub fn create_hashes<'a>(
             DataType::Utf8 => {
                 hash_array!(StringArray, col, str, hashes_buffer, random_state);
             }
+            DataType::LargeUtf8 => {
+                hash_array!(LargeStringArray, col, str, hashes_buffer, random_state);
+            }
             _ => {
                 // This is internal because we should have caught this before.
                 return Err(DataFusionError::Internal(

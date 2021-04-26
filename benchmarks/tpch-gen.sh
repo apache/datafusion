@@ -1,3 +1,4 @@
+#!/bin/bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,22 +16,19 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "tpch"
-version = "0.4.2-SNAPSHOT"
-homepage = "https://github.com/apache/arrow"
-repository = "https://github.com/apache/arrow"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-edition = "2018"
+#set -e
 
-[dependencies]
-ballista = { path="../../client" }
-datafusion = { path = "../../../../datafusion" }
+pushd ..
+. ./dev/build-set-env.sh
+popd
+docker build -t ballistacompute/ballista-tpchgen:$BALLISTA_VERSION -f tpchgen.dockerfile .
 
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "08a662f" }
-parquet = { git = "https://github.com/apache/arrow-rs", rev = "08a662f" }
-
-env_logger = "0.8"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
-structopt = "0.3"
+# Generate data into the ./data directory if it does not already exist
+FILE=./data/supplier.tbl
+if test -f "$FILE"; then
+    echo "$FILE exists."
+else
+  mkdir data 2>/dev/null
+  docker run -v `pwd`/data:/data -it --rm ballistacompute/ballista-tpchgen:$BALLISTA_VERSION
+  ls -l data
+fi

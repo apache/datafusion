@@ -1,3 +1,4 @@
+#!/bin/bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,25 +15,12 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+set -e
 
-[package]
-name = "datafusion-examples"
-description = "DataFusion usage examples"
-version = "4.0.0-SNAPSHOT"
-homepage = "https://github.com/apache/arrow"
-repository = "https://github.com/apache/arrow"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = [ "arrow", "query", "sql" ]
-edition = "2018"
-publish = false
+# This bash script is meant to be run inside the docker-compose environment. Check the README for instructions
 
-
-[dev-dependencies]
-arrow-flight = { git = "https://github.com/apache/arrow-rs", rev = "c3fe3bab9905739fdda75301dab07a18c91731bd" }
-datafusion = { path = "../datafusion" }
-prost = "0.7"
-tonic = "0.4"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
-futures = "0.3"
-num_cpus = "1.13.0"
+cd /
+for query in 1 3 5 6 10 12
+do
+  /tpch benchmark --host ballista-scheduler --port 50050 --query $query --path /data --format tbl --iterations 1 --debug
+done

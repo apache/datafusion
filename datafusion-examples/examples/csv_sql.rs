@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::util::pretty;
+use datafusion::arrow::util::pretty;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     // create local execution context
     let mut ctx = ExecutionContext::new();
 
-    let testdata = arrow::util::test_util::arrow_test_data();
+    let testdata = datafusion::arrow::util::test_util::arrow_test_data();
 
     // register csv file with the execution context
     ctx.register_csv(

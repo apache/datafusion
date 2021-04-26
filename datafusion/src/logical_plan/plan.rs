@@ -109,6 +109,15 @@ pub enum LogicalPlan {
         /// The output schema, containing fields from the left and right inputs
         schema: DFSchemaRef,
     },
+    /// Apply Cross Join to two logical plans
+    CrossJoin {
+        /// Left input
+        left: Arc<LogicalPlan>,
+        /// Right input
+        right: Arc<LogicalPlan>,
+        /// The output schema, containing fields from the left and right inputs
+        schema: DFSchemaRef,
+    },
     /// Repartition the plan based on a partitioning scheme.
     Repartition {
         /// The incoming logical plan
@@ -199,6 +208,7 @@ impl LogicalPlan {
             LogicalPlan::Aggregate { schema, .. } => &schema,
             LogicalPlan::Sort { input, .. } => input.schema(),
             LogicalPlan::Join { schema, .. } => &schema,
+            LogicalPlan::CrossJoin { schema, .. } => &schema,
             LogicalPlan::Repartition { input, .. } => input.schema(),
             LogicalPlan::Limit { input, .. } => input.schema(),
             LogicalPlan::CreateExternalTable { schema, .. } => &schema,
@@ -225,6 +235,11 @@ impl LogicalPlan {
                 right,
                 schema,
                 ..
+            }
+            | LogicalPlan::CrossJoin {
+                left,
+                right,
+                schema,
             } => {
                 let mut schemas = left.all_schemas();
                 schemas.extend(right.all_schemas());
@@ -287,8 +302,9 @@ impl LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Limit { .. }
             | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::Explain { .. } => vec![],
-            LogicalPlan::Union { .. } => {
+            | LogicalPlan::CrossJoin { .. }
+            | LogicalPlan::Explain { .. }
+            | LogicalPlan::Union { .. } => {
                 vec![]
             }
         }
@@ -304,6 +320,7 @@ impl LogicalPlan {
             LogicalPlan::Aggregate { input, .. } => vec![input],
             LogicalPlan::Sort { input, .. } => vec![input],
             LogicalPlan::Join { left, right, .. } => vec![left, right],
+            LogicalPlan::CrossJoin { left, right, .. } => vec![left, right],
             LogicalPlan::Limit { input, .. } => vec![input],
             LogicalPlan::Extension { node } => node.inputs(),
             LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
@@ -393,7 +410,8 @@ impl LogicalPlan {
             LogicalPlan::Repartition { input, .. } => input.accept(visitor)?,
             LogicalPlan::Aggregate { input, .. } => input.accept(visitor)?,
             LogicalPlan::Sort { input, .. } => input.accept(visitor)?,
-            LogicalPlan::Join { left, right, .. } => {
+            LogicalPlan::Join { left, right, .. }
+            | LogicalPlan::CrossJoin { left, right, .. } => {
                 left.accept(visitor)? && right.accept(visitor)?
             }
             LogicalPlan::Union { inputs, .. } => {
@@ -670,6 +688,9 @@ impl LogicalPlan {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
                         write!(f, "Join: {}", join_expr.join(", "))
+                    }
+                    LogicalPlan::CrossJoin { .. } => {
+                        write!(f, "CrossJoin:")
                     }
                     LogicalPlan::Repartition {
                         partitioning_scheme,

@@ -183,7 +183,6 @@
 //!
 //! you can find examples of each of them in examples section.
 
-extern crate arrow;
 extern crate sqlparser;
 
 pub mod catalog;
@@ -199,6 +198,10 @@ pub mod prelude;
 pub mod scalar;
 pub mod sql;
 pub mod variable;
+
+// re-export dependencies from arrow-rs to minimise version maintenance for crate users
+pub use arrow;
+pub use parquet;
 
 #[cfg(test)]
 pub mod test;

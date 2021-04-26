@@ -18,8 +18,8 @@
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
-use arrow::util::pretty;
+use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::util::pretty;
 
 use arrow_flight::flight_descriptor;
 use arrow_flight::flight_service_client::FlightServiceClient;
@@ -31,7 +31,7 @@ use arrow_flight::{FlightDescriptor, Ticket};
 /// This example is run along-side the example `flight_server`.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let testdata = arrow::util::test_util::parquet_test_data();
+    let testdata = datafusion::arrow::util::test_util::parquet_test_data();
 
     // Create Flight client
     let mut client = FlightServiceClient::connect("http://localhost:50051").await?;

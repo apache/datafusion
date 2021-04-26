@@ -19,7 +19,7 @@
 name = "ballista"
 description = "Ballista Distributed Compute"
 license = "Apache-2.0"
-version = "0.4.2-SNAPSHOT"
+version = "0.5.0-SNAPSHOT"
 homepage = "https://github.com/apache/arrow"
 repository = "https://github.com/apache/arrow"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -31,5 +31,5 @@ futures = "0.3"
 log = "0.4"
 tokio = "1.0"
 
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "08a662f" }
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "c3fe3bab9905739fdda75301dab07a18c91731bd" }
 datafusion = { path = "../../../datafusion" }
