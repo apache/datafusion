@@ -97,8 +97,8 @@ async fn main() -> datafusion::error::Result<()> {
   let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
 
   let df = df.filter(col("a").lt_eq(col("b")))?
-           .aggregate(vec![col("a")], vec![min(col("b"))])?
-           .limit(100)?;
+          .aggregate(vec![col("a")], vec![min(col("b"))])?
+          .limit(100)?;
 
   // execute and print results
   let results: Vec<RecordBatch> = df.collect().await?;
@@ -141,11 +141,11 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
 - [x] SQL Parser
 - [x] SQL Query Planner
 - [x] Query Optimizer
- - [x] Constant folding
- - [x] Join Reordering
- - [x] Limit Pushdown
- - [x] Projection push down
- - [x] Predicate push down
+- [x] Constant folding
+- [x] Join Reordering
+- [x] Limit Pushdown
+- [x] Projection push down
+- [x] Predicate push down
 - [x] Type coercion
 - [x] Parallel query execution
 
@@ -213,7 +213,9 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
   - [ ] MINUS
 - [x] Joins
   - [x] INNER JOIN
-  - [ ] CROSS JOIN
+  - [x] LEFT JOIN
+  - [x] RIGHT JOIN
+  - [x] CROSS JOIN
   - [ ] OUTER JOIN
 - [ ] Window
 
