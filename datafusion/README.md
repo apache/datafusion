@@ -355,4 +355,4 @@ There is no formal document describing DataFusion's architecture yet, but the fo
 
 # Developer's guide
 
-Please see [Developers Guide](DEVELOPERS.md) for information about developing DataFusion.
+Please see [Developers Guide](../DEVELOPERS.md) for information about developing DataFusion.
