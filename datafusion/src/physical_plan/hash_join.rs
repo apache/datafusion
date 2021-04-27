@@ -63,8 +63,17 @@ use crate::physical_plan::coalesce_batches::concat_batches;
 use log::debug;
 
 // Maps a `u64` hash value based on the left ["on" values] to a list of indices with this key's value.
+//
+// Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
+// to put the indices in a certain bucket.
+// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the left side,
+// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
 // E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 // As the key is a hash value, we need to check possible hash collisions in the probe stage
+// During this stage it might be the case that a row is contained the same hashmap value,
+// but the values don't match. Those are checked in the [equal_rows] macro
+// TODO: speed up collission check and move away from using a hashbrown HashMap
+// https://github.com/apache/arrow-datafusion/issues/50
 type JoinHashMap = HashMap<(), SmallVec<[u64; 1]>, IdHashBuilder>;
 type JoinLeftData = Arc<(JoinHashMap, RecordBatch)>;
 
