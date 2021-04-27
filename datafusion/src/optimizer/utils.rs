@@ -23,8 +23,8 @@ use arrow::datatypes::Schema;
 
 use super::optimizer::OptimizerRule;
 use crate::logical_plan::{
-    Column, Expr, LogicalPlan, Operator, Partitioning, PlanType, Recursion,
-    StringifiedPlan, ToDFSchema,
+    Column, Expr, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, PlanType,
+    Recursion, StringifiedPlan, ToDFSchema,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
@@ -208,11 +208,11 @@ pub fn from_plan(
             on: on.clone(),
             schema: schema.clone(),
         }),
-        LogicalPlan::CrossJoin { schema, .. } => Ok(LogicalPlan::CrossJoin {
-            left: Arc::new(inputs[0].clone()),
-            right: Arc::new(inputs[1].clone()),
-            schema: schema.clone(),
-        }),
+        LogicalPlan::CrossJoin { .. } => {
+            let left = &inputs[0];
+            let right = &inputs[1];
+            LogicalPlanBuilder::from(left).cross_join(right)?.build()
+        }
         LogicalPlan::Limit { n, .. } => Ok(LogicalPlan::Limit {
             n: *n,
             input: Arc::new(inputs[0].clone()),
