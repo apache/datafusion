@@ -107,8 +107,14 @@ async fn main() -> Result<()> {
 
     if opt.local {
         info!("Running in local mode. Scheduler will be run in-proc");
-        let client = StandaloneClient::try_new_temporary()
-            .context("Could not create standalone config backend")?;
+
+        let client = match opt.scheduler_data_path {
+            Some(v) => StandaloneClient::try_new(v)
+                .context("Could not create standalone config backend")?,
+            None => StandaloneClient::try_new_temporary()
+                .context("Could not create standalone config backend")?,
+        };
+
         let server =
             SchedulerGrpcServer::new(SchedulerServer::new(Arc::new(client), namespace));
         let addr = format!("{}:{}", bind_host, scheduler_port);
