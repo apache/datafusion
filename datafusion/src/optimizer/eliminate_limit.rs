@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to push down LIMIT in the query plan
-//! It will push down through projection, limits (taking the smaller limit)
+//! Optimizer rule to replace `LIMIT 0` on a plan with an empty relation.
+//! This saves time in planning and executing the query.
 use crate::error::Result;
 use crate::logical_plan::LogicalPlan;
 use crate::optimizer::optimizer::OptimizerRule;
 
 use super::utils;
 
-/// Optimization rule that replaces Limit 0 with an empty relation
+/// Optimization rule that replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
 pub struct EliminateLimit {}
 
 impl EliminateLimit {
@@ -42,7 +42,7 @@ impl OptimizerRule for EliminateLimit {
                     schema: input.schema().clone(),
                 })
             }
-            // Rest: recurse and find possible Limit 0 nodes
+            // Rest: recurse and find possible LIMIT 0 nodes
             _ => {
                 let expr = plan.expressions();
 

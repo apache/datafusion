@@ -21,7 +21,9 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
-    optimizer::hash_build_probe_order::HashBuildProbeOrder,
+    optimizer::{
+        eliminate_limit::EliminateLimit, hash_build_probe_order::HashBuildProbeOrder,
+    },
     physical_optimizer::optimizer::PhysicalOptimizerRule,
 };
 use log::debug;
@@ -636,6 +638,7 @@ impl ExecutionConfig {
             batch_size: 8192,
             optimizers: vec![
                 Arc::new(ConstantFolding::new()),
+                Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(HashBuildProbeOrder::new()),
