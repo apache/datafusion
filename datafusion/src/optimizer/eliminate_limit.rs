@@ -24,7 +24,7 @@ use crate::optimizer::optimizer::OptimizerRule;
 use super::utils;
 
 /// Optimization rule that replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
-pub struct EliminateLimit {}
+pub struct EliminateLimit;
 
 impl EliminateLimit {
     #[allow(missing_docs)]
