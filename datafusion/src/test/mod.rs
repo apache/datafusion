@@ -274,7 +274,6 @@ pub fn make_timestamps() -> RecordBatch {
 
 pub mod exec;
 pub mod user_defined;
-pub mod variable;
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record

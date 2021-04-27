@@ -70,7 +70,6 @@ use crate::sql::{
     parser::{DFParser, FileType},
     planner::{ContextProvider, SqlToRel},
 };
-use crate::variable::{VarProvider, VarType};
 use crate::{dataframe::DataFrame, physical_plan::udaf::AggregateUDF};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -154,7 +153,6 @@ impl ExecutionContext {
             state: Arc::new(Mutex::new(ExecutionContextState {
                 catalog_list,
                 scalar_functions: HashMap::new(),
-                var_provider: HashMap::new(),
                 aggregate_functions: HashMap::new(),
                 config,
             })),
@@ -217,19 +215,6 @@ impl ExecutionContext {
         let state = self.state.lock().unwrap().clone();
         let query_planner = SqlToRel::new(&state);
         query_planner.statement_to_plan(&statements[0])
-    }
-
-    /// Registers a variable provider within this context.
-    pub fn register_variable(
-        &mut self,
-        variable_type: VarType,
-        provider: Arc<dyn VarProvider + Send + Sync>,
-    ) {
-        self.state
-            .lock()
-            .unwrap()
-            .var_provider
-            .insert(variable_type, provider);
     }
 
     /// Registers a scalar UDF within this context.
@@ -744,8 +729,6 @@ pub struct ExecutionContextState {
     pub catalog_list: Arc<dyn CatalogList>,
     /// Scalar functions that are registered with the context
     pub scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-    /// Variable provider that are registered with the context
-    pub var_provider: HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>,
     /// Aggregate functions registered in the context
     pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Context configuration
@@ -837,7 +820,6 @@ mod tests {
     use crate::physical_plan::functions::make_scalar_function;
     use crate::physical_plan::{collect, collect_partitioned};
     use crate::test;
-    use crate::variable::VarType;
     use crate::{
         assert_batches_eq, assert_batches_sorted_eq,
         logical_plan::{col, create_udf, sum},
@@ -912,35 +894,6 @@ mod tests {
             "+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &results);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn create_variable_expr() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let partition_count = 4;
-        let mut ctx = create_ctx(&tmp_dir, partition_count)?;
-
-        let variable_provider = test::variable::SystemVar::new();
-        ctx.register_variable(VarType::System, Arc::new(variable_provider));
-        let variable_provider = test::variable::UserDefinedVar::new();
-        ctx.register_variable(VarType::UserDefined, Arc::new(variable_provider));
-
-        let provider = test::create_table_dual();
-        ctx.register_table("dual", provider)?;
-
-        let results =
-            plan_and_collect(&mut ctx, "SELECT @@version, @name FROM dual").await?;
-
-        let expected = vec![
-            "+----------------------+------------------------+",
-            "| @@version            | @name                  |",
-            "+----------------------+------------------------+",
-            "| system-var-@@version | user-defined-var-@name |",
-            "+----------------------+------------------------+",
-        ];
-        assert_batches_eq!(expected, &results);
 
         Ok(())
     }

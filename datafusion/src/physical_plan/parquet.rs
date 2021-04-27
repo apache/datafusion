@@ -397,7 +397,6 @@ impl RowGroupPredicateBuilder {
         let execution_context_state = ExecutionContextState {
             catalog_list: Arc::new(MemoryCatalogList::new()),
             scalar_functions: HashMap::new(),
-            var_provider: HashMap::new(),
             aggregate_functions: HashMap::new(),
             config: ExecutionConfig::new(),
         };

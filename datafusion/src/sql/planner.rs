@@ -866,28 +866,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fractional_seconds_precision,
             ),
 
-            SQLExpr::Identifier(ref id) => {
-                if &id.value[0..1] == "@" {
-                    let var_names = vec![id.value.clone()];
-                    Ok(Expr::ScalarVariable(var_names))
-                } else {
-                    Ok(Expr::Column(id.value.to_string()))
-                }
-            }
+            SQLExpr::Identifier(ref id) => Ok(Expr::Column(id.value.to_string())),
 
             SQLExpr::CompoundIdentifier(ids) => {
                 let mut var_names = vec![];
                 for id in ids {
                     var_names.push(id.value.clone());
                 }
-                if &var_names[0][0..1] == "@" {
-                    Ok(Expr::ScalarVariable(var_names))
-                } else {
-                    Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported compound identifier '{:?}'",
-                        var_names,
-                    )))
-                }
+                Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported compound identifier '{:?}'",
+                    var_names,
+                )))
             }
 
             SQLExpr::Wildcard => Ok(Expr::Wildcard),

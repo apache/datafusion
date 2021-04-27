@@ -223,7 +223,6 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let ctx_state = ExecutionContextState {
                     catalog_list,
                     scalar_functions: Default::default(),
-                    var_provider: Default::default(),
                     aggregate_functions: Default::default(),
                     config: ExecutionConfig::new(),
                 };
@@ -387,7 +386,6 @@ fn compile_expr(
     let state = ExecutionContextState {
         catalog_list,
         scalar_functions: HashMap::new(),
-        var_provider: HashMap::new(),
         aggregate_functions: HashMap::new(),
         config: ExecutionConfig::new(),
     };

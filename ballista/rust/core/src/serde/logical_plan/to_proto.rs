@@ -1016,7 +1016,6 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
                 })
             }
-            Expr::ScalarVariable(_) => unimplemented!(),
             Expr::ScalarFunction { ref fun, ref args } => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let expr: Vec<protobuf::LogicalExprNode> = args

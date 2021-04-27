@@ -335,9 +335,7 @@ where
                 asc: *asc,
                 nulls_first: *nulls_first,
             }),
-            Expr::Column(_) | Expr::Literal(_) | Expr::ScalarVariable(_) => {
-                Ok(expr.clone())
-            }
+            Expr::Column(_) | Expr::Literal(_) => Ok(expr.clone()),
             Expr::Wildcard => Ok(Expr::Wildcard),
         },
     }

@@ -44,7 +44,6 @@ use crate::physical_plan::{hash_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, PhysicalPlanner};
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
-use crate::variable::VarType;
 use arrow::compute::can_cast_types;
 
 use arrow::compute::SortOptions;
@@ -444,31 +443,6 @@ impl DefaultPhysicalPlanner {
                 Ok(Arc::new(Column::new(name)))
             }
             Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
-            Expr::ScalarVariable(variable_names) => {
-                if &variable_names[0][0..2] == "@@" {
-                    match ctx_state.var_provider.get(&VarType::System) {
-                        Some(provider) => {
-                            let scalar_value =
-                                provider.get_value(variable_names.clone())?;
-                            Ok(Arc::new(Literal::new(scalar_value)))
-                        }
-                        _ => Err(DataFusionError::Plan(
-                            "No system variable provider found".to_string(),
-                        )),
-                    }
-                } else {
-                    match ctx_state.var_provider.get(&VarType::UserDefined) {
-                        Some(provider) => {
-                            let scalar_value =
-                                provider.get_value(variable_names.clone())?;
-                            Ok(Arc::new(Literal::new(scalar_value)))
-                        }
-                        _ => Err(DataFusionError::Plan(
-                            "No user defined variable provider found".to_string(),
-                        )),
-                    }
-                }
-            }
             Expr::BinaryExpr { left, op, right } => {
                 let lhs = self.create_physical_expr(left, input_schema, ctx_state)?;
                 let rhs = self.create_physical_expr(right, input_schema, ctx_state)?;
@@ -755,7 +729,6 @@ mod tests {
         ExecutionContextState {
             catalog_list: Arc::new(MemoryCatalogList::new()),
             scalar_functions: HashMap::new(),
-            var_provider: HashMap::new(),
             aggregate_functions: HashMap::new(),
             config: ExecutionConfig::new(),
         }
