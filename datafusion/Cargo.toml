@@ -51,8 +51,8 @@ unicode_expressions = ["unicode-segmentation"]
 [dependencies]
 ahash = "0.7"
 hashbrown = "0.11"
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "c3fe3bab9905739fdda75301dab07a18c91731bd", features = ["prettyprint"] }
-parquet = { git = "https://github.com/apache/arrow-rs", rev = "c3fe3bab9905739fdda75301dab07a18c91731bd", features = ["arrow"] }
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "ed00e4d4a160cd5182bfafb81fee2240ec005014", features = ["prettyprint"] }
+parquet = { git = "https://github.com/apache/arrow-rs", rev = "ed00e4d4a160cd5182bfafb81fee2240ec005014", features = ["arrow"] }
 sqlparser = "0.9.0"
 clap = "2.33"
 rustyline = {version = "7.0", optional = true}
