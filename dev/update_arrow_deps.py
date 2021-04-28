@@ -31,14 +31,19 @@ from pathlib import Path
 import tomlkit
 import requests
 
+
 # find latest arrow-rs sha
 def get_arrow_sha():
     url = 'https://api.github.com/repos/apache/arrow-rs/branches/master'
     response = requests.get(url)
     return response.json()['commit']['sha']
 
+
 # Update all entries that look like
-# {'git': 'https://github.com/apache/arrow-rs', 'rev': 'c3fe3bab9905739fdda75301dab07a18c91731bd', 'features': ['prettyprint']}
+# {
+#   'git': 'https://github.com/apache/arrow-rs',
+#   'rev': 'c3fe3bab9905739fdda75301dab07a18c91731bd'
+# }
 # to point at a new SHA
 def update_dependencies(dependencies, new_sha):
     if dependencies is None:
