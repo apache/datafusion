@@ -2669,12 +2669,11 @@ async fn inner_join_qualified_names() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "https://issues.apache.org/jira/browse/ARROW-12266"]
 async fn inner_join_nulls() {
     let sql = "SELECT * FROM (SELECT null AS id1) t1
             INNER JOIN (SELECT null AS id2) t2 ON id1 = id2";
 
-    let expected: &[&[&str]] = &[&[]];
+    let expected: &[&[&str]] = &[];
 
     let mut ctx = create_join_context_qualified().unwrap();
     let actual = execute(&mut ctx, sql).await;
