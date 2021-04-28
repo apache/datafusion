@@ -70,7 +70,6 @@ async fn main() -> Result<()> {
         std::process::exit(0);
     }
 
-    let namespace = opt.namespace;
     let external_host = opt.external_host;
     let bind_host = opt.bind_host;
     let port = opt.port;
@@ -115,8 +114,10 @@ async fn main() -> Result<()> {
                 .context("Could not create standalone config backend")?,
         };
 
-        let server =
-            SchedulerGrpcServer::new(SchedulerServer::new(Arc::new(client), namespace));
+        let server = SchedulerGrpcServer::new(SchedulerServer::new(
+            Arc::new(client),
+            "ballista".to_string(),
+        ));
         let addr = format!("{}:{}", bind_host, scheduler_port);
         let addr = addr
             .parse()
