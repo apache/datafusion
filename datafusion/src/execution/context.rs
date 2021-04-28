@@ -840,10 +840,11 @@ mod tests {
     use crate::variable::VarType;
     use crate::{
         assert_batches_eq, assert_batches_sorted_eq,
-        logical_plan::{col, create_udf, sum},
+        logical_plan::{col, create_udf, sum, Expr},
     };
     use crate::{
-        datasource::MemTable, logical_plan::create_udaf,
+        datasource::{MemTable, TableType},
+        logical_plan::create_udaf,
         physical_plan::expressions::AvgAccumulator,
     };
     use arrow::array::{
@@ -2627,6 +2628,68 @@ mod tests {
             "| my_other_catalog | information_schema | tables     | VIEW       |",
             "| my_other_catalog | my_other_schema    | t3         | BASE TABLE |",
             "+------------------+--------------------+------------+------------+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+    }
+
+    #[tokio::test]
+    async fn information_schema_tables_table_types() {
+        struct TestTable(TableType);
+
+        impl TableProvider for TestTable {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn table_type(&self) -> TableType {
+                self.0
+            }
+
+            fn schema(&self) -> SchemaRef {
+                unimplemented!()
+            }
+
+            fn scan(
+                &self,
+                _: &Option<Vec<usize>>,
+                _: usize,
+                _: &[Expr],
+                _: Option<usize>,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                unimplemented!()
+            }
+
+            fn statistics(&self) -> crate::datasource::datasource::Statistics {
+                unimplemented!()
+            }
+        }
+
+        let mut ctx = ExecutionContext::with_config(
+            ExecutionConfig::new().with_information_schema(true),
+        );
+
+        ctx.register_table("physical", Arc::new(TestTable(TableType::Base)))
+            .unwrap();
+        ctx.register_table("query", Arc::new(TestTable(TableType::View)))
+            .unwrap();
+        ctx.register_table("temp", Arc::new(TestTable(TableType::Temporary)))
+            .unwrap();
+
+        let result =
+            plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+                .await
+                .unwrap();
+
+        let expected = vec![
+            "+---------------+--------------------+------------+-----------------+",
+            "| table_catalog | table_schema       | table_name | table_type      |",
+            "+---------------+--------------------+------------+-----------------+",
+            "| datafusion    | information_schema | tables     | VIEW            |",
+            "| datafusion    | information_schema | columns    | VIEW            |",
+            "| datafusion    | public             | physical   | BASE TABLE      |",
+            "| datafusion    | public             | query      | VIEW            |",
+            "| datafusion    | public             | temp       | LOCAL TEMPORARY |",
+            "+---------------+--------------------+------------+-----------------+",
         ];
         assert_batches_sorted_eq!(expected, &result);
     }

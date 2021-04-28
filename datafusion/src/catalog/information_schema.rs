@@ -27,7 +27,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::datasource::{MemTable, TableProvider};
+use crate::datasource::{MemTable, TableProvider, TableType};
 
 use super::{
     catalog::{CatalogList, CatalogProvider},
@@ -105,14 +105,25 @@ impl InformationSchemaProvider {
                 if schema_name != INFORMATION_SCHEMA {
                     let schema = catalog.schema(&schema_name).unwrap();
                     for table_name in schema.table_names() {
-                        builder.add_base_table(&catalog_name, &schema_name, table_name)
+                        let table = schema.table(&table_name).unwrap();
+                        builder.add_table(
+                            &catalog_name,
+                            &schema_name,
+                            table_name,
+                            table.table_type(),
+                        );
                     }
                 }
             }
 
             // Add a final list for the information schema tables themselves
-            builder.add_system_table(&catalog_name, INFORMATION_SCHEMA, TABLES);
-            builder.add_system_table(&catalog_name, INFORMATION_SCHEMA, COLUMNS);
+            builder.add_table(&catalog_name, INFORMATION_SCHEMA, TABLES, TableType::View);
+            builder.add_table(
+                &catalog_name,
+                INFORMATION_SCHEMA,
+                COLUMNS,
+                TableType::View,
+            );
         }
 
         let mem_table: MemTable = builder.into();
@@ -198,11 +209,12 @@ impl InformationSchemaTablesBuilder {
         }
     }
 
-    fn add_base_table(
+    fn add_table(
         &mut self,
         catalog_name: impl AsRef<str>,
         schema_name: impl AsRef<str>,
         table_name: impl AsRef<str>,
+        table_type: TableType,
     ) {
         // Note: append_value is actually infallable.
         self.catalog_names
@@ -212,24 +224,13 @@ impl InformationSchemaTablesBuilder {
             .append_value(schema_name.as_ref())
             .unwrap();
         self.table_names.append_value(table_name.as_ref()).unwrap();
-        self.table_types.append_value("BASE TABLE").unwrap();
-    }
-
-    fn add_system_table(
-        &mut self,
-        catalog_name: impl AsRef<str>,
-        schema_name: impl AsRef<str>,
-        table_name: impl AsRef<str>,
-    ) {
-        // Note: append_value is actually infallable.
-        self.catalog_names
-            .append_value(catalog_name.as_ref())
+        self.table_types
+            .append_value(match table_type {
+                TableType::Base => "BASE TABLE",
+                TableType::View => "VIEW",
+                TableType::Temporary => "LOCAL TEMPORARY",
+            })
             .unwrap();
-        self.schema_names
-            .append_value(schema_name.as_ref())
-            .unwrap();
-        self.table_names.append_value(table_name.as_ref()).unwrap();
-        self.table_types.append_value("VIEW").unwrap();
     }
 }
 
