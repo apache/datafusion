@@ -25,3 +25,5 @@ members = [
     "ballista/rust/executor",
     "ballista/rust/scheduler",
 ]
+
+exclude = ["python"]
