@@ -52,7 +52,7 @@ tonic = "0.4"
 tower = { version = "0.4" }
 warp = "0.3"
 
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "ed00e4d4a160cd5182bfafb81fee2240ec005014" }
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "d008f31b107c1030a1f5144c164e8ca8bf543576" }
 datafusion = { path = "../../../datafusion" }
 
 [dev-dependencies]
