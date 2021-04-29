@@ -237,6 +237,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             let mut predicates = vec![];
             split_members(predicate, &mut predicates);
 
+            // Predicates without referencing columns (WHERE FALSE, WHERE 1=1, etc.)
             let mut no_col_predicates = vec![];
 
             predicates
@@ -252,6 +253,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     }
                     Ok(())
                 })?;
+            // Predicates without columns will not be pushed down.
+            // As those contain only literals, they could be optimized using constant folding
+            // and removal of WHERE TRUE / WHERE FALSE
             if !no_col_predicates.is_empty() {
                 Ok(add_filter(optimize(input, state)?, &no_col_predicates))
             } else {
