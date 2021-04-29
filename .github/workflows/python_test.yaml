@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Tests
+name: Python test
 on: [push, pull_request]
 
 jobs:
@@ -23,11 +23,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: nightly-2020-11-24
-        default: true
-        components: rustfmt
+    - name: Setup Rust toolchain
+      run: |
+        rustup toolchain install nightly-2020-11-24
+        rustup default nightly-2020-11-24
+        rustup component add rustfmt
     - name: Cache Cargo
       uses: actions/cache@v2
       with:
