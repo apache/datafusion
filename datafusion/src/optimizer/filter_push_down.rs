@@ -516,6 +516,7 @@ mod tests {
             .project(vec![col("c"), col("b")])?
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
+        // filter is before double projection
         let expected = "\
             Projection: #c, #b\
             \n  Projection: #a, #b, #c\
