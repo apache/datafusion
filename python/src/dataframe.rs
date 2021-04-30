@@ -53,7 +53,7 @@ impl DataFrame {
         let expressions = expression::from_tuple(args)?;
         let builder = LogicalPlanBuilder::from(&self.plan);
         let builder =
-            errors::wrap(builder.project(expressions.iter().map(|e| e.expr.clone()).collect()))?;
+            errors::wrap(builder.project(expressions.into_iter().map(|e| e.expr)))?;
         let plan = errors::wrap(builder.build())?;
 
         Ok(DataFrame {
@@ -82,8 +82,8 @@ impl DataFrame {
     ) -> PyResult<Self> {
         let builder = LogicalPlanBuilder::from(&self.plan);
         let builder = errors::wrap(builder.aggregate(
-            group_by.iter().map(|e| e.expr.clone()).collect(),
-            aggs.iter().map(|e| e.expr.clone()).collect(),
+            group_by.into_iter().map(|e| e.expr),
+            aggs.into_iter().map(|e| e.expr),
         ))?;
         let plan = errors::wrap(builder.build())?;
 
@@ -116,7 +116,7 @@ impl DataFrame {
             .create_physical_plan(&plan)
             .map_err(|e| -> errors::DataFusionError { e.into() })?;
 
-        let mut rt = Runtime::new().unwrap();
+        let rt = Runtime::new().unwrap();
         let batches = py.allow_threads(|| {
             rt.block_on(async {
                 collect(plan)
@@ -144,8 +144,12 @@ impl DataFrame {
             }
         };
 
-        let builder =
-            errors::wrap(builder.join(&right.plan, join_type, on.as_slice(), on.as_slice()))?;
+        let builder = errors::wrap(builder.join(
+            &right.plan,
+            join_type,
+            on.as_slice(),
+            on.as_slice(),
+        ))?;
 
         let plan = errors::wrap(builder.build())?;
 

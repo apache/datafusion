@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 
 use pyo3::prelude::*;
 
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionContext as _ExecutionContext;
 
@@ -76,7 +76,8 @@ impl ExecutionContext {
             })
             .collect::<PyResult<_>>()?;
 
-        let table = errors::wrap(MemTable::try_new(partitions[0][0].schema(), partitions))?;
+        let table =
+            errors::wrap(MemTable::try_new(partitions[0][0].schema(), partitions))?;
 
         // generate a random (unique) name for this table
         let name = rand::thread_rng()
@@ -84,10 +85,10 @@ impl ExecutionContext {
             .take(10)
             .collect::<String>();
 
-        self.ctx.register_table(&name, Box::new(table));
+        errors::wrap(self.ctx.register_table(&*name, Arc::new(table)))?;
         Ok(dataframe::DataFrame::new(
             self.ctx.state.clone(),
-            errors::wrap(self.ctx.table(&name))?.to_logical_plan(),
+            errors::wrap(self.ctx.table(&*name))?.to_logical_plan(),
         ))
     }
 
@@ -102,13 +103,13 @@ impl ExecutionContext {
         func: PyObject,
         args_types: Vec<PyDataType>,
         return_type: PyDataType,
-    ) -> PyResult<()> {
-        let function = functions::create_udf(func, args_types, return_type, name)?;
+    ) {
+        let function = functions::create_udf(func, args_types, return_type, name);
 
-        Ok(self.ctx.register_udf(function.function))
+        self.ctx.register_udf(function.function);
     }
 
     fn tables(&self) -> HashSet<String> {
-        self.ctx.tables()
+        self.ctx.tables().unwrap()
     }
 }

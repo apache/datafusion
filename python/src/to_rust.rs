@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::{
+use datafusion::arrow::{
     array::{make_array_from_raw, ArrayRef},
     datatypes::Field,
     datatypes::Schema,
@@ -43,7 +43,7 @@ pub fn to_rust(ob: &PyAny) -> PyResult<ArrayRef> {
     )?;
 
     let array = unsafe { make_array_from_raw(array_pointer, schema_pointer) }
-        .map_err(|e| errors::DataFusionError::from(e))?;
+        .map_err(errors::DataFusionError::from)?;
     Ok(array)
 }
 
@@ -73,7 +73,7 @@ pub fn to_rust_batch(batch: &PyAny) -> PyResult<RecordBatch> {
         .collect::<PyResult<_>>()?;
 
     let batch =
-        RecordBatch::try_new(schema, arrays).map_err(|e| errors::DataFusionError::from(e))?;
+        RecordBatch::try_new(schema, arrays).map_err(errors::DataFusionError::from)?;
     Ok(batch)
 }
 

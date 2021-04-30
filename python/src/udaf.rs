@@ -19,10 +19,13 @@ use std::sync::Arc;
 
 use pyo3::{prelude::*, types::PyTuple};
 
-use arrow::array;
+use datafusion::arrow::array::ArrayRef;
 
 use datafusion::error::Result;
-use datafusion::{error::DataFusionError as InnerDataFusionError, physical_plan::Accumulator};
+use datafusion::{
+    error::DataFusionError as InnerDataFusionError, physical_plan::Accumulator,
+    scalar::ScalarValue,
+};
 
 use crate::scalar::Scalar;
 use crate::to_py::to_py_array;
@@ -55,12 +58,12 @@ impl Accumulator for PyAccumulator {
         Ok(state.into_iter().map(|v| v.scalar).collect::<Vec<_>>())
     }
 
-    fn update(&mut self, _values: &Vec<datafusion::scalar::ScalarValue>) -> Result<()> {
+    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
         // no need to implement as datafusion does not use it
         todo!()
     }
 
-    fn merge(&mut self, _states: &Vec<datafusion::scalar::ScalarValue>) -> Result<()> {
+    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
         // no need to implement as datafusion does not use it
         todo!()
     }
@@ -76,10 +79,11 @@ impl Accumulator for PyAccumulator {
             .call_method0("evaluate")
             .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
 
-        to_rust_scalar(value).map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
+        to_rust_scalar(value)
+            .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
     }
 
-    fn update_batch(&mut self, values: &Vec<array::ArrayRef>) -> Result<()> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // get GIL
         let gil = pyo3::Python::acquire_gil();
         let py = gil.python();
@@ -106,7 +110,7 @@ impl Accumulator for PyAccumulator {
         Ok(())
     }
 
-    fn merge_batch(&mut self, states: &Vec<array::ArrayRef>) -> Result<()> {
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // get GIL
         let gil = pyo3::Python::acquire_gil();
         let py = gil.python();
@@ -131,7 +135,6 @@ impl Accumulator for PyAccumulator {
 pub fn array_udaf(
     accumulator: PyObject,
 ) -> Arc<dyn Fn() -> Result<Box<dyn Accumulator>> + Send + Sync> {
-    let accumulator = accumulator.clone();
     Arc::new(move || -> Result<Box<dyn Accumulator>> {
         let gil = pyo3::Python::acquire_gil();
         let py = gil.python();

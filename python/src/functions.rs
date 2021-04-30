@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::DataType;
 use pyo3::{prelude::*, wrap_pyfunction};
 
 use datafusion::logical_plan;
@@ -30,9 +30,9 @@ use crate::{expression, types::PyDataType};
 #[pyfunction]
 #[text_signature = "(name)"]
 fn col(name: &str) -> expression::Expression {
-    return expression::Expression {
+    expression::Expression {
         expr: logical_plan::col(name),
-    };
+    }
 }
 
 /// Expression representing a constant value
@@ -79,25 +79,33 @@ fn count(value: expression::Expression) -> expression::Expression {
     }
 }
 
+/*
 #[pyfunction]
 fn concat(value: Vec<expression::Expression>) -> expression::Expression {
     expression::Expression {
-        expr: logical_plan::concat(value.into_iter().map(|e| e.expr).collect()),
+        expr: logical_plan::concat(value.into_iter().map(|e| e.expr)),
     }
 }
+ */
 
 pub(crate) fn create_udf(
     fun: PyObject,
     input_types: Vec<PyDataType>,
     return_type: PyDataType,
     name: &str,
-) -> PyResult<expression::ScalarUDF> {
-    let input_types: Vec<DataType> = input_types.iter().map(|d| d.data_type.clone()).collect();
+) -> expression::ScalarUDF {
+    let input_types: Vec<DataType> =
+        input_types.iter().map(|d| d.data_type.clone()).collect();
     let return_type = Arc::new(return_type.data_type);
 
-    Ok(expression::ScalarUDF {
-        function: logical_plan::create_udf(name, input_types, return_type, udf::array_udf(fun)),
-    })
+    expression::ScalarUDF {
+        function: logical_plan::create_udf(
+            name,
+            input_types,
+            return_type,
+            udf::array_udf(fun),
+        ),
+    }
 }
 
 /// Creates a new udf.
@@ -110,7 +118,7 @@ fn udf(
 ) -> PyResult<expression::ScalarUDF> {
     let name = fun.getattr(py, "__qualname__")?.extract::<String>(py)?;
 
-    create_udf(fun, input_types, return_type, &name)
+    Ok(create_udf(fun, input_types, return_type, &name))
 }
 
 /// Creates a new udf.
@@ -144,7 +152,8 @@ fn udaf(
 pub fn init(module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(col, module)?)?;
     module.add_function(wrap_pyfunction!(lit, module)?)?;
-    module.add_function(wrap_pyfunction!(concat, module)?)?;
+    // see https://github.com/apache/arrow-datafusion/issues/226
+    //module.add_function(wrap_pyfunction!(concat, module)?)?;
     module.add_function(wrap_pyfunction!(udf, module)?)?;
     module.add_function(wrap_pyfunction!(sum, module)?)?;
     module.add_function(wrap_pyfunction!(count, module)?)?;

@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::{basic::CompareOp, prelude::*, types::PyTuple, PyNumberProtocol, PyObjectProtocol};
+use pyo3::{
+    basic::CompareOp, prelude::*, types::PyTuple, PyNumberProtocol, PyObjectProtocol,
+};
 
 use datafusion::logical_plan::Expr as _Expr;
 use datafusion::physical_plan::udaf::AggregateUDF as _AggregateUDF;
@@ -76,7 +78,7 @@ impl PyNumberProtocol for Expression {
 
     fn __invert__(&self) -> PyResult<Expression> {
         Ok(Expression {
-            expr: self.expr.not(),
+            expr: self.expr.clone().not(),
         })
     }
 }
@@ -86,22 +88,22 @@ impl PyObjectProtocol for Expression {
     fn __richcmp__(&self, other: Expression, op: CompareOp) -> Expression {
         match op {
             CompareOp::Lt => Expression {
-                expr: self.expr.lt(other.expr),
+                expr: self.expr.clone().lt(other.expr),
             },
             CompareOp::Le => Expression {
-                expr: self.expr.lt_eq(other.expr),
+                expr: self.expr.clone().lt_eq(other.expr),
             },
             CompareOp::Eq => Expression {
-                expr: self.expr.eq(other.expr),
+                expr: self.expr.clone().eq(other.expr),
             },
             CompareOp::Ne => Expression {
-                expr: self.expr.not_eq(other.expr),
+                expr: self.expr.clone().not_eq(other.expr),
             },
             CompareOp::Gt => Expression {
-                expr: self.expr.gt(other.expr),
+                expr: self.expr.clone().gt(other.expr),
             },
             CompareOp::Ge => Expression {
-                expr: self.expr.gt_eq(other.expr),
+                expr: self.expr.clone().gt_eq(other.expr),
             },
         }
     }
@@ -112,7 +114,7 @@ impl Expression {
     /// assign a name to the expression
     pub fn alias(&self, name: &str) -> PyResult<Expression> {
         Ok(Expression {
-            expr: self.expr.alias(name),
+            expr: self.expr.clone().alias(name),
         })
     }
 }

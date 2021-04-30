@@ -129,13 +129,13 @@ Bootstrap:
 
 ```bash
 # fetch this repo
-git clone git@github.com:jorgecarleitao/datafusion-python.git
+git clone git@github.com:apache/arrow-datafusion.git
 
-cd datafusion-python
+cd arrow-datafusion/python
 
 # prepare development environment (used to build wheel / install in development)
-python -m venv venv
-venv/bin/pip install maturin==0.8.2 toml==0.10.1
+python3 -m venv venv
+pip install maturin==0.10.4 toml==0.10.1 pyarrow==1.0.0
 ```
 
 Whenever rust code changes (your changes or via git pull):

@@ -17,7 +17,7 @@
 
 use core::fmt;
 
-use arrow::error::ArrowError;
+use datafusion::arrow::error::ArrowError;
 use datafusion::error::DataFusionError as InnerDataFusionError;
 use pyo3::{exceptions, PyErr};
 

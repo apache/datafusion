@@ -15,11 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use pyo3::{prelude::*, types::PyTuple};
 
-use arrow::array;
+use datafusion::{arrow::array, physical_plan::functions::make_scalar_function};
 
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::functions::ScalarFunctionImplementation;
@@ -30,7 +28,7 @@ use crate::to_rust::to_rust;
 /// creates a DataFusion's UDF implementation from a python function that expects pyarrow arrays
 /// This is more efficient as it performs a zero-copy of the contents.
 pub fn array_udf(func: PyObject) -> ScalarFunctionImplementation {
-    Arc::new(
+    make_scalar_function(
         move |args: &[array::ArrayRef]| -> Result<array::ArrayRef, DataFusionError> {
             // get GIL
             let gil = pyo3::Python::acquire_gil();
@@ -54,9 +52,7 @@ pub fn array_udf(func: PyObject) -> ScalarFunctionImplementation {
             let value = func.as_ref(py).call(py_args, None);
             let value = match value {
                 Ok(n) => Ok(n),
-                Err(error) => Err(DataFusionError::Execution(
-                    format!("{:?}", error).to_owned(),
-                )),
+                Err(error) => Err(DataFusionError::Execution(format!("{:?}", error))),
             }?;
 
             let array = to_rust(value).unwrap();

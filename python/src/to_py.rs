@@ -20,15 +20,14 @@ use pyo3::{libc::uintptr_t, PyErr};
 
 use std::convert::From;
 
-use arrow::array::ArrayRef;
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::record_batch::RecordBatch;
 
 use crate::errors;
 
 pub fn to_py_array(array: &ArrayRef, py: Python) -> PyResult<PyObject> {
-    let (array_pointer, schema_pointer) = array
-        .to_raw()
-        .map_err(|e| errors::DataFusionError::from(e))?;
+    let (array_pointer, schema_pointer) =
+        array.to_raw().map_err(errors::DataFusionError::from)?;
 
     let pa = py.import("pyarrow")?;
 
@@ -62,8 +61,8 @@ fn to_py_batch<'a>(
     Ok(PyObject::from(record))
 }
 
-/// Converts a Vec<RecordBatch> into a Vec<RecordBatch> represented in PyArrow
-pub fn to_py(batches: &Vec<RecordBatch>) -> PyResult<PyObject> {
+/// Converts a &[RecordBatch] into a Vec<RecordBatch> represented in PyArrow
+pub fn to_py(batches: &[RecordBatch]) -> PyResult<PyObject> {
     let gil = pyo3::Python::acquire_gil();
     let py = gil.python();
     let pyarrow = PyModule::import(py, "pyarrow")?;

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::DataType;
 use pyo3::{FromPyObject, PyAny, PyResult};
 
 use crate::errors;
