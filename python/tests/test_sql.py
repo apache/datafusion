@@ -198,8 +198,6 @@ class TestIO(unittest.TestCase):
         )
         self._test_data(array)
 
-    # Not writtable to parquet
-    @unittest.expectedFailure
     def test_large_utf8(self):
         array = pyarrow.array(
             ["a", "b", "c"], pyarrow.large_utf8(), numpy.array([False, True, False])
@@ -246,8 +244,6 @@ class TestIO(unittest.TestCase):
     def test_timedelta_ns(self):
         self._test_data(data_timedelta("ns"))
 
-    # C data interface missing
-    @unittest.expectedFailure
     def test_date32(self):
         array = pyarrow.array(
             [
@@ -276,8 +272,6 @@ class TestIO(unittest.TestCase):
         )
         self._test_data(array)
 
-    # Not writtable to parquet
-    @unittest.expectedFailure
     def test_large_binary(self):
         array = pyarrow.array(
             [b"1111", b"2222", b"3333"],
