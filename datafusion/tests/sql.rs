@@ -475,6 +475,20 @@ async fn csv_query_group_by_and_having_and_where() -> Result<()> {
 }
 
 #[tokio::test]
+async fn all_where_empty() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "SELECT *
+               FROM aggregate_test_100
+               WHERE 1=2";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected: Vec<Vec<String>> = vec![];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_having_without_group_by() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
