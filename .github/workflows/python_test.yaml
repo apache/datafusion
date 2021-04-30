@@ -52,7 +52,7 @@ jobs:
         python -m venv venv
         source venv/bin/activate
 
-        pip install maturin==0.10.4 toml==0.10.1 pyarrow==1.0.0
+        pip install maturin==0.10.4 toml==0.10.1 pyarrow==4.0.0
         maturin develop
 
         python -m unittest discover tests
