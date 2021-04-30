@@ -381,7 +381,6 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     new_filters.push(filter_expr.clone());
                 }
             }
-            println!("{:?}", &state);
 
             issue_filters(
                 state,
