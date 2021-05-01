@@ -30,5 +30,4 @@ repository = "https://github.com/apache/arrow-datafusion"
 clap = "2.33"
 rustyline ="8.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "d008f31b107c1030a1f5144c164e8ca8bf543576", features = ["prettyprint"] }
 datafusion = { path = "../datafusion" }

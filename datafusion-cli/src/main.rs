@@ -17,7 +17,7 @@
 
 #![allow(bare_trait_objects)]
 
-use arrow::util::pretty;
+use datafusion::arrow::util::pretty;
 use clap::{crate_version, App, Arg};
 use datafusion::error::Result;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
