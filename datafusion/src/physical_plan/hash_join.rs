@@ -1381,7 +1381,7 @@ mod tests {
             ("y", &vec![200, 300]),
         );
 
-        let random_state = RandomState::new();
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; left.num_rows()];
         let hashes =
             create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
