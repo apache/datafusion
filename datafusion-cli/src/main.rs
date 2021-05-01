@@ -44,7 +44,7 @@ pub async fn main() {
         )
         .arg(
             Arg::with_name("batch-size")
-                .help("The batch size of each query, default value is 8192")
+                .help("The batch size of each query, or use DataFusion default")
                 .short("c")
                 .long("batch-size")
                 .takes_value(true),
@@ -56,16 +56,17 @@ pub async fn main() {
         env::set_current_dir(&p).unwrap();
     };
 
-    let batch_size = matches
-        .value_of("batch-size")
-        .map(|size| size.parse::<usize>().unwrap())
-        .unwrap_or(8192);
+    let mut execution_config = ExecutionConfig::new().with_information_schema(true);
 
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new()
-            .with_batch_size(batch_size)
-            .with_information_schema(true),
-    );
+    if let Some(batch_size) = matches
+        .value_of("batch-size")
+        .and_then(|size| size.parse::<usize>().ok())
+    {
+        execution_config = execution_config.with_batch_size(batch_size);
+    };
+
+    let mut ctx =
+        ExecutionContext::with_config(execution_config.with_information_schema(true));
 
     let mut rl = Editor::<()>::new();
     rl.load_history(".history").ok();
