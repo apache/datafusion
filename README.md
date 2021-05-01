@@ -132,7 +132,7 @@ datafusion = "4.0.0-SNAPSHOT"
 
 ## Using DataFusion as a binary
 
-DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](docs/cli.md) for more information.
+DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](datafusion/docs/cli.md) for more information.
 
 # Status
 
