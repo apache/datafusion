@@ -36,10 +36,6 @@ edition = "2018"
 name = "datafusion"
 path = "src/lib.rs"
 
-[[bin]]
-name = "datafusion-cli"
-path = "src/bin/main.rs"
-
 [features]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
 simd = ["arrow/simd"]
