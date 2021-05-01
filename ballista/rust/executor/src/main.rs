@@ -176,6 +176,8 @@ async fn main() -> Result<()> {
     let server_future = tokio::spawn(Server::builder().add_service(server).serve(addr));
     let client_host = external_host.as_deref().unwrap_or_else(|| {
         if bind_host == "0.0.0.0" {
+            // If the executor is being bound to "0.0.0.0" (which means use all ips in all eth devices)
+            // then use "localhost" to connect to itself through the BallistaClient
             "localhost"
         } else {
             &bind_host
