@@ -27,7 +27,7 @@ Use the following commands to clone this repository and run the CLI. This will r
 
 ```sh
 git clone https://github.com/apache/arrow-datafusion
-cd arrow/datafusion-cli
+cd arrow-datafusion/datafusion-cli
 cargo run --release
 ```
 
