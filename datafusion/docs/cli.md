@@ -37,7 +37,7 @@ Use the following commands to clone this repository and build a Docker image con
 
 ```sh
 git clone https://github.com/apache/arrow-datafusion
-cd arrow
+cd arrow-datafusion
 docker build -f datafusion/Dockerfile . --tag datafusion-cli
 docker run -it -v $(your_data_location):/data datafusion-cli
 ```
