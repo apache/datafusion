@@ -345,6 +345,7 @@ impl ScalarValue {
                 ),
             },
             ScalarValue::List(values, data_type) => Arc::new(match data_type {
+                DataType::Boolean => typed_cast!(array, index, BooleanArray, Boolean),
                 DataType::Int8 => build_list!(Int8Builder, Int8, values, size),
                 DataType::Int16 => build_list!(Int16Builder, Int16, values, size),
                 DataType::Int32 => build_list!(Int32Builder, Int32, values, size),
