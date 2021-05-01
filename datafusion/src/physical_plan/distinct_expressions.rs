@@ -437,7 +437,7 @@ mod tests {
         assert_eq!(get_count(one_count_values)?, (vec![Some(false)], 1));
         assert_eq!(
             get_count(one_count_values_with_null)?,
-            (vec![Some(false)], 1)
+            (vec![Some(true)], 1)
         );
         assert_eq!(
             get_count(two_count_values)?,
