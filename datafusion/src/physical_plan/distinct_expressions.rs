@@ -396,19 +396,20 @@ mod tests {
     }
 
     #[test]
-    fn count_distinct_update_batch_boolean()->Result<()>{
-        
-
-
-        let get_count = |data: BooleanArray|->Result<(Vec<Option<bool>>, u64)>{
+    fn count_distinct_update_batch_boolean() -> Result<()> {
+        let get_count = |data: BooleanArray| -> Result<(Vec<Option<bool>>, u64)> {
             let arrays = vec![Arc::new(data) as ArrayRef];
             let (states, result) = run_update_batch(&arrays)?;
-            let mut state_vec =
-            state_to_vec!(&states[0], Boolean, bool).unwrap();
+            let mut state_vec = state_to_vec!(&states[0], Boolean, bool).unwrap();
             state_vec.sort();
-            let count = match result{
-                ScalarValue::UInt64(c)=>c.ok_or(DataFusionError::Internal(format!("Found None count"))),
-                scalar => Err(DataFusionError::Internal(format!("Found non Uint64 scalar value from count: {}", scalar)))
+            let count = match result {
+                ScalarValue::UInt64(c) => {
+                    c.ok_or(DataFusionError::Internal(format!("Found None count")))
+                }
+                scalar => Err(DataFusionError::Internal(format!(
+                    "Found non Uint64 scalar value from count: {}",
+                    scalar
+                ))),
             }?;
             Ok((state_vec, count))
         };
@@ -416,17 +417,36 @@ mod tests {
         let zero_count_values = BooleanArray::from(Vec::<bool>::new());
 
         let one_count_values = BooleanArray::from(vec![false, false]);
-        let one_count_values_with_null = BooleanArray::from(vec![Some(true), Some(true), None, None]);
+        let one_count_values_with_null =
+            BooleanArray::from(vec![Some(true), Some(true), None, None]);
 
         let two_count_values = BooleanArray::from(vec![true, false, true, false, true]);
-        let two_count_values_with_null = BooleanArray::from(vec![Some(true), Some(false), None, None, Some(true), Some(false)]);
+        let two_count_values_with_null = BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+            None,
+            Some(true),
+            Some(false),
+        ]);
 
-
-        assert_eq!(get_count(zero_count_values)?, (Vec::<Option<bool>>::new(), 0));
+        assert_eq!(
+            get_count(zero_count_values)?,
+            (Vec::<Option<bool>>::new(), 0)
+        );
         assert_eq!(get_count(one_count_values)?, (vec![Some(false)], 1));
-        assert_eq!(get_count(one_count_values_with_null)?, (vec![Some(false)], 1));
-        assert_eq!(get_count(two_count_values)?, (vec![Some(false), Some(true)], 2));
-        assert_eq!(get_count(two_count_values_with_null)?, (vec![Some(false), Some(true)], 2));
+        assert_eq!(
+            get_count(one_count_values_with_null)?,
+            (vec![Some(false)], 1)
+        );
+        assert_eq!(
+            get_count(two_count_values)?,
+            (vec![Some(false), Some(true)], 2)
+        );
+        assert_eq!(
+            get_count(two_count_values_with_null)?,
+            (vec![Some(false), Some(true)], 2)
+        );
         Ok(())
     }
 
