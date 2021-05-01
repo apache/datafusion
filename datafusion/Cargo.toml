@@ -41,8 +41,7 @@ name = "datafusion-cli"
 path = "src/bin/main.rs"
 
 [features]
-default = ["cli", "crypto_expressions", "regex_expressions", "unicode_expressions"]
-cli = ["rustyline"]
+default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
 simd = ["arrow/simd"]
 crypto_expressions = ["md-5", "sha2"]
 regex_expressions = ["regex", "lazy_static"]
@@ -54,8 +53,6 @@ hashbrown = "0.11"
 arrow = { git = "https://github.com/apache/arrow-rs", rev = "d008f31b107c1030a1f5144c164e8ca8bf543576", features = ["prettyprint"] }
 parquet = { git = "https://github.com/apache/arrow-rs", rev = "d008f31b107c1030a1f5144c164e8ca8bf543576", features = ["arrow"] }
 sqlparser = "0.9.0"
-clap = "2.33"
-rustyline = {version = "7.0", optional = true}
 paste = "^1.0"
 num_cpus = "1.13.0"
 chrono = "0.4"
