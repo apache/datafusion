@@ -67,11 +67,11 @@ export const Header: React.FunctionComponent<HeaderProps> = ({schedulerState}) =
                         </a>
                         <a
                             rel="noreferrer"
-                            href={"https://github.com/apache/arrow/tree/master/rust/ballista"}
+                            href={"https://github.com/apache/arrow-datafusion"}
                             target={"_blank"}
                         >
                             <Button colorScheme="blue" size="sm" rightIcon={<AiFillGithub/>}>
-                                Github
+                                GitHub
                             </Button>
                         </a>
                     </Flex>
