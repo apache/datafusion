@@ -19,17 +19,11 @@
 //!
 //! This code is EXPERIMENTAL and still under development
 
-use std::pin::Pin;
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
-use std::{collections::HashMap, future::Future};
 
-use ballista_core::client::BallistaClient;
 use ballista_core::datasource::DfTableAdapter;
 use ballista_core::error::{BallistaError, Result};
-use ballista_core::serde::scheduler::ExecutorMeta;
-use ballista_core::serde::scheduler::PartitionId;
-use ballista_core::utils::format_plan;
 use ballista_core::{
     execution_plans::{QueryStageExec, ShuffleReaderExec, UnresolvedShuffleExec},
     serde::scheduler::PartitionLocation,
@@ -42,59 +36,27 @@ use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec
 use datafusion::physical_plan::hash_join::HashJoinExec;
 use datafusion::physical_plan::merge::MergeExec;
 use datafusion::physical_plan::ExecutionPlan;
-use log::{debug, info};
-use tokio::task::JoinHandle;
+use log::info;
 
-type SendableExecutionPlan =
-    Pin<Box<dyn Future<Output = Result<Arc<dyn ExecutionPlan>>> + Send>>;
 type PartialQueryStageResult = (Arc<dyn ExecutionPlan>, Vec<Arc<QueryStageExec>>);
 
 pub struct DistributedPlanner {
-    executors: Vec<ExecutorMeta>,
     next_stage_id: usize,
 }
 
 impl DistributedPlanner {
-    pub fn try_new(executors: Vec<ExecutorMeta>) -> Result<Self> {
-        if executors.is_empty() {
-            Err(BallistaError::General(
-                "DistributedPlanner requires at least one executor".to_owned(),
-            ))
-        } else {
-            Ok(Self {
-                executors,
-                next_stage_id: 0,
-            })
-        }
+    pub fn new() -> Self {
+        Self { next_stage_id: 0 }
+    }
+}
+
+impl Default for DistributedPlanner {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl DistributedPlanner {
-    /// Execute a distributed query against a cluster, leaving the final results on the
-    /// executors. The [ExecutionPlan] returned by this method is guaranteed to be a
-    /// [ShuffleReaderExec] that can be used to fetch the final results from the executors
-    /// in parallel.
-    pub async fn execute_distributed_query(
-        &mut self,
-        job_id: String,
-        execution_plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let now = Instant::now();
-        let execution_plans = self.plan_query_stages(&job_id, execution_plan)?;
-
-        info!(
-            "DistributedPlanner created {} execution plans in {} seconds:",
-            execution_plans.len(),
-            now.elapsed().as_secs()
-        );
-
-        for plan in &execution_plans {
-            info!("{}", format_plan(plan.as_ref(), 0)?);
-        }
-
-        execute(execution_plans, self.executors.clone()).await
-    }
-
     /// Returns a vector of ExecutionPlans, where the root node is a [QueryStageExec].
     /// Plans that depend on the input of other plans will have leaf nodes of type [UnresolvedShuffleExec].
     /// A [QueryStageExec] is created whenever the partitioning changes.
@@ -221,38 +183,6 @@ impl DistributedPlanner {
     }
 }
 
-fn execute(
-    stages: Vec<Arc<QueryStageExec>>,
-    executors: Vec<ExecutorMeta>,
-) -> SendableExecutionPlan {
-    Box::pin(async move {
-        let mut partition_locations: HashMap<usize, Vec<PartitionLocation>> =
-            HashMap::new();
-        let mut result_partition_locations = vec![];
-        for stage in &stages {
-            debug!("execute() {}", &format!("{:?}", stage)[0..60]);
-            let stage = remove_unresolved_shuffles(stage.as_ref(), &partition_locations)?;
-            let stage = stage.as_any().downcast_ref::<QueryStageExec>().unwrap();
-            result_partition_locations = execute_query_stage(
-                &stage.job_id.clone(),
-                stage.stage_id,
-                stage.children()[0].clone(),
-                executors.clone(),
-            )
-            .await?;
-            partition_locations
-                .insert(stage.stage_id, result_partition_locations.clone());
-        }
-
-        let shuffle_reader: Arc<dyn ExecutionPlan> =
-            Arc::new(ShuffleReaderExec::try_new(
-                result_partition_locations,
-                stages.last().unwrap().schema(),
-            )?);
-        Ok(shuffle_reader)
-    })
-}
-
 pub fn remove_unresolved_shuffles(
     stage: &dyn ExecutionPlan,
     partition_locations: &HashMap<usize, Vec<PartitionLocation>>,
@@ -298,88 +228,6 @@ fn create_query_stage(
     Ok(Arc::new(QueryStageExec::try_new(job_id, stage_id, plan)?))
 }
 
-/// Execute a query stage by sending each partition to an executor
-async fn execute_query_stage(
-    job_id: &str,
-    stage_id: usize,
-    plan: Arc<dyn ExecutionPlan>,
-    executors: Vec<ExecutorMeta>,
-) -> Result<Vec<PartitionLocation>> {
-    info!(
-        "execute_query_stage() stage_id={}\n{}",
-        stage_id,
-        format_plan(plan.as_ref(), 0)?
-    );
-
-    let partition_count = plan.output_partitioning().partition_count();
-
-    let num_chunks = partition_count / executors.len();
-    let num_chunks = num_chunks.max(1);
-    let partition_chunks: Vec<Vec<usize>> = (0..partition_count)
-        .collect::<Vec<usize>>()
-        .chunks(num_chunks)
-        .map(|r| r.to_vec())
-        .collect();
-
-    info!(
-        "Executing query stage with {} chunks of partition ranges",
-        partition_chunks.len()
-    );
-
-    let mut executions: Vec<JoinHandle<Result<Vec<PartitionLocation>>>> =
-        Vec::with_capacity(partition_count);
-    for i in 0..partition_chunks.len() {
-        let plan = plan.clone();
-        let executor_meta = executors[i % executors.len()].clone();
-        let partition_ids = partition_chunks[i].to_vec();
-        let job_id = job_id.to_owned();
-        executions.push(tokio::spawn(async move {
-            let mut client =
-                BallistaClient::try_new(&executor_meta.host, executor_meta.port).await?;
-            let stats = client
-                .execute_partition(job_id.clone(), stage_id, partition_ids.clone(), plan)
-                .await?;
-
-            Ok(partition_ids
-                .iter()
-                .map(|part| PartitionLocation {
-                    partition_id: PartitionId::new(&job_id, stage_id, *part),
-                    executor_meta: executor_meta.clone(),
-                    partition_stats: *stats[*part].statistics(),
-                })
-                .collect())
-        }));
-    }
-
-    // wait for all partitions to complete
-    let results = futures::future::join_all(executions).await;
-
-    // check for errors
-    let mut meta = Vec::with_capacity(partition_count);
-    for result in results {
-        match result {
-            Ok(partition_result) => {
-                let final_result = partition_result?;
-                debug!("Query stage partition result: {:?}", final_result);
-                meta.extend(final_result);
-            }
-            Err(e) => {
-                return Err(BallistaError::General(format!(
-                    "Query stage {} failed: {:?}",
-                    stage_id, e
-                )))
-            }
-        }
-    }
-
-    debug!(
-        "execute_query_stage() stage_id={} produced {:?}",
-        stage_id, meta
-    );
-
-    Ok(meta)
-}
-
 #[cfg(test)]
 mod test {
     use crate::planner::DistributedPlanner;
@@ -387,7 +235,6 @@ mod test {
     use ballista_core::error::BallistaError;
     use ballista_core::execution_plans::UnresolvedShuffleExec;
     use ballista_core::serde::protobuf;
-    use ballista_core::serde::scheduler::ExecutorMeta;
     use ballista_core::utils::format_plan;
     use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
     use datafusion::physical_plan::merge::MergeExec;
@@ -420,11 +267,7 @@ mod test {
         let plan = ctx.optimize(&plan)?;
         let plan = ctx.create_physical_plan(&plan)?;
 
-        let mut planner = DistributedPlanner::try_new(vec![ExecutorMeta {
-            id: "".to_string(),
-            host: "".to_string(),
-            port: 0,
-        }])?;
+        let mut planner = DistributedPlanner::new();
         let job_uuid = Uuid::new_v4();
         let stages = planner.plan_query_stages(&job_uuid.to_string(), plan)?;
         for stage in &stages {

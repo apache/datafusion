@@ -24,16 +24,16 @@ pub mod state;
 #[cfg(test)]
 pub mod test_utils;
 
-use std::fmt;
 use std::{convert::TryInto, sync::Arc};
+use std::{fmt, net::IpAddr};
 
 use ballista_core::serde::protobuf::{
-    execute_query_params::Query, job_status, scheduler_grpc_server::SchedulerGrpc,
-    ExecuteQueryParams, ExecuteQueryResult, FailedJob, FilePartitionMetadata, FileType,
-    GetExecutorMetadataParams, GetExecutorMetadataResult, GetFileMetadataParams,
-    GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult, JobStatus,
-    PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob, TaskDefinition,
-    TaskStatus,
+    execute_query_params::Query, executor_registration::OptionalHost, job_status,
+    scheduler_grpc_server::SchedulerGrpc, ExecuteQueryParams, ExecuteQueryResult,
+    FailedJob, FilePartitionMetadata, FileType, GetExecutorMetadataParams,
+    GetExecutorMetadataResult, GetFileMetadataParams, GetFileMetadataResult,
+    GetJobStatusParams, GetJobStatusResult, JobStatus, PartitionId, PollWorkParams,
+    PollWorkResult, QueuedJob, RunningJob, TaskDefinition, TaskStatus,
 };
 use ballista_core::serde::scheduler::ExecutorMeta;
 
@@ -71,13 +71,18 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct SchedulerServer {
+    caller_ip: IpAddr,
     state: Arc<SchedulerState>,
     start_time: u128,
     version: String,
 }
 
 impl SchedulerServer {
-    pub fn new(config: Arc<dyn ConfigBackendClient>, namespace: String) -> Self {
+    pub fn new(
+        config: Arc<dyn ConfigBackendClient>,
+        namespace: String,
+        caller_ip: IpAddr,
+    ) -> Self {
         const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
         let state = Arc::new(SchedulerState::new(config, namespace));
         let state_clone = state.clone();
@@ -86,6 +91,7 @@ impl SchedulerServer {
         tokio::spawn(async move { state_clone.synchronize_job_status_loop().await });
 
         Self {
+            caller_ip,
             state,
             start_time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -131,7 +137,16 @@ impl SchedulerGrpc for SchedulerServer {
         } = request.into_inner()
         {
             debug!("Received poll_work request for {:?}", metadata);
-            let metadata: ExecutorMeta = metadata.into();
+            let metadata: ExecutorMeta = ExecutorMeta {
+                id: metadata.id,
+                host: metadata
+                    .optional_host
+                    .map(|h| match h {
+                        OptionalHost::Host(host) => host,
+                    })
+                    .unwrap_or_else(|| self.caller_ip.to_string()),
+                port: metadata.port as u16,
+            };
             let mut lock = self.state.lock().await.map_err(|e| {
                 let msg = format!("Could not lock the state: {}", e);
                 error!("{}", msg);
@@ -359,12 +374,7 @@ impl SchedulerGrpc for SchedulerServer {
                         job_id_spawn, e
                     );
                 }
-                let mut planner = fail_job!(DistributedPlanner::try_new(executors)
-                    .map_err(|e| {
-                        let msg = format!("Could not create distributed planner: {}", e);
-                        error!("{}", msg);
-                        tonic::Status::internal(msg)
-                    }));
+                let mut planner = DistributedPlanner::new();
                 let stages = fail_job!(planner
                     .plan_query_stages(&job_id_spawn, plan)
                     .map_err(|e| {
@@ -433,12 +443,17 @@ impl SchedulerGrpc for SchedulerServer {
 
 #[cfg(all(test, feature = "sled"))]
 mod test {
-    use std::sync::Arc;
+    use std::{
+        net::{IpAddr, Ipv4Addr},
+        sync::Arc,
+    };
 
     use tonic::Request;
 
     use ballista_core::error::BallistaError;
-    use ballista_core::serde::protobuf::{ExecutorMetadata, PollWorkParams};
+    use ballista_core::serde::protobuf::{
+        executor_registration::OptionalHost, ExecutorRegistration, PollWorkParams,
+    };
 
     use super::{
         state::{SchedulerState, StandaloneClient},
@@ -449,11 +464,15 @@ mod test {
     async fn test_poll_work() -> Result<(), BallistaError> {
         let state = Arc::new(StandaloneClient::try_new_temporary()?);
         let namespace = "default";
-        let scheduler = SchedulerServer::new(state.clone(), namespace.to_owned());
+        let scheduler = SchedulerServer::new(
+            state.clone(),
+            namespace.to_owned(),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+        );
         let state = SchedulerState::new(state, namespace.to_string());
-        let exec_meta = ExecutorMetadata {
+        let exec_meta = ExecutorRegistration {
             id: "abc".to_owned(),
-            host: "".to_owned(),
+            optional_host: Some(OptionalHost::Host("".to_owned())),
             port: 0,
         };
         let request: Request<PollWorkParams> = Request::new(PollWorkParams {

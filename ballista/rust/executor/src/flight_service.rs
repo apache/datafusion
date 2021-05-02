@@ -23,7 +23,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::BallistaExecutor;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::decode_protobuf;
 use ballista_core::serde::scheduler::{Action as BallistaAction, PartitionStats};
@@ -59,12 +58,12 @@ type FlightDataReceiver = Receiver<Result<FlightData, Status>>;
 /// Service implementing the Apache Arrow Flight Protocol
 #[derive(Clone)]
 pub struct BallistaFlightService {
-    executor: Arc<BallistaExecutor>,
+    work_dir: String,
 }
 
 impl BallistaFlightService {
-    pub fn new(executor: Arc<BallistaExecutor>) -> Self {
-        Self { executor }
+    pub fn new(work_dir: String) -> Self {
+        Self { work_dir }
     }
 }
 
@@ -103,11 +102,10 @@ impl FlightService for BallistaFlightService {
                 );
 
                 let mut tasks: Vec<JoinHandle<Result<_, BallistaError>>> = vec![];
-                for part in partition.partition_id.clone() {
-                    let work_dir = self.executor.config.work_dir.clone();
+                for &part in &partition.partition_id {
+                    let mut path = PathBuf::from(&self.work_dir);
                     let partition = partition.clone();
                     tasks.push(tokio::spawn(async move {
-                        let mut path = PathBuf::from(&work_dir);
                         path.push(partition.job_id);
                         path.push(&format!("{}", partition.stage_id));
                         path.push(&format!("{}", part));
@@ -208,7 +206,7 @@ impl FlightService for BallistaFlightService {
                 // fetch a partition that was previously executed by this executor
                 info!("FetchPartition {:?}", partition_id);
 
-                let mut path = PathBuf::from(&self.executor.config.work_dir);
+                let mut path = PathBuf::from(&self.work_dir);
                 path.push(&partition_id.job_id);
                 path.push(&format!("{}", partition_id.stage_id));
                 path.push(&format!("{}", partition_id.partition_id));
