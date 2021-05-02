@@ -1372,7 +1372,7 @@ mod tests {
     async fn join_left_multi_batch() {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
-            ("b1", &vec![4, 5, 7]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
             ("c1", &vec![7, 8, 9]),
         );
         let right = build_table_two_batches(
@@ -1409,7 +1409,7 @@ mod tests {
     async fn join_left_empty_right() {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
-            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("b1", &vec![4, 5, 7]),
             ("c1", &vec![7, 8, 9]),
         );
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
