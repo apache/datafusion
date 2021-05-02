@@ -997,18 +997,22 @@ pub fn create_hashes<'a>(
     Ok(hashes_buffer)
 }
 
+// Produces a batch for left-side rows that are not marked as being visited during the whole join
 fn produce_unmatched(
     visited_left_side: &[bool],
     schema: &SchemaRef,
     column_indices: &[ColumnIndex],
     left_data: &JoinLeftData,
 ) -> ArrowResult<RecordBatch> {
+    // Find indices which didn't match any right row (are false)
     let unmatched_indices: Vec<u64> = visited_left_side
         .iter()
         .enumerate()
         .filter(|&(_, &value)| !value)
         .map(|(index, _)| index as u64)
         .collect();
+
+    // generate batches by taking values from the left side and generating columns filled with null on the right side
     let indices = UInt64Array::from_iter_values(unmatched_indices);
     let num_rows = indices.len();
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
