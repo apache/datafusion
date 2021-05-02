@@ -31,7 +31,6 @@ use arrow::{
     util::display::array_value_to_string,
 };
 
-use datafusion::{execution::context::ExecutionContext, prelude::ExecutionConfig};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::prelude::create_udf;
 use datafusion::{
@@ -42,6 +41,7 @@ use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::ColumnarValue,
 };
+use datafusion::{execution::context::ExecutionContext, prelude::ExecutionConfig};
 
 #[tokio::test]
 async fn nyc() -> Result<()> {
