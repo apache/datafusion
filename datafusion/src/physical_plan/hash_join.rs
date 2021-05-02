@@ -464,7 +464,7 @@ struct HashJoinStream {
     /// Keeps track of the left side rows whether they are visited
     /// TODO: use a more memory efficient data structure
     visited_left_side: Vec<bool>,
-    /// There is nothing to process anymore and left side is proced in case of left join
+    /// There is nothing to process anymore and left side is processed in case of left join
     is_exhausted: bool,
 }
 
@@ -1360,8 +1360,7 @@ mod tests {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
         Arc::new(
-            MemoryExec::try_new(&[vec![batch.clone(), batch]], schema, None)
-                .unwrap(),
+            MemoryExec::try_new(&[vec![batch.clone(), batch]], schema, None).unwrap(),
         )
     }
 
@@ -1395,6 +1394,38 @@ mod tests {
             "| 1  | 4  | 7  | 10 | 70 |",
             "| 2  | 5  | 8  | 20 | 80 |",
             "| 2  | 5  | 8  | 20 | 80 |",
+            "| 3  | 7  | 9  |    |    |",
+            "+----+----+----+----+----+",
+        ];
+
+        assert_batches_sorted_eq!(expected, &batches);
+    }
+
+    #[tokio::test]
+    async fn join_left_empty_right() {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
+        let on = &[("b1", "b1")];
+        let schema = right.schema();
+        let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
+        let join = join(left, right, on, &JoinType::Left).unwrap();
+
+        let columns = columns(&join.schema());
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+
+        let stream = join.execute(0).await.unwrap();
+        let batches = common::collect(stream).await.unwrap();
+
+        let expected = vec![
+            "+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | c2 |",
+            "+----+----+----+----+----+",
+            "| 1  | 4  | 7  |    |    |",
+            "| 2  | 5  | 8  |    |    |",
             "| 3  | 7  | 9  |    |    |",
             "+----+----+----+----+----+",
         ];
