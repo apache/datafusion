@@ -31,7 +31,7 @@ use arrow::{
     util::display::array_value_to_string,
 };
 
-use datafusion::execution::context::ExecutionContext;
+use datafusion::{execution::context::ExecutionContext, prelude::ExecutionConfig};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::prelude::create_udf;
 use datafusion::{

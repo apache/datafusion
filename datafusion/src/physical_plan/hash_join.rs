@@ -27,13 +27,13 @@ use arrow::{
         TimestampMicrosecondArray, TimestampNanosecondArray, UInt32BufferBuilder,
         UInt32Builder, UInt64BufferBuilder, UInt64Builder,
     },
-    compute,
+    compute::{self, take},
     datatypes::{TimeUnit, UInt32Type, UInt64Type},
 };
 use smallvec::{smallvec, SmallVec};
-use std::time::Instant;
-use std::{any::Any, collections::HashSet};
+use std::{any::Any, usize};
 use std::{hash::Hasher, sync::Arc};
+use std::{time::Instant, vec};
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -370,6 +370,12 @@ impl ExecutionPlan for HashJoinExec {
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
 
         let column_indices = self.column_indices_from_schema()?;
+        let num_rows = left_data.1.num_rows();
+        let visited_left_side = if self.join_type == JoinType::Left {
+            vec![false; num_rows]
+        } else {
+            vec![]
+        };
         Ok(Box::pin(HashJoinStream {
             schema: self.schema.clone(),
             on_left,
@@ -384,6 +390,8 @@ impl ExecutionPlan for HashJoinExec {
             num_output_rows: 0,
             join_time: 0,
             random_state: self.random_state.clone(),
+            visited_left_side: visited_left_side,
+            is_exhausted: false,
         }))
     }
 }
@@ -453,6 +461,11 @@ struct HashJoinStream {
     join_time: usize,
     /// Random state used for hashing initialization
     random_state: RandomState,
+    /// Keeps track of the left side rows whether they are visited
+    /// TODO: use a more memory efficient data structure
+    visited_left_side: Vec<bool>,
+    /// There is nothing to process anymore and left side is proced in case of left join
+    is_exhausted: bool,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -473,7 +486,7 @@ fn build_batch_from_indices(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
     column_indices: &[ColumnIndex],
-) -> ArrowResult<RecordBatch> {
+) -> ArrowResult<(RecordBatch, UInt64Array)> {
     // build the columns of the new [RecordBatch]:
     // 1. pick whether the column is from the left or right
     // 2. based on the pick, `take` items from the different RecordBatches
@@ -489,7 +502,7 @@ fn build_batch_from_indices(
         };
         columns.push(array);
     }
-    RecordBatch::try_new(Arc::new(schema.clone()), columns)
+    RecordBatch::try_new(Arc::new(schema.clone()), columns).map(|x| (x, left_indices))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -502,7 +515,7 @@ fn build_batch(
     schema: &Schema,
     column_indices: &[ColumnIndex],
     random_state: &RandomState,
-) -> ArrowResult<RecordBatch> {
+) -> ArrowResult<(RecordBatch, UInt64Array)> {
     let (left_indices, right_indices) = build_join_indexes(
         &left_data,
         &batch,
@@ -617,13 +630,6 @@ fn build_join_indexes(
             let mut left_indices = UInt64Builder::new(0);
             let mut right_indices = UInt32Builder::new(0);
 
-            // Keep track of which item is visited in the build input
-            // TODO: this can be stored more efficiently with a marker
-            //       https://issues.apache.org/jira/browse/ARROW-11116
-            // TODO: Fix LEFT join with multiple right batches
-            //       https://issues.apache.org/jira/browse/ARROW-10971
-            let mut is_visited = HashSet::new();
-
             // First visit all of the rows
             for (row, hash_value) in hash_values.iter().enumerate() {
                 if let Some((_, indices)) =
@@ -634,19 +640,9 @@ fn build_join_indexes(
                         if equal_rows(i as usize, row, &left_join_values, &keys_values)? {
                             left_indices.append_value(i)?;
                             right_indices.append_value(row as u32)?;
-                            is_visited.insert(i);
                         }
                     }
                 };
-            }
-            // Add the remaining left rows to the result set with None on the right side
-            for (_, indices) in left {
-                for i in indices.iter() {
-                    if !is_visited.contains(i) {
-                        left_indices.append_slice(&indices)?;
-                        right_indices.append_null()?;
-                    }
-                }
             }
             Ok((left_indices.finish(), right_indices.finish()))
         }
@@ -1001,6 +997,35 @@ pub fn create_hashes<'a>(
     Ok(hashes_buffer)
 }
 
+fn produce_unmatched(
+    visited_left_side: &[bool],
+    schema: &SchemaRef,
+    column_indices: &[ColumnIndex],
+    left_data: &JoinLeftData,
+) -> ArrowResult<RecordBatch> {
+    let unmatched_indices: Vec<u64> = visited_left_side
+        .iter()
+        .enumerate()
+        .filter(|&(_, &value)| !value)
+        .map(|(index, _)| index as u64)
+        .collect();
+    let indices = UInt64Array::from_iter_values(unmatched_indices);
+    let num_rows = indices.len();
+    let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
+    for (idx, column_index) in column_indices.iter().enumerate() {
+        let array = if column_index.is_left {
+            let array = left_data.1.column(column_index.index);
+            take(array.as_ref(), &indices, None).unwrap()
+        } else {
+            let datatype = schema.field(idx).data_type();
+            arrow::array::new_null_array(datatype, num_rows)
+        };
+
+        columns.push(array);
+    }
+    RecordBatch::try_new(schema.clone(), columns)
+}
+
 impl Stream for HashJoinStream {
     type Item = ArrowResult<RecordBatch>;
 
@@ -1025,14 +1050,42 @@ impl Stream for HashJoinStream {
                     );
                     self.num_input_batches += 1;
                     self.num_input_rows += batch.num_rows();
-                    if let Ok(ref batch) = result {
+                    if let Ok((ref batch, ref left_side)) = result {
                         self.join_time += start.elapsed().as_millis() as usize;
                         self.num_output_batches += 1;
                         self.num_output_rows += batch.num_rows();
+
+                        if self.join_type == JoinType::Left {
+                            left_side.iter().flatten().for_each(|x| {
+                                self.visited_left_side[x as usize] = true;
+                            });
+                        }
                     }
-                    Some(result)
+                    Some(result.map(|x| x.0))
                 }
                 other => {
+                    let start = Instant::now();
+                    // For the left join, produce rows for unmatched rows
+                    if self.join_type == JoinType::Left && !self.is_exhausted {
+                        let result = produce_unmatched(
+                            &self.visited_left_side,
+                            &self.schema,
+                            &self.column_indices,
+                            &self.left_data,
+                        );
+                        if let Ok(ref batch) = result {
+                            self.num_input_batches += 1;
+                            self.num_input_rows += batch.num_rows();
+                            if let Ok(ref batch) = result {
+                                self.join_time += start.elapsed().as_millis() as usize;
+                                self.num_output_batches += 1;
+                                self.num_output_rows += batch.num_rows();
+                            }
+                        }
+                        self.is_exhausted = true;
+                        return Some(result);
+                    }
+
                     debug!(
                         "Processed {} probe-side input batches containing {} rows and \
                         produced {} output batches containing {} rows in {} ms",
