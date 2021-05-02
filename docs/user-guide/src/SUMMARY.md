@@ -20,7 +20,12 @@
 
 - [Introduction](introduction.md)
 - [Example Usage](example-usage.md)  
-- [Use as a Library](library.md)  
+- [Use as a Library](library.md)
+- [SQL Reference](sql/introduction.md)
+  - [SELECT](sql/select.md)
+  - [DDL](sql/ddl.md)
+    - [CREATE EXTERNAL TABLE](sql/ddl.md)
+
 - [Distributed](distributed/introduction.md)
   - [Create a Ballista Cluster](distributed/deployment.md)
     - [Docker](distributed/standalone.md)
