@@ -27,7 +27,7 @@ use arrow::{
         TimestampMicrosecondArray, TimestampNanosecondArray, UInt32BufferBuilder,
         UInt32Builder, UInt64BufferBuilder, UInt64Builder,
     },
-    compute::{self, take},
+    compute,
     datatypes::{TimeUnit, UInt32Type, UInt64Type},
 };
 use smallvec::{smallvec, SmallVec};
@@ -1015,7 +1015,7 @@ fn produce_unmatched(
     for (idx, column_index) in column_indices.iter().enumerate() {
         let array = if column_index.is_left {
             let array = left_data.1.column(column_index.index);
-            take(array.as_ref(), &indices, None).unwrap()
+            compute::take(array.as_ref(), &indices, None).unwrap()
         } else {
             let datatype = schema.field(idx).data_type();
             arrow::array::new_null_array(datatype, num_rows)
