@@ -514,6 +514,16 @@ message ExecutorMetadata {
   uint32 port = 3;
 }
 
+message ExecutorRegistration {
+  string id = 1;
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
+  oneof optional_host {
+    string host = 2;
+  }
+  uint32 port = 3;
+}
+
 message GetExecutorMetadataParams {}
 
 message GetExecutorMetadataResult {
@@ -542,7 +552,7 @@ message TaskStatus {
 }
 
 message PollWorkParams {
-  ExecutorMetadata metadata = 1;
+  ExecutorRegistration metadata = 1;
   bool can_accept_task = 2;
   // All tasks must be reported until they reach the failed or completed state
   repeated TaskStatus task_status = 3;

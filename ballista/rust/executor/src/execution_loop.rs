@@ -24,7 +24,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use log::{debug, error, info, warn};
 use tonic::transport::Channel;
 
-use ballista_core::serde::scheduler::ExecutorMeta;
+use ballista_core::serde::protobuf::ExecutorRegistration;
 use ballista_core::{
     client::BallistaClient,
     serde::protobuf::{
@@ -37,10 +37,9 @@ use protobuf::CompletedTask;
 pub async fn poll_loop(
     mut scheduler: SchedulerGrpcClient<Channel>,
     executor_client: BallistaClient,
-    executor_meta: ExecutorMeta,
+    executor_meta: ExecutorRegistration,
     concurrent_tasks: usize,
 ) {
-    let executor_meta: protobuf::ExecutorMetadata = executor_meta.into();
     let available_tasks_slots = Arc::new(AtomicUsize::new(concurrent_tasks));
     let (task_status_sender, mut task_status_receiver) =
         std::sync::mpsc::channel::<TaskStatus>();
