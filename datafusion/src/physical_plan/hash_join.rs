@@ -462,8 +462,7 @@ struct HashJoinStream {
     /// Random state used for hashing initialization
     random_state: RandomState,
     /// Keeps track of the left side rows whether they are visited
-    /// TODO: use a more memory efficient data structure
-    visited_left_side: Vec<bool>,
+    visited_left_side: Vec<bool>, // TODO: use a more memory efficient data structure, https://github.com/apache/arrow-datafusion/issues/240
     /// There is nothing to process anymore and left side is processed in case of left join
     is_exhausted: bool,
 }
