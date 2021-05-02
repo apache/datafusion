@@ -1360,7 +1360,7 @@ mod tests {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
         Arc::new(
-            MemoryExec::try_new(&vec![vec![batch.clone(), batch.clone()]], schema, None)
+            MemoryExec::try_new(&[vec![batch.clone(), batch]], schema, None)
                 .unwrap(),
         )
     }
