@@ -21,8 +21,8 @@ description = "Apache Arrow Benchmarks"
 version = "4.0.0-SNAPSHOT"
 edition = "2018"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
-homepage = "https://github.com/apache/arrow"
-repository = "https://github.com/apache/arrow"
+homepage = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/arrow-datafusion"
 license = "Apache-2.0"
 publish = false
 
