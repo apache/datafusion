@@ -33,4 +33,5 @@ github:
     merge: false
     rebase: false    
   features:
-    issues: true        
+    issues: true
+  ghp_branch: gh-pages
