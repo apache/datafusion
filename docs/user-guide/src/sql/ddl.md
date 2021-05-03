@@ -16,23 +16,5 @@
   specific language governing permissions and limitations
   under the License.
 -->
-# Summary
 
-- [Introduction](introduction.md)
-- [Example Usage](example-usage.md)  
-- [Use as a Library](library.md)
-- [SQL Reference](sql/introduction.md)
-  - [SELECT](sql/select.md)
-  - [DDL](sql/ddl.md)
-    - [CREATE EXTERNAL TABLE](sql/ddl.md)
-
-- [Distributed](distributed/introduction.md)
-  - [Create a Ballista Cluster](distributed/deployment.md)
-    - [Docker](distributed/standalone.md)
-    - [Docker Compose](distributed/docker-compose.md)
-    - [Kubernetes](distributed/kubernetes.md)
-    - [Ballista Configuration](distributed/configuration.md)
-  - [Clients](distributed/clients.md)
-    - [Rust](distributed/client-rust.md)
-    - [Python](distributed/client-python.md)
-- [Frequently Asked Questions](faq.md)
+# DDL
