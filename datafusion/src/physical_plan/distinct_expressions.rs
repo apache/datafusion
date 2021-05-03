@@ -61,6 +61,9 @@ impl DistinctCount {
         name: String,
         data_type: DataType,
     ) -> Self {
+        println!("creating distinct counts for {:#?}", input_data_types);
+        println!("  name {}, data_type: {:?}", name, data_type);
+
         Self {
             input_data_types,
             exprs,
@@ -69,6 +72,16 @@ impl DistinctCount {
         }
     }
 }
+
+// return the type to use to accumulate state for the specified input type
+fn state_type(data_type: DataType) -> DataType {
+    match data_type {
+        // when aggregating dictionary values, use the underlying value type
+        DataType::Dictionary(_key_type, value_type) => *value_type,
+        t @ _ => t
+    }
+}
+
 
 impl AggregateExpr for DistinctCount {
     /// Return a reference to Any that can be used for downcasting
@@ -84,10 +97,12 @@ impl AggregateExpr for DistinctCount {
         Ok(self
             .input_data_types
             .iter()
-            .map(|data_type| {
+           .map(|input_data_type| {
+               let state_type = state_type(input_data_type.clone());
+               println!("AAL using state type of {:?}", state_type);
                 Field::new(
                     &format_state_name(&self.name, "count distinct"),
-                    DataType::List(Box::new(Field::new("item", data_type.clone(), true))),
+                    DataType::List(Box::new(Field::new("item", state_type, true))),
                     false,
                 )
             })
@@ -121,7 +136,10 @@ impl Accumulator for DistinctCountAccumulator {
             self.values.insert(DistinctScalarValues(
                 values
                     .iter()
-                    .map(GroupByScalar::try_from)
+                    .map(|v| {
+                        println!("trying to update from {:?}", v);
+                        GroupByScalar::try_from(v)
+                    })
                     .collect::<Result<Vec<_>>>()?,
             ));
         }
@@ -158,7 +176,7 @@ impl Accumulator for DistinctCountAccumulator {
         let mut cols_out = self
             .data_types
             .iter()
-            .map(|data_type| ScalarValue::List(Some(Vec::new()), data_type.clone()))
+            .map(|data_type| ScalarValue::List(Some(Vec::new()), state_type(data_type.clone())))
             .collect::<Vec<_>>();
 
         let mut cols_vec = cols_out

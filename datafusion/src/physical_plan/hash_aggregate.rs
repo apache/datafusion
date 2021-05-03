@@ -1070,6 +1070,8 @@ fn dictionary_create_group_by_value<K: ArrowDictionaryKeyType>(
 
 /// Extract the value in `col[row]` as a GroupByScalar
 fn create_group_by_value(col: &ArrayRef, row: usize) -> Result<GroupByScalar> {
+    println!("AAL creating group by value for row {} of type {:?}", row, col);
+
     match col.data_type() {
         DataType::Float32 => {
             let array = col.as_any().downcast_ref::<Float32Array>().unwrap();
@@ -1176,6 +1178,7 @@ pub(crate) fn create_group_by_values(
     row: usize,
     vec: &mut Box<[GroupByScalar]>,
 ) -> Result<()> {
+    println!("AAL creating group by values for row {}", row);
     for (i, col) in group_by_keys.iter().enumerate() {
         vec[i] = create_group_by_value(col, row)?
     }

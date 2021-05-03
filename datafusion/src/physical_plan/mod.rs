@@ -274,6 +274,7 @@ pub trait AggregateExpr: Send + Sync + Debug {
     /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
+
     /// the field of the final result of this aggregation.
     fn field(&self) -> Result<Field>;
 
@@ -311,6 +312,9 @@ pub trait Accumulator: Send + Sync + Debug {
         if values.is_empty() {
             return Ok(());
         };
+
+        println!("Accumulator::update_batch for values: {:#?}", values);
+
         (0..values[0].len()).try_for_each(|index| {
             let v = values
                 .iter()

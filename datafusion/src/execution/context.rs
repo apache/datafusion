@@ -1766,6 +1766,24 @@ mod tests {
                 "+-----+-------------+",
             ];
             assert_batches_sorted_eq!(expected, &results);
+
+            // Now, use dict as an aggregate
+            let results =
+                plan_and_collect(&mut ctx, "SELECT val, count(distinct dict) FROM t GROUP BY val")
+                    .await
+                    .expect("ran plan correctly");
+
+            let expected = vec![
+                "+-----+----------------------+",
+                "| val | COUNT(DISTINCT dict) |",
+                "+-----+----------------------+",
+                "| 1   | 2                    |",
+                "| 2   | 2                    |",
+                "| 4   | 1                    |",
+                "+-----+----------------------+",
+            ];
+            assert_batches_sorted_eq!(expected, &results);
+
         }
 
         run_test_case::<Int8Type>().await;
@@ -1777,6 +1795,9 @@ mod tests {
         run_test_case::<UInt32Type>().await;
         run_test_case::<UInt64Type>().await;
     }
+
+
+
 
     async fn run_count_distinct_integers_aggregated_scenario(
         partitions: Vec<Vec<(&str, u64)>>,
@@ -1903,6 +1924,8 @@ mod tests {
 
         Ok(())
     }
+
+
 
     #[test]
     fn aggregate_with_alias() -> Result<()> {
