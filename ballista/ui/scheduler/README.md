@@ -19,27 +19,39 @@
 
 # Ballista UI
 
+## Start project from source
 
-## Available Scripts
+### Run scheduler/executor
+First, run scheduler from project:
+```shell
+$ cd rust/scheduler
+$ RUST_LOG=info cargo run --release
+...
+    Finished release [optimized] target(s) in 11.92s
+     Running `/path-to-project/target/release/ballista-scheduler`
+[2021-05-02T05:11:17Z INFO  ballista_scheduler] Ballista v0.5.0-SNAPSHOT Scheduler listening on 0.0.0.0:50050
+[2021-05-02T05:14:10Z INFO  ballista_scheduler] Received get_executors_metadata request
+```
 
-In the project directory, you can run:
+and run executor in new terminal:
+```shell
+$ cd rust/executor
+$ RUST_LOG=info cargo run --release
+    Finished release [optimized] target(s) in 0.09s
+     Running `/path-to-project/target/release/ballista-executor`
+[2021-05-02T05:11:30Z INFO  ballista_executor] Running with config: ExecutorConfig { host: "localhost", port: 50051, work_dir: "/var/folders/y8/fc61kyjd4n53tn444n72rjrm0000gn/T/.tmpAZ0rn4", concurrent_tasks: 4 }
+[2021-05-02T05:11:30Z INFO  ballista_executor] Ballista v0.5.0-SNAPSHOT Rust Executor listening on 0.0.0.0:50051
+```
 
-### `yarn start`
+### Run Client project
+```shell
+$ cd ui/scheduler
+$ yarn
+yarn install v1.22.10
+[1/4] 🔍  Resolving packages...
+...
+$ yarn start
+Starting the development server...
+```
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
-
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
-
-### `yarn test`
-
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
-
-### `yarn build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.
+Now access to http://localhost:3000/
