@@ -373,6 +373,61 @@ async fn csv_query_group_by_float32() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_distinct_all() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_simple_csv(&mut ctx)?;
+
+    let sql = "SELECT DISTINCT * FROM aggregate_simple";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+
+    let mut dedup = actual.clone();
+    dedup.dedup();
+
+    assert_eq!(actual, dedup);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn select_distinct_simple() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_simple_csv(&mut ctx)?;
+
+    let sql = "SELECT DISTINCT c1 FROM aggregate_simple order by c1";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![
+        vec!["0.00001"],
+        vec!["0.00002"],
+        vec!["0.00003"],
+        vec!["0.00004"],
+        vec!["0.00005"],
+    ];
+    assert_eq!(actual, expected);
+
+    let sql = "SELECT DISTINCT c1, c2 FROM aggregate_simple order by c1";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![
+        vec!["0.00001", "0.000000000001"],
+        vec!["0.00002", "0.000000000002"],
+        vec!["0.00003", "0.000000000003"],
+        vec!["0.00004", "0.000000000004"],
+        vec!["0.00005", "0.000000000005"],
+    ];
+    assert_eq!(actual, expected);
+
+    let sql = "SELECT distinct c3 FROM aggregate_simple order by c3";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["false"], vec!["true"]];
+    assert_eq!(actual, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_group_by_float64() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_simple_csv(&mut ctx)?;

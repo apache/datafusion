@@ -17,9 +17,9 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use std::convert::TryInto;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::{convert::TryInto, vec};
 
 use crate::catalog::TableReference;
 use crate::datasource::TableProvider;
@@ -621,7 +621,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        self.project(&plan, select_exprs_post_aggr, false)
+        self.project(&plan, select_exprs_post_aggr, false, select.distinct)
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
@@ -654,9 +654,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input: &LogicalPlan,
         expr: Vec<Expr>,
         force: bool,
+        distinct: bool,
     ) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(&input.schema(), &expr)?;
-        let plan = LogicalPlanBuilder::from(input).project(expr)?.build()?;
+        let plan = if distinct {
+            LogicalPlanBuilder::from(input)
+                .aggregate(expr.clone(), vec![])?
+                .project(expr)?
+                .build()?
+        } else {
+            LogicalPlanBuilder::from(input).project(expr)?.build()?
+        };
 
         let project = force
             || match input {
