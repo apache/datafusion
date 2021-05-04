@@ -1768,10 +1768,12 @@ mod tests {
             assert_batches_sorted_eq!(expected, &results);
 
             // Now, use dict as an aggregate
-            let results =
-                plan_and_collect(&mut ctx, "SELECT val, count(distinct dict) FROM t GROUP BY val")
-                    .await
-                    .expect("ran plan correctly");
+            let results = plan_and_collect(
+                &mut ctx,
+                "SELECT val, count(distinct dict) FROM t GROUP BY val",
+            )
+            .await
+            .expect("ran plan correctly");
 
             let expected = vec![
                 "+-----+----------------------+",
@@ -1783,7 +1785,6 @@ mod tests {
                 "+-----+----------------------+",
             ];
             assert_batches_sorted_eq!(expected, &results);
-
         }
 
         run_test_case::<Int8Type>().await;

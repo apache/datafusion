@@ -22,9 +22,10 @@ use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 use arrow::datatypes::{ArrowDictionaryKeyType, DataType, Field, IntervalUnit, TimeUnit};
 use arrow::{
     array::*,
-    datatypes::{ArrowNativeType, Float32Type, TimestampNanosecondType,
-                Int16Type, Int32Type, Int64Type,
-                Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type},
+    datatypes::{
+        ArrowNativeType, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
+        TimestampNanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    },
 };
 use arrow::{
     array::{
@@ -445,23 +446,13 @@ impl ScalarValue {
             }
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 typed_cast!(array, index, TimestampNanosecondArray, TimestampNanosecond)
-            },
+            }
             DataType::Dictionary(index_type, _) => match **index_type {
-                DataType::Int8 => {
-                    Self::try_from_dict_array::<Int8Type>(array, index)?
-                }
-                DataType::Int16 => {
-                    Self::try_from_dict_array::<Int16Type>(array, index)?
-                }
-                DataType::Int32 => {
-                    Self::try_from_dict_array::<Int32Type>(array, index)?
-                }
-                DataType::Int64 => {
-                    Self::try_from_dict_array::<Int64Type>(array, index)?
-                }
-                DataType::UInt8 => {
-                    Self::try_from_dict_array::<UInt8Type>(array, index)?
-                }
+                DataType::Int8 => Self::try_from_dict_array::<Int8Type>(array, index)?,
+                DataType::Int16 => Self::try_from_dict_array::<Int16Type>(array, index)?,
+                DataType::Int32 => Self::try_from_dict_array::<Int32Type>(array, index)?,
+                DataType::Int64 => Self::try_from_dict_array::<Int64Type>(array, index)?,
+                DataType::UInt8 => Self::try_from_dict_array::<UInt8Type>(array, index)?,
                 DataType::UInt16 => {
                     Self::try_from_dict_array::<UInt16Type>(array, index)?
                 }
@@ -471,11 +462,13 @@ impl ScalarValue {
                 DataType::UInt64 => {
                     Self::try_from_dict_array::<UInt64Type>(array, index)?
                 }
-                _ => return Err(DataFusionError::Internal(format!(
+                _ => {
+                    return Err(DataFusionError::Internal(format!(
                     "Index type not supported while creating scalar from dictionary: {}",
                     array.data_type(),
-                ))),
-            }
+                )))
+                }
+            },
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a scalar from array of type \"{:?}\"",
@@ -485,7 +478,10 @@ impl ScalarValue {
         })
     }
 
-    fn try_from_dict_array<K: ArrowDictionaryKeyType>(array: &ArrayRef, index: usize) -> Result<Self> {
+    fn try_from_dict_array<K: ArrowDictionaryKeyType>(
+        array: &ArrayRef,
+        index: usize,
+    ) -> Result<Self> {
         let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
 
         // look up the index in the values dictionary
@@ -498,8 +494,6 @@ impl ScalarValue {
         })?;
         Self::try_from_array(&dict_array.values(), values_index)
     }
-
-
 }
 
 impl From<f64> for ScalarValue {
