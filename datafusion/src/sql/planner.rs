@@ -621,7 +621,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        self.project(&plan, select_exprs_post_aggr, false, select.distinct)
+        self.project(&plan, select_exprs_post_aggr, select.distinct)
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
@@ -653,24 +653,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         input: &LogicalPlan,
         expr: Vec<Expr>,
-        force: bool,
         distinct: bool,
     ) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(&input.schema(), &expr)?;
-        let plan = if distinct {
-            LogicalPlanBuilder::from(input)
+
+        let input = if distinct {
+            return LogicalPlanBuilder::from(input)
                 .aggregate(expr.clone(), vec![])?
-                .project(expr)?
-                .build()?
+                .build();
         } else {
-            LogicalPlanBuilder::from(input).project(expr)?.build()?
+            input
         };
 
-        let project = force
-            || match input {
-                LogicalPlan::TableScan { .. } => true,
-                _ => plan.schema().fields() != input.schema().fields(),
-            };
+        let plan = LogicalPlanBuilder::from(input).project(expr)?.build()?;
+
+        let project = match input {
+            LogicalPlan::TableScan { .. } => true,
+            _ => plan.schema().fields() != input.schema().fields(),
+        };
 
         if project {
             Ok(plan)

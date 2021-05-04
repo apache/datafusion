@@ -424,6 +424,10 @@ async fn select_distinct_simple() -> Result<()> {
     let expected = vec![vec!["false"], vec!["true"]];
     assert_eq!(actual, expected);
 
+    let sql = "SELECT distinct c1+c2 as a FROM aggregate_simple";
+    let actual = execute(&mut ctx, sql).await;
+
+    assert_eq!(actual.len(), 5);
     Ok(())
 }
 
