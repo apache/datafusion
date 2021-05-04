@@ -629,7 +629,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        self.project(&plan, select_exprs_post_aggr, select.distinct)
+        self.project(&plan, select_exprs_post_aggr)
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
