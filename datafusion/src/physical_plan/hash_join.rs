@@ -389,7 +389,7 @@ impl ExecutionPlan for HashJoinExec {
             num_output_rows: 0,
             join_time: 0,
             random_state: self.random_state.clone(),
-            visited_left_side: visited_left_side,
+            visited_left_side,
             is_exhausted: false,
         }))
     }
