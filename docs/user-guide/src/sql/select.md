@@ -56,7 +56,7 @@ SELECT a, b, a + b FROM table
 ```
 
 The `DISTINCT` quantifier can be added to make the query return all distinct rows.
-
+By default `ALL` will be used, which returns all the rows.
 
 ```sql
 SELECT DISTINCT person, age FROM employees
