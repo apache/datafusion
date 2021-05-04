@@ -14,17 +14,3 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-
-[workspace]
-members = [
-    "datafusion",
-    "datafusion-cli",
-    "datafusion-examples",
-	"benchmarks",
-    "ballista/rust/client",
-    "ballista/rust/core",
-    "ballista/rust/executor",
-    "ballista/rust/scheduler",
-]
-
-exclude = ["python"]
