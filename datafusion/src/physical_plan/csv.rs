@@ -199,8 +199,7 @@ impl CsvExec {
     ) -> Result<Self> {
         let file_extension = String::from(options.file_extension);
 
-        let mut filenames: Vec<String> = vec![];
-        common::build_file_list(path, &mut filenames, file_extension.as_str())?;
+        let filenames = common::build_file_list(path, file_extension.as_str())?;
         if filenames.is_empty() {
             return Err(DataFusionError::Execution(format!(
                 "No files found at {path} with file extension {file_extension}",
