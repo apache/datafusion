@@ -373,6 +373,22 @@ async fn csv_query_group_by_float32() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_all() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_simple_csv(&mut ctx)?;
+
+    let sql = "SELECT c1 FROM aggregate_simple order by c1";
+    let actual_no_all = execute(&mut ctx, sql).await;
+
+    let sql_all = "SELECT ALL c1 FROM aggregate_simple order by c1";
+    let actual_all = execute(&mut ctx, sql_all).await;
+
+    assert_eq!(actual_no_all, actual_all);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn select_distinct_all() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_simple_csv(&mut ctx)?;
