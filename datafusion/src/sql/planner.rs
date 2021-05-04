@@ -621,6 +621,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
+        let plan = if select.distinct {
+            return LogicalPlanBuilder::from(&plan)
+                .aggregate(select_exprs_post_aggr.clone(), vec![])?
+                .build();
+        } else {
+            plan
+        };
+
         self.project(&plan, select_exprs_post_aggr, select.distinct)
     }
 
@@ -649,21 +657,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// necessary, i.e., when the input fields are different than the
     /// projection. Note that if the input fields are the same, but out of
     /// order, the projection will be applied.
-    fn project(
-        &self,
-        input: &LogicalPlan,
-        expr: Vec<Expr>,
-        distinct: bool,
-    ) -> Result<LogicalPlan> {
+    fn project(&self, input: &LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(&input.schema(), &expr)?;
-
-        let input = if distinct {
-            return LogicalPlanBuilder::from(input)
-                .aggregate(expr.clone(), vec![])?
-                .build();
-        } else {
-            input
-        };
 
         let plan = LogicalPlanBuilder::from(input).project(expr)?.build()?;
 
