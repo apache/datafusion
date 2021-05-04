@@ -653,8 +653,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Wrap a plan in a projection
     ///
-    /// If the `force` argument is `false`, the projection is applied only when
-    /// necessary, i.e., when the input fields are different than the
+    /// The projection is applied only when necessary,
+    /// i.e., when the input fields are different than the
     /// projection. Note that if the input fields are the same, but out of
     /// order, the projection will be applied.
     fn project(&self, input: &LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
