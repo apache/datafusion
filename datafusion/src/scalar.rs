@@ -360,10 +360,7 @@ impl ScalarValue {
                 DataType::LargeUtf8 => {
                     build_list!(LargeStringBuilder, LargeUtf8, values, size)
                 }
-                _ => {
-                    println!("list data type was: {}", data_type);
-                    panic!("Unexpected DataType for list")
-                }
+                _ => panic!("Unexpected DataType for list"),
             }),
             ScalarValue::Date32(e) => match e {
                 Some(value) => Arc::new(Date32Array::from_value(*value, size)),

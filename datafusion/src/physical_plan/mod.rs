@@ -312,9 +312,6 @@ pub trait Accumulator: Send + Sync + Debug {
         if values.is_empty() {
             return Ok(());
         };
-
-        println!("Accumulator::update_batch for values: {:#?}", values);
-
         (0..values[0].len()).try_for_each(|index| {
             let v = values
                 .iter()

@@ -61,9 +61,6 @@ impl DistinctCount {
         name: String,
         data_type: DataType,
     ) -> Self {
-        println!("creating distinct counts for {:#?}", input_data_types);
-        println!("  name {}, data_type: {:?}", name, data_type);
-
         Self {
             input_data_types,
             exprs,
@@ -99,7 +96,6 @@ impl AggregateExpr for DistinctCount {
             .iter()
            .map(|input_data_type| {
                let state_type = state_type(input_data_type.clone());
-               println!("AAL using state type of {:?}", state_type);
                 Field::new(
                     &format_state_name(&self.name, "count distinct"),
                     DataType::List(Box::new(Field::new("item", state_type, true))),
@@ -136,10 +132,7 @@ impl Accumulator for DistinctCountAccumulator {
             self.values.insert(DistinctScalarValues(
                 values
                     .iter()
-                    .map(|v| {
-                        println!("trying to update from {:?}", v);
-                        GroupByScalar::try_from(v)
-                    })
+                    .map(GroupByScalar::try_from)
                     .collect::<Result<Vec<_>>>()?,
             ));
         }

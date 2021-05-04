@@ -1796,9 +1796,6 @@ mod tests {
         run_test_case::<UInt64Type>().await;
     }
 
-
-
-
     async fn run_count_distinct_integers_aggregated_scenario(
         partitions: Vec<Vec<(&str, u64)>>,
     ) -> Result<Vec<RecordBatch>> {
@@ -1924,8 +1921,6 @@ mod tests {
 
         Ok(())
     }
-
-
 
     #[test]
     fn aggregate_with_alias() -> Result<()> {
