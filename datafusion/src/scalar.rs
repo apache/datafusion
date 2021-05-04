@@ -355,6 +355,8 @@ impl ScalarValue {
                 DataType::UInt32 => build_list!(UInt32Builder, UInt32, values, size),
                 DataType::UInt64 => build_list!(UInt64Builder, UInt64, values, size),
                 DataType::Utf8 => build_list!(StringBuilder, Utf8, values, size),
+                DataType::Float32 => build_list!(Float32Builder, Float32, values, size),
+                DataType::Float64 => build_list!(Float64Builder, Float64, values, size),
                 DataType::LargeUtf8 => {
                     build_list!(LargeStringBuilder, LargeUtf8, values, size)
                 }
