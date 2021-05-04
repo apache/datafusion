@@ -623,7 +623,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = if select.distinct {
             return LogicalPlanBuilder::from(&plan)
-                .aggregate(select_exprs_post_aggr.clone(), vec![])?
+                .aggregate(select_exprs_post_aggr, vec![])?
                 .build();
         } else {
             plan
