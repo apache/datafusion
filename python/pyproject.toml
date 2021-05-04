@@ -15,16 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-members = [
-    "datafusion",
-    "datafusion-cli",
-    "datafusion-examples",
-	"benchmarks",
-    "ballista/rust/client",
-    "ballista/rust/core",
-    "ballista/rust/executor",
-    "ballista/rust/scheduler",
-]
-
-exclude = ["python"]
+[build-system]
+requires = ["maturin"]
+build-backend = "maturin"
