@@ -118,8 +118,7 @@ impl ParquetExec {
     ) -> Result<Self> {
         // build a list of filenames from the specified path, which could be a single file or
         // a directory containing one or more parquet files
-        let mut filenames: Vec<String> = vec![];
-        common::build_file_list(path, &mut filenames, ".parquet")?;
+        let filenames = common::build_file_list(path, ".parquet")?;
         if filenames.is_empty() {
             Err(DataFusionError::Plan(format!(
                 "No Parquet files found at path {}",
