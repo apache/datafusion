@@ -31,6 +31,7 @@
     - [Docker](distributed/standalone.md)
     - [Docker Compose](distributed/docker-compose.md)
     - [Kubernetes](distributed/kubernetes.md)
+    - [Raspberry Pi](distributed/raspberrypi.md)
     - [Ballista Configuration](distributed/configuration.md)
   - [Clients](distributed/clients.md)
     - [Rust](distributed/client-rust.md)
