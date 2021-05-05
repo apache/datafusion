@@ -448,6 +448,23 @@ async fn select_distinct_simple() -> Result<()> {
 }
 
 #[tokio::test]
+async fn projection_same_fields() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    let sql = "select (1+1) as a from (select 1 as a);";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![
+        vec!["2"],
+    ];
+    assert_eq!(actual, expected);
+
+    Ok(())
+}
+
+
+
+#[tokio::test]
 async fn csv_query_group_by_float64() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_simple_csv(&mut ctx)?;
