@@ -17,14 +17,13 @@
 
 //! InList expression
 
-use std::any::Any;
 use std::sync::Arc;
+use std::{any::Any, collections::HashSet};
 
-use arrow::array::GenericStringArray;
-use arrow::array::{
-    ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, StringOffsetSizeTrait, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+use arrow::array::{ArrayRef, BooleanArray, StringOffsetSizeTrait};
+use arrow::{
+    array::{Array, GenericStringArray, PrimitiveArray},
+    datatypes::ArrowPrimitiveType,
 };
 use arrow::{
     datatypes::{DataType, Schema},
@@ -43,59 +42,193 @@ pub struct InListExpr {
     negated: bool,
 }
 
-macro_rules! make_contains {
-    ($ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr, $SCALAR_VALUE:ident, $ARRAY_TYPE:ident) => {{
-        let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-
-        let mut contains_null = false;
-        let values = $LIST_VALUES
-            .iter()
-            .flat_map(|expr| match expr {
-                ColumnarValue::Scalar(s) => match s {
-                    ScalarValue::$SCALAR_VALUE(Some(v)) => Some(*v),
-                    ScalarValue::$SCALAR_VALUE(None) => {
-                        contains_null = true;
-                        None
-                    }
-                    ScalarValue::Utf8(None) => {
-                        contains_null = true;
-                        None
-                    }
-                    datatype => unimplemented!("Unexpected type {} for InList", datatype),
-                },
-                ColumnarValue::Array(_) => {
-                    unimplemented!("InList does not yet support nested columns.")
-                }
+use std::iter::Iterator;
+//This function computes the in list boolean array over an iterator
+//the checks for the behavior for the negated and the contains_null are lifted outside the loops to try to avoid branches within the loop
+fn compute_contains_array<
+    V,
+    I: Iterator<Item = Option<V>>,
+    F: FnMut(Option<V>) -> Option<bool>,
+>(
+    it: I,
+    negated: bool,
+    contains_null: bool,
+    contains: F,
+) -> BooleanArray {
+    let it_contains = it.map(contains);
+    match (negated, contains_null) {
+        (true, true) => it_contains
+            .map(|x| match x {
+                Some(true) => Some(false),
+                Some(false) | None => None,
             })
-            .collect::<Vec<_>>();
+            .collect::<BooleanArray>(),
+        (true, false) => it_contains.map(|x| x.map(|x| !x)).collect::<BooleanArray>(),
+        (false, true) => it_contains
+            .map(|x| match x {
+                Some(true) => Some(true),
+                Some(false) | None => None,
+            })
+            .collect::<BooleanArray>(),
+        (false, false) => it_contains.collect::<BooleanArray>(),
+    }
+}
+//Collects the scalar values from a specified discriminant into a vector, marking if there are any null values.
+fn collect_scalar_value<V, F: Fn(&ScalarValue, &mut bool) -> Option<V>>(
+    vals: Vec<ColumnarValue>,
+    contains_null: &mut bool,
+    disc: std::mem::Discriminant<ScalarValue>,
+    scalar_handler: F,
+) -> Vec<V> {
+    vals.iter()
+        .flat_map(|expr| match expr {
+            ColumnarValue::Scalar(s) => match s {
+                sc if std::mem::discriminant(s) == disc => {
+                    scalar_handler(sc, contains_null)
+                }
+                ScalarValue::Utf8(None) => {
+                    *contains_null = true;
+                    None
+                }
+                datatype => unimplemented!("Unexpected type {} for InList", datatype),
+            },
+            ColumnarValue::Array(_) => {
+                unimplemented!("InList does not yet support nested columns.")
+            }
+        })
+        .collect::<Vec<_>>()
+}
 
-        Ok(ColumnarValue::Array(Arc::new(
-            array
-                .iter()
-                .map(|x| {
-                    let contains = x.map(|x| values.contains(&x));
-                    match contains {
-                        Some(true) => {
-                            if $NEGATED {
-                                Some(false)
-                            } else {
-                                Some(true)
-                            }
-                        }
-                        Some(false) => {
-                            if contains_null {
-                                None
-                            } else if $NEGATED {
-                                Some(true)
-                            } else {
-                                Some(false)
-                            }
-                        }
-                        None => None,
-                    }
-                })
-                .collect::<BooleanArray>(),
-        )))
+//Checks for values in the array of the specified ScalarValue discriminant for  partially ordered that can be totally ordered types like f32 and f64. 
+#[allow(clippy::unnecessary_wraps, clippy::too_many_arguments)]
+fn contains_partial_ord_type<A, N, F, V, O>(
+    array: Arc<dyn Array>,
+    list_values: Vec<ColumnarValue>,
+    negated: bool,
+    disc: std::mem::Discriminant<ScalarValue>,
+    linear_search_upper_bound: usize,
+    binary_search_upper_bound: usize,
+    make_ord_val: V,
+    scalar_handler: F,
+) -> Result<ColumnarValue>
+where
+    A: ArrowPrimitiveType<Native = N>,
+    V: Fn(N) -> O + Copy,
+    O: Ord + std::hash::Hash + Eq,
+    F: Fn(&ScalarValue, &mut bool) -> Option<N>,
+{
+    let arr = array
+        .as_ref()
+        .as_any()
+        .downcast_ref::<PrimitiveArray<A>>()
+        .unwrap();
+    let mut contains_null = false;
+    let handler_wrapper = move |s: &ScalarValue, cont_null: &mut bool| -> Option<O> {
+        let partial_ord_val = scalar_handler(s, cont_null);
+        partial_ord_val.map(make_ord_val)
+    };
+    let mut values =
+        collect_scalar_value(list_values, &mut contains_null, disc, handler_wrapper);
+    let num_values = values.len();
+    let contains_arr = if num_values == 0 {
+        compute_contains_array(arr.iter(), negated, contains_null, |val| {
+            Some(val.is_none())
+        })
+    } else if num_values <= linear_search_upper_bound {
+        values.sort_unstable();
+        compute_contains_array(arr.iter(), negated, contains_null, |val| {
+            val.map(|x| {
+                let ord_val = make_ord_val(x);
+                if *values.first().unwrap() > ord_val || *values.last().unwrap() < ord_val
+                {
+                    return false;
+                }
+                values.contains(&ord_val)
+            })
+        })
+    } else if num_values <= binary_search_upper_bound {
+        values.sort_unstable();
+        compute_contains_array(arr.iter(), negated, contains_null, |val| {
+            val.map(|x| {
+                let ord_val = make_ord_val(x);
+                if *values.first().unwrap() > ord_val || *values.last().unwrap() < ord_val
+                {
+                    return false;
+                }
+                values.binary_search(&ord_val).is_ok()
+            })
+        })
+    } else {
+        let set = values.into_iter().collect::<HashSet<_>>(); // HashSet::with_capacity(values.len());
+        compute_contains_array(arr.iter(), negated, contains_null, |val| {
+            val.map(|x| set.contains(&make_ord_val(x)))
+        })
+    };
+    let col_val = ColumnarValue::Array(Arc::new(contains_arr));
+    Ok(col_val)
+}
+
+
+//Checks if the values are in the array after downcasting it to the specified Primitive type
+fn contains_ord_types<A, N, F>(
+    array: Arc<dyn Array>,
+    list_values: Vec<ColumnarValue>,
+    negated: bool,
+    disc: std::mem::Discriminant<ScalarValue>,
+    linear_search_upper_bound: usize,
+    binary_search_upper_bound: usize,
+    scalar_handler: F,
+) -> Result<ColumnarValue>
+where
+    N: Ord + std::hash::Hash,
+    A: ArrowPrimitiveType<Native = N>,
+    F: Fn(&ScalarValue, &mut bool) -> Option<A::Native>,
+{
+    let make_ord_val = |partial_ord_val: N| -> N { partial_ord_val };
+    contains_partial_ord_type::<A, N, _, _, _>(
+        array,
+        list_values,
+        negated,
+        disc,
+        linear_search_upper_bound,
+        binary_search_upper_bound,
+        make_ord_val,
+        scalar_handler,
+    )
+}
+
+//The last two literals are the linear search upper bound and the binary search upper bound before the strategy switches to a HashSet.
+//If a single literal is given then it is used for both search bounds and the binary search will never be performed.
+
+macro_rules! make_ord_contains {
+    ($PRIM_TYPE:ty, $ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr, $SCALAR_VALUE:ident, $LINEAR_SEARCH_BOUND:literal) => {{
+        make_ord_contains!(
+            $PRIM_TYPE,
+            $ARRAY,
+            $LIST_VALUES,
+            $NEGATED,
+            $SCALAR_VALUE,
+            $LINEAR_SEARCH_BOUND,
+            $LINEAR_SEARCH_BOUND
+        )
+    }};
+    ($PRIM_TYPE:ty, $ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr, $SCALAR_VALUE:ident, $LINEAR_SEARCH_BOUND:literal, $BINARY_SEARCH_BOUND:literal) => {{
+        contains_ord_types::<$PRIM_TYPE, <$PRIM_TYPE as ArrowPrimitiveType>::Native, _>(
+            $ARRAY,
+            $LIST_VALUES,
+            $NEGATED,
+            std::mem::discriminant(&ScalarValue::$SCALAR_VALUE(None)),
+            $LINEAR_SEARCH_BOUND,
+            $BINARY_SEARCH_BOUND,
+            |s, contains_null| match s {
+                ScalarValue::$SCALAR_VALUE(Some(v)) => Some(*v),
+                ScalarValue::$SCALAR_VALUE(None) => {
+                    *contains_null = true;
+                    None
+                }
+                _ => unreachable!(),
+            },
+        )
     }};
 }
 
@@ -134,7 +267,6 @@ impl InListExpr {
         &self,
         array: ArrayRef,
         list_values: Vec<ColumnarValue>,
-        negated: bool,
     ) -> Result<ColumnarValue> {
         let array = array
             .as_any()
@@ -142,7 +274,8 @@ impl InListExpr {
             .unwrap();
 
         let mut contains_null = false;
-        let values = list_values
+
+        let mut values = list_values
             .iter()
             .flat_map(|expr| match expr {
                 ColumnarValue::Scalar(s) => match s {
@@ -162,35 +295,32 @@ impl InListExpr {
                     unimplemented!("InList does not yet support nested columns.")
                 }
             })
-            .collect::<Vec<&str>>();
+            .collect::<Vec<_>>();
 
-        Ok(ColumnarValue::Array(Arc::new(
-            array
-                .iter()
-                .map(|x| {
-                    let contains = x.map(|x| values.contains(&x));
-                    match contains {
-                        Some(true) => {
-                            if negated {
-                                Some(false)
-                            } else {
-                                Some(true)
-                            }
-                        }
-                        Some(false) => {
-                            if contains_null {
-                                None
-                            } else if negated {
-                                Some(true)
-                            } else {
-                                Some(false)
-                            }
-                        }
-                        None => None,
-                    }
+        const LINEAR_SEARCH_UPPER_BOUND: usize = 8;
+        let contains_arr = match values.len() {
+            0 => {
+                if !contains_null {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))));
+                }
+                compute_contains_array(array.iter(), self.negated, contains_null, |x| {
+                    x.map(|x| values.contains(&x))
                 })
-                .collect::<BooleanArray>(),
-        )))
+            }
+            1..=LINEAR_SEARCH_UPPER_BOUND => {
+                values.sort_unstable();
+                compute_contains_array(array.iter(), self.negated, contains_null, |x| {
+                    x.map(|x| values.contains(&x))
+                })
+            }
+            _ => {
+                let set = values.into_iter().collect::<HashSet<_>>();
+                compute_contains_array(array.iter(), self.negated, contains_null, |x| {
+                    x.map(|s| set.contains(s))
+                })
+            }
+        };
+        Ok(ColumnarValue::Array(Arc::new(contains_arr)))
     }
 }
 
@@ -231,45 +361,172 @@ impl PhysicalExpr for InListExpr {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => scalar.to_array(),
         };
-
+        use arrow::datatypes::{
+            Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+            UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        };
         match value_data_type {
             DataType::Float32 => {
-                make_contains!(array, list_values, self.negated, Float32, Float32Array)
+                let disc = std::mem::discriminant(&ScalarValue::Float32(None));
+                contains_partial_ord_type::<Float32Type, f32, _, _, _>(
+                    array,
+                    list_values,
+                    self.negated,
+                    disc,
+                    8,
+                    16,
+                    ordered_float::OrderedFloat::from,
+                    |s, contains_null| match s {
+                        ScalarValue::Float32(Some(v)) => Some(*v),
+                        ScalarValue::Float32(None) => {
+                            *contains_null = true;
+                            None
+                        }
+                        _ => unreachable!(),
+                    },
+                )
             }
             DataType::Float64 => {
-                make_contains!(array, list_values, self.negated, Float64, Float64Array)
+                let disc = std::mem::discriminant(&ScalarValue::Float64(None));
+                contains_partial_ord_type::<Float64Type, f64, _, _, _>(
+                    array,
+                    list_values,
+                    self.negated,
+                    disc,
+                    8,
+                    16,
+                    ordered_float::OrderedFloat::from,
+                    |s, contains_null| match s {
+                        ScalarValue::Float64(Some(v)) => Some(*v),
+                        ScalarValue::Float64(None) => {
+                            *contains_null = true;
+                            None
+                        }
+                        _ => unreachable!(),
+                    },
+                )
             }
             DataType::Int16 => {
-                make_contains!(array, list_values, self.negated, Int16, Int16Array)
+                make_ord_contains!(
+                    Int16Type,
+                    array,
+                    list_values,
+                    self.negated,
+                    Int16,
+                    256
+                )
             }
             DataType::Int32 => {
-                make_contains!(array, list_values, self.negated, Int32, Int32Array)
+                make_ord_contains!(
+                    Int32Type,
+                    array,
+                    list_values,
+                    self.negated,
+                    Int32,
+                    256
+                )
             }
             DataType::Int64 => {
-                make_contains!(array, list_values, self.negated, Int64, Int64Array)
+                make_ord_contains!(
+                    Int64Type,
+                    array,
+                    list_values,
+                    self.negated,
+                    Int64,
+                    128
+                )
             }
             DataType::Int8 => {
-                make_contains!(array, list_values, self.negated, Int8, Int8Array)
+                make_ord_contains!(Int8Type, array, list_values, self.negated, Int8, 256)
             }
             DataType::UInt16 => {
-                make_contains!(array, list_values, self.negated, UInt16, UInt16Array)
+                make_ord_contains!(
+                    UInt16Type,
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt16,
+                    256
+                )
             }
             DataType::UInt32 => {
-                make_contains!(array, list_values, self.negated, UInt32, UInt32Array)
+                make_ord_contains!(
+                    UInt32Type,
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt32,
+                    256
+                )
             }
             DataType::UInt64 => {
-                make_contains!(array, list_values, self.negated, UInt64, UInt64Array)
+                make_ord_contains!(
+                    UInt64Type,
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt64,
+                    128
+                )
             }
             DataType::UInt8 => {
-                make_contains!(array, list_values, self.negated, UInt8, UInt8Array)
+                make_ord_contains!(
+                    UInt8Type,
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt8,
+                    256
+                )
             }
             DataType::Boolean => {
-                make_contains!(array, list_values, self.negated, Boolean, BooleanArray)
+                let mut contains_nulls = false;
+                let bool_disc = std::mem::discriminant(&ScalarValue::Boolean(None));
+                let values = collect_scalar_value(
+                    list_values,
+                    &mut contains_nulls,
+                    bool_disc,
+                    |s, contains_null| match s {
+                        ScalarValue::Boolean(Some(v)) => Some(*v),
+                        ScalarValue::Boolean(None) => {
+                            *contains_null = true;
+                            None
+                        }
+                        _ => unreachable!(),
+                    },
+                );
+
+                if values.is_empty() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))));
+                }
+                let mut found_true = false;
+                let mut found_false = false;
+                let exhaustively_true = values.iter().any(|b| {
+                    match b {
+                        true => {
+                            found_true = true;
+                        }
+                        false => {
+                            found_false = true;
+                        }
+                    }
+                    found_true && found_false
+                });
+                if exhaustively_true {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))));
+                }
+                let match_bool = found_true;
+                let bool_iter = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+                let contains_arr = compute_contains_array(
+                    bool_iter.iter(),
+                    self.negated,
+                    contains_nulls,
+                    |o| o.map(|b| b == match_bool),
+                );
+                Ok(ColumnarValue::Array(Arc::new(contains_arr)))
             }
-            DataType::Utf8 => self.compare_utf8::<i32>(array, list_values, self.negated),
-            DataType::LargeUtf8 => {
-                self.compare_utf8::<i64>(array, list_values, self.negated)
-            }
+            DataType::Utf8 => self.compare_utf8::<i32>(array, list_values),
+            DataType::LargeUtf8 => self.compare_utf8::<i64>(array, list_values),
             datatype => {
                 unimplemented!("InList does not support datatype {:?}.", datatype)
             }
@@ -288,7 +545,11 @@ pub fn in_list(
 
 #[cfg(test)]
 mod tests {
-    use arrow::{array::StringArray, datatypes::Field};
+    use arrow::{
+        array::StringArray,
+        array::{Float64Array, Int64Array},
+        datatypes::Field,
+    };
 
     use super::*;
     use crate::error::Result;
