@@ -81,15 +81,18 @@ async fn nyc() -> Result<()> {
     let optimized_plan = ctx.optimize(&logical_plan)?;
 
     match &optimized_plan {
-        LogicalPlan::Aggregate { input, .. } => match input.as_ref() {
-            LogicalPlan::TableScan {
-                ref projected_schema,
-                ..
-            } => {
-                assert_eq!(2, projected_schema.fields().len());
-                assert_eq!(projected_schema.field(0).name(), "passenger_count");
-                assert_eq!(projected_schema.field(1).name(), "fare_amount");
-            }
+        LogicalPlan::Projection { input, .. } => match input.as_ref() {
+            LogicalPlan::Aggregate { input, .. } => match input.as_ref() {
+                LogicalPlan::TableScan {
+                    ref projected_schema,
+                    ..
+                } => {
+                    assert_eq!(2, projected_schema.fields().len());
+                    assert_eq!(projected_schema.field(0).name(), "passenger_count");
+                    assert_eq!(projected_schema.field(1).name(), "fare_amount");
+                }
+                _ => unreachable!(),
+            },
             _ => unreachable!(),
         },
         _ => unreachable!(false),
