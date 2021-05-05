@@ -26,7 +26,7 @@ DataFusion supports the following syntax for queries:
 <code class="language-sql hljs">
 
 [ [WITH](#with-clause) with_query [, ...] ] <br/>
-[SELECT](#select-clause) select_expr [, ...] <br/>
+[SELECT](#select-clause) [ ALL | DISTINCT ] select_expr [, ...] <br/>
 [ [FROM](#from-clause) from_item [, ...] ] <br/>
 [ [WHERE](#where-clause) condition ] <br/>
 [ [GROUP BY](#group-by-clause) grouping_element [, ...] ] <br/>
@@ -55,6 +55,12 @@ Example:
 SELECT a, b, a + b FROM table 
 ```
 
+The `DISTINCT` quantifier can be added to make the query return all distinct rows.
+By default `ALL` will be used, which returns all the rows.
+
+```sql
+SELECT DISTINCT person, age FROM employees
+```
 
 # FROM clause
 
