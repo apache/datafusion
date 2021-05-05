@@ -15,14 +15,25 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rust:latest
+FROM rust:alpine as builder
 
+RUN apk add --no-cache \
+  musl-dev
 
-COPY ./datafusion ./usr/src/datafusion
-COPY ./datafusion-cli ./usr/src/datafusion-cli
+COPY ./datafusion /usr/src/datafusion
+
+COPY ./datafusion-cli /usr/src/datafusion-cli
 
 WORKDIR /usr/src/datafusion-cli
-RUN cargo install --path .
 
+RUN cargo build --release
 
-CMD ["datafusion-cli", "--data-path", "/data"]
+RUN ls -hal
+
+FROM alpine
+
+COPY --from=builder /usr/src/target/release/datafusion-cli /usr/local/bin
+
+ENTRYPOINT ["datafusion-cli"]
+
+CMD ["--data-path", "/data"]
