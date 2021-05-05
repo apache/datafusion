@@ -389,7 +389,7 @@ async fn select_all() -> Result<()> {
 }
 
 #[tokio::test]
-async fn select_distinct_all() -> Result<()> {
+async fn select_distinct() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_simple_csv(&mut ctx)?;
 
