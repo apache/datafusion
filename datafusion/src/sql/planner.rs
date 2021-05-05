@@ -1721,10 +1721,11 @@ mod tests {
                    )
                    WHERE fn1 = 'X' AND age < 30";
 
-        let expected = "Filter: #fn1 Eq Utf8(\"X\") And #age Lt Int64(30)\
-                        \n  Projection: #first_name AS fn1, #age\
-                        \n    Filter: #age Gt Int64(20)\
-                        \n      TableScan: person projection=None";
+        let expected = "Projection: #fn1, #age\
+                        \n  Filter: #fn1 Eq Utf8(\"X\") And #age Lt Int64(30)\
+                        \n    Projection: #first_name AS fn1, #age\
+                        \n      Filter: #age Gt Int64(20)\
+                        \n        TableScan: person projection=None";
 
         quick_test(sql, expected);
     }
@@ -2035,14 +2036,16 @@ mod tests {
     fn select_wildcard_with_groupby() {
         quick_test(
             "SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date",
-            "Aggregate: groupBy=[[#id, #first_name, #last_name, #age, #state, #salary, #birth_date]], aggr=[[]]\
-             \n  TableScan: person projection=None",
+            "Projection: #id, #first_name, #last_name, #age, #state, #salary, #birth_date\
+             \n  Aggregate: groupBy=[[#id, #first_name, #last_name, #age, #state, #salary, #birth_date]], aggr=[[]]\
+             \n    TableScan: person projection=None",
         );
         quick_test(
             "SELECT * FROM (SELECT first_name, last_name FROM person) GROUP BY first_name, last_name",
-            "Aggregate: groupBy=[[#first_name, #last_name]], aggr=[[]]\
-             \n  Projection: #first_name, #last_name\
-             \n    TableScan: person projection=None",
+            "Projection: #first_name, #last_name\
+             \n  Aggregate: groupBy=[[#first_name, #last_name]], aggr=[[]]\
+             \n    Projection: #first_name, #last_name\
+             \n      TableScan: person projection=None",
         );
     }
 
@@ -2123,8 +2126,9 @@ mod tests {
     fn select_simple_aggregate_with_groupby() {
         quick_test(
             "SELECT state, MIN(age), MAX(age) FROM person GROUP BY state",
-            "Aggregate: groupBy=[[#state]], aggr=[[MIN(#age), MAX(#age)]]\
-             \n  TableScan: person projection=None",
+            "Projection: #state, #MIN(age), #MAX(age)\
+            \n  Aggregate: groupBy=[[#state]], aggr=[[MIN(#age), MAX(#age)]]\
+            \n    TableScan: person projection=None",
         );
     }
 
@@ -2261,8 +2265,9 @@ mod tests {
     ) {
         quick_test(
             "SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1",
-            "Aggregate: groupBy=[[#age Plus Int64(1)]], aggr=[[MIN(#first_name)]]\
-             \n  TableScan: person projection=None",
+            "Projection: #age Plus Int64(1), #MIN(first_name)\
+             \n  Aggregate: groupBy=[[#age Plus Int64(1)]], aggr=[[MIN(#first_name)]]\
+             \n    TableScan: person projection=None",
         );
         quick_test(
             "SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1",
@@ -2456,8 +2461,9 @@ mod tests {
     #[test]
     fn select_group_by() {
         let sql = "SELECT state FROM person GROUP BY state";
-        let expected = "Aggregate: groupBy=[[#state]], aggr=[[]]\
-                        \n  TableScan: person projection=None";
+        let expected = "Projection: #state\
+                        \n  Aggregate: groupBy=[[#state]], aggr=[[]]\
+                        \n    TableScan: person projection=None";
 
         quick_test(sql, expected);
     }
@@ -2475,8 +2481,9 @@ mod tests {
     #[test]
     fn select_group_by_count_star() {
         let sql = "SELECT state, COUNT(*) FROM person GROUP BY state";
-        let expected = "Aggregate: groupBy=[[#state]], aggr=[[COUNT(UInt8(1))]]\
-                        \n  TableScan: person projection=None";
+        let expected = "Projection: #state, #COUNT(UInt8(1))\
+                        \n  Aggregate: groupBy=[[#state]], aggr=[[COUNT(UInt8(1))]]\
+                        \n    TableScan: person projection=None";
 
         quick_test(sql, expected);
     }
