@@ -19,7 +19,7 @@ Although it is technically possible to build DataFusion directly on a Raspberry 
 It is much faster to use [cross](https://github.com/rust-embedded/cross) to cross-compile from a more powerful 
 desktop computer.
 
-Docker must be installed and the Docker daemon must be running before cross-compiling with cross. See th 
+Docker must be installed and the Docker daemon must be running before cross-compiling with cross. See the 
 [cross](https://github.com/rust-embedded/cross) project for more detailed instructions.
 
 Run the following command to install cross.
@@ -47,8 +47,8 @@ address in these commands to be the IP address for your Raspberry Pi. The easies
 keyboard and monitor to the Pi and run `ifconfig`. 
 
 ```bash
-scp ./target/armv7-unknown-linux-gnueabihf/release/ballista-scheduler ubuntu@10.0.0.186:
-scp ./target/armv7-unknown-linux-gnueabihf/release/ballista-executor ubuntu@10.0.0.186:
+scp ./target/aarch64-unknown-linux-gnu/release/ballista-scheduler ubuntu@10.0.0.186:
+scp ./target/aarch64-unknown-linux-gnu/release/ballista-executor ubuntu@10.0.0.186:
 ```
 
 Finally, ssh into the Pi and make the binaries executable:
