@@ -454,15 +454,11 @@ async fn projection_same_fields() -> Result<()> {
     let sql = "select (1+1) as a from (select 1 as a);";
     let actual = execute(&mut ctx, sql).await;
 
-    let expected = vec![
-        vec!["2"],
-    ];
+    let expected = vec![vec!["2"]];
     assert_eq!(actual, expected);
 
     Ok(())
 }
-
-
 
 #[tokio::test]
 async fn csv_query_group_by_float64() -> Result<()> {
