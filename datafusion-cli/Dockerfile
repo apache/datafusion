@@ -25,9 +25,7 @@ WORKDIR /usr/src/datafusion-cli
 
 RUN cargo build --release
 
-RUN ls -hal
-
-FROM debian:buster
+FROM debian:buster-slim
 
 COPY --from=builder /usr/src/datafusion-cli/target/release/datafusion-cli /usr/local/bin
 
