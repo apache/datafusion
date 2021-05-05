@@ -17,9 +17,9 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use std::convert::TryInto;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::{convert::TryInto, vec};
 
 use crate::catalog::TableReference;
 use crate::datasource::TableProvider;
@@ -621,7 +621,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        self.project(&plan, select_exprs_post_aggr, false)
+        let plan = if select.distinct {
+            return LogicalPlanBuilder::from(&plan)
+                .aggregate(select_exprs_post_aggr, vec![])?
+                .build();
+        } else {
+            plan
+        };
+
+        self.project(&plan, select_exprs_post_aggr)
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
@@ -645,24 +653,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Wrap a plan in a projection
     ///
-    /// If the `force` argument is `false`, the projection is applied only when
-    /// necessary, i.e., when the input fields are different than the
+    /// The projection is applied only when necessary,
+    /// i.e., when the input fields are different than the
     /// projection. Note that if the input fields are the same, but out of
     /// order, the projection will be applied.
-    fn project(
-        &self,
-        input: &LogicalPlan,
-        expr: Vec<Expr>,
-        force: bool,
-    ) -> Result<LogicalPlan> {
+    fn project(&self, input: &LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(&input.schema(), &expr)?;
+
         let plan = LogicalPlanBuilder::from(input).project(expr)?.build()?;
 
-        let project = force
-            || match input {
-                LogicalPlan::TableScan { .. } => true,
-                _ => plan.schema().fields() != input.schema().fields(),
-            };
+        let project = match input {
+            LogicalPlan::TableScan { .. } => true,
+            _ => plan.schema().fields() != input.schema().fields(),
+        };
 
         if project {
             Ok(plan)
