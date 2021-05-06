@@ -19,10 +19,13 @@
 
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
-use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+use arrow::datatypes::{ArrowDictionaryKeyType, DataType, Field, IntervalUnit, TimeUnit};
 use arrow::{
     array::*,
-    datatypes::{ArrowNativeType, Float32Type, TimestampNanosecondType},
+    datatypes::{
+        ArrowNativeType, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
+        TimestampNanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    },
 };
 use arrow::{
     array::{
@@ -446,13 +449,52 @@ impl ScalarValue {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 typed_cast!(array, index, TimestampNanosecondArray, TimestampNanosecond)
             }
+            DataType::Dictionary(index_type, _) => match **index_type {
+                DataType::Int8 => Self::try_from_dict_array::<Int8Type>(array, index)?,
+                DataType::Int16 => Self::try_from_dict_array::<Int16Type>(array, index)?,
+                DataType::Int32 => Self::try_from_dict_array::<Int32Type>(array, index)?,
+                DataType::Int64 => Self::try_from_dict_array::<Int64Type>(array, index)?,
+                DataType::UInt8 => Self::try_from_dict_array::<UInt8Type>(array, index)?,
+                DataType::UInt16 => {
+                    Self::try_from_dict_array::<UInt16Type>(array, index)?
+                }
+                DataType::UInt32 => {
+                    Self::try_from_dict_array::<UInt32Type>(array, index)?
+                }
+                DataType::UInt64 => {
+                    Self::try_from_dict_array::<UInt64Type>(array, index)?
+                }
+                _ => {
+                    return Err(DataFusionError::Internal(format!(
+                    "Index type not supported while creating scalar from dictionary: {}",
+                    array.data_type(),
+                )))
+                }
+            },
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Can't create a scalar of array of type \"{:?}\"",
+                    "Can't create a scalar from array of type \"{:?}\"",
                     other
                 )))
             }
         })
+    }
+
+    fn try_from_dict_array<K: ArrowDictionaryKeyType>(
+        array: &ArrayRef,
+        index: usize,
+    ) -> Result<Self> {
+        let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
+
+        // look up the index in the values dictionary
+        let keys_col = dict_array.keys_array();
+        let values_index = keys_col.value(index).to_usize().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Can not convert index to usize in dictionary of type creating group by value {:?}",
+                keys_col.data_type()
+            ))
+        })?;
+        Self::try_from_array(&dict_array.values(), values_index)
     }
 }
 
