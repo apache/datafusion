@@ -274,6 +274,7 @@ pub trait AggregateExpr: Send + Sync + Debug {
     /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
+
     /// the field of the final result of this aggregation.
     fn field(&self) -> Result<Field>;
 

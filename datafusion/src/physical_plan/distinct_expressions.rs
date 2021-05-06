@@ -47,8 +47,8 @@ pub struct DistinctCount {
     name: String,
     /// The DataType for the final count
     data_type: DataType,
-    /// The DataType for each input argument
-    input_data_types: Vec<DataType>,
+    /// The DataType used to hold the state for each input
+    state_data_types: Vec<DataType>,
     /// The input arguments
     exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
@@ -61,12 +61,23 @@ impl DistinctCount {
         name: String,
         data_type: DataType,
     ) -> Self {
+        let state_data_types = input_data_types.into_iter().map(state_type).collect();
+
         Self {
-            input_data_types,
+            state_data_types,
             exprs,
             name,
             data_type,
         }
+    }
+}
+
+/// return the type to use to accumulate state for the specified input type
+fn state_type(data_type: DataType) -> DataType {
+    match data_type {
+        // when aggregating dictionary values, use the underlying value type
+        DataType::Dictionary(_key_type, value_type) => *value_type,
+        t => t,
     }
 }
 
@@ -82,12 +93,16 @@ impl AggregateExpr for DistinctCount {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(self
-            .input_data_types
+            .state_data_types
             .iter()
-            .map(|data_type| {
+            .map(|state_data_type| {
                 Field::new(
                     &format_state_name(&self.name, "count distinct"),
-                    DataType::List(Box::new(Field::new("item", data_type.clone(), true))),
+                    DataType::List(Box::new(Field::new(
+                        "item",
+                        state_data_type.clone(),
+                        true,
+                    ))),
                     false,
                 )
             })
@@ -101,7 +116,7 @@ impl AggregateExpr for DistinctCount {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(DistinctCountAccumulator {
             values: HashSet::default(),
-            data_types: self.input_data_types.clone(),
+            state_data_types: self.state_data_types.clone(),
             count_data_type: self.data_type.clone(),
         }))
     }
@@ -110,7 +125,7 @@ impl AggregateExpr for DistinctCount {
 #[derive(Debug)]
 struct DistinctCountAccumulator {
     values: HashSet<DistinctScalarValues, RandomState>,
-    data_types: Vec<DataType>,
+    state_data_types: Vec<DataType>,
     count_data_type: DataType,
 }
 
@@ -156,9 +171,11 @@ impl Accumulator for DistinctCountAccumulator {
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut cols_out = self
-            .data_types
+            .state_data_types
             .iter()
-            .map(|data_type| ScalarValue::List(Some(Vec::new()), data_type.clone()))
+            .map(|state_data_type| {
+                ScalarValue::List(Some(Vec::new()), state_data_type.clone())
+            })
             .collect::<Vec<_>>();
 
         let mut cols_vec = cols_out
