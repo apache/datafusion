@@ -105,14 +105,14 @@ fn contains_ord_types_it<O, I>(
     mut list_values: Vec<O>,
     negated: bool,
     contains_null: bool,
-    method_bounds: (usize, usize),
+    linear_search_bound: usize,
 ) -> Result<ColumnarValue>
 where
     I: Iterator<Item = Option<O>>,
     O: Ord + Hash + Eq,
 {
     let num_values = list_values.len();
-    let contains_arr = if num_values <= method_bounds.0 {
+    let contains_arr = if num_values <= linear_search_bound {
         list_values.sort_unstable();
         compute_contains_array(it, negated, contains_null, |val| {
             val.map(|x| {
@@ -124,20 +124,6 @@ where
                     return false;
                 }
                 list_values.contains(&x)
-            })
-        })
-    } else if num_values <= method_bounds.1 {
-        list_values.sort_unstable();
-        compute_contains_array(it, negated, contains_null, |val| {
-            val.map(|x| {
-                let out_of_bounds = match (list_values.first(), list_values.last()) {
-                    (Some(lowest), Some(highest)) => *lowest > x || *highest < x,
-                    _ => false,
-                };
-                if out_of_bounds {
-                    return false;
-                }
-                list_values.binary_search(&x).is_ok()
             })
         })
     } else {
@@ -155,7 +141,7 @@ fn contains_ord_types<A, F>(
     list_values: Vec<ColumnarValue>,
     negated: bool,
     disc: std::mem::Discriminant<ScalarValue>,
-    method_bounds: (usize, usize),
+    linear_search_bound: usize,
     scalar_handler: F,
 ) -> Result<ColumnarValue>
 where
@@ -171,7 +157,13 @@ where
     let mut contains_null = false;
     let values =
         collect_scalar_value(list_values, &mut contains_null, disc, scalar_handler);
-    contains_ord_types_it(arr.iter(), values, negated, contains_null, method_bounds)
+    contains_ord_types_it(
+        arr.iter(),
+        values,
+        negated,
+        contains_null,
+        linear_search_bound,
+    )
 }
 
 //Checks for values in the array of the specified ScalarValue discriminant for  partially ordered that can be totally ordered types like f32 and f64.
@@ -180,7 +172,7 @@ fn contains_partial_ord_type<A, F, V, O>(
     list_values: Vec<ColumnarValue>,
     negated: bool,
     disc: std::mem::Discriminant<ScalarValue>,
-    method_bounds: (usize, usize),
+    linear_search_bound: usize,
     make_ord_val: V,
     scalar_handler: F,
 ) -> Result<ColumnarValue>
@@ -206,7 +198,7 @@ where
         values,
         negated,
         contains_null,
-        method_bounds,
+        linear_search_bound,
     )
 }
 
@@ -214,24 +206,13 @@ where
 //If a single literal is given then it is used for both search bounds and the binary search will never be performed.
 
 macro_rules! make_ord_contains {
-    ($PRIM_TYPE:ty, $ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr, $SCALAR_VALUE:ident, $LINEAR_SEARCH_BOUND:literal) => {{
-        make_ord_contains!(
-            $PRIM_TYPE,
-            $ARRAY,
-            $LIST_VALUES,
-            $NEGATED,
-            $SCALAR_VALUE,
-            $LINEAR_SEARCH_BOUND,
-            $LINEAR_SEARCH_BOUND
-        )
-    }};
-    ($ARRAY_TYPE:ty, $ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr, $SCALAR_VALUE:ident, $LINEAR_SEARCH_BOUND:literal, $BINARY_SEARCH_BOUND:literal) => {{
+    ($ARRAY_TYPE:ty, $ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr, $SCALAR_VALUE:ident, $LINEAR_SEARCH_BOUND:literal) => {{
         contains_ord_types::<$ARRAY_TYPE, _>(
             $ARRAY,
             $LIST_VALUES,
             $NEGATED,
             std::mem::discriminant(&ScalarValue::$SCALAR_VALUE(None)),
-            ($LINEAR_SEARCH_BOUND, $BINARY_SEARCH_BOUND),
+            $LINEAR_SEARCH_BOUND,
             |s, contains_null| match s {
                 ScalarValue::$SCALAR_VALUE(Some(v)) => Some(*v),
                 ScalarValue::$SCALAR_VALUE(None) => {
@@ -377,7 +358,7 @@ impl PhysicalExpr for InListExpr {
                     list_values,
                     self.negated,
                     disc,
-                    (256, 256),
+                    256,
                     ordered_float::OrderedFloat::from,
                     |s, contains_null| match s {
                         ScalarValue::Float32(Some(v)) => Some(*v),
@@ -396,7 +377,7 @@ impl PhysicalExpr for InListExpr {
                     list_values,
                     self.negated,
                     disc,
-                    (128, 128),
+                    128,
                     ordered_float::OrderedFloat::from,
                     |s, contains_null| match s {
                         ScalarValue::Float64(Some(v)) => Some(*v),
