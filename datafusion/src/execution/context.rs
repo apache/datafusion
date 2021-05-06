@@ -2025,7 +2025,6 @@ mod tests {
 
         assert_batches_sorted_eq!(expected, &results);
 
-
         let expected = vec![
             "+---------+",
             "| SQRT(i) |",
@@ -2199,7 +2198,7 @@ mod tests {
             "| \"MY_AVG\"(i) |",
             "+-------------+",
             "| 1           |",
-            "+-------------+",        
+            "+-------------+",
         ];
         assert_batches_eq!(expected, &result);
 
