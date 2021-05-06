@@ -705,12 +705,6 @@ mod tests {
             lit(ScalarValue::Utf8(None)),
         ];
         in_list!(batch, list, &true, vec![Some(false), None]);
-        ////Expression "a in true (NULL, true)"
-        //let list=vec![
-        //    lit(ScalarValue::Utf8(None)),
-        //];
-        ////let batch = BooleanArray::from(vec![Some(true), None]);
-        //in_list!(batch, list, &false, vec![Some(false), None]);
         Ok(())
     }
 }
