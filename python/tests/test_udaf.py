@@ -16,12 +16,13 @@
 # under the License.
 
 import unittest
+from typing import List
 
 import pyarrow
 import pyarrow.compute
-import datafusion
 
-f = datafusion.functions
+import datafusion
+from datafusion import functions as f
 
 
 class Accumulator:
@@ -32,7 +33,7 @@ class Accumulator:
     def __init__(self):
         self._sum = pyarrow.scalar(0.0)
 
-    def to_scalars(self) -> [pyarrow.Scalar]:
+    def to_scalars(self) -> List[pyarrow.Scalar]:
         return [self._sum]
 
     def update(self, values: pyarrow.Array) -> None:

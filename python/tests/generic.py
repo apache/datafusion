@@ -15,18 +15,19 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import unittest
-import tempfile
 import datetime
 import os.path
 import shutil
+import tempfile
+import unittest
 
 import numpy
 import pyarrow
-import datafusion
 
 # used to write parquet files
 import pyarrow.parquet
+
+import datafusion
 
 
 def data():

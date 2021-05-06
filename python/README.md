@@ -135,7 +135,7 @@ cd arrow-datafusion/python
 
 # prepare development environment (used to build wheel / install in development)
 python3 -m venv venv
-pip install maturin==0.10.4 toml==0.10.1 pyarrow==1.0.0
+pip install maturin==0.10.4 toml==0.10.2 pyarrow==4.0.0 psycopg2==2.8.6
 ```
 
 Whenever rust code changes (your changes or via git pull):

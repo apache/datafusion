@@ -18,12 +18,12 @@
 import unittest
 
 import pyarrow
+
 import datafusion
-f = datafusion.functions
+from datafusion import functions as f
 
 
 class TestCase(unittest.TestCase):
-
     def _prepare(self):
         ctx = datafusion.ExecutionContext()
 
@@ -51,12 +51,10 @@ class TestCase(unittest.TestCase):
     def test_filter(self):
         df = self._prepare()
 
-        df = df \
-            .select(
-                f.col("a") + f.col("b"),
-                f.col("a") - f.col("b"),
-            ) \
-            .filter(f.col("a") > f.lit(2))
+        df = df.select(
+            f.col("a") + f.col("b"),
+            f.col("a") - f.col("b"),
+        ).filter(f.col("a") > f.lit(2))
 
         # execute and collect the first (and only) batch
         result = df.collect()[0]
@@ -83,7 +81,9 @@ class TestCase(unittest.TestCase):
 
         df = df.select(udf(f.col("a")))
 
-        self.assertEqual(df.collect()[0].column(0), pyarrow.array([False, False, False]))
+        self.assertEqual(
+            df.collect()[0].column(0), pyarrow.array([False, False, False])
+        )
 
     def test_join(self):
         ctx = datafusion.ExecutionContext()
