@@ -68,7 +68,7 @@ class PostgresComparisonTestCase(unittest.TestCase):
                 self.assertEqual(expected, got)
             else:
                 for i, j in zip(got, expected):
-                    self.assertAlmostEqual(Decimal(i), Decimal(j), delta)
+                    self.assertAlmostEqual(Decimal(i), Decimal(j), delta=delta)
 
     def test_simple_select_1(self):
         sql = "SELECT 1"
