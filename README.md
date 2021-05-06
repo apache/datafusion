@@ -48,7 +48,7 @@ the convenience of an SQL interface or a DataFrame API.
 
 Here are some of the projects known to use DataFusion:
 
-* [Ballista](https://github.com/ballista-compute/ballista) Distributed Compute Platform
+* [Ballista](ballista) Distributed Compute Platform
 * [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 * [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 * [datafusion-python](https://pypi.org/project/datafusion)
