@@ -513,8 +513,13 @@ impl PhysicalExpr for InListExpr {
                     }
                     found_true && found_false
                 });
-                
-                let contains_arr = compute_contains_array(bool_arr.iter(), self.negated, contains_null, |o| o.map(|b| (found_true && b) || (found_false && !b)));
+
+                let contains_arr = compute_contains_array(
+                    bool_arr.iter(),
+                    self.negated,
+                    contains_null,
+                    |o| o.map(|b| (found_true && b) || (found_false && !b)),
+                );
                 Ok(ColumnarValue::Array(Arc::new(contains_arr)))
             }
             DataType::Utf8 => self.compare_utf8::<i32>(array, list_values),
@@ -713,7 +718,6 @@ mod tests {
         ];
         in_list!(batch, list, &false, vec![Some(true), None, Some(true)]);
 
-
         //expression: "a not in (true, false)"
         let list = vec![
             lit(ScalarValue::Boolean(Some(true))),
@@ -721,21 +725,19 @@ mod tests {
         ];
         in_list!(batch, list, &true, vec![Some(false), None, Some(false)]);
 
-
         // expression: "a in (true, false, NULL)"
         let list = vec![
             lit(ScalarValue::Boolean(Some(true))),
             lit(ScalarValue::Boolean(Some(false))),
-            lit(ScalarValue::Utf8(None))
+            lit(ScalarValue::Utf8(None)),
         ];
         in_list!(batch, list, &false, vec![Some(true), None, Some(true)]);
-
 
         //expression: "a not in (true, false, NULL)"
         let list = vec![
             lit(ScalarValue::Boolean(Some(true))),
             lit(ScalarValue::Boolean(Some(false))),
-            lit(ScalarValue::Utf8(None))
+            lit(ScalarValue::Utf8(None)),
         ];
         in_list!(batch, list, &true, vec![Some(false), None, Some(false)]);
         Ok(())
