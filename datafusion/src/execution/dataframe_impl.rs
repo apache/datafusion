@@ -177,9 +177,11 @@ impl DataFrame for DataFrameImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
-    use crate::execution::context::ExecutionContext;
     use crate::logical_plan::*;
+    use crate::{assert_batches_sorted_eq, execution::context::ExecutionContext};
     use crate::{datasource::csv::CsvReadOptions, physical_plan::ColumnarValue};
     use crate::{physical_plan::functions::ScalarFunctionImplementation, test};
     use arrow::datatypes::DataType;
@@ -216,8 +218,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn aggregate() -> Result<()> {
+    #[tokio::test]
+    async fn aggregate() -> Result<()> {
         // build plan using DataFrame API
         let df = test_table()?;
         let group_expr = vec![col("c1")];
@@ -230,18 +232,22 @@ mod tests {
             count_distinct(col("c12")),
         ];
 
-        let df = df.aggregate(group_expr, aggr_expr)?;
+        let df: Vec<RecordBatch> = df.aggregate(group_expr, aggr_expr)?.collect().await?;
 
-        let plan = df.to_logical_plan();
-
-        // build same plan using SQL API
-        let sql = "SELECT c1, MIN(c12), MAX(c12), AVG(c12), SUM(c12), COUNT(c12), COUNT(DISTINCT c12) \
-                   FROM aggregate_test_100 \
-                   GROUP BY c1";
-        let sql_plan = create_plan(sql)?;
-
-        // the two plans should be identical
-        assert_same_plan(&plan, &sql_plan);
+        assert_batches_sorted_eq!(
+            vec![
+            "+----+----------------------+--------------------+---------------------+--------------------+------------+---------------------+",
+            "| c1 | MIN(c12)             | MAX(c12)           | AVG(c12)            | SUM(c12)           | COUNT(c12) | COUNT(DISTINCT c12) |",
+            "+----+----------------------+--------------------+---------------------+--------------------+------------+---------------------+",
+            "| a  | 0.02182578039211991  | 0.9800193410444061 | 0.48754517466109415 | 10.238448667882977 | 21         | 21                  |",
+            "| b  | 0.04893135681998029  | 0.9185813970744787 | 0.41040709263815384 | 7.797734760124923  | 19         | 19                  |",
+            "| c  | 0.0494924465469434   | 0.991517828651004  | 0.6600456536439784  | 13.860958726523545 | 21         | 21                  |",
+            "| d  | 0.061029375346466685 | 0.9748360509016578 | 0.48855379387549824 | 8.793968289758968  | 18         | 18                  |",
+            "| e  | 0.01479305307777301  | 0.9965400387585364 | 0.48600669271341534 | 10.206140546981722 | 21         | 21                  |",
+            "+----+----------------------+--------------------+---------------------+--------------------+------------+---------------------+",
+            ],
+            &df
+        );
 
         Ok(())
     }
