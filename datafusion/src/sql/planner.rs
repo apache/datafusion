@@ -810,7 +810,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a relational expression from a select SQL expression
     fn sql_select_to_rex(&self, sql: &SelectItem, schema: &DFSchema) -> Result<Expr> {
         match sql {
-            SelectItem::UnnamedExpr(expr) => self.sql_to_rex(expr, schema),
+            SelectItem::UnnamedExpr(sql_expr) => {
+                let expr = self.sql_to_rex(sql_expr, schema)?;
+                Ok(expr.alias(&format!("{}", sql_expr)))
+            }
             SelectItem::ExprWithAlias { expr, alias } => Ok(Alias(
                 Box::new(self.sql_to_rex(&expr, schema)?),
                 alias.value.clone(),
