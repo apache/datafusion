@@ -483,16 +483,16 @@ impl PhysicalExpr for InListExpr {
             }
 
             DataType::Boolean => {
-                let mut contains_nulls = false;
+                let mut contains_null = false;
                 let bool_disc = std::mem::discriminant(&ScalarValue::Boolean(None));
                 let values = collect_scalar_value(
                     list_values,
-                    &mut contains_nulls,
+                    &mut contains_null,
                     bool_disc,
-                    |s, contains_null| match s {
+                    |s, cont_null| match s {
                         ScalarValue::Boolean(Some(v)) => Some(*v),
                         ScalarValue::Boolean(None) => {
-                            *contains_null = true;
+                            *cont_null = true;
                             None
                         }
                         _ => unreachable!(),
@@ -513,37 +513,8 @@ impl PhysicalExpr for InListExpr {
                     }
                     found_true && found_false
                 });
-
-                let contains_arr = match (found_true, found_false, contains_nulls) {
-                    (true, true, false) => {
-                        //If the list contains both true and false but no nulls then fill the array with !negated
-                        let fill_value = !self.negated;
-                        bool_arr
-                            .iter()
-                            .map(|o| o.map(|_| fill_value))
-                            .collect::<BooleanArray>()
-                    }
-                    (true, true, true) => {
-                        //If the list contains both true and false and a null value then fill the array with !negated and map false to null
-                        let fill_value = !self.negated;
-                        bool_arr
-                            .iter()
-                            .map(|o| match o {
-                                Some(true) => Some(fill_value),
-                                Some(false) | None => None,
-                            })
-                            .collect()
-                    }
-                    _ => {
-                        //Otherwise calculate normally
-                        compute_contains_array(
-                            bool_arr.iter(),
-                            self.negated,
-                            contains_nulls,
-                            |o| o.map(|b| (found_false && !b) || (b && found_true)),
-                        )
-                    }
-                };
+                
+                let contains_arr = compute_contains_array(bool_arr.iter(), self.negated, contains_null, |o| o.map(|b| (found_true && b) || (found_false && !b)));
                 Ok(ColumnarValue::Array(Arc::new(contains_arr)))
             }
             DataType::Utf8 => self.compare_utf8::<i32>(array, list_values),
@@ -757,7 +728,7 @@ mod tests {
             lit(ScalarValue::Boolean(Some(false))),
             lit(ScalarValue::Utf8(None))
         ];
-        in_list!(batch, list, &false, vec![Some(true), None, None]);
+        in_list!(batch, list, &false, vec![Some(true), None, Some(true)]);
 
 
         //expression: "a not in (true, false, NULL)"
@@ -766,7 +737,7 @@ mod tests {
             lit(ScalarValue::Boolean(Some(false))),
             lit(ScalarValue::Utf8(None))
         ];
-        in_list!(batch, list, &true, vec![Some(false), None, None]);
+        in_list!(batch, list, &true, vec![Some(false), None, Some(false)]);
         Ok(())
     }
 }
