@@ -99,7 +99,7 @@ fn collect_scalar_value<V, F: Fn(&ScalarValue, &mut bool) -> Option<V>>(
         .collect::<Vec<_>>()
 }
 
-//Checks for values in the array of the specified ScalarValue discriminant for  partially ordered that can be totally ordered types like f32 and f64. 
+//Checks for values in the array of the specified ScalarValue discriminant for  partially ordered that can be totally ordered types like f32 and f64.
 #[allow(clippy::unnecessary_wraps, clippy::too_many_arguments)]
 fn contains_partial_ord_type<A, N, F, V, O>(
     array: Arc<dyn Array>,
@@ -130,17 +130,18 @@ where
     let mut values =
         collect_scalar_value(list_values, &mut contains_null, disc, handler_wrapper);
     let num_values = values.len();
-    let contains_arr = if num_values == 0 {
-        compute_contains_array(arr.iter(), negated, contains_null, |val| {
-            Some(val.is_none())
-        })
-    } else if num_values <= linear_search_upper_bound {
+    let contains_arr = if num_values <= linear_search_upper_bound {
         values.sort_unstable();
         compute_contains_array(arr.iter(), negated, contains_null, |val| {
             val.map(|x| {
                 let ord_val = make_ord_val(x);
-                if *values.first().unwrap() > ord_val || *values.last().unwrap() < ord_val
-                {
+                let out_of_bounds = match (values.first(), values.last()) {
+                    (Some(lowest), Some(highest)) => {
+                        *lowest > ord_val || *highest < ord_val
+                    }
+                    _ => false,
+                };
+                if out_of_bounds {
                     return false;
                 }
                 values.contains(&ord_val)
@@ -167,7 +168,6 @@ where
     let col_val = ColumnarValue::Array(Arc::new(contains_arr));
     Ok(col_val)
 }
-
 
 //Checks if the values are in the array after downcasting it to the specified Primitive type
 fn contains_ord_types<A, N, F>(
@@ -299,15 +299,7 @@ impl InListExpr {
 
         const LINEAR_SEARCH_UPPER_BOUND: usize = 8;
         let contains_arr = match values.len() {
-            0 => {
-                if !contains_null {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))));
-                }
-                compute_contains_array(array.iter(), self.negated, contains_null, |x| {
-                    x.map(|x| values.contains(&x))
-                })
-            }
-            1..=LINEAR_SEARCH_UPPER_BOUND => {
+            0..=LINEAR_SEARCH_UPPER_BOUND => {
                 values.sort_unstable();
                 compute_contains_array(array.iter(), self.negated, contains_null, |x| {
                     x.map(|x| values.contains(&x))
@@ -373,8 +365,8 @@ impl PhysicalExpr for InListExpr {
                     list_values,
                     self.negated,
                     disc,
-                    8,
-                    16,
+                    256,
+                    256,
                     ordered_float::OrderedFloat::from,
                     |s, contains_null| match s {
                         ScalarValue::Float32(Some(v)) => Some(*v),
@@ -393,8 +385,8 @@ impl PhysicalExpr for InListExpr {
                     list_values,
                     self.negated,
                     disc,
-                    8,
-                    16,
+                    128,
+                    128,
                     ordered_float::OrderedFloat::from,
                     |s, contains_null| match s {
                         ScalarValue::Float64(Some(v)) => Some(*v),
@@ -713,7 +705,12 @@ mod tests {
             lit(ScalarValue::Utf8(None)),
         ];
         in_list!(batch, list, &true, vec![Some(false), None]);
-
+        ////Expression "a in true (NULL, true)"
+        //let list=vec![
+        //    lit(ScalarValue::Utf8(None)),
+        //];
+        ////let batch = BooleanArray::from(vec![Some(true), None]);
+        //in_list!(batch, list, &false, vec![Some(false), None]);
         Ok(())
     }
 }
