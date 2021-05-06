@@ -29,6 +29,9 @@ from tests.generic import *
 import datafusion
 
 
+@unittest.skipUnless(
+    os.environ.get("POSTGRES_PASSWORD") is not None, "requires Postgres environment"
+)
 class PostgresComparisonTestCase(unittest.TestCase):
     def setUp(self):
         # Create a temporary directory
