@@ -33,7 +33,7 @@ message LogicalExprNode {
   oneof ExprType {
     // column references
     string column_name = 1;
-    
+
     // alias
     AliasNode alias = 2;
 
@@ -42,15 +42,15 @@ message LogicalExprNode {
 
     // binary expressions
     BinaryExprNode binary_expr = 4;
-    
+
     // aggregate expressions
     AggregateExprNode aggregate_expr = 5;
-    
+
     // null checks
     IsNull is_null_expr = 6;
     IsNotNull is_not_null_expr = 7;
     Not not_expr = 8;
-    
+
     BetweenNode between = 9;
     CaseNode case_ = 10;
     CastNode cast = 11;
@@ -130,6 +130,7 @@ enum ScalarFunction {
   SHA256 = 30;
   SHA384 = 31;
   SHA512 = 32;
+  LN = 33;
 }
 
 message ScalarFunctionNode {
@@ -361,7 +362,7 @@ message CsvScanExecNode {
   bool has_header = 5;
   uint32 batch_size = 6;
   string delimiter = 7;
-  
+
   // partition filenames
   repeated string filename = 8;
 }
@@ -466,7 +467,7 @@ message Action {
     // Fetch a partition from an executor
     PartitionId fetch_partition = 3;
   }
-  
+
   // configuration settings
   repeated KeyValuePair settings = 100;
 }
@@ -742,10 +743,10 @@ message ScalarValue{
     }
 }
 
-// Contains all valid datafusion scalar type except for 
+// Contains all valid datafusion scalar type except for
 // List
 enum PrimitiveScalarType{
-    
+
     BOOL = 0;     // arrow::Type::BOOL
     UINT8 = 1;    // arrow::Type::UINT8
     INT8 = 2;     // arrow::Type::INT8
@@ -777,7 +778,7 @@ message ScalarListType{
     PrimitiveScalarType deepest_type = 2;
 }
 
-// Broke out into multiple message types so that type 
+// Broke out into multiple message types so that type
 // metadata did not need to be in separate message
 //All types that are of the empty message types contain no additional metadata
 // about the type
@@ -794,7 +795,7 @@ message ArrowType{
         EmptyMessage UINT64 =9;
         EmptyMessage INT64 =10 ;
         EmptyMessage FLOAT16 =11 ;
-        EmptyMessage FLOAT32 =12 ; 
+        EmptyMessage FLOAT32 =12 ;
         EmptyMessage FLOAT64 =13 ;
         EmptyMessage UTF8 =14 ;
         EmptyMessage LARGE_UTF8 = 32;
@@ -824,7 +825,7 @@ message ArrowType{
 
 //Useful for representing an empty enum variant in rust
 // E.G. enum example{One, Two(i32)}
-// maps to 
+// maps to
 // message example{
 //    oneof{
 //        EmptyMessage One = 1;

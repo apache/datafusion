@@ -1200,6 +1200,7 @@ impl TryInto<protobuf::ScalarFunction> for &BuiltinScalarFunction {
             BuiltinScalarFunction::Atan => Ok(protobuf::ScalarFunction::Atan),
             BuiltinScalarFunction::Exp => Ok(protobuf::ScalarFunction::Exp),
             BuiltinScalarFunction::Log => Ok(protobuf::ScalarFunction::Log),
+            BuiltinScalarFunction::Ln => Ok(protobuf::ScalarFunction::Ln),
             BuiltinScalarFunction::Log10 => Ok(protobuf::ScalarFunction::Log10),
             BuiltinScalarFunction::Floor => Ok(protobuf::ScalarFunction::Floor),
             BuiltinScalarFunction::Ceil => Ok(protobuf::ScalarFunction::Ceil),
