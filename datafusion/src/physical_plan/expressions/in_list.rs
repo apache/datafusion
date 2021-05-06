@@ -99,6 +99,28 @@ fn collect_scalar_value<V, F: Fn(&ScalarValue, &mut bool) -> Option<V>>(
         .collect::<Vec<_>>()
 }
 
+fn contains_sorted<E: Ord>(data: &[E], item: &E)->bool{
+    if data.is_empty(){
+        return false;
+    }
+    //At this point slice is not empty so it will never panic
+    let lowest = data.first().unwrap();
+    let highest = data.last().unwrap();
+
+    if item < lowest || highest < item{
+        return false
+    }
+
+    for elem in data.iter(){
+        if *elem == *item{
+            return true;
+        }else if *elem > *item{
+            return false;
+        }
+    }
+    false
+}
+
 #[allow(clippy::unnecessary_wraps)]
 fn contains_ord_types_it<O, I>(
     it: I,
@@ -112,19 +134,14 @@ where
     O: Ord + Hash + Eq,
 {
     let num_values = list_values.len();
-    let contains_arr = if num_values <= linear_search_bound {
+    let contains_arr = if num_values == 0{
+        compute_contains_array(it, negated, contains_null, |val| {
+            val.map(|_x| false)
+        })
+    } else if num_values <= linear_search_bound {
         list_values.sort_unstable();
         compute_contains_array(it, negated, contains_null, |val| {
-            val.map(|x| {
-                let out_of_bounds = match (list_values.first(), list_values.last()) {
-                    (Some(lowest), Some(highest)) => *lowest > x || *highest < x,
-                    _ => false,
-                };
-                if out_of_bounds {
-                    return false;
-                }
-                list_values.contains(&x)
-            })
+            val.map(|x|  contains_sorted(list_values.as_slice(), &x))
         })
     } else {
         let set = list_values.into_iter().collect::<HashSet<_>>(); // HashSet::with_capacity(values.len());
@@ -292,10 +309,15 @@ impl InListExpr {
         // Possibly based off of the number of characters the values in the list have combined with the total length of the list?
         const LINEAR_SEARCH_UPPER_BOUND: usize = 8;
         let contains_arr = match values.len() {
-            0..=LINEAR_SEARCH_UPPER_BOUND => {
+            0 =>{
+                compute_contains_array(array.iter(), self.negated, contains_null, |x| {
+                    x.map(|_x| false)
+                })
+            }
+            1..=LINEAR_SEARCH_UPPER_BOUND => {
                 values.sort_unstable();
                 compute_contains_array(array.iter(), self.negated, contains_null, |x| {
-                    x.map(|x| values.contains(&x))
+                    x.map(|x| contains_sorted(values.as_slice(), &x))
                 })
             }
             _ => {
