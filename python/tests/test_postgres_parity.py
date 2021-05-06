@@ -20,6 +20,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from decimal import Decimal
 
 import numpy
 import psycopg2
@@ -46,7 +47,7 @@ class PostgresComparisonTestCase(unittest.TestCase):
         # Remove the directory after the test
         shutil.rmtree(self.test_dir)
 
-    def _query_and_compare(self, sql: str):
+    def _query_and_compare(self, sql: str, delta=None):
         ctx = datafusion.ExecutionContext()
         batches = ctx.sql(sql).collect()
 
@@ -63,7 +64,11 @@ class PostgresComparisonTestCase(unittest.TestCase):
         batch = zip(*[i.tolist() for i in batch])
 
         for got, expected in zip(batch, fetched):
-            self.assertEqual(expected, got)
+            if delta is None:
+                self.assertEqual(expected, got)
+            else:
+                for i, j in zip(got, expected):
+                    self.assertAlmostEqual(Decimal(i), Decimal(j), delta)
 
     def test_simple_select_1(self):
         sql = "SELECT 1"
@@ -93,7 +98,7 @@ class PostgresComparisonTestCase(unittest.TestCase):
         exp(2.0),
         abs(-1.0)
         """
-        self._query_and_compare(sql)
+        self._query_and_compare(sql, delta=1e-6)
 
     def test_simple_select_string_functions(self):
         sql = """SELECT
