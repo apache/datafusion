@@ -1451,7 +1451,7 @@ mod tests {
 
         let expected = vec![
             "+--------------+---------------+---------------+-------------+",
-            "| COUNT(nanos) | COUNT(micros) | COUNT(millis) | COUNT(secs) |",
+            "| count(nanos) | count(micros) | count(millis) | count(secs) |",
             "+--------------+---------------+---------------+-------------+",
             "| 3            | 3             | 3             | 3           |",
             "+--------------+---------------+---------------+-------------+",
@@ -1477,7 +1477,7 @@ mod tests {
 
         let expected = vec![
             "+----------------------------+----------------------------+-------------------------+---------------------+",
-            "| MIN(nanos)                 | MIN(micros)                | MIN(millis)             | MIN(secs)           |",
+            "| min(nanos)                 | min(micros)                | min(millis)             | min(secs)           |",
             "+----------------------------+----------------------------+-------------------------+---------------------+",
             "| 2011-12-13 11:13:10.123450 | 2011-12-13 11:13:10.123450 | 2011-12-13 11:13:10.123 | 2011-12-13 11:13:10 |",
             "+----------------------------+----------------------------+-------------------------+---------------------+",
@@ -1690,7 +1690,7 @@ mod tests {
 
             let expected = vec![
                 "+-----+------------+",
-                "| str | COUNT(val) |",
+                "| str | count(val) |",
                 "+-----+------------+",
                 "| A   | 4          |",
                 "| B   | 1          |",
@@ -1741,7 +1741,7 @@ mod tests {
 
             let expected = vec![
                 "+------+------------+",
-                "| dict | COUNT(val) |",
+                "| dict | count(val) |",
                 "+------+------------+",
                 "| A    | 4          |",
                 "| B    | 1          |",
@@ -1758,7 +1758,7 @@ mod tests {
 
             let expected = vec![
                 "+-----+-------------+",
-                "| val | COUNT(dict) |",
+                "| val | count(dict) |",
                 "+-----+-------------+",
                 "| 1   | 3           |",
                 "| 2   | 2           |",
@@ -2025,10 +2025,27 @@ mod tests {
 
         assert_batches_sorted_eq!(expected, &results);
 
+
+        let expected = vec![
+            "+---------+",
+            "| SQRT(i) |",
+            "+---------+",
+            "| 1       |",
+            "+---------+",
+        ];
+
         let results = plan_and_collect(&mut ctx, "SELECT SQRT(i) FROM t")
             .await
             .unwrap();
         assert_batches_sorted_eq!(expected, &results);
+
+        let expected = vec![
+            "+-----------+",
+            "| \"SQRT\"(i) |",
+            "+-----------+",
+            "| 1         |",
+            "+-----------+",
+        ];
 
         // Using double quotes allows specifying the function name with capitalization
         let err = plan_and_collect(&mut ctx, "SELECT \"SQRT\"(i) FROM t")
@@ -2038,6 +2055,14 @@ mod tests {
             err.to_string(),
             "Error during planning: Invalid function 'SQRT'"
         );
+
+        let expected = vec![
+            "+-----------+",
+            "| \"sqrt\"(i) |",
+            "+-----------+",
+            "| 1         |",
+            "+-----------+",
+        ];
 
         let results = plan_and_collect(&mut ctx, "SELECT \"sqrt\"(i) FROM t")
             .await
@@ -2074,11 +2099,11 @@ mod tests {
         let result = plan_and_collect(&mut ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
 
         let expected = vec![
-            "+------------+",
-            "| MY_FUNC(i) |",
-            "+------------+",
-            "| 1          |",
-            "+------------+",
+            "+--------------+",
+            "| \"MY_FUNC\"(i) |",
+            "+--------------+",
+            "| 1            |",
+            "+--------------+",
         ];
         assert_batches_eq!(expected, &result);
 
@@ -2093,7 +2118,7 @@ mod tests {
 
         let expected = vec![
             "+--------+",
-            "| MAX(i) |",
+            "| max(i) |",
             "+--------+",
             "| 1      |",
             "+--------+",
@@ -2104,6 +2129,14 @@ mod tests {
             .unwrap();
 
         assert_batches_sorted_eq!(expected, &results);
+
+        let expected = vec![
+            "+--------+",
+            "| MAX(i) |",
+            "+--------+",
+            "| 1      |",
+            "+--------+",
+        ];
 
         let results = plan_and_collect(&mut ctx, "SELECT MAX(i) FROM t")
             .await
@@ -2119,6 +2152,13 @@ mod tests {
             "Error during planning: Invalid function 'MAX'"
         );
 
+        let expected = vec![
+            "+------------+",
+            "| \"max\"(i) |",
+            "+------------+",
+            "| 1          |",
+            "+------------+",
+        ];
         let results = plan_and_collect(&mut ctx, "SELECT \"max\"(i) FROM t")
             .await
             .unwrap();
@@ -2155,11 +2195,11 @@ mod tests {
         let result = plan_and_collect(&mut ctx, "SELECT \"MY_AVG\"(i) FROM t").await?;
 
         let expected = vec![
-            "+-----------+",
-            "| MY_AVG(i) |",
-            "+-----------+",
-            "| 1         |",
-            "+-----------+",
+            "+-------------+",
+            "| \"MY_AVG\"(i) |",
+            "+-------------+",
+            "| 1           |",
+            "+-------------+",        
         ];
         assert_batches_eq!(expected, &result);
 
@@ -2255,11 +2295,11 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         let expected = vec![
-            "+---------+---------+-----------------+",
-            "| SUM(c1) | SUM(c2) | COUNT(UInt8(1)) |",
-            "+---------+---------+-----------------+",
-            "| 10      | 110     | 20              |",
-            "+---------+---------+-----------------+",
+            "+---------+---------+----------+",
+            "| SUM(c1) | SUM(c2) | COUNT(*) |",
+            "+---------+---------+----------+",
+            "| 10      | 110     | 20       |",
+            "+---------+---------+----------+",
         ];
         assert_batches_eq!(expected, &results);
 
@@ -2484,7 +2524,7 @@ mod tests {
 
         let expected = vec![
             "+-----------+",
-            "| my_avg(a) |",
+            "| MY_AVG(a) |",
             "+-----------+",
             "| 3         |",
             "+-----------+",
