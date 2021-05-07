@@ -2745,7 +2745,8 @@ async fn test_timestamp_expressions() -> Result<()> {
     let actual = execute(&mut ctx, "SELECT NOW(), NOW() as t2").await;
     let res = actual[0][0].as_str();
     let t3 = chrono::Utc::now().timestamp();
-    let t2_naive = chrono::NaiveDateTime::parse_from_str(res, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
+    let t2_naive =
+        chrono::NaiveDateTime::parse_from_str(res, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
 
     let t2 = t2_naive.timestamp();
     assert!(t1 >= t2 && t1 <= t3);

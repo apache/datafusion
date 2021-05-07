@@ -573,9 +573,7 @@ pub fn return_type(
         BuiltinScalarFunction::ToTimestamp => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
-        BuiltinScalarFunction::Now => {
-            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
-        }
+        BuiltinScalarFunction::Now => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         BuiltinScalarFunction::Translate => Ok(match arg_types[0] {
             DataType::LargeUtf8 => DataType::LargeUtf8,
             DataType::Utf8 => DataType::Utf8,

@@ -46,7 +46,6 @@ pub fn coerce(
     schema: &Schema,
     signature: &Signature,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
-
     if expressions.is_empty() {
         return Ok(vec![]);
     }
@@ -73,7 +72,6 @@ pub fn data_types(
     current_types: &[DataType],
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
-
     if current_types.is_empty() {
         return Ok(vec![]);
     }
