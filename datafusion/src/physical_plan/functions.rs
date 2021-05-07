@@ -192,6 +192,8 @@ pub enum BuiltinScalarFunction {
     ToHex,
     /// to_timestamp
     ToTimestamp,
+    ///now
+    Now,
     /// translate
     Translate,
     /// trim
@@ -270,6 +272,7 @@ impl FromStr for BuiltinScalarFunction {
             "substr" => BuiltinScalarFunction::Substr,
             "to_hex" => BuiltinScalarFunction::ToHex,
             "to_timestamp" => BuiltinScalarFunction::ToTimestamp,
+            "now" => BuiltinScalarFunction::Now,
             "translate" => BuiltinScalarFunction::Translate,
             "trim" => BuiltinScalarFunction::Trim,
             "upper" => BuiltinScalarFunction::Upper,
@@ -294,15 +297,6 @@ pub fn return_type(
 
     // verify that this is a valid set of data types for this function
     data_types(&arg_types, &signature(fun))?;
-
-    if arg_types.is_empty() {
-        // functions currently cannot be evaluated without arguments, as they can't
-        // know the number of rows to return.
-        return Err(DataFusionError::Plan(format!(
-            "Function '{}' requires at least one argument",
-            fun
-        )));
-    }
 
     // the return type of the built in function.
     // Some built-in functions' return type depends on the incoming type.
@@ -579,6 +573,9 @@ pub fn return_type(
         BuiltinScalarFunction::ToTimestamp => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
+        BuiltinScalarFunction::Now => {
+            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+        }
         BuiltinScalarFunction::Translate => Ok(match arg_types[0] {
             DataType::LargeUtf8 => DataType::LargeUtf8,
             DataType::Utf8 => DataType::Utf8,
@@ -800,6 +797,7 @@ pub fn create_physical_expr(
         }
         BuiltinScalarFunction::DatePart => datetime_expressions::date_part,
         BuiltinScalarFunction::DateTrunc => datetime_expressions::date_trunc,
+        BuiltinScalarFunction::Now => datetime_expressions::now,
         BuiltinScalarFunction::InitCap => |args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::initcap::<i32>)(args)

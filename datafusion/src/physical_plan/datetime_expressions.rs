@@ -192,10 +192,10 @@ pub(crate) fn unary_string_to_primitive_function<'a, T, O, F>(
     op: F,
     name: &str,
 ) -> Result<PrimitiveArray<O>>
-where
-    O: ArrowPrimitiveType,
-    T: StringOffsetSizeTrait,
-    F: Fn(&'a str) -> Result<O::Native>,
+    where
+        O: ArrowPrimitiveType,
+        T: StringOffsetSizeTrait,
+        F: Fn(&'a str) -> Result<O::Native>,
 {
     if args.len() != 1 {
         return Err(DataFusionError::Internal(format!(
@@ -224,10 +224,10 @@ fn handle<'a, O, F, S>(
     op: F,
     name: &str,
 ) -> Result<ColumnarValue>
-where
-    O: ArrowPrimitiveType,
-    S: ScalarType<O::Native>,
-    F: Fn(&'a str) -> Result<O::Native>,
+    where
+        O: ArrowPrimitiveType,
+        S: ScalarType<O::Native>,
+        F: Fn(&'a str) -> Result<O::Native>,
 {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
@@ -268,6 +268,11 @@ pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     )
 }
 
+/// now SQL function
+pub fn now(_: &[ColumnarValue]) -> Result<ColumnarValue> {
+    Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(chrono::Utc::now().timestamp_nanos()))))
+}
+
 fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
     let value = timestamp_ns_to_datetime(value).with_nanosecond(0);
     let value = match granularity {
@@ -300,7 +305,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
             return Err(DataFusionError::Execution(format!(
                 "Unsupported date_trunc granularity: {}",
                 unsupported
-            )))
+            )));
         }
     };
     // `with_x(0)` are infalible because `0` are always a valid

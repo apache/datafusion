@@ -2217,7 +2217,7 @@ macro_rules! test_expression {
         let mut ctx = ExecutionContext::new();
         let sql = format!("SELECT {}", $SQL);
         let actual = execute(&mut ctx, sql.as_str()).await;
-        assert_eq!($EXPECTED, actual[0][0]);
+        assert_eq!(actual[0][0], $EXPECTED);
     };
 }
 
@@ -2735,6 +2735,21 @@ async fn test_cast_expressions() -> Result<()> {
     test_expression!("CAST(NULL AS INT)", "NULL");
     test_expression!("TRY_CAST('0' AS INT)", "0");
     test_expression!("TRY_CAST('x' AS INT)", "NULL");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_timestamp_expressions() -> Result<()> {
+    let t1 = chrono::Utc::now().timestamp();
+    let mut ctx = ExecutionContext::new();
+    let actual = execute(&mut ctx, "SELECT NOW(), NOW() as t2").await;
+    let res = actual[0][0].as_str();
+    let t3 = chrono::Utc::now().timestamp();
+    let t2_naive = chrono::NaiveDateTime::parse_from_str(res, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
+
+    let t2 = t2_naive.timestamp();
+    assert!(t1 >= t2 && t1 <= t3);
+
     Ok(())
 }
 
