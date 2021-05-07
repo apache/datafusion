@@ -64,10 +64,10 @@ impl DistinctCount {
         let state_data_types = input_data_types.into_iter().map(state_type).collect();
 
         Self {
-            state_data_types,
-            exprs,
             name,
             data_type,
+            state_data_types,
+            exprs,
         }
     }
 }
