@@ -81,15 +81,18 @@ async fn nyc() -> Result<()> {
     let optimized_plan = ctx.optimize(&logical_plan)?;
 
     match &optimized_plan {
-        LogicalPlan::Aggregate { input, .. } => match input.as_ref() {
-            LogicalPlan::TableScan {
-                ref projected_schema,
-                ..
-            } => {
-                assert_eq!(2, projected_schema.fields().len());
-                assert_eq!(projected_schema.field(0).name(), "passenger_count");
-                assert_eq!(projected_schema.field(1).name(), "fare_amount");
-            }
+        LogicalPlan::Projection { input, .. } => match input.as_ref() {
+            LogicalPlan::Aggregate { input, .. } => match input.as_ref() {
+                LogicalPlan::TableScan {
+                    ref projected_schema,
+                    ..
+                } => {
+                    assert_eq!(2, projected_schema.fields().len());
+                    assert_eq!(projected_schema.field(0).name(), "passenger_count");
+                    assert_eq!(projected_schema.field(1).name(), "fare_amount");
+                }
+                _ => unreachable!(),
+            },
             _ => unreachable!(),
         },
         _ => unreachable!(false),
@@ -444,6 +447,19 @@ async fn select_distinct_simple() -> Result<()> {
     let actual = execute(&mut ctx, sql).await;
 
     assert_eq!(actual.len(), 5);
+    Ok(())
+}
+
+#[tokio::test]
+async fn projection_same_fields() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    let sql = "select (1+1) as a from (select 1 as a);";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["2"]];
+    assert_eq!(actual, expected);
+
     Ok(())
 }
 

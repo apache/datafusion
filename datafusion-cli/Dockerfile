@@ -15,14 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rust:latest
+FROM rust:latest as builder
 
+COPY ./datafusion /usr/src/datafusion
 
-COPY ./datafusion ./usr/src/datafusion
-COPY ./datafusion-cli ./usr/src/datafusion-cli
+COPY ./datafusion-cli /usr/src/datafusion-cli
 
 WORKDIR /usr/src/datafusion-cli
-RUN cargo install --path .
 
+RUN cargo build --release
 
-CMD ["datafusion-cli", "--data-path", "/data"]
+FROM debian:buster-slim
+
+COPY --from=builder /usr/src/datafusion-cli/target/release/datafusion-cli /usr/local/bin
+
+ENTRYPOINT ["datafusion-cli"]
+
+CMD ["--data-path", "/data"]

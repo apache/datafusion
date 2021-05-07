@@ -1086,9 +1086,9 @@ unary_scalar_expr!(Trunc, trunc);
 unary_scalar_expr!(Abs, abs);
 unary_scalar_expr!(Signum, signum);
 unary_scalar_expr!(Exp, exp);
-unary_scalar_expr!(Log, ln);
 unary_scalar_expr!(Log2, log2);
 unary_scalar_expr!(Log10, log10);
+unary_scalar_expr!(Ln, ln);
 
 // string functions
 unary_scalar_expr!(Ascii, ascii);

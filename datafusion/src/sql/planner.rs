@@ -652,26 +652,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Wrap a plan in a projection
-    ///
-    /// The projection is applied only when necessary,
-    /// i.e., when the input fields are different than the
-    /// projection. Note that if the input fields are the same, but out of
-    /// order, the projection will be applied.
     fn project(&self, input: &LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(&input.schema(), &expr)?;
 
-        let plan = LogicalPlanBuilder::from(input).project(expr)?.build()?;
-
-        let project = match input {
-            LogicalPlan::TableScan { .. } => true,
-            _ => plan.schema().fields() != input.schema().fields(),
-        };
-
-        if project {
-            Ok(plan)
-        } else {
-            Ok(input.clone())
-        }
+        LogicalPlanBuilder::from(input).project(expr)?.build()
     }
 
     fn aggregate(
@@ -1740,10 +1724,11 @@ mod tests {
                    )
                    WHERE fn1 = 'X' AND age < 30";
 
-        let expected = "Filter: #fn1 Eq Utf8(\"X\") And #age Lt Int64(30)\
-                        \n  Projection: #first_name AS fn1, #age\
-                        \n    Filter: #age Gt Int64(20)\
-                        \n      TableScan: person projection=None";
+        let expected = "Projection: #fn1, #age\
+                        \n  Filter: #fn1 Eq Utf8(\"X\") And #age Lt Int64(30)\
+                        \n    Projection: #first_name AS fn1, #age\
+                        \n      Filter: #age Gt Int64(20)\
+                        \n        TableScan: person projection=None";
 
         quick_test(sql, expected);
     }
@@ -1800,9 +1785,10 @@ mod tests {
         let sql = "SELECT MAX(age)
                    FROM person
                    HAVING MAX(age) < 30";
-        let expected = "Filter: #MAX(age) Lt Int64(30)\
-                        \n  Aggregate: groupBy=[[]], aggr=[[MAX(#age)]]\
-                        \n    TableScan: person projection=None";
+        let expected = "Projection: #MAX(age)\
+                        \n  Filter: #MAX(age) Lt Int64(30)\
+                        \n    Aggregate: groupBy=[[]], aggr=[[MAX(#age)]]\
+                        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -1860,9 +1846,10 @@ mod tests {
                    FROM person
                    GROUP BY first_name
                    HAVING first_name = 'M'";
-        let expected = "Filter: #first_name Eq Utf8(\"M\")\
-                        \n  Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#age)]]\
-                        \n    TableScan: person projection=None";
+        let expected = "Projection: #first_name, #MAX(age)\
+                        \n  Filter: #first_name Eq Utf8(\"M\")\
+                        \n    Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#age)]]\
+                        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -1873,10 +1860,11 @@ mod tests {
                    WHERE id > 5
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
-        let expected = "Filter: #MAX(age) Lt Int64(100)\
-                        \n  Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#age)]]\
-                        \n    Filter: #id Gt Int64(5)\
-                        \n      TableScan: person projection=None";
+        let expected = "Projection: #first_name, #MAX(age)\
+                        \n  Filter: #MAX(age) Lt Int64(100)\
+                        \n    Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#age)]]\
+                        \n      Filter: #id Gt Int64(5)\
+                        \n        TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -1888,10 +1876,11 @@ mod tests {
                    WHERE id > 5 AND age > 18
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
-        let expected = "Filter: #MAX(age) Lt Int64(100)\
-                        \n  Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#age)]]\
-                        \n    Filter: #id Gt Int64(5) And #age Gt Int64(18)\
-                        \n      TableScan: person projection=None";
+        let expected = "Projection: #first_name, #MAX(age)\
+                        \n  Filter: #MAX(age) Lt Int64(100)\
+                        \n    Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#age)]]\
+                        \n      Filter: #id Gt Int64(5) And #age Gt Int64(18)\
+                        \n        TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -1928,9 +1917,10 @@ mod tests {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100";
-        let expected = "Filter: #MAX(age) Gt Int64(100)\
-                        \n  Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#age)]]\
-                        \n    TableScan: person projection=None";
+        let expected = "Projection: #first_name, #MAX(age)\
+                        \n  Filter: #MAX(age) Gt Int64(100)\
+                        \n    Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#age)]]\
+                        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -1953,9 +1943,10 @@ mod tests {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MAX(age) < 200";
-        let expected = "Filter: #MAX(age) Gt Int64(100) And #MAX(age) Lt Int64(200)\
-                        \n  Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#age)]]\
-                        \n    TableScan: person projection=None";
+        let expected = "Projection: #first_name, #MAX(age)\
+                        \n  Filter: #MAX(age) Gt Int64(100) And #MAX(age) Lt Int64(200)\
+                        \n    Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#age)]]\
+                        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -2049,14 +2040,16 @@ mod tests {
     fn select_wildcard_with_groupby() {
         quick_test(
             "SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date",
-            "Aggregate: groupBy=[[#id, #first_name, #last_name, #age, #state, #salary, #birth_date]], aggr=[[]]\
-             \n  TableScan: person projection=None",
+            "Projection: #id, #first_name, #last_name, #age, #state, #salary, #birth_date\
+             \n  Aggregate: groupBy=[[#id, #first_name, #last_name, #age, #state, #salary, #birth_date]], aggr=[[]]\
+             \n    TableScan: person projection=None",
         );
         quick_test(
             "SELECT * FROM (SELECT first_name, last_name FROM person) GROUP BY first_name, last_name",
-            "Aggregate: groupBy=[[#first_name, #last_name]], aggr=[[]]\
-             \n  Projection: #first_name, #last_name\
-             \n    TableScan: person projection=None",
+            "Projection: #first_name, #last_name\
+             \n  Aggregate: groupBy=[[#first_name, #last_name]], aggr=[[]]\
+             \n    Projection: #first_name, #last_name\
+             \n      TableScan: person projection=None",
         );
     }
 
@@ -2064,8 +2057,9 @@ mod tests {
     fn select_simple_aggregate() {
         quick_test(
             "SELECT MIN(age) FROM person",
-            "Aggregate: groupBy=[[]], aggr=[[MIN(#age)]]\
-             \n  TableScan: person projection=None",
+            "Projection: #MIN(age)\
+            \n  Aggregate: groupBy=[[]], aggr=[[MIN(#age)]]\
+            \n    TableScan: person projection=None",
         );
     }
 
@@ -2073,8 +2067,9 @@ mod tests {
     fn test_sum_aggregate() {
         quick_test(
             "SELECT SUM(age) from person",
-            "Aggregate: groupBy=[[]], aggr=[[SUM(#age)]]\
-             \n  TableScan: person projection=None",
+            "Projection: #SUM(age)\
+            \n  Aggregate: groupBy=[[]], aggr=[[SUM(#age)]]\
+            \n    TableScan: person projection=None",
         );
     }
 
@@ -2135,8 +2130,9 @@ mod tests {
     fn select_simple_aggregate_with_groupby() {
         quick_test(
             "SELECT state, MIN(age), MAX(age) FROM person GROUP BY state",
-            "Aggregate: groupBy=[[#state]], aggr=[[MIN(#age), MAX(#age)]]\
-             \n  TableScan: person projection=None",
+            "Projection: #state, #MIN(age), #MAX(age)\
+            \n  Aggregate: groupBy=[[#state]], aggr=[[MIN(#age), MAX(#age)]]\
+            \n    TableScan: person projection=None",
         );
     }
 
@@ -2274,8 +2270,8 @@ mod tests {
         quick_test(
             "SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1",
             "Projection: #age Plus Int64(1) AS age + 1, #MIN(first_name)\
-            \n  Aggregate: groupBy=[[#age Plus Int64(1)]], aggr=[[MIN(#first_name)]]\
-            \n    TableScan: person projection=None",
+             \n  Aggregate: groupBy=[[#age Plus Int64(1)]], aggr=[[MIN(#first_name)]]\
+             \n    TableScan: person projection=None",
         );
         quick_test(
             "SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1",
@@ -2355,8 +2351,8 @@ mod tests {
         quick_test(
             "SELECT state, MIN(age + 1) FROM person GROUP BY state",
             "Projection: #state, #MIN(age Plus Int64(1)) AS MIN(age + 1)\
-             \n  Aggregate: groupBy=[[#state]], aggr=[[MIN(#age Plus Int64(1))]]\
-             \n    TableScan: person projection=None",
+            \n  Aggregate: groupBy=[[#state]], aggr=[[MIN(#age Plus Int64(1))]]\
+            \n    TableScan: person projection=None",
         );
     }
 
@@ -2381,8 +2377,9 @@ mod tests {
     #[test]
     fn select_count_column() {
         let sql = "SELECT COUNT(id) FROM person";
-        let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(#id)]]\
-                        \n  TableScan: person projection=None";
+        let expected = "Projection: #COUNT(id)\
+                        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#id)]]\
+                        \n    TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -2468,8 +2465,9 @@ mod tests {
     #[test]
     fn select_group_by() {
         let sql = "SELECT state FROM person GROUP BY state";
-        let expected = "Aggregate: groupBy=[[#state]], aggr=[[]]\
-                        \n  TableScan: person projection=None";
+        let expected = "Projection: #state\
+                        \n  Aggregate: groupBy=[[#state]], aggr=[[]]\
+                        \n    TableScan: person projection=None";
 
         quick_test(sql, expected);
     }

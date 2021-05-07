@@ -28,8 +28,8 @@ use crate::{convert_box_required, convert_required};
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::logical_plan::{
-    abs, acos, asin, atan, ceil, cos, exp, floor, log10, log2, round, signum, sin, sqrt,
-    tan, trunc, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
+    abs, acos, asin, atan, ceil, cos, exp, floor, ln, log10, log2, round, signum, sin,
+    sqrt, tan, trunc, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::csv::CsvReadOptions;
@@ -1013,6 +1013,7 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                     protobuf::ScalarFunction::Log2 => {
                         Ok(log2((&expr.expr[0]).try_into()?))
                     }
+                    protobuf::ScalarFunction::Ln => Ok(ln((&expr.expr[0]).try_into()?)),
                     protobuf::ScalarFunction::Log10 => {
                         Ok(log10((&expr.expr[0]).try_into()?))
                     }
