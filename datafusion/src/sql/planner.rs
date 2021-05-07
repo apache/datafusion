@@ -1536,7 +1536,7 @@ mod tests {
     fn select_no_relation() {
         quick_test(
             "SELECT 1",
-            "Projection: Int64(1)\
+            "Projection: Int64(1) AS 1\
              \n  EmptyRelation",
         );
     }
@@ -1587,7 +1587,7 @@ mod tests {
     fn select_scalar_func_with_literal_no_relation() {
         quick_test(
             "SELECT sqrt(9)",
-            "Projection: sqrt(Int64(9))\
+            "Projection: sqrt(Int64(9)) AS sqrt(9)\
              \n  EmptyRelation",
         );
     }
@@ -2031,7 +2031,7 @@ mod tests {
     #[test]
     fn select_binary_expr() {
         let sql = "SELECT age + salary from person";
-        let expected = "Projection: #age Plus #salary\
+        let expected = "Projection: #age Plus #salary AS age + salary\
                         \n  TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -2039,7 +2039,8 @@ mod tests {
     #[test]
     fn select_binary_expr_nested() {
         let sql = "SELECT (age + salary)/2 from person";
-        let expected = "Projection: #age Plus #salary Divide Int64(2)\
+        let expected =
+            "Projection: #age Plus #salary Divide Int64(2) AS (age + salary) / 2\
                         \n  TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -2272,12 +2273,13 @@ mod tests {
     ) {
         quick_test(
             "SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1",
-            "Aggregate: groupBy=[[#age Plus Int64(1)]], aggr=[[MIN(#first_name)]]\
-             \n  TableScan: person projection=None",
+            "Projection: #age Plus Int64(1) AS age + 1, #MIN(first_name)\
+            \n  Aggregate: groupBy=[[#age Plus Int64(1)]], aggr=[[MIN(#first_name)]]\
+            \n    TableScan: person projection=None",
         );
         quick_test(
             "SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1",
-            "Projection: #MIN(first_name), #age Plus Int64(1)\
+            "Projection: #MIN(first_name), #age Plus Int64(1) AS age + 1\
              \n  Aggregate: groupBy=[[#age Plus Int64(1)]], aggr=[[MIN(#first_name)]]\
              \n    TableScan: person projection=None",
         );
@@ -2288,7 +2290,7 @@ mod tests {
     {
         quick_test(
             "SELECT ((age + 1) / 2) * (age + 1), MIN(first_name) FROM person GROUP BY age + 1",
-            "Projection: #age Plus Int64(1) Divide Int64(2) Multiply #age Plus Int64(1), #MIN(first_name)\
+            "Projection: #age Plus Int64(1) Divide Int64(2) Multiply #age Plus Int64(1) AS ((age + 1) / 2) * (age + 1), #MIN(first_name)\
              \n  Aggregate: groupBy=[[#age Plus Int64(1)]], aggr=[[MIN(#first_name)]]\
              \n    TableScan: person projection=None",
         );
@@ -2322,7 +2324,7 @@ mod tests {
     fn select_simple_aggregate_nested_in_binary_expr_with_groupby() {
         quick_test(
             "SELECT state, MIN(age) < 10 FROM person GROUP BY state",
-            "Projection: #state, #MIN(age) Lt Int64(10)\
+            "Projection: #state, #MIN(age) Lt Int64(10) AS MIN(age) < 10\
              \n  Aggregate: groupBy=[[#state]], aggr=[[MIN(#age)]]\
              \n    TableScan: person projection=None",
         );
@@ -2332,7 +2334,7 @@ mod tests {
     fn select_simple_aggregate_and_nested_groupby_column() {
         quick_test(
             "SELECT age + 1, MAX(first_name) FROM person GROUP BY age",
-            "Projection: #age Plus Int64(1), #MAX(first_name)\
+            "Projection: #age Plus Int64(1) AS age + 1, #MAX(first_name)\
              \n  Aggregate: groupBy=[[#age]], aggr=[[MAX(#first_name)]]\
              \n    TableScan: person projection=None",
         );
@@ -2342,7 +2344,7 @@ mod tests {
     fn select_aggregate_compounded_with_groupby_column() {
         quick_test(
             "SELECT age + MIN(salary) FROM person GROUP BY age",
-            "Projection: #age Plus #MIN(salary)\
+            "Projection: #age Plus #MIN(salary) AS age + MIN(salary)\
              \n  Aggregate: groupBy=[[#age]], aggr=[[MIN(#salary)]]\
              \n    TableScan: person projection=None",
         );
@@ -2352,8 +2354,9 @@ mod tests {
     fn select_aggregate_with_non_column_inner_expression_with_groupby() {
         quick_test(
             "SELECT state, MIN(age + 1) FROM person GROUP BY state",
-            "Aggregate: groupBy=[[#state]], aggr=[[MIN(#age Plus Int64(1))]]\
-             \n  TableScan: person projection=None",
+            "Projection: #state, #MIN(age Plus Int64(1)) AS MIN(age + 1)\
+             \n  Aggregate: groupBy=[[#state]], aggr=[[MIN(#age Plus Int64(1))]]\
+             \n    TableScan: person projection=None",
         );
     }
 
@@ -2369,8 +2372,9 @@ mod tests {
     #[test]
     fn select_count_one() {
         let sql = "SELECT COUNT(1) FROM person";
-        let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-                        \n  TableScan: person projection=None";
+        let expected = "Projection: #COUNT(UInt8(1)) AS COUNT(1)\
+                        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+                        \n    TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -2385,7 +2389,7 @@ mod tests {
     #[test]
     fn select_scalar_func() {
         let sql = "SELECT sqrt(age) FROM person";
-        let expected = "Projection: sqrt(#age)\
+        let expected = "Projection: sqrt(#age) AS sqrt(age)\
                         \n  TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -2402,7 +2406,7 @@ mod tests {
     fn select_where_nullif_division() {
         let sql = "SELECT c3/(c4+c5) \
                    FROM aggregate_test_100 WHERE c3/nullif(c4+c5, 0) > 0.1";
-        let expected = "Projection: #c3 Divide #c4 Plus #c5\
+        let expected = "Projection: #c3 Divide #c4 Plus #c5 AS c3 / (c4 + c5)\
             \n  Filter: #c3 Divide nullif(#c4 Plus #c5, Int64(0)) Gt Float64(0.1)\
             \n    TableScan: aggregate_test_100 projection=None";
         quick_test(sql, expected);
@@ -2483,8 +2487,9 @@ mod tests {
     #[test]
     fn select_group_by_count_star() {
         let sql = "SELECT state, COUNT(*) FROM person GROUP BY state";
-        let expected = "Aggregate: groupBy=[[#state]], aggr=[[COUNT(UInt8(1))]]\
-                        \n  TableScan: person projection=None";
+        let expected = "Projection: #state, #COUNT(UInt8(1)) AS COUNT(*)\
+                        \n  Aggregate: groupBy=[[#state]], aggr=[[COUNT(UInt8(1))]]\
+                        \n    TableScan: person projection=None";
 
         quick_test(sql, expected);
     }

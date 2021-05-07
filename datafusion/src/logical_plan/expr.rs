@@ -1188,7 +1188,12 @@ fn fmt_function(
 impl fmt::Debug for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Expr::Alias(expr, _alias) => write!(f, "{:?}", expr),
+            Expr::Alias(expr, alias) => match expr.as_ref() {
+                Expr::Column(name) if alias == name => {
+                    write!(f, "{:?}", expr)
+                }
+                _ => write!(f, "{:?} AS {}", expr, alias),
+            },
             Expr::Column(name) => write!(f, "#{}", name),
             Expr::ScalarVariable(var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{:?}", v),

@@ -2038,14 +2038,6 @@ mod tests {
             .unwrap();
         assert_batches_sorted_eq!(expected, &results);
 
-        let expected = vec![
-            "+-----------+",
-            "| \"SQRT\"(i) |",
-            "+-----------+",
-            "| 1         |",
-            "+-----------+",
-        ];
-
         // Using double quotes allows specifying the function name with capitalization
         let err = plan_and_collect(&mut ctx, "SELECT \"SQRT\"(i) FROM t")
             .await
