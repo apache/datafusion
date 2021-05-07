@@ -2749,7 +2749,7 @@ async fn test_timestamp_expressions() -> Result<()> {
         chrono::NaiveDateTime::parse_from_str(res, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
 
     let t2 = t2_naive.timestamp();
-    assert!(t1 >= t2 && t1 <= t3);
+    assert!(t1 <= t2 && t2 <= t3);
 
     Ok(())
 }
