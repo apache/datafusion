@@ -77,15 +77,14 @@ pub async fn main() {
         execution_config = execution_config.with_batch_size(batch_size);
     };
 
-    if let Some(file) = matches
-        .value_of("file")
-        .and_then(|file| File::open(&file).ok())
-    {
+    if let Some(file_path) = matches.value_of("file") {
+        let file =
+            File::open(file_path).expect(format!("cannot open file '{}'", file_path));
         let mut reader = BufReader::new(file);
         exec_from_lines(&mut reader, execution_config).await;
     } else {
         exec_from_repl(execution_config).await;
-    };
+    }
 }
 
 fn is_valid_file(dir: String) -> std::result::Result<(), String> {
