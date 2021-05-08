@@ -66,7 +66,7 @@ pub async fn main() {
         )
         .arg(
             Arg::with_name("format")
-                .help("Output format (possible values: table, csv, tsv)")
+                .help("Output format (possible values: table, csv, tsv, json)")
                 .long("format")
                 .default_value("table")
                 .validator(is_valid_format)

@@ -17,6 +17,7 @@
 
 //! Print format variants
 use arrow::csv::writer::WriterBuilder;
+use arrow::json::ArrayWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};
@@ -28,6 +29,7 @@ pub enum PrintFormat {
     Csv,
     Tsv,
     Table,
+    Json,
 }
 
 impl FromStr for PrintFormat {
@@ -37,9 +39,22 @@ impl FromStr for PrintFormat {
             "csv" => Ok(Self::Csv),
             "tsv" => Ok(Self::Tsv),
             "table" => Ok(Self::Table),
+            "json" => Ok(Self::Json),
             _ => Err(()),
         }
     }
+}
+
+fn print_batches_to_json(batches: &[RecordBatch]) -> Result<String> {
+    let mut bytes = vec![];
+    {
+        let mut writer = ArrayWriter::new(&mut bytes);
+        writer.write_batches(batches)?;
+        writer.finish()?;
+    }
+    let formatted = String::from_utf8(bytes)
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    Ok(formatted)
 }
 
 fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<String> {
@@ -65,6 +80,7 @@ impl PrintFormat {
             Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
             Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
             Self::Table => pretty::print_batches(batches)?,
+            Self::Json => println!("{}", print_batches_to_json(batches)?),
         }
         Ok(())
     }
