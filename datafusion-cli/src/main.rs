@@ -177,10 +177,10 @@ async fn exec_from_repl(execution_config: ExecutionConfig, print_format: PrintFo
 }
 
 fn is_valid_format(format: String) -> std::result::Result<(), String> {
-    match format.to_lowercase().as_str() {
-        "csv" => Ok(()),
-        "table" => Ok(()),
-        _ => Err(format!("Format '{}' not supported", format)),
+    if format.parse::<PrintFormat>().is_ok() {
+        Ok(())
+    } else {
+        Err(format!("Format '{}' not supported", format))
     }
 }
 

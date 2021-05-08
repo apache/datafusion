@@ -26,6 +26,7 @@ use std::str::FromStr;
 #[derive(Debug, Clone)]
 pub enum PrintFormat {
     Csv,
+    Tsv,
     Table,
 }
 
@@ -34,29 +35,35 @@ impl FromStr for PrintFormat {
     fn from_str(s: &str) -> std::result::Result<PrintFormat, ()> {
         match s {
             "csv" => Ok(PrintFormat::Csv),
+            "tsv" => Ok(PrintFormat::Tsv),
             "table" => Ok(PrintFormat::Table),
             _ => Err(()),
         }
     }
 }
 
+fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<String> {
+    let mut bytes = vec![];
+    {
+        let builder = WriterBuilder::new()
+            .has_headers(true)
+            .with_delimiter(delimiter);
+        let mut writer = builder.build(&mut bytes);
+        for batch in batches {
+            writer.write(batch)?;
+        }
+    }
+    let formatted = String::from_utf8(bytes)
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    Ok(formatted)
+}
+
 impl PrintFormat {
     /// print the batches to stdout using the specified format
     pub fn print_batches(&self, batches: &[RecordBatch]) -> Result<()> {
         match self {
-            PrintFormat::Csv => {
-                let mut bytes = vec![];
-                {
-                    let builder = WriterBuilder::new().has_headers(true);
-                    let mut writer = builder.build(&mut bytes);
-                    for batch in batches {
-                        writer.write(batch)?;
-                    }
-                }
-                let csv = String::from_utf8(bytes)
-                    .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-                println!("{}", csv);
-            }
+            PrintFormat::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
+            PrintFormat::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
             PrintFormat::Table => pretty::print_batches(batches)?,
         }
         Ok(())
