@@ -53,9 +53,7 @@ impl TimestampEvaluation {
             Expr::Alias(inner_exp, alias) => {
                 Expr::Alias(Box::new(self.optimize_now(inner_exp)), alias.clone())
             }
-            _ => {
-                exp.clone()
-            }
+            _ => exp.clone(),
         }
     }
 }
@@ -134,15 +132,19 @@ mod tests {
     #[test]
     fn double_now() {
         let table_scan = test_table_scan().unwrap();
-        let proj = vec![Expr::ScalarFunction {
-            args: vec![],
-            fun: BuiltinScalarFunction::Now,
-        }, Expr::Alias(Box::new(
+        let proj = vec![
             Expr::ScalarFunction {
                 args: vec![],
                 fun: BuiltinScalarFunction::Now,
-            }
-        ), "t2".to_string())];
+            },
+            Expr::Alias(
+                Box::new(Expr::ScalarFunction {
+                    args: vec![],
+                    fun: BuiltinScalarFunction::Now,
+                }),
+                "t2".to_string(),
+            ),
+        ];
         let plan = LogicalPlanBuilder::from(&table_scan)
             .project(proj)
             .unwrap()
