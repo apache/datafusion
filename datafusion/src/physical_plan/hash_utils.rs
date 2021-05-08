@@ -30,7 +30,7 @@ pub enum JoinType {
     Left,
     /// Right Join
     Right,
-    /// Outer Join
+    /// Full Join
     Full,
 }
 
