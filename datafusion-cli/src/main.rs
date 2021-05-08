@@ -113,7 +113,7 @@ fn is_valid_data_dir(dir: String) -> std::result::Result<(), String> {
 fn is_valid_batch_size(size: String) -> std::result::Result<(), String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(()),
-        _ => Err(format!("Invalid batch size “{}”", size)),
+        _ => Err(format!("Invalid batch size '{}'", size)),
     }
 }
 
