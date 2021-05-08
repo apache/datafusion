@@ -79,7 +79,7 @@ pub async fn main() {
 
     if let Some(file_path) = matches.value_of("file") {
         let file =
-            File::open(file_path).expect(format!("cannot open file '{}'", file_path));
+            File::open(file_path).expect(&format!("cannot open file '{}'", file_path));
         let mut reader = BufReader::new(file);
         exec_from_lines(&mut reader, execution_config).await;
     } else {
