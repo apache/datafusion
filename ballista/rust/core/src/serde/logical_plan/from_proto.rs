@@ -235,6 +235,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     protobuf::JoinType::Inner => JoinType::Inner,
                     protobuf::JoinType::Left => JoinType::Left,
                     protobuf::JoinType::Right => JoinType::Right,
+                    protobuf::JoinType::Full => JoinType::Full,
                 };
                 LogicalPlanBuilder::from(&convert_box_required!(join.left)?)
                     .join(
