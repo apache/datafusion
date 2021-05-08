@@ -87,34 +87,6 @@ pub async fn main() {
     }
 }
 
-fn is_valid_file(dir: String) -> std::result::Result<(), String> {
-    if Path::new(&dir).is_file() {
-        Ok(())
-    } else {
-        Err(format!("Invalid file “{}”", dir))
-    }
-}
-
-fn is_valid_data_dir(dir: String) -> std::result::Result<(), String> {
-    if Path::new(&dir).is_dir() {
-        Ok(())
-    } else {
-        Err(format!("Invalid data directory “{}”", dir))
-    }
-}
-
-fn is_valid_batch_size(size: String) -> std::result::Result<(), String> {
-    match size.parse::<usize>() {
-        Ok(size) if size > 0 => Ok(()),
-        _ => Err(format!("Invalid batch size “{}”", size)),
-    }
-}
-
-fn is_exit_command(line: &str) -> bool {
-    let line = line.trim_end().to_lowercase();
-    line == "quit" || line == "exit"
-}
-
 async fn exec_from_lines(
     reader: &mut BufReader<File>,
     execution_config: ExecutionConfig,
@@ -184,6 +156,34 @@ async fn exec_from_repl(execution_config: ExecutionConfig) {
     }
 
     rl.save_history(".history").ok();
+}
+
+fn is_valid_file(dir: String) -> std::result::Result<(), String> {
+    if Path::new(&dir).is_file() {
+        Ok(())
+    } else {
+        Err(format!("Invalid file '{}'", dir))
+    }
+}
+
+fn is_valid_data_dir(dir: String) -> std::result::Result<(), String> {
+    if Path::new(&dir).is_dir() {
+        Ok(())
+    } else {
+        Err(format!("Invalid data directory '{}'", dir))
+    }
+}
+
+fn is_valid_batch_size(size: String) -> std::result::Result<(), String> {
+    match size.parse::<usize>() {
+        Ok(size) if size > 0 => Ok(()),
+        _ => Err(format!("Invalid batch size '{}'", size)),
+    }
+}
+
+fn is_exit_command(line: &str) -> bool {
+    let line = line.trim_end().to_lowercase();
+    line == "quit" || line == "exit"
 }
 
 async fn exec_and_print(ctx: &mut ExecutionContext, sql: String) -> Result<()> {
