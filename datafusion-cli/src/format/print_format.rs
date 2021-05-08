@@ -32,11 +32,11 @@ pub enum PrintFormat {
 
 impl FromStr for PrintFormat {
     type Err = ();
-    fn from_str(s: &str) -> std::result::Result<PrintFormat, ()> {
+    fn from_str(s: &str) -> std::result::Result<Self, ()> {
         match s {
-            "csv" => Ok(PrintFormat::Csv),
-            "tsv" => Ok(PrintFormat::Tsv),
-            "table" => Ok(PrintFormat::Table),
+            "csv" => Ok(Self::Csv),
+            "tsv" => Ok(Self::Tsv),
+            "table" => Ok(Self::Table),
             _ => Err(()),
         }
     }
@@ -62,9 +62,9 @@ impl PrintFormat {
     /// print the batches to stdout using the specified format
     pub fn print_batches(&self, batches: &[RecordBatch]) -> Result<()> {
         match self {
-            PrintFormat::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
-            PrintFormat::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
-            PrintFormat::Table => pretty::print_batches(batches)?,
+            Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
+            Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
+            Self::Table => pretty::print_batches(batches)?,
         }
         Ok(())
     }
