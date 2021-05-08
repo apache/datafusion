@@ -62,6 +62,7 @@ use crate::optimizer::projection_push_down::ProjectionPushDown;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddMergeExec;
 use crate::physical_optimizer::repartition::Repartition;
+use crate::optimizer::timestamp_evaluation::TimestampEvaluation;
 
 use crate::physical_plan::csv::CsvReadOptions;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -643,6 +644,7 @@ impl ExecutionConfig {
                 Arc::new(FilterPushDown::new()),
                 Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(LimitPushDown::new()),
+                Arc::new(TimestampEvaluation::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(CoalesceBatches::new()),
