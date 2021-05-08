@@ -1345,7 +1345,6 @@ async fn outer_join() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn left_join_using() -> Result<()> {
     let mut ctx = create_join_context("id", "id")?;
