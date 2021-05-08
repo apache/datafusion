@@ -49,12 +49,10 @@ impl TimestampEvaluation {
                 }
                 _ => exp.clone(),
             },
-            Expr::Alias(inner_exp, _) => {
-                println!("Alias is {:?}", exp);
-                self.optimize_now(inner_exp)
+            Expr::Alias(inner_exp, alias) => {
+                Expr::Alias(Box::new(self.optimize_now(inner_exp)), alias.clone())
             }
             _ => {
-                println!("Expr is {:?}", exp);
                 exp.clone()
             }
         }
@@ -107,6 +105,56 @@ impl OptimizerRule for TimestampEvaluation {
 mod tests {
     use super::*;
     use crate::logical_plan::LogicalPlanBuilder;
-    use crate::logical_plan::{col, sum};
     use crate::test::*;
+
+    fn get_optimized_plan_formatted(plan: &LogicalPlan) -> String {
+        let rule = TimestampEvaluation::new();
+        let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
+        return format!("{:?}", optimized_plan);
+    }
+
+    #[test]
+    fn single_now() {
+        let table_scan = test_table_scan().unwrap();
+        let proj = vec![Expr::ScalarFunction {
+            args: vec![],
+            fun: BuiltinScalarFunction::Now,
+        }];
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .project(proj)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Projection: TimestampNanosecond(";
+        assert!(get_optimized_plan_formatted(&plan).starts_with(expected));
+    }
+
+    #[test]
+    fn double_now() {
+        let table_scan = test_table_scan().unwrap();
+        let proj = vec![Expr::ScalarFunction {
+            args: vec![],
+            fun: BuiltinScalarFunction::Now,
+        }, Expr::Alias(Box::new(
+            Expr::ScalarFunction {
+                args: vec![],
+                fun: BuiltinScalarFunction::Now,
+            }
+        ), "t2".to_string())];
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .project(proj)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let actual = get_optimized_plan_formatted(&plan);
+        println!("output is {}", &actual);
+        let expected_start = "Projection: TimestampNanosecond(";
+        assert!(actual.starts_with(expected_start));
+
+        let expected_end = ") AS t2\
+             \n  TableScan: test projection=None";
+        assert!(actual.ends_with(expected_end));
+    }
 }
