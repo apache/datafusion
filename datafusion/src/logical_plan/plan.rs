@@ -39,12 +39,14 @@ use crate::logical_plan::dfschema::DFSchemaRef;
 /// Join type
 #[derive(Debug, Clone, Copy)]
 pub enum JoinType {
-    /// Inner join
+    /// Inner Join
     Inner,
-    /// Left join
+    /// Left Join
     Left,
-    /// Right join
+    /// Right Join
     Right,
+    /// Full Join
+    Full,
 }
 
 /// A LogicalPlan represents the different types of relational

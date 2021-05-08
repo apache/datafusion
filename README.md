@@ -215,8 +215,8 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
   - [x] INNER JOIN
   - [x] LEFT JOIN
   - [x] RIGHT JOIN
+  - [x] FULL JOIN
   - [x] CROSS JOIN
-  - [ ] OUTER JOIN
 - [ ] Window
 
 ## Data Sources
