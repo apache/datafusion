@@ -106,7 +106,7 @@ fn is_valid_data_dir(dir: String) -> std::result::Result<(), String> {
     if Path::new(&dir).is_dir() {
         Ok(())
     } else {
-        Err(format!("Invalid data directory “{}”", dir))
+        Err(format!("Invalid data directory '{}'", dir))
     }
 }
 
