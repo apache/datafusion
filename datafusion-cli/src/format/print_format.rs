@@ -24,7 +24,7 @@ use datafusion::error::{DataFusionError, Result};
 use std::str::FromStr;
 
 /// Allow records to be printed in different formats
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PrintFormat {
     Csv,
     Tsv,
@@ -83,5 +83,86 @@ impl PrintFormat {
             Self::Json => println!("{}", print_batches_to_json(batches)?),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_from_str() {
+        let format = "csv".parse::<PrintFormat>().unwrap();
+        assert_eq!(PrintFormat::Csv, format);
+
+        let format = "tsv".parse::<PrintFormat>().unwrap();
+        assert_eq!(PrintFormat::Tsv, format);
+
+        let format = "json".parse::<PrintFormat>().unwrap();
+        assert_eq!(PrintFormat::Json, format);
+
+        let format = "table".parse::<PrintFormat>().unwrap();
+        assert_eq!(PrintFormat::Table, format);
+    }
+
+    #[test]
+    fn test_from_str_failure() {
+        assert_eq!(true, "pretty".parse::<PrintFormat>().is_err());
+    }
+
+    #[test]
+    fn test_print_batches_with_sep() {
+        let batches = vec![];
+        assert_eq!("", print_batches_with_sep(&batches, b',').unwrap());
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
+            ],
+        )
+        .unwrap();
+
+        let batches = vec![batch];
+        let r = print_batches_with_sep(&batches, b',').unwrap();
+        assert_eq!("a,b,c\n1,4,7\n2,5,8\n3,6,9\n", r);
+    }
+
+    #[test]
+    fn test_print_batches_to_json_empty() {
+        let batches = vec![];
+        let r = print_batches_to_json(&batches).unwrap();
+        assert_eq!("", r);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
+            ],
+        )
+        .unwrap();
+
+        let batches = vec![batch];
+        let r = print_batches_to_json(&batches).unwrap();
+        assert_eq!("[{\"a\":1,\"b\":4,\"c\":7},{\"a\":2,\"b\":5,\"c\":8},{\"a\":3,\"b\":6,\"c\":9}]", r);
     }
 }
