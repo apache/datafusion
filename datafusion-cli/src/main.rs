@@ -16,10 +16,13 @@
 // under the License.
 
 #![allow(bare_trait_objects)]
+
+mod format;
+
 use clap::{crate_version, App, Arg};
-use datafusion::arrow::util::pretty;
 use datafusion::error::Result;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
+use format::print_format::PrintFormat;
 use rustyline::Editor;
 use std::env;
 use std::fs::File;
@@ -55,11 +58,17 @@ pub async fn main() {
         )
         .arg(
             Arg::with_name("file")
-                .help("execute commands from file, then exit")
+                .help("Execute commands from file, then exit")
                 .short("f")
                 .long("file")
                 .validator(is_valid_file)
                 .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("csv")
+                .help("Switches to CSV (Comma-Separated Values) output mode.")
+                .long("csv")
+                .takes_value(false),
         )
         .get_matches();
 
@@ -77,19 +86,26 @@ pub async fn main() {
         execution_config = execution_config.with_batch_size(batch_size);
     };
 
+    let print_format = if matches.is_present("csv") {
+        PrintFormat::Csv
+    } else {
+        PrintFormat::Aligned
+    };
+
     if let Some(file_path) = matches.value_of("file") {
         let file = File::open(file_path)
             .unwrap_or_else(|err| panic!("cannot open file '{}': {}", file_path, err));
         let mut reader = BufReader::new(file);
-        exec_from_lines(&mut reader, execution_config).await;
+        exec_from_lines(&mut reader, execution_config, print_format).await;
     } else {
-        exec_from_repl(execution_config).await;
+        exec_from_repl(execution_config, print_format).await;
     }
 }
 
 async fn exec_from_lines(
     reader: &mut BufReader<File>,
     execution_config: ExecutionConfig,
+    print_format: PrintFormat,
 ) {
     let mut ctx = ExecutionContext::with_config(execution_config);
     let mut query = "".to_owned();
@@ -100,7 +116,7 @@ async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match exec_and_print(&mut ctx, query).await {
+                    match exec_and_print(&mut ctx, print_format.clone(), query).await {
                         Ok(_) => {}
                         Err(err) => println!("{:?}", err),
                     }
@@ -117,14 +133,14 @@ async fn exec_from_lines(
 
     // run the left over query if the last statement doesn't contain ‘;’
     if !query.is_empty() {
-        match exec_and_print(&mut ctx, query).await {
+        match exec_and_print(&mut ctx, print_format, query).await {
             Ok(_) => {}
             Err(err) => println!("{:?}", err),
         }
     }
 }
 
-async fn exec_from_repl(execution_config: ExecutionConfig) {
+async fn exec_from_repl(execution_config: ExecutionConfig, print_format: PrintFormat) {
     let mut ctx = ExecutionContext::with_config(execution_config);
 
     let mut rl = Editor::<()>::new();
@@ -139,7 +155,7 @@ async fn exec_from_repl(execution_config: ExecutionConfig) {
             Ok(ref line) if line.trim_end().ends_with(';') => {
                 query.push_str(line.trim_end());
                 rl.add_history_entry(query.clone());
-                match exec_and_print(&mut ctx, query).await {
+                match exec_and_print(&mut ctx, print_format.clone(), query).await {
                     Ok(_) => {}
                     Err(err) => println!("{:?}", err),
                 }
@@ -186,7 +202,11 @@ fn is_exit_command(line: &str) -> bool {
     line == "quit" || line == "exit"
 }
 
-async fn exec_and_print(ctx: &mut ExecutionContext, sql: String) -> Result<()> {
+async fn exec_and_print(
+    ctx: &mut ExecutionContext,
+    print_format: PrintFormat,
+    sql: String,
+) -> Result<()> {
     let now = Instant::now();
 
     let df = ctx.sql(&sql)?;
@@ -200,7 +220,7 @@ async fn exec_and_print(ctx: &mut ExecutionContext, sql: String) -> Result<()> {
         return Ok(());
     }
 
-    pretty::print_batches(&results)?;
+    print_format.print_batches(&results)?;
 
     let row_count: usize = results.iter().map(|b| b.num_rows()).sum();
 
