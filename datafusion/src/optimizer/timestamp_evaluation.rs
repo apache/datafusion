@@ -39,6 +39,7 @@ impl TimestampEvaluation {
         }
     }
 
+    /// Recursive function to optimize the now expression
     pub fn optimize_now(&self, exp: &Expr) -> Expr {
         match exp {
             Expr::ScalarFunction { fun, .. } => match fun {
