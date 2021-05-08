@@ -16,13 +16,15 @@
 // under the License.
 
 #![allow(bare_trait_objects)]
-
 use clap::{crate_version, App, Arg};
 use datafusion::arrow::util::pretty;
 use datafusion::error::Result;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 use rustyline::Editor;
 use std::env;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::BufReader;
 use std::path::Path;
 use std::time::Instant;
 
@@ -51,6 +53,14 @@ pub async fn main() {
                 .validator(is_valid_batch_size)
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("file")
+                .help("execute commands from file, then exit")
+                .short("f")
+                .long("file")
+                .validator(is_valid_file)
+                .takes_value(true),
+        )
         .get_matches();
 
     if let Some(path) = matches.value_of("data-path") {
@@ -67,16 +77,62 @@ pub async fn main() {
         execution_config = execution_config.with_batch_size(batch_size);
     };
 
-    let mut ctx =
-        ExecutionContext::with_config(execution_config.with_information_schema(true));
+    if let Some(file_path) = matches.value_of("file") {
+        let file = File::open(file_path)
+            .unwrap_or_else(|err| panic!("cannot open file '{}': {}", file_path, err));
+        let mut reader = BufReader::new(file);
+        exec_from_lines(&mut reader, execution_config).await;
+    } else {
+        exec_from_repl(execution_config).await;
+    }
+}
+
+async fn exec_from_lines(
+    reader: &mut BufReader<File>,
+    execution_config: ExecutionConfig,
+) {
+    let mut ctx = ExecutionContext::with_config(execution_config);
+    let mut query = "".to_owned();
+
+    for line in reader.lines() {
+        match line {
+            Ok(line) => {
+                let line = line.trim_end();
+                query.push_str(line);
+                if line.ends_with(';') {
+                    match exec_and_print(&mut ctx, query).await {
+                        Ok(_) => {}
+                        Err(err) => println!("{:?}", err),
+                    }
+                    query = "".to_owned();
+                } else {
+                    query.push(' ');
+                }
+            }
+            _ => {
+                break;
+            }
+        }
+    }
+
+    // run the left over query if the last statement doesn't contain ‘;’
+    if !query.is_empty() {
+        match exec_and_print(&mut ctx, query).await {
+            Ok(_) => {}
+            Err(err) => println!("{:?}", err),
+        }
+    }
+}
+
+async fn exec_from_repl(execution_config: ExecutionConfig) {
+    let mut ctx = ExecutionContext::with_config(execution_config);
 
     let mut rl = Editor::<()>::new();
     rl.load_history(".history").ok();
 
     let mut query = "".to_owned();
     loop {
-        let readline = rl.readline("> ");
-        match readline {
+        match rl.readline("> ") {
             Ok(ref line) if is_exit_command(line) && query.is_empty() => {
                 break;
             }
@@ -100,6 +156,14 @@ pub async fn main() {
     }
 
     rl.save_history(".history").ok();
+}
+
+fn is_valid_file(dir: String) -> std::result::Result<(), String> {
+    if Path::new(&dir).is_file() {
+        Ok(())
+    } else {
+        Err(format!("Invalid file '{}'", dir))
+    }
 }
 
 fn is_valid_data_dir(dir: String) -> std::result::Result<(), String> {
