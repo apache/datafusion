@@ -19,15 +19,25 @@
 use arrow::csv::writer::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
-use datafusion::error::Result;
-use std::io::{Read, Seek, SeekFrom};
-use tempfile::tempfile;
+use datafusion::error::{DataFusionError, Result};
+use std::str::FromStr;
 
 /// Allow records to be printed in different formats
 #[derive(Debug, Clone)]
 pub enum PrintFormat {
     Csv,
-    Aligned,
+    Table,
+}
+
+impl FromStr for PrintFormat {
+    type Err = ();
+    fn from_str(s: &str) -> std::result::Result<PrintFormat, ()> {
+        match s {
+            "csv" => Ok(PrintFormat::Csv),
+            "table" => Ok(PrintFormat::Table),
+            _ => Err(()),
+        }
+    }
 }
 
 impl PrintFormat {
@@ -35,22 +45,19 @@ impl PrintFormat {
     pub fn print_batches(&self, batches: &[RecordBatch]) -> Result<()> {
         match self {
             PrintFormat::Csv => {
-                // utilizing a temp file so that we can leverage the arrow csv writer
-                // ideally the upstream shall take a more generic trait
-                let mut file = tempfile()?;
+                let mut bytes = vec![];
                 {
                     let builder = WriterBuilder::new().has_headers(true);
-                    let mut writer = builder.build(&file);
-                    batches
-                        .iter()
-                        .for_each(|batch| writer.write(batch).unwrap());
+                    let mut writer = builder.build(&mut bytes);
+                    for batch in batches {
+                        writer.write(batch)?;
+                    }
                 }
-                let mut data = String::new();
-                file.seek(SeekFrom::Start(0))?;
-                file.read_to_string(&mut data)?;
-                println!("{}", data);
+                let csv = String::from_utf8(bytes)
+                    .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+                println!("{}", csv);
             }
-            PrintFormat::Aligned => pretty::print_batches(batches)?,
+            PrintFormat::Table => pretty::print_batches(batches)?,
         }
         Ok(())
     }

@@ -65,10 +65,12 @@ pub async fn main() {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("csv")
-                .help("Switches to CSV (Comma-Separated Values) output mode.")
-                .long("csv")
-                .takes_value(false),
+            Arg::with_name("format")
+                .help("Output format")
+                .long("format")
+                .default_value("table")
+                .validator(is_valid_format)
+                .takes_value(true),
         )
         .get_matches();
 
@@ -86,11 +88,11 @@ pub async fn main() {
         execution_config = execution_config.with_batch_size(batch_size);
     };
 
-    let print_format = if matches.is_present("csv") {
-        PrintFormat::Csv
-    } else {
-        PrintFormat::Aligned
-    };
+    let print_format = matches
+        .value_of("format")
+        .expect("No format is specified")
+        .parse::<PrintFormat>()
+        .expect("Invalid format");
 
     if let Some(file_path) = matches.value_of("file") {
         let file = File::open(file_path)
@@ -172,6 +174,14 @@ async fn exec_from_repl(execution_config: ExecutionConfig, print_format: PrintFo
     }
 
     rl.save_history(".history").ok();
+}
+
+fn is_valid_format(format: String) -> std::result::Result<(), String> {
+    match format.to_lowercase().as_str() {
+        "csv" => Ok(()),
+        "table" => Ok(()),
+        _ => Err(format!("Format '{}' not supported", format)),
+    }
 }
 
 fn is_valid_file(dir: String) -> std::result::Result<(), String> {
