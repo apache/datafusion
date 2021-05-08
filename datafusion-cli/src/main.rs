@@ -40,6 +40,7 @@ pub async fn main() {
                 .help("Path to your data, default to current directory")
                 .short("p")
                 .long("data-path")
+                .validator(is_valid_data_dir)
                 .takes_value(true),
         )
         .arg(
@@ -47,6 +48,7 @@ pub async fn main() {
                 .help("The batch size of each query, or use DataFusion default")
                 .short("c")
                 .long("batch-size")
+                .validator(is_valid_batch_size)
                 .takes_value(true),
         )
         .get_matches();
@@ -98,6 +100,21 @@ pub async fn main() {
     }
 
     rl.save_history(".history").ok();
+}
+
+fn is_valid_data_dir(dir: String) -> std::result::Result<(), String> {
+    if Path::new(&dir).is_dir() {
+        Ok(())
+    } else {
+        Err(format!("Invalid data directory '{}'", dir))
+    }
+}
+
+fn is_valid_batch_size(size: String) -> std::result::Result<(), String> {
+    match size.parse::<usize>() {
+        Ok(size) if size > 0 => Ok(()),
+        _ => Err(format!("Invalid batch size '{}'", size)),
+    }
 }
 
 fn is_exit_command(line: &str) -> bool {
