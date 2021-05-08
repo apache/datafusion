@@ -125,7 +125,7 @@ mod tests {
         ]));
 
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            schema,
             vec![
                 Arc::new(Int32Array::from(vec![1, 2, 3])),
                 Arc::new(Int32Array::from(vec![4, 5, 6])),
@@ -152,7 +152,7 @@ mod tests {
         ]));
 
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            schema,
             vec![
                 Arc::new(Int32Array::from(vec![1, 2, 3])),
                 Arc::new(Int32Array::from(vec![4, 5, 6])),
