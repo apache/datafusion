@@ -42,14 +42,12 @@ impl TimestampEvaluation {
     /// Recursive function to optimize the now expression
     pub fn optimize_now(&self, exp: &Expr) -> Expr {
         match exp {
-            Expr::ScalarFunction { fun, .. } => match fun {
-                BuiltinScalarFunction::Now => {
-                    Expr::Literal(ScalarValue::TimestampNanosecond(Some(
-                        self.timestamp.timestamp_nanos(),
-                    )))
-                }
-                _ => exp.clone(),
-            },
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::Now,
+                ..
+            } => Expr::Literal(ScalarValue::TimestampNanosecond(Some(
+                self.timestamp.timestamp_nanos(),
+            ))),
             Expr::Alias(inner_exp, alias) => {
                 Expr::Alias(Box::new(self.optimize_now(inner_exp)), alias.clone())
             }
@@ -89,7 +87,6 @@ impl OptimizerRule for TimestampEvaluation {
                     .map(|plan| self.optimize(*plan))
                     .collect::<Result<Vec<_>>>()?;
 
-                println!("plan is {:?}", &plan);
                 utils::from_plan(plan, &expr, &new_inputs)
             }
         }
