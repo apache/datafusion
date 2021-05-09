@@ -146,7 +146,7 @@ async fn parquet_list_columns() {
         "list_columns",
         &format!("{}/list_columns.parquet", testdata),
     )
-        .unwrap();
+    .unwrap();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new(
@@ -195,7 +195,7 @@ async fn parquet_list_columns() {
             .as_any()
             .downcast_ref::<PrimitiveArray<Int64Type>>()
             .unwrap(),
-        &PrimitiveArray::<Int64Type>::from(vec![Some(1), Some(2), Some(3), ])
+        &PrimitiveArray::<Int64Type>::from(vec![Some(1), Some(2), Some(3),])
     );
 
     assert_eq!(
@@ -204,7 +204,7 @@ async fn parquet_list_columns() {
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap(),
-        &StringArray::try_from(vec![Some("abc"), Some("efg"), Some("hij"), ]).unwrap()
+        &StringArray::try_from(vec![Some("abc"), Some("efg"), Some("hij"),]).unwrap()
     );
 
     assert_eq!(
@@ -213,7 +213,7 @@ async fn parquet_list_columns() {
             .as_any()
             .downcast_ref::<PrimitiveArray<Int64Type>>()
             .unwrap(),
-        &PrimitiveArray::<Int64Type>::from(vec![None, Some(1), ])
+        &PrimitiveArray::<Int64Type>::from(vec![None, Some(1),])
     );
 
     assert!(utf8_list_array.is_null(1));
@@ -224,7 +224,7 @@ async fn parquet_list_columns() {
             .as_any()
             .downcast_ref::<PrimitiveArray<Int64Type>>()
             .unwrap(),
-        &PrimitiveArray::<Int64Type>::from(vec![Some(4), ])
+        &PrimitiveArray::<Int64Type>::from(vec![Some(4),])
     );
 
     let result = utf8_list_array.value(2);
@@ -1570,7 +1570,7 @@ fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
         "alltypes_plain",
         &format!("{}/alltypes_plain.parquet", testdata),
     )
-        .unwrap();
+    .unwrap();
 }
 
 /// Execute query and return result set as 2-d table of Vecs
@@ -2091,8 +2091,8 @@ async fn query_scalar_minus_array() -> Result<()> {
 }
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
-    where
-        T: AsRef<str>,
+where
+    T: AsRef<str>,
 {
     expected
         .iter()
