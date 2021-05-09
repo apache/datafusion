@@ -1088,11 +1088,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .collect::<Result<Vec<Expr>>>()?
                     };
 
-                    return Ok(Expr::AggregateFunction {
-                        fun,
-                        distinct: function.distinct,
-                        args,
-                    });
+                    return match &function.over {
+                        Some(window) => Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported OVER clause ({})",
+                            window
+                        ))),
+                        _ => Ok(Expr::AggregateFunction {
+                            fun,
+                            distinct: function.distinct,
+                            args,
+                        }),
+                    };
                 };
 
                 // finally, user-defined functions (UDF) and UDAF
@@ -2627,6 +2633,27 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             "Plan(\"UNION ALL schemas are expected to be the same\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn over_not_supported() {
+        let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "NotImplemented(\"Unsupported OVER clause ()\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn over_partition_by_not_supported() {
+        let sql =
+            "SELECT order_id, MAX(delivered) OVER (PARTITION BY order_id) from orders";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "NotImplemented(\"Unsupported OVER clause (PARTITION BY order_id)\")",
             format!("{:?}", err)
         );
     }
