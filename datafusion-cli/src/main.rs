@@ -114,6 +114,9 @@ async fn exec_from_lines(
 
     for line in reader.lines() {
         match line {
+            Ok(line) if line.starts_with("--") => {
+                continue;
+            }
             Ok(line) => {
                 let line = line.trim_end();
                 query.push_str(line);
@@ -153,6 +156,9 @@ async fn exec_from_repl(execution_config: ExecutionConfig, print_format: PrintFo
         match rl.readline("> ") {
             Ok(ref line) if is_exit_command(line) && query.is_empty() => {
                 break;
+            }
+            Ok(ref line) if line.starts_with("--") => {
+                continue;
             }
             Ok(ref line) if line.trim_end().ends_with(';') => {
                 query.push_str(line.trim_end());
