@@ -1330,7 +1330,7 @@ async fn right_join() -> Result<()> {
 }
 
 #[tokio::test]
-async fn outer_join() -> Result<()> {
+async fn full_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t1_id = t2_id ORDER BY t1_id";
     let actual = execute(&mut ctx, sql).await;
