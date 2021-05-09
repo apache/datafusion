@@ -19,9 +19,7 @@
 use arrow::csv::writer::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
-use datafusion::error::Result;
 use datafusion::error::{DataFusionError, Result};
-use std::io::{Read, Seek, SeekFrom};
 use std::str::FromStr;
 
 /// Allow records to be printed in different formats
