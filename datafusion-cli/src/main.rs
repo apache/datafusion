@@ -127,7 +127,7 @@ async fn exec_from_lines(
                     }
                     query = "".to_owned();
                 } else {
-                    query.push(' ');
+                    query.push('\n');
                 }
             }
             _ => {
@@ -171,7 +171,7 @@ async fn exec_from_repl(execution_config: ExecutionConfig, print_format: PrintFo
             }
             Ok(ref line) => {
                 query.push_str(line);
-                query.push(' ');
+                query.push('\n');
             }
             Err(_) => {
                 break;
