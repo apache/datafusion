@@ -1420,7 +1420,7 @@ mod tests {
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
             ("c1", &vec![7, 8, 9]),
         );
-        // create two identical tables
+        // create two identical batches for the right side
         let right = build_table_two_batches(
             ("a2", &vec![10, 20, 30]),
             ("b2", &vec![4, 5, 6]),
