@@ -1414,39 +1414,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_outer_multi_batch() {
+    async fn join_full_multi_batch() {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
             ("c1", &vec![7, 8, 9]),
         );
+        // create two identical tables
         let right = build_table_two_batches(
             ("a2", &vec![10, 20, 30]),
-            ("b1", &vec![4, 5, 6]),
+            ("b2", &vec![4, 5, 6]),
             ("c2", &vec![70, 80, 90]),
         );
-        let on = &[("b1", "b1")];
+        let on = &[("b1", "b2")];
 
         let join = join(left, right, on, &JoinType::Full).unwrap();
 
         let columns = columns(&join.schema());
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
         let stream = join.execute(0).await.unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "|    |    |    | 30 | 90 |",
-            "|    |    |    | 30 | 90 |",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 7  | 9  |    |    |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "|    |    |    | 30 | 6  | 90 |",
+            "|    |    |    | 30 | 6  | 90 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 7  | 9  |    |    |    |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1485,32 +1486,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_outer_empty_right() {
+    async fn join_full_empty_right() {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
             ("c1", &vec![7, 8, 9]),
         );
-        let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
-        let on = &[("b1", "b1")];
+        let right = build_table_i32(("a2", &vec![]), ("b2", &vec![]), ("c2", &vec![]));
+        let on = &[("b1", "b2")];
         let schema = right.schema();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
         let join = join(left, right, on, &JoinType::Full).unwrap();
 
         let columns = columns(&join.schema());
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
         let stream = join.execute(0).await.unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  |    |    |",
-            "| 2  | 5  | 8  |    |    |",
-            "| 3  | 7  | 9  |    |    |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  |    |    |    |",
+            "| 2  | 5  | 8  |    |    |    |",
+            "| 3  | 7  | 9  |    |    |    |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1590,7 +1591,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_outer_one() -> Result<()> {
+    async fn join_full_one() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1598,28 +1599,28 @@ mod tests {
         );
         let right = build_table(
             ("a2", &vec![10, 20, 30]),
-            ("b1", &vec![4, 5, 6]),
+            ("b2", &vec![4, 5, 6]),
             ("c2", &vec![70, 80, 90]),
         );
-        let on = &[("b1", "b1")];
+        let on = &[("b1", "b2")];
 
         let join = join(left, right, on, &JoinType::Full)?;
 
         let columns = columns(&join.schema());
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
         let stream = join.execute(0).await?;
         let batches = common::collect(stream).await?;
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "|    |    |    | 30 | 90 |",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 7  | 9  |    |    |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "|    |    |    | 30 | 6  | 90 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 7  | 9  |    |    |    |",
+            "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 

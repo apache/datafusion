@@ -1342,6 +1342,11 @@ async fn outer_join() -> Result<()> {
         vec!["44", "d", "x"],
     ];
     assert_eq!(expected, actual);
+
+    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id ORDER BY t1_id";
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
+
     Ok(())
 }
 
