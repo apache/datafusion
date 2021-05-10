@@ -17,37 +17,21 @@
 
 //! Math expressions
 
-use arrow::array::{make_array, Array, ArrayData, Float32Array, Float64Array};
-use arrow::buffer::Buffer;
-use arrow::datatypes::{DataType, ToByteSlice};
-
 use super::{ColumnarValue, ScalarValue};
 use crate::error::{DataFusionError, Result};
-
-macro_rules! compute_op {
-    ($ARRAY:expr, $FUNC:ident, $TYPE:ident) => {{
-        let len = $ARRAY.len();
-        let result = (0..len)
-            .map(|i| $ARRAY.value(i).$FUNC() as f64)
-            .collect::<Vec<f64>>();
-        let data = ArrayData::new(
-            DataType::Float64,
-            len,
-            Some($ARRAY.null_count()),
-            $ARRAY.data().null_buffer().cloned(),
-            0,
-            vec![Buffer::from(result.to_byte_slice())],
-            vec![],
-        );
-        Ok(make_array(data))
-    }};
-}
+use arrow::array::{Float32Array, Float64Array};
+use arrow::datatypes::DataType;
+use std::sync::Arc;
 
 macro_rules! downcast_compute_op {
     ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident) => {{
         let n = $ARRAY.as_any().downcast_ref::<$TYPE>();
         match n {
-            Some(array) => compute_op!(array, $FUNC, $TYPE),
+            Some(array) => {
+                let res: $TYPE =
+                    arrow::compute::kernels::arity::unary(array, |x| x.$FUNC());
+                Ok(Arc::new(res))
+            }
             _ => Err(DataFusionError::Internal(format!(
                 "Invalid data type for {}",
                 $NAME

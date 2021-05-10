@@ -631,7 +631,7 @@ async fn sqrt_f32_vs_f64() -> Result<()> {
     // sqrt(f32)'s plan passes
     let sql = "SELECT avg(sqrt(c11)) FROM aggregate_test_100";
     let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0.6584408485889435"]];
+    let expected = vec![vec!["0.6584407806396484"]];
 
     assert_eq!(actual, expected);
     let sql = "SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100";
