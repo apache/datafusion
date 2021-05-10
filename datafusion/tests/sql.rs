@@ -2906,7 +2906,16 @@ async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
     let t2 = t2_naive.timestamp();
     assert!(t1 <= t2 && t2 <= t3);
     assert_eq!(res2, res1);
+}
 
+#[tokio::test]
+async fn test_random_expression() -> Result<()> {
+    let mut ctx = create_ctx()?;
+    let sql = format!("SELECT random() r1");
+    let actual = execute(&mut ctx, sql.as_str()).await;
+    let r1 = actual[0][0].parse::<f64>().unwrap();
+    assert!(0.0 <= r1);
+    assert!(r1 < 1.0);
     Ok(())
 }
 

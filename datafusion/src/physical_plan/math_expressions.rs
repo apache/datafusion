@@ -16,11 +16,12 @@
 // under the License.
 
 //! Math expressions
-
 use super::{ColumnarValue, ScalarValue};
 use crate::error::{DataFusionError, Result};
 use arrow::array::{Float32Array, Float64Array};
 use arrow::datatypes::DataType;
+use rand::{thread_rng, Rng};
+use std::iter;
 use std::sync::Arc;
 
 macro_rules! downcast_compute_op {
@@ -100,3 +101,36 @@ math_unary_function!("exp", exp);
 math_unary_function!("ln", ln);
 math_unary_function!("log2", log2);
 math_unary_function!("log10", log10);
+
+/// random SQL function
+pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let len: usize = match &args[0] {
+        ColumnarValue::Array(array) => array.len(),
+        _ => {
+            return Err(DataFusionError::Internal(
+                "Expect random function to take no param".to_string(),
+            ))
+        }
+    };
+    let mut rng = thread_rng();
+    let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
+    let array = Float64Array::from_iter_values(values);
+    Ok(ColumnarValue::Array(Arc::new(array)))
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use arrow::array::{Float64Array, NullArray};
+
+    #[test]
+    fn test_random_expression() {
+        let args = vec![ColumnarValue::Array(Arc::new(NullArray::new(1)))];
+        let array = random(&args).expect("fail").into_array(1);
+        let floats = array.as_any().downcast_ref::<Float64Array>().expect("fail");
+
+        assert_eq!(floats.len(), 1);
+        assert!(0.0 <= floats.value(0) && floats.value(0) < 1.0);
+    }
+}
