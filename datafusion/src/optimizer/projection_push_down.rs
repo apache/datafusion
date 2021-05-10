@@ -565,6 +565,6 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rule = ProjectionPushDown::new();
-        rule.optimize(plan)
+        rule.optimize(plan, &ExecutionProps::new())
     }
 }

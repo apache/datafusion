@@ -736,7 +736,6 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 mod tests {
     use super::*;
     use crate::physical_plan::{csv::CsvReadOptions, expressions, Partitioning};
-    use crate::prelude::ExecutionConfig;
     use crate::scalar::ScalarValue;
     use crate::{
         catalog::catalog::MemoryCatalogList,
@@ -750,7 +749,6 @@ mod tests {
     use async_trait::async_trait;
     use fmt::Debug;
     use std::{any::Any, collections::HashMap, fmt};
-    use crate::execution::context::ExecutionProps;
 
     fn make_ctx_state() -> ExecutionContextState {
         ExecutionContextState::new()

@@ -116,7 +116,13 @@ mod tests {
 
     fn get_optimized_plan_formatted(plan: &LogicalPlan) -> String {
         let rule = TimestampEvaluation::new();
-        let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
+        let execution_props = ExecutionProps {
+            query_execution_start_time: Some(chrono::Utc::now()),
+        };
+
+        let optimized_plan = rule
+            .optimize(plan, &execution_props)
+            .expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
     }
 

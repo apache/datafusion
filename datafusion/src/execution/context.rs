@@ -789,7 +789,7 @@ impl ExecutionProps {
 }
 
 impl ExecutionContextState {
-
+    /// Returns new ExecutionContextState
     pub fn new() -> Self {
         ExecutionContextState {
             catalog_list: Arc::new(MemoryCatalogList::new()),

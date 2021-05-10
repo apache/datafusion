@@ -450,7 +450,7 @@ mod tests {
         fn optimize(
             &self,
             plan: &LogicalPlan,
-            execution_props: &ExecutionProps,
+            _: &ExecutionProps,
         ) -> Result<LogicalPlan> {
             Ok(plan.clone())
         }
@@ -473,7 +473,7 @@ mod tests {
             &empty_plan,
             &[StringifiedPlan::new(PlanType::LogicalPlan, "...")],
             schema.as_ref(),
-            execution_props: ExecutionProps::new(),
+            &ExecutionProps::new(),
         )?;
 
         match &optimized_explain {

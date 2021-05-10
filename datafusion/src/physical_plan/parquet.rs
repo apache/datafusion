@@ -39,7 +39,6 @@ use crate::{
     execution::context::ExecutionContextState,
     logical_plan::{Expr, Operator},
     optimizer::utils,
-    prelude::ExecutionConfig,
 };
 use arrow::record_batch::RecordBatch;
 use arrow::{
@@ -66,7 +65,6 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::datasource::datasource::{ColumnStatistics, Statistics};
-use crate::execution::context::ExecutionProps;
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 
