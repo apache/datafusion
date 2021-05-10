@@ -1372,9 +1372,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the arguments, if there are no arguments we'll instead pass in a null array of
         // batch size (as a convention)
         let inputs = match self.args.len() {
-            0 => vec![ColumnarValue::Array(Arc::new(NullArray::new(
-                batch.num_rows(),
-            )))],
+            0 => vec![ColumnarValue::from(NullArray::new(batch.num_rows()))],
             _ => self
                 .args
                 .iter()

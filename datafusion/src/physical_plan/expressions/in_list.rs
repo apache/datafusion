@@ -69,7 +69,7 @@ macro_rules! make_contains {
             })
             .collect::<Vec<_>>();
 
-        Ok(ColumnarValue::Array(Arc::new(
+        Ok(ColumnarValue::from(
             array
                 .iter()
                 .map(|x| {
@@ -95,7 +95,7 @@ macro_rules! make_contains {
                     }
                 })
                 .collect::<BooleanArray>(),
-        )))
+        ))
     }};
 }
 
@@ -164,7 +164,7 @@ impl InListExpr {
             })
             .collect::<Vec<&str>>();
 
-        Ok(ColumnarValue::Array(Arc::new(
+        Ok(ColumnarValue::from(
             array
                 .iter()
                 .map(|x| {
@@ -190,7 +190,7 @@ impl InListExpr {
                     }
                 })
                 .collect::<BooleanArray>(),
-        )))
+        ))
     }
 }
 

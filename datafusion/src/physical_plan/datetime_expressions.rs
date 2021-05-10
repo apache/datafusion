@@ -231,12 +231,24 @@ where
 {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<i32, O, _>(&[a.as_ref()], op, name)?,
-            ))),
-            DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<i64, O, _>(&[a.as_ref()], op, name)?,
-            ))),
+            DataType::Utf8 => {
+                Ok(ColumnarValue::from(unary_string_to_primitive_function::<
+                    i32,
+                    O,
+                    _,
+                >(
+                    &[a.as_ref()], op, name
+                )?))
+            }
+            DataType::LargeUtf8 => {
+                Ok(ColumnarValue::from(unary_string_to_primitive_function::<
+                    i64,
+                    O,
+                    _,
+                >(
+                    &[a.as_ref()], op, name
+                )?))
+            }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
                 other, name,
@@ -342,7 +354,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 .map(f)
                 .collect::<Result<TimestampNanosecondArray>>()?;
 
-            ColumnarValue::Array(Arc::new(array))
+            ColumnarValue::from(array)
         }
     })
 }
@@ -435,7 +447,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             0,
         )?)
     } else {
-        ColumnarValue::Array(Arc::new(arr))
+        ColumnarValue::from(arr)
     })
 }
 
@@ -461,8 +473,7 @@ mod tests {
         ts_builder.append_null()?;
         let expected_timestamps = &ts_builder.finish() as &dyn Array;
 
-        let string_array =
-            ColumnarValue::Array(Arc::new(string_builder.finish()) as ArrayRef);
+        let string_array = ColumnarValue::from(string_builder.finish() as ArrayRef);
         let parsed_timestamps = to_timestamp(&[string_array])
             .expect("that to_timestamp parsed values without error");
         if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
@@ -539,7 +550,7 @@ mod tests {
 
         let mut builder = Int64Array::builder(1);
         builder.append_value(1)?;
-        let int64array = ColumnarValue::Array(Arc::new(builder.finish()));
+        let int64array = ColumnarValue::from(builder.finish());
 
         let expected_err =
             "Internal error: Unsupported data type Int64 for function to_timestamp";

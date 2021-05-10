@@ -131,24 +131,14 @@ where
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_string_function::<
-                    i32,
-                    i32,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
+                Ok(ColumnarValue::from(
+                    unary_string_function::<i32, i32, _, _>(&[a.as_ref()], op, name)?,
+                ))
             }
             DataType::LargeUtf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_string_function::<
-                    i64,
-                    i64,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
+                Ok(ColumnarValue::from(
+                    unary_string_function::<i64, i64, _, _>(&[a.as_ref()], op, name)?,
+                ))
             }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
@@ -309,7 +299,7 @@ pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             })
             .collect::<StringArray>();
 
-        Ok(ColumnarValue::Array(Arc::new(result)))
+        Ok(ColumnarValue::from(result))
     } else {
         // short avenue with only scalars
         let initial = Some("".to_string());

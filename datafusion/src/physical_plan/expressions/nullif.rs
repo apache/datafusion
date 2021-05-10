@@ -138,7 +138,7 @@ mod tests {
             Some(4),
             Some(5),
         ]);
-        let a = ColumnarValue::Array(Arc::new(a));
+        let a = ColumnarValue::from(a);
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
 
@@ -164,7 +164,7 @@ mod tests {
     // Ensure that arrays with no nulls can also invoke NULLIF() correctly
     fn nullif_int32_nonulls() -> Result<()> {
         let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
-        let a = ColumnarValue::Array(Arc::new(a));
+        let a = ColumnarValue::from(a);
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
 

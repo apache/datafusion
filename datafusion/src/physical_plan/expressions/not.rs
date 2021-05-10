@@ -81,9 +81,9 @@ impl PhysicalExpr for NotExpr {
                                 "boolean_op failed to downcast array".to_owned(),
                             )
                         })?;
-                Ok(ColumnarValue::Array(Arc::new(
-                    arrow::compute::kernels::boolean::not(array)?,
-                )))
+                Ok(ColumnarValue::from(arrow::compute::kernels::boolean::not(
+                    array,
+                )?))
             }
             ColumnarValue::Scalar(scalar) => {
                 use std::convert::TryInto;

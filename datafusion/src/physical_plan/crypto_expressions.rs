@@ -16,7 +16,6 @@
 // under the License.
 
 //! Crypto expressions
-use std::sync::Arc;
 
 use md5::Md5;
 use sha2::{
@@ -97,23 +96,15 @@ where
 {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_binary_function::<
-                    i32,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
-            }
+            DataType::Utf8 => Ok(ColumnarValue::from(
+                unary_binary_function::<i32, _, _>(&[a.as_ref()], op, name)?,
+            )),
             DataType::LargeUtf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_binary_function::<
-                    i64,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
+                Ok(ColumnarValue::from(unary_binary_function::<i64, _, _>(
+                    &[a.as_ref()],
+                    op,
+                    name,
+                )?))
             }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
@@ -147,13 +138,9 @@ fn md5_array<T: StringOffsetSizeTrait>(
 pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 => Ok(ColumnarValue::Array(Arc::new(md5_array::<i32>(&[
-                a.as_ref()
-            ])?))),
+            DataType::Utf8 => Ok(ColumnarValue::from(md5_array::<i32>(&[a.as_ref()])?)),
             DataType::LargeUtf8 => {
-                Ok(ColumnarValue::Array(Arc::new(md5_array::<i64>(&[
-                    a.as_ref()
-                ])?)))
+                Ok(ColumnarValue::from(md5_array::<i64>(&[a.as_ref()])?))
             }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function md5",

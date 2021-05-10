@@ -22,7 +22,6 @@ use arrow::array::{make_array, Array, ArrayData, Float32Array, Float64Array};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{DataType, ToByteSlice};
 use rand::{thread_rng, Rng};
-use std::sync::Arc;
 
 macro_rules! compute_op {
     ($ARRAY:expr, $FUNC:ident, $TYPE:ident) => {{
@@ -136,5 +135,5 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     for _ in 0..len {
         array.push(Some(rng.gen_range(0.0..1.0)))
     }
-    Ok(ColumnarValue::Array(Arc::new(Float64Array::from(array))))
+    Ok(ColumnarValue::from(Float64Array::from(array)))
 }

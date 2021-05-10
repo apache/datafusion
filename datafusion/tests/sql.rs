@@ -689,7 +689,7 @@ fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             .expect("cast failed");
 
         let array: Float64Array = input.iter().map(|v| v.map(|x| x.sqrt())).collect();
-        Ok(ColumnarValue::Array(Arc::new(array)))
+        Ok(ColumnarValue::from(array))
     } else {
         unimplemented!()
     }

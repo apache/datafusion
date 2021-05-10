@@ -28,7 +28,13 @@ use crate::{error::Result, scalar::ScalarValue};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
+use arrow::{
+    array::{
+        ArrayRef, BinaryOffsetSizeTrait, BooleanArray, GenericBinaryArray,
+        GenericStringArray, NullArray, PrimitiveArray, StringOffsetSizeTrait,
+    },
+    datatypes::{ArrowPrimitiveType, Field},
+};
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -248,6 +254,35 @@ impl ColumnarValue {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
         }
+    }
+}
+
+impl From<NullArray> for ColumnarValue {
+    fn from(array: NullArray) -> Self {
+        ColumnarValue::Array(Arc::new(array))
+    }
+}
+impl<T: BinaryOffsetSizeTrait> From<GenericBinaryArray<T>> for ColumnarValue {
+    fn from(array: GenericBinaryArray<T>) -> Self {
+        ColumnarValue::Array(Arc::new(array))
+    }
+}
+
+impl From<BooleanArray> for ColumnarValue {
+    fn from(array: BooleanArray) -> Self {
+        ColumnarValue::Array(Arc::new(array))
+    }
+}
+
+impl<T: StringOffsetSizeTrait> From<GenericStringArray<T>> for ColumnarValue {
+    fn from(array: GenericStringArray<T>) -> Self {
+        ColumnarValue::Array(Arc::new(array))
+    }
+}
+
+impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ColumnarValue {
+    fn from(array: PrimitiveArray<T>) -> Self {
+        ColumnarValue::Array(Arc::new(array))
     }
 }
 
