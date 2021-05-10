@@ -1580,6 +1580,8 @@ async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
     let results = collect(plan).await.expect(&msg);
 
+    assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+
     result_vec(&results)
 }
 
