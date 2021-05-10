@@ -1330,6 +1330,27 @@ async fn right_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn full_join() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t1_id = t2_id ORDER BY t1_id";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["NULL", "NULL", "w"],
+        vec!["11", "a", "z"],
+        vec!["22", "b", "y"],
+        vec!["33", "c", "NULL"],
+        vec!["44", "d", "x"],
+    ];
+    assert_eq!(expected, actual);
+
+    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id ORDER BY t1_id";
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn left_join_using() -> Result<()> {
     let mut ctx = create_join_context("id", "id")?;
     let sql = "SELECT id, t1_name, t2_name FROM t1 LEFT JOIN t2 USING (id) ORDER BY id";
