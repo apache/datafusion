@@ -26,38 +26,45 @@ use std::str::FromStr;
 #[derive(Debug, Clone)]
 pub enum PrintFormat {
     Csv,
+    Tsv,
     Table,
 }
 
 impl FromStr for PrintFormat {
     type Err = ();
-    fn from_str(s: &str) -> std::result::Result<PrintFormat, ()> {
+    fn from_str(s: &str) -> std::result::Result<Self, ()> {
         match s {
-            "csv" => Ok(PrintFormat::Csv),
-            "table" => Ok(PrintFormat::Table),
+            "csv" => Ok(Self::Csv),
+            "tsv" => Ok(Self::Tsv),
+            "table" => Ok(Self::Table),
             _ => Err(()),
         }
     }
+}
+
+fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<String> {
+    let mut bytes = vec![];
+    {
+        let builder = WriterBuilder::new()
+            .has_headers(true)
+            .with_delimiter(delimiter);
+        let mut writer = builder.build(&mut bytes);
+        for batch in batches {
+            writer.write(batch)?;
+        }
+    }
+    let formatted = String::from_utf8(bytes)
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    Ok(formatted)
 }
 
 impl PrintFormat {
     /// print the batches to stdout using the specified format
     pub fn print_batches(&self, batches: &[RecordBatch]) -> Result<()> {
         match self {
-            PrintFormat::Csv => {
-                let mut bytes = vec![];
-                {
-                    let builder = WriterBuilder::new().has_headers(true);
-                    let mut writer = builder.build(&mut bytes);
-                    for batch in batches {
-                        writer.write(batch)?;
-                    }
-                }
-                let csv = String::from_utf8(bytes)
-                    .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-                println!("{}", csv);
-            }
-            PrintFormat::Table => pretty::print_batches(batches)?,
+            Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
+            Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
+            Self::Table => pretty::print_batches(batches)?,
         }
         Ok(())
     }
