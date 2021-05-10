@@ -50,6 +50,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use fmt::{Debug, Formatter};
+use std::convert::TryInto;
 use std::{any::Any, fmt, str::FromStr, sync::Arc};
 
 /// A function's signature, which defines the function's supported argument types.
@@ -1373,12 +1374,20 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        // evaluate the arguments
-        let inputs = self
-            .args
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .collect::<Result<Vec<_>>>()?;
+        // evaluate the arguments, if there are no arguments we'll instead pass in an uint32 holding
+        // batch size (as a convention)
+        let inputs = match self.args.len() {
+            0 => vec![ColumnarValue::Scalar(ScalarValue::UInt32(Some(
+                batch.num_rows().try_into().map_err(|_| {
+                    DataFusionError::Internal("Batch size too large".to_string())
+                })?,
+            )))],
+            _ => self
+                .args
+                .iter()
+                .map(|e| e.evaluate(batch))
+                .collect::<Result<Vec<_>>>()?,
+        };
 
         // evaluate the function
         let fun = self.fun.as_ref();
@@ -1386,7 +1395,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 }
 
-/// decorates a function to handle [`ScalarValue`]s by coverting them to arrays before calling the function
+/// decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
 /// and vice-versa after evaluation.
 pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
 where
