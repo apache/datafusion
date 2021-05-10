@@ -395,14 +395,7 @@ impl RowGroupPredicateBuilder {
             .map(|(_, _, f)| f.clone())
             .collect::<Vec<_>>();
         let stat_schema = Schema::new(stat_fields);
-        let execution_context_state = ExecutionContextState {
-            catalog_list: Arc::new(MemoryCatalogList::new()),
-            scalar_functions: HashMap::new(),
-            var_provider: HashMap::new(),
-            aggregate_functions: HashMap::new(),
-            config: ExecutionConfig::new(),
-            execution_props: ExecutionProps::new(),
-        };
+        let execution_context_state = ExecutionContextState::new();
         let predicate_expr = DefaultPhysicalPlanner::default().create_physical_expr(
             &logical_predicate_expr,
             &stat_schema,

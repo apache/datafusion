@@ -753,14 +753,7 @@ mod tests {
     use crate::execution::context::ExecutionProps;
 
     fn make_ctx_state() -> ExecutionContextState {
-        ExecutionContextState {
-            catalog_list: Arc::new(MemoryCatalogList::new()),
-            scalar_functions: HashMap::new(),
-            var_provider: HashMap::new(),
-            aggregate_functions: HashMap::new(),
-            config: ExecutionConfig::new(),
-            execution_props: ExecutionProps::new()
-        }
+        ExecutionContextState::new()
     }
 
     fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {

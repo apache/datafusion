@@ -789,6 +789,18 @@ impl ExecutionProps {
 }
 
 impl ExecutionContextState {
+
+    pub fn new() -> Self {
+        ExecutionContextState {
+            catalog_list: Arc::new(MemoryCatalogList::new()),
+            scalar_functions: HashMap::new(),
+            var_provider: HashMap::new(),
+            aggregate_functions: HashMap::new(),
+            config: ExecutionConfig::new(),
+            execution_props: ExecutionProps::new(),
+        }
+    }
+
     fn resolve_table_ref<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
