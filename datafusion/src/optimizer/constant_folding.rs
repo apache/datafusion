@@ -23,6 +23,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 
 use crate::error::Result;
+use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{DFSchemaRef, Expr, ExprRewriter, LogicalPlan, Operator};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -47,7 +48,11 @@ impl ConstantFolding {
 }
 
 impl OptimizerRule for ConstantFolding {
-    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+    fn optimize(
+        &self,
+        plan: &LogicalPlan,
+        execution_props: &ExecutionProps,
+    ) -> Result<LogicalPlan> {
         // We need to pass down the all schemas within the plan tree to `optimize_expr` in order to
         // to evaluate expression types. For example, a projection plan's schema will only include
         // projected columns. With just the projected schema, it's not possible to infer types for
@@ -60,7 +65,7 @@ impl OptimizerRule for ConstantFolding {
         match plan {
             LogicalPlan::Filter { predicate, input } => Ok(LogicalPlan::Filter {
                 predicate: predicate.clone().rewrite(&mut rewriter)?,
-                input: Arc::new(self.optimize(input)?),
+                input: Arc::new(self.optimize(input, execution_props)?),
             }),
             // Rest: recurse into plan, apply optimization where possible
             LogicalPlan::Projection { .. }
@@ -78,7 +83,7 @@ impl OptimizerRule for ConstantFolding {
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
-                    .map(|plan| self.optimize(plan))
+                    .map(|plan| self.optimize(plan, execution_props))
                     .collect::<Result<Vec<_>>>()?;
 
                 let expr = plan

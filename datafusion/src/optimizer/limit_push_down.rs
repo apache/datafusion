@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use super::utils;
 use crate::error::Result;
+use crate::execution::context::ExecutionProps;
 use crate::logical_plan::LogicalPlan;
 use crate::optimizer::optimizer::OptimizerRule;
 
@@ -125,7 +126,7 @@ fn limit_push_down(
 }
 
 impl OptimizerRule for LimitPushDown {
-    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+    fn optimize(&self, plan: &LogicalPlan, _: &ExecutionProps) -> Result<LogicalPlan> {
         limit_push_down(None, plan)
     }
 

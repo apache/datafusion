@@ -22,6 +22,7 @@ use crate::logical_plan::LogicalPlan;
 use crate::optimizer::optimizer::OptimizerRule;
 
 use super::utils;
+use crate::execution::context::ExecutionProps;
 
 /// Optimization rule that replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
 pub struct EliminateLimit;
@@ -34,7 +35,11 @@ impl EliminateLimit {
 }
 
 impl OptimizerRule for EliminateLimit {
-    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+    fn optimize(
+        &self,
+        plan: &LogicalPlan,
+        execution_props: &ExecutionProps,
+    ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Limit { n, input } if *n == 0 => {
                 Ok(LogicalPlan::EmptyRelation {
@@ -50,7 +55,7 @@ impl OptimizerRule for EliminateLimit {
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
-                    .map(|plan| self.optimize(plan))
+                    .map(|plan| self.optimize(plan, execution_props))
                     .collect::<Result<Vec<_>>>()?;
 
                 utils::from_plan(plan, &expr, &new_inputs)

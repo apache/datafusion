@@ -27,6 +27,7 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::{error::Result, prelude::JoinType};
 
 use super::utils;
+use crate::execution::context::ExecutionProps;
 
 /// BuildProbeOrder reorders the build and probe phase of
 /// hash joins. This uses the amount of rows that a datasource has.
@@ -106,7 +107,11 @@ impl OptimizerRule for HashBuildProbeOrder {
         "hash_build_probe_order"
     }
 
-    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+    fn optimize(
+        &self,
+        plan: &LogicalPlan,
+        execution_props: &ExecutionProps,
+    ) -> Result<LogicalPlan> {
         match plan {
             // Main optimization rule, swaps order of left and right
             // based on number of rows in each table
@@ -117,8 +122,8 @@ impl OptimizerRule for HashBuildProbeOrder {
                 join_type,
                 schema,
             } => {
-                let left = self.optimize(left)?;
-                let right = self.optimize(right)?;
+                let left = self.optimize(left, execution_props)?;
+                let right = self.optimize(right, execution_props)?;
                 if should_swap_join_order(&left, &right) {
                     // Swap left and right, change join type and (equi-)join key order
                     Ok(LogicalPlan::Join {
@@ -147,8 +152,8 @@ impl OptimizerRule for HashBuildProbeOrder {
                 right,
                 schema,
             } => {
-                let left = self.optimize(left)?;
-                let right = self.optimize(right)?;
+                let left = self.optimize(left, execution_props)?;
+                let right = self.optimize(right, execution_props)?;
                 if should_swap_join_order(&left, &right) {
                     // Swap left and right
                     Ok(LogicalPlan::CrossJoin {
@@ -184,7 +189,7 @@ impl OptimizerRule for HashBuildProbeOrder {
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
-                    .map(|plan| self.optimize(plan))
+                    .map(|plan| self.optimize(plan, execution_props))
                     .collect::<Result<Vec<_>>>()?;
 
                 utils::from_plan(plan, &expr, &new_inputs)

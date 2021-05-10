@@ -22,6 +22,7 @@ use crate::logical_plan::{Expr, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
 
 use super::utils;
+use crate::execution::context::ExecutionProps;
 use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
 use chrono::{DateTime, Utc};
@@ -36,20 +37,23 @@ impl TimestampEvaluation {
     }
 
     /// Recursive function to optimize the now expression
-    pub fn optimize_now(&self, exp: &Expr, date_time: &DateTime<Utc>) -> Expr {
-        match exp {
+    pub fn rewrite_expr(&self, exp: &Expr, date_time: &DateTime<Utc>) -> Result<Expr> {
+        let expressions = utils::expr_sub_expressions(exp).unwrap();
+        let expressions = expressions
+            .iter()
+            .map(|e| self.rewrite_expr(e, date_time))
+            .collect::<Result<Vec<_>>>()?;
+
+        let exp = match exp {
             Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::Now,
                 ..
             } => Expr::Literal(ScalarValue::TimestampNanosecond(Some(
                 date_time.timestamp_nanos(),
             ))),
-            Expr::Alias(inner_exp, alias) => Expr::Alias(
-                Box::new(self.optimize_now(inner_exp, date_time)),
-                alias.clone(),
-            ),
             _ => exp.clone(),
-        }
+        };
+        utils::rewrite_expression(&exp, &expressions)
     }
 
     fn optimize_with_datetime(
@@ -62,7 +66,7 @@ impl TimestampEvaluation {
                 let exprs = plan
                     .expressions()
                     .iter()
-                    .map(|exp| self.optimize_now(exp, date_time))
+                    .map(|exp| self.rewrite_expr(exp, date_time).unwrap())
                     .collect::<Vec<_>>();
 
                 // apply the optimization to all inputs of the plan
@@ -71,8 +75,6 @@ impl TimestampEvaluation {
                     .iter()
                     .map(|plan| self.optimize_with_datetime(*plan, date_time))
                     .collect::<Result<Vec<_>>>()?;
-
-                println!("plan is {:?}", &plan);
 
                 utils::from_plan(plan, &exprs, &new_inputs)
             }
@@ -83,7 +85,7 @@ impl TimestampEvaluation {
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
-                    .map(|plan| self.optimize(*plan))
+                    .map(|plan| self.optimize_with_datetime(*plan, date_time))
                     .collect::<Result<Vec<_>>>()?;
 
                 utils::from_plan(plan, &expr, &new_inputs)
@@ -93,9 +95,12 @@ impl TimestampEvaluation {
 }
 
 impl OptimizerRule for TimestampEvaluation {
-    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let date_time = chrono::Utc::now();
-        self.optimize_with_datetime(plan, &date_time)
+    fn optimize(
+        &self,
+        plan: &LogicalPlan,
+        props: &ExecutionProps,
+    ) -> Result<LogicalPlan> {
+        self.optimize_with_datetime(plan, &props.query_execution_start_time.unwrap())
     }
 
     fn name(&self) -> &str {

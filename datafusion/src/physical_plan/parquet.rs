@@ -66,6 +66,7 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::datasource::datasource::{ColumnStatistics, Statistics};
+use crate::execution::context::ExecutionProps;
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 
@@ -400,6 +401,7 @@ impl RowGroupPredicateBuilder {
             var_provider: HashMap::new(),
             aggregate_functions: HashMap::new(),
             config: ExecutionConfig::new(),
+            execution_props: ExecutionProps::new(),
         };
         let predicate_expr = DefaultPhysicalPlanner::default().create_physical_expr(
             &logical_predicate_expr,
