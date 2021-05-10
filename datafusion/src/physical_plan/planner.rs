@@ -750,6 +750,7 @@ mod tests {
     use async_trait::async_trait;
     use fmt::Debug;
     use std::{any::Any, collections::HashMap, fmt};
+    use crate::execution::context::ExecutionProps;
 
     fn make_ctx_state() -> ExecutionContextState {
         ExecutionContextState {
@@ -758,6 +759,7 @@ mod tests {
             var_provider: HashMap::new(),
             aggregate_functions: HashMap::new(),
             config: ExecutionConfig::new(),
+            execution_props: ExecutionProps::new()
         }
     }
 
