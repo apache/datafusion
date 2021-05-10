@@ -43,7 +43,7 @@ use crate::{
     scalar::ScalarValue,
 };
 use arrow::{
-    array::ArrayRef,
+    array::{ArrayRef, NullArray},
     compute::kernels::length::{bit_length, length},
     datatypes::TimeUnit,
     datatypes::{DataType, Field, Int32Type, Int64Type, Schema},
@@ -160,6 +160,8 @@ pub enum BuiltinScalarFunction {
     NullIf,
     /// octet_length
     OctetLength,
+    /// random
+    Random,
     /// regexp_replace
     RegexpReplace,
     /// repeat
@@ -256,6 +258,7 @@ impl FromStr for BuiltinScalarFunction {
             "md5" => BuiltinScalarFunction::MD5,
             "nullif" => BuiltinScalarFunction::NullIf,
             "octet_length" => BuiltinScalarFunction::OctetLength,
+            "random" => BuiltinScalarFunction::Random,
             "regexp_replace" => BuiltinScalarFunction::RegexpReplace,
             "repeat" => BuiltinScalarFunction::Repeat,
             "replace" => BuiltinScalarFunction::Replace,
@@ -297,15 +300,6 @@ pub fn return_type(
 
     // verify that this is a valid set of data types for this function
     data_types(&arg_types, &signature(fun))?;
-
-    if arg_types.is_empty() {
-        // functions currently cannot be evaluated without arguments, as they can't
-        // know the number of rows to return.
-        return Err(DataFusionError::Plan(format!(
-            "Function '{}' requires at least one argument",
-            fun
-        )));
-    }
 
     // the return type of the built in function.
     // Some built-in functions' return type depends on the incoming type.
@@ -427,6 +421,7 @@ pub fn return_type(
                 ));
             }
         }),
+        BuiltinScalarFunction::Random => Ok(DataType::Float64),
         BuiltinScalarFunction::RegexpReplace => Ok(match arg_types[0] {
             DataType::LargeUtf8 => DataType::LargeUtf8,
             DataType::Utf8 => DataType::Utf8,
@@ -729,6 +724,7 @@ pub fn create_physical_expr(
         BuiltinScalarFunction::Ln => math_expressions::ln,
         BuiltinScalarFunction::Log10 => math_expressions::log10,
         BuiltinScalarFunction::Log2 => math_expressions::log2,
+        BuiltinScalarFunction::Random => math_expressions::random,
         BuiltinScalarFunction::Round => math_expressions::round,
         BuiltinScalarFunction::Signum => math_expressions::signum,
         BuiltinScalarFunction::Sin => math_expressions::sin,
@@ -1373,12 +1369,18 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        // evaluate the arguments
-        let inputs = self
-            .args
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .collect::<Result<Vec<_>>>()?;
+        // evaluate the arguments, if there are no arguments we'll instead pass in a null array of
+        // batch size (as a convention)
+        let inputs = match self.args.len() {
+            0 => vec![ColumnarValue::Array(Arc::new(NullArray::new(
+                batch.num_rows(),
+            )))],
+            _ => self
+                .args
+                .iter()
+                .map(|e| e.evaluate(batch))
+                .collect::<Result<Vec<_>>>()?,
+        };
 
         // evaluate the function
         let fun = self.fun.as_ref();
@@ -1386,7 +1388,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 }
 
-/// decorates a function to handle [`ScalarValue`]s by coverting them to arrays before calling the function
+/// decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
 /// and vice-versa after evaluation.
 pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
 where
