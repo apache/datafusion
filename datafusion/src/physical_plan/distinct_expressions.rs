@@ -62,10 +62,10 @@ impl DistinctCount {
         data_type: DataType,
     ) -> Self {
         Self {
-            input_data_types,
-            exprs,
             name,
             data_type,
+            input_data_types,
+            exprs,
         }
     }
 }
