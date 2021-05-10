@@ -393,6 +393,7 @@ fn compile_expr(
         var_provider: HashMap::new(),
         aggregate_functions: HashMap::new(),
         config: ExecutionConfig::new(),
+        execution_props: ExecutionProps::new(),
     };
     let expr: Expr = expr.try_into()?;
     df_planner
