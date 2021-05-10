@@ -297,6 +297,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     protobuf::JoinType::Inner => JoinType::Inner,
                     protobuf::JoinType::Left => JoinType::Left,
                     protobuf::JoinType::Right => JoinType::Right,
+                    protobuf::JoinType::Full => JoinType::Full,
                 };
                 Ok(Arc::new(HashJoinExec::try_new(
                     left,

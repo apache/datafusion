@@ -355,6 +355,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinOperator::Inner(constraint) => {
                 self.parse_join(left, &right, constraint, JoinType::Inner)
             }
+            JoinOperator::FullOuter(constraint) => {
+                self.parse_join(left, &right, constraint, JoinType::Full)
+            }
             JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
             other => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported JOIN operator {:?}",
