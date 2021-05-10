@@ -748,7 +748,10 @@ impl ExecutionConfig {
     }
 }
 
-/// Current execution props
+/// Holds per-execution properties and data (such as starting timestamps, etc). 
+/// An instance of this struct is created each time a [`LogicalPlan`] is prepared for 
+/// execution (optimized). If the same plan is optimized multiple times, a new 
+/// `ExecutionProps` is created each time. 
 #[derive(Clone)]
 pub struct ExecutionProps {
     pub(crate) query_execution_start_time: Option<DateTime<Utc>>,
