@@ -21,7 +21,7 @@ use arrow::array::{make_array, Array, ArrayData, Float32Array, Float64Array};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{DataType, ToByteSlice};
 
-use super::{ColumnarValue, ScalarValue};
+use super::{functions::BatchSize, ColumnarValue, ScalarValue};
 use crate::error::{DataFusionError, Result};
 
 macro_rules! compute_op {
@@ -93,7 +93,7 @@ macro_rules! unary_primitive_array_op {
 macro_rules! math_unary_function {
     ($NAME:expr, $FUNC:ident) => {
         /// mathematical function that accepts f32 or f64 and returns f64
-        pub fn $FUNC(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        pub fn $FUNC(_: BatchSize, args: &[ColumnarValue]) -> Result<ColumnarValue> {
             unary_primitive_array_op!(&args[0], $NAME, $FUNC)
         }
     };

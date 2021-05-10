@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use super::ColumnarValue;
+use super::{super::functions::BatchSize, ColumnarValue};
 use crate::error::{DataFusionError, Result};
 use crate::scalar::ScalarValue;
 use arrow::array::Array;
@@ -71,7 +71,10 @@ macro_rules! primitive_bool_array_op {
 /// Args: 0 - left expr is any array
 ///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
 ///
-pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn nullif_func(
+    batch_size: BatchSize,
+    args: &[ColumnarValue],
+) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return Err(DataFusionError::Internal(format!(
             "{:?} args were supplied but NULLIF takes exactly two args",

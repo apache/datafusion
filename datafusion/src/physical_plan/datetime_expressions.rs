@@ -18,7 +18,7 @@
 //! DateTime expressions
 use std::sync::Arc;
 
-use super::ColumnarValue;
+use super::{functions::BatchSize, ColumnarValue};
 use crate::{
     error::{DataFusionError, Result},
     scalar::{ScalarType, ScalarValue},
@@ -260,7 +260,10 @@ where
 }
 
 /// to_timestamp SQL function
-pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn to_timestamp(
+    batch_size: BatchSize,
+    args: &[ColumnarValue],
+) -> Result<ColumnarValue> {
     handle::<TimestampNanosecondType, _, TimestampNanosecondType>(
         args,
         string_to_timestamp_nanos,
@@ -308,7 +311,10 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
 }
 
 /// date_trunc SQL function
-pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn date_trunc(
+    batch_size: BatchSize,
+    args: &[ColumnarValue],
+) -> Result<ColumnarValue> {
     let (granularity, array) = (&args[0], &args[1]);
 
     let granularity =
@@ -397,7 +403,7 @@ macro_rules! extract_date_part {
 }
 
 /// DATE_PART SQL function
-pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn date_part(batch_size: BatchSize, args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return Err(DataFusionError::Execution(
             "Expected two arguments in DATE_PART".to_string(),
