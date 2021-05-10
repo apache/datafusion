@@ -174,7 +174,7 @@ where
 /// Returns the numeric code of the first character of the argument.
 /// ascii('x') = 120
 pub fn ascii<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
@@ -195,7 +195,7 @@ pub fn ascii<T: StringOffsetSizeTrait>(
 /// Removes the longest string containing only characters in characters (a space by default) from the start and end of string.
 /// btrim('xyxtrimyyx', 'xyz') = 'trim'
 pub fn btrim<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     match args.len() {
@@ -245,7 +245,7 @@ pub fn btrim<T: StringOffsetSizeTrait>(
 
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
 /// chr(65) = 'A'
-pub fn chr(batch_size: BatchSize, args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn chr(_batch_size: BatchSize, args: &[ArrayRef]) -> Result<ArrayRef> {
     let integer_array = downcast_arg!(args[0], "integer", Int64Array);
 
     // first map is the iterator, second is for the `Option<_>`
@@ -276,7 +276,7 @@ pub fn chr(batch_size: BatchSize, args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
 /// concat('abcde', 2, NULL, 22) = 'abcde222'
-pub fn concat(batch_size: BatchSize, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn concat(_batch_size: BatchSize, args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return Err(DataFusionError::Internal(format!(
@@ -336,7 +336,7 @@ pub fn concat(batch_size: BatchSize, args: &[ColumnarValue]) -> Result<ColumnarV
 
 /// Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.
 /// concat_ws(',', 'abcde', 2, NULL, 22) = 'abcde,2,22'
-pub fn concat_ws(batch_size: BatchSize, args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn concat_ws(_batch_size: BatchSize, args: &[ArrayRef]) -> Result<ArrayRef> {
     // downcast all arguments to strings
     let args = downcast_vec!(args, StringArray).collect::<Result<Vec<&StringArray>>>()?;
 
@@ -376,7 +376,7 @@ pub fn concat_ws(batch_size: BatchSize, args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Converts the first letter of each word to upper case and the rest to lower case. Words are sequences of alphanumeric characters separated by non-alphanumeric characters.
 /// initcap('hi THOMAS') = 'Hi Thomas'
 pub fn initcap<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
@@ -501,7 +501,7 @@ pub fn replace<T: StringOffsetSizeTrait>(
 /// Removes the longest string containing only characters in characters (a space by default) from the end of string.
 /// rtrim('testxxzx', 'xyz') = 'test'
 pub fn rtrim<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     match args.len() {
@@ -543,7 +543,7 @@ pub fn rtrim<T: StringOffsetSizeTrait>(
 /// Splits string at occurrences of delimiter and returns the n'th field (counting from one).
 /// split_part('abc~@~def~@~ghi', '~@~', 2) = 'def'
 pub fn split_part<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
@@ -578,7 +578,7 @@ pub fn split_part<T: StringOffsetSizeTrait>(
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
 pub fn starts_with<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
@@ -599,7 +599,7 @@ pub fn starts_with<T: StringOffsetSizeTrait>(
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
 pub fn to_hex<T: ArrowPrimitiveType>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef>
 where

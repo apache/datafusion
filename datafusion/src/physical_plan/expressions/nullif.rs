@@ -72,7 +72,7 @@ macro_rules! primitive_bool_array_op {
 ///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
 ///
 pub fn nullif_func(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ColumnarValue],
 ) -> Result<ColumnarValue> {
     if args.len() != 2 {

@@ -753,7 +753,7 @@ pub fn create_physical_expr(
                 other,
             ))),
         },
-        BuiltinScalarFunction::BitLength => |batch_size, args| match &args[0] {
+        BuiltinScalarFunction::BitLength => |_batch_size, args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
@@ -867,7 +867,7 @@ pub fn create_physical_expr(
             invoke_if_crypto_expressions_feature_flag!(md5, "md5")
         }
         BuiltinScalarFunction::NullIf => nullif_func,
-        BuiltinScalarFunction::OctetLength => |batch_size, args| match &args[0] {
+        BuiltinScalarFunction::OctetLength => |_batch_size, args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(

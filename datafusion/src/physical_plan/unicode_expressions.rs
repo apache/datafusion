@@ -64,7 +64,7 @@ macro_rules! downcast_arg {
 /// Returns number of characters in the string.
 /// character_length('josé') = 4
 pub fn character_length<T: ArrowPrimitiveType>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef>
 where
@@ -94,7 +94,7 @@ where
 /// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.
 /// left('abcde', 2) = 'ab'
 pub fn left<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
@@ -131,7 +131,7 @@ pub fn left<T: StringOffsetSizeTrait>(
 /// Extends the string to length 'length' by prepending the characters fill (a space by default). If the string is already longer than length then it is truncated (on the right).
 /// lpad('hi', 5, 'xy') = 'xyxhi'
 pub fn lpad<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     match args.len() {
@@ -223,7 +223,7 @@ pub fn lpad<T: StringOffsetSizeTrait>(
 /// Reverses the order of the characters in the string.
 /// reverse('abcde') = 'edcba'
 pub fn reverse<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
@@ -241,7 +241,7 @@ pub fn reverse<T: StringOffsetSizeTrait>(
 /// Returns last n characters in the string, or when n is negative, returns all but first |n| characters.
 /// right('abcde', 2) = 'de'
 pub fn right<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
@@ -292,7 +292,7 @@ pub fn right<T: StringOffsetSizeTrait>(
 /// Extends the string to length 'length' by appending the characters fill (a space by default). If the string is already longer than length then it is truncated.
 /// rpad('hi', 5, 'xy') = 'hixyx'
 pub fn rpad<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     match args.len() {
@@ -372,7 +372,7 @@ pub fn rpad<T: StringOffsetSizeTrait>(
 /// Returns starting index of specified substring within string, or zero if it's not present. (Same as position(substring in string), but note the reversed argument order.)
 /// strpos('high', 'ig') = 2
 pub fn strpos<T: ArrowPrimitiveType>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef>
 where
@@ -434,7 +434,7 @@ where
 /// substr('alphabet', 3) = 'phabet'
 /// substr('alphabet', 3, 2) = 'ph'
 pub fn substr<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     match args.len() {
@@ -514,7 +514,7 @@ pub fn substr<T: StringOffsetSizeTrait>(
 /// Replaces each character in string that matches a character in the from set with the corresponding character in the to set. If from is longer than to, occurrences of the extra characters in from are deleted.
 /// translate('12345', '143', 'ax') = 'a2x5'
 pub fn translate<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);

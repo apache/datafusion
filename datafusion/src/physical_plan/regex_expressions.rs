@@ -47,7 +47,7 @@ macro_rules! downcast_string_arg {
 
 /// extract a specific group from a string column, using a regular expression
 pub fn regexp_match<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     match args.len() {
@@ -77,7 +77,7 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
 ///
 /// example: `regexp_replace('Thomas', '.[mN]a.', 'M') = 'ThM'`
 pub fn regexp_replace<T: StringOffsetSizeTrait>(
-    batch_size: BatchSize,
+    _batch_size: BatchSize,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     // creating Regex is expensive so create hashmap for memoization
