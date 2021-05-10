@@ -48,9 +48,9 @@ the convenience of an SQL interface or a DataFrame API.
 
 Here are some of the projects known to use DataFusion:
 
-* [Ballista](https://github.com/ballista-compute/ballista) Distributed Compute Platform
+* [Ballista](ballista) Distributed Compute Platform
 * [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
-* [Cube.js](https://github.com/cube-js/cube.js)
+* [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 * [datafusion-python](https://pypi.org/project/datafusion)
 * [delta-rs](https://github.com/delta-io/delta-rs)
 * [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
@@ -97,8 +97,8 @@ async fn main() -> datafusion::error::Result<()> {
   let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
 
   let df = df.filter(col("a").lt_eq(col("b")))?
-           .aggregate(vec![col("a")], vec![min(col("b"))])?
-           .limit(100)?;
+          .aggregate(vec![col("a")], vec![min(col("b"))])?
+          .limit(100)?;
 
   // execute and print results
   let results: Vec<RecordBatch> = df.collect().await?;
@@ -132,7 +132,7 @@ datafusion = "4.0.0-SNAPSHOT"
 
 ## Using DataFusion as a binary
 
-DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](docs/cli.md) for more information.
+DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](datafusion/docs/cli.md) for more information.
 
 # Status
 
@@ -141,11 +141,11 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
 - [x] SQL Parser
 - [x] SQL Query Planner
 - [x] Query Optimizer
- - [x] Constant folding
- - [x] Join Reordering
- - [x] Limit Pushdown
- - [x] Projection push down
- - [x] Predicate push down
+- [x] Constant folding
+- [x] Join Reordering
+- [x] Limit Pushdown
+- [x] Projection push down
+- [x] Predicate push down
 - [x] Type coercion
 - [x] Parallel query execution
 
@@ -213,7 +213,9 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
   - [ ] MINUS
 - [x] Joins
   - [x] INNER JOIN
-  - [ ] CROSS JOIN
+  - [x] LEFT JOIN
+  - [x] RIGHT JOIN
+  - [x] CROSS JOIN
   - [ ] OUTER JOIN
 - [ ] Window
 

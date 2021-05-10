@@ -19,7 +19,7 @@
 
 use anyhow::{Context, Result};
 use futures::future::{self, Either, TryFutureExt};
-use hyper::{service::make_service_fn, Server};
+use hyper::{server::conn::AddrStream, service::make_service_fn, Server};
 use std::convert::Infallible;
 use std::{net::SocketAddr, sync::Arc};
 use tonic::transport::Server as TonicServer;
@@ -62,17 +62,20 @@ async fn start_server(
         BALLISTA_VERSION, addr
     );
 
-    let scheduler_server =
-        SchedulerServer::new(config_backend.clone(), namespace.clone());
     Ok(Server::bind(&addr)
-        .serve(make_service_fn(move |_| {
+        .serve(make_service_fn(move |request: &AddrStream| {
+            let scheduler_server = SchedulerServer::new(
+                config_backend.clone(),
+                namespace.clone(),
+                request.remote_addr().ip(),
+            );
             let scheduler_grpc_server =
                 SchedulerGrpcServer::new(scheduler_server.clone());
 
             let mut tonic = TonicServer::builder()
                 .add_service(scheduler_grpc_server)
                 .into_service();
-            let mut warp = warp::service(get_routes(scheduler_server.clone()));
+            let mut warp = warp::service(get_routes(scheduler_server));
 
             future::ok::<_, Infallible>(tower::service_fn(
                 move |req: hyper::Request<hyper::Body>| {

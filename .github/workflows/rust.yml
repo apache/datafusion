@@ -214,7 +214,7 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cargo clippy --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
+          cargo clippy --all-targets --workspace -- -D warnings
 
   miri-checks:
     name: MIRI

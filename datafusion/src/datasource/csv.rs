@@ -33,10 +33,11 @@
 //! let schema = csvdata.schema();
 //! ```
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use std::any::Any;
+use std::io::{Read, Seek};
 use std::string::String;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::datasource::datasource::Statistics;
 use crate::datasource::TableProvider;
@@ -46,10 +47,17 @@ use crate::physical_plan::csv::CsvExec;
 pub use crate::physical_plan::csv::CsvReadOptions;
 use crate::physical_plan::{common, ExecutionPlan};
 
+enum Source {
+    /// Path to a single CSV file or a directory containing one of more CSV files
+    Path(String),
+
+    /// Read CSV data from a reader
+    Reader(Mutex<Option<Box<dyn Read + Send + Sync + 'static>>>),
+}
+
 /// Represents a CSV file with a provided schema
 pub struct CsvFile {
-    /// Path to a single CSV file or a directory containing one of more CSV files
-    path: String,
+    source: Source,
     schema: SchemaRef,
     has_header: bool,
     delimiter: u8,
@@ -63,8 +71,7 @@ impl CsvFile {
         let schema = Arc::new(match options.schema {
             Some(s) => s.clone(),
             None => {
-                let mut filenames: Vec<String> = vec![];
-                common::build_file_list(path, &mut filenames, options.file_extension)?;
+                let filenames = common::build_file_list(path, options.file_extension)?;
                 if filenames.is_empty() {
                     return Err(DataFusionError::Plan(format!(
                         "No files found at {path} with file extension {file_extension}",
@@ -77,7 +84,7 @@ impl CsvFile {
         });
 
         Ok(Self {
-            path: String::from(path),
+            source: Source::Path(path.to_string()),
             schema,
             has_header: options.has_header,
             delimiter: options.delimiter,
@@ -86,9 +93,64 @@ impl CsvFile {
         })
     }
 
+    /// Attempt to initialize a `CsvFile` from a reader. The schema MUST be provided in options.
+    pub fn try_new_from_reader<R: Read + Send + Sync + 'static>(
+        reader: R,
+        options: CsvReadOptions,
+    ) -> Result<Self> {
+        let schema = Arc::new(match options.schema {
+            Some(s) => s.clone(),
+            None => {
+                return Err(DataFusionError::Execution(
+                    "Schema must be provided to CsvRead".to_string(),
+                ));
+            }
+        });
+
+        Ok(Self {
+            source: Source::Reader(Mutex::new(Some(Box::new(reader)))),
+            schema,
+            has_header: options.has_header,
+            delimiter: options.delimiter,
+            statistics: Statistics::default(),
+            file_extension: String::new(),
+        })
+    }
+
+    /// Attempt to initialize a `CsvRead` from a reader impls `Seek`. The schema can be inferred automatically.
+    pub fn try_new_from_reader_infer_schema<R: Read + Seek + Send + Sync + 'static>(
+        mut reader: R,
+        options: CsvReadOptions,
+    ) -> Result<Self> {
+        let schema = Arc::new(match options.schema {
+            Some(s) => s.clone(),
+            None => {
+                let (schema, _) = arrow::csv::reader::infer_file_schema(
+                    &mut reader,
+                    options.delimiter,
+                    Some(options.schema_infer_max_records),
+                    options.has_header,
+                )?;
+                schema
+            }
+        });
+
+        Ok(Self {
+            source: Source::Reader(Mutex::new(Some(Box::new(reader)))),
+            schema,
+            has_header: options.has_header,
+            delimiter: options.delimiter,
+            statistics: Statistics::default(),
+            file_extension: String::new(),
+        })
+    }
+
     /// Get the path for the CSV file(s) represented by this CsvFile instance
     pub fn path(&self) -> &str {
-        &self.path
+        match &self.source {
+            Source::Reader(_) => "",
+            Source::Path(path) => path,
+        }
     }
 
     /// Determine whether the CSV file(s) represented by this CsvFile instance have a header row
@@ -123,30 +185,75 @@ impl TableProvider for CsvFile {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let fields = self
-            .schema
-            .fields()
-            .iter()
-            .map(|f| f.clone())
-            .collect::<Vec<_>>();
-        let schema = Schema::new(fields);
+        let opts = CsvReadOptions::new()
+            .schema(&self.schema)
+            .has_header(self.has_header)
+            .delimiter(self.delimiter)
+            .file_extension(self.file_extension.as_str());
+        let batch_size = limit
+            .map(|l| std::cmp::min(l, batch_size))
+            .unwrap_or(batch_size);
 
-        Ok(Arc::new(CsvExec::try_new(
-            &self.path,
-            CsvReadOptions::new()
-                .schema(&schema)
-                .has_header(self.has_header)
-                .delimiter(self.delimiter)
-                .file_extension(self.file_extension.as_str()),
-            projection.clone(),
-            limit
-                .map(|l| std::cmp::min(l, batch_size))
-                .unwrap_or(batch_size),
-            limit,
-        )?))
+        let exec = match &self.source {
+            Source::Reader(maybe_reader) => {
+                if let Some(rdr) = maybe_reader.lock().unwrap().take() {
+                    CsvExec::try_new_from_reader(
+                        rdr,
+                        opts,
+                        projection.clone(),
+                        batch_size,
+                        limit,
+                    )?
+                } else {
+                    return Err(DataFusionError::Execution(
+                        "You can only read once if the data comes from a reader"
+                            .to_string(),
+                    ));
+                }
+            }
+            Source::Path(p) => {
+                CsvExec::try_new(&p, opts, projection.clone(), batch_size, limit)?
+            }
+        };
+        Ok(Arc::new(exec))
     }
 
     fn statistics(&self) -> Statistics {
         self.statistics.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::*;
+
+    #[tokio::test]
+    async fn csv_file_from_reader() -> Result<()> {
+        let testdata = arrow::util::test_util::arrow_test_data();
+        let filename = "aggregate_test_100.csv";
+        let path = format!("{}/csv/{}", testdata, filename);
+        let buf = std::fs::read(path).unwrap();
+        let rdr = std::io::Cursor::new(buf);
+        let mut ctx = ExecutionContext::new();
+        ctx.register_table(
+            "aggregate_test",
+            Arc::new(CsvFile::try_new_from_reader_infer_schema(
+                rdr,
+                CsvReadOptions::new(),
+            )?),
+        )?;
+        let df = ctx.sql("select max(c2) from aggregate_test")?;
+        let batches = df.collect().await?;
+        assert_eq!(
+            batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::Int64Array>()
+                .unwrap()
+                .value(0),
+            5
+        );
+        Ok(())
     }
 }

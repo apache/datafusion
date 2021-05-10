@@ -24,7 +24,7 @@ use std::collections::HashSet;
 use crate::physical_plan::expressions::Column;
 
 /// All valid types of joins.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JoinType {
     /// Inner join
     Inner,

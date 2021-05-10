@@ -234,36 +234,6 @@ fn if_then_else(
     }
 }
 
-macro_rules! make_null_array {
-    ($TY:ty, $N:expr) => {{
-        let mut builder = <$TY>::new($N);
-        for _ in 0..$N {
-            builder.append_null()?;
-        }
-        Ok(Arc::new(builder.finish()))
-    }};
-}
-
-fn build_null_array(data_type: &DataType, num_rows: usize) -> Result<ArrayRef> {
-    match data_type {
-        DataType::UInt8 => make_null_array!(array::UInt8Builder, num_rows),
-        DataType::UInt16 => make_null_array!(array::UInt16Builder, num_rows),
-        DataType::UInt32 => make_null_array!(array::UInt32Builder, num_rows),
-        DataType::UInt64 => make_null_array!(array::UInt64Builder, num_rows),
-        DataType::Int8 => make_null_array!(array::Int8Builder, num_rows),
-        DataType::Int16 => make_null_array!(array::Int16Builder, num_rows),
-        DataType::Int32 => make_null_array!(array::Int32Builder, num_rows),
-        DataType::Int64 => make_null_array!(array::Int64Builder, num_rows),
-        DataType::Float32 => make_null_array!(array::Float32Builder, num_rows),
-        DataType::Float64 => make_null_array!(array::Float64Builder, num_rows),
-        DataType::Utf8 => make_null_array!(array::StringBuilder, num_rows),
-        other => Err(DataFusionError::Execution(format!(
-            "CASE does not support '{:?}'",
-            other
-        ))),
-    }
-}
-
 macro_rules! array_equals {
     ($TY:ty, $L:expr, $R:expr, $eq_fn:expr) => {{
         let when_value = $L
@@ -347,7 +317,7 @@ impl CaseExpr {
         let mut current_value: Option<ArrayRef> = if let Some(e) = &self.else_expr {
             Some(e.evaluate(batch)?.into_array(batch.num_rows()))
         } else {
-            Some(build_null_array(&return_type, batch.num_rows())?)
+            Some(new_null_array(&return_type, batch.num_rows()))
         };
 
         // walk backwards through the when/then expressions
@@ -388,7 +358,7 @@ impl CaseExpr {
         let mut current_value: Option<ArrayRef> = if let Some(e) = &self.else_expr {
             Some(e.evaluate(batch)?.into_array(batch.num_rows()))
         } else {
-            Some(build_null_array(&return_type, batch.num_rows())?)
+            Some(new_null_array(&return_type, batch.num_rows()))
         };
 
         // walk backwards through the when/then expressions

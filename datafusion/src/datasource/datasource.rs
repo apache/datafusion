@@ -66,6 +66,17 @@ pub enum TableProviderFilterPushDown {
     Exact,
 }
 
+/// Indicates the type of this table for metadata/catalog purposes.
+#[derive(Debug, Clone, Copy)]
+pub enum TableType {
+    /// An ordinary physical table.
+    Base,
+    /// A non-materialised table that itself uses a query internally to provide data.
+    View,
+    /// A transient table.
+    Temporary,
+}
+
 /// Source table
 pub trait TableProvider: Sync + Send {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
@@ -74,6 +85,11 @@ pub trait TableProvider: Sync + Send {
 
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
+
+    /// Get the type of this table for metadata/catalog purposes.
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
 
     /// Create an ExecutionPlan that will scan the table.
     fn scan(

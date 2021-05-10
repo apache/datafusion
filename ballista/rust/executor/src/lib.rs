@@ -19,34 +19,3 @@
 
 pub mod collect;
 pub mod flight_service;
-
-#[derive(Debug, Clone)]
-pub struct ExecutorConfig {
-    pub(crate) host: String,
-    pub(crate) port: u16,
-    /// Directory for temporary files, such as IPC files
-    pub(crate) work_dir: String,
-    pub(crate) concurrent_tasks: usize,
-}
-
-impl ExecutorConfig {
-    pub fn new(host: &str, port: u16, work_dir: &str, concurrent_tasks: usize) -> Self {
-        Self {
-            host: host.to_owned(),
-            port,
-            work_dir: work_dir.to_owned(),
-            concurrent_tasks,
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub struct BallistaExecutor {
-    pub(crate) config: ExecutorConfig,
-}
-
-impl BallistaExecutor {
-    pub fn new(config: ExecutorConfig) -> Self {
-        Self { config }
-    }
-}

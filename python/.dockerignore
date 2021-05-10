@@ -15,11 +15,5 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rustlang/rust:nightly
-
-COPY format /arrow/format/
-COPY rust /arrow/rust/
-WORKDIR /arrow/rust/datafusion
-RUN cargo install --bin datafusion-cli --path .
-
-CMD ["datafusion-cli", "--data-path", "/data"]
+target
+venv

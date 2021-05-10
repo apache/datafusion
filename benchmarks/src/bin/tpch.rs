@@ -681,6 +681,11 @@ mod tests {
         run_query(14).await
     }
 
+    #[tokio::test]
+    async fn run_q19() -> Result<()> {
+        run_query(19).await
+    }
+
     /// Specialised String representation
     fn col_str(column: &ArrayRef, row_index: usize) -> String {
         if column.is_null(row_index) {

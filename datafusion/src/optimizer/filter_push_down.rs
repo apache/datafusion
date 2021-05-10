@@ -237,17 +237,30 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             let mut predicates = vec![];
             split_members(predicate, &mut predicates);
 
+            // Predicates without referencing columns (WHERE FALSE, WHERE 1=1, etc.)
+            let mut no_col_predicates = vec![];
+
             predicates
                 .into_iter()
                 .try_for_each::<_, Result<()>>(|predicate| {
                     let mut columns: HashSet<Column> = HashSet::new();
                     utils::expr_to_column_names(predicate, &mut columns)?;
-                    // collect the predicate
-                    state.filters.push((predicate.clone(), columns));
+                    if columns.is_empty() {
+                        no_col_predicates.push(predicate)
+                    } else {
+                        // collect the predicate
+                        state.filters.push((predicate.clone(), columns));
+                    }
                     Ok(())
                 })?;
-
-            optimize(input, state)
+            // Predicates without columns will not be pushed down.
+            // As those contain only literals, they could be optimized using constant folding
+            // and removal of WHERE TRUE / WHERE FALSE
+            if !no_col_predicates.is_empty() {
+                Ok(add_filter(optimize(input, state)?, &no_col_predicates))
+            } else {
+                optimize(input, state)
+            }
         }
         LogicalPlan::Projection {
             input,
@@ -478,6 +491,19 @@ mod tests {
             \n  Limit: 10\
             \n    Projection: #test.a, #test.b\
             \n      TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_no_columns() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .filter(lit(0i64).eq(lit(1i64)))?
+            .build()?;
+        let expected = "\
+            Filter: Int64(0) Eq Int64(1)\
+            \n  TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }

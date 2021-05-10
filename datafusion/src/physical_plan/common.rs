@@ -78,8 +78,19 @@ pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatc
         .map_err(DataFusionError::from)
 }
 
-/// Recursively build a list of files in a directory with a given extension
-pub fn build_file_list(dir: &str, filenames: &mut Vec<String>, ext: &str) -> Result<()> {
+/// Recursively builds a list of files in a directory with a given extension
+pub fn build_file_list(dir: &str, ext: &str) -> Result<Vec<String>> {
+    let mut filenames: Vec<String> = Vec::new();
+    build_file_list_recurse(dir, &mut filenames, ext)?;
+    Ok(filenames)
+}
+
+/// Recursively build a list of files in a directory with a given extension with an accumulator list
+fn build_file_list_recurse(
+    dir: &str,
+    filenames: &mut Vec<String>,
+    ext: &str,
+) -> Result<()> {
     let metadata = metadata(dir)?;
     if metadata.is_file() {
         if dir.ends_with(ext) {
@@ -91,7 +102,7 @@ pub fn build_file_list(dir: &str, filenames: &mut Vec<String>, ext: &str) -> Res
             let path = entry.path();
             if let Some(path_name) = path.to_str() {
                 if path.is_dir() {
-                    build_file_list(path_name, filenames, ext)?;
+                    build_file_list_recurse(path_name, filenames, ext)?;
                 } else if path_name.ends_with(ext) {
                     filenames.push(path_name.to_string());
                 }

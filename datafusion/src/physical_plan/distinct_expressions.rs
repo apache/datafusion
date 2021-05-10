@@ -47,8 +47,8 @@ pub struct DistinctCount {
     name: String,
     /// The DataType for the final count
     data_type: DataType,
-    /// The DataType for each input argument
-    input_data_types: Vec<DataType>,
+    /// The DataType used to hold the state for each input
+    state_data_types: Vec<DataType>,
     /// The input arguments
     exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
@@ -61,12 +61,23 @@ impl DistinctCount {
         name: String,
         data_type: DataType,
     ) -> Self {
+        let state_data_types = input_data_types.into_iter().map(state_type).collect();
+
         Self {
-            input_data_types,
-            exprs,
             name,
             data_type,
+            state_data_types,
+            exprs,
         }
+    }
+}
+
+/// return the type to use to accumulate state for the specified input type
+fn state_type(data_type: DataType) -> DataType {
+    match data_type {
+        // when aggregating dictionary values, use the underlying value type
+        DataType::Dictionary(_key_type, value_type) => *value_type,
+        t => t,
     }
 }
 
@@ -82,12 +93,16 @@ impl AggregateExpr for DistinctCount {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(self
-            .input_data_types
+            .state_data_types
             .iter()
-            .map(|data_type| {
+            .map(|state_data_type| {
                 Field::new(
                     &format_state_name(&self.name, "count distinct"),
-                    DataType::List(Box::new(Field::new("item", data_type.clone(), true))),
+                    DataType::List(Box::new(Field::new(
+                        "item",
+                        state_data_type.clone(),
+                        true,
+                    ))),
                     false,
                 )
             })
@@ -101,7 +116,7 @@ impl AggregateExpr for DistinctCount {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(DistinctCountAccumulator {
             values: HashSet::default(),
-            data_types: self.input_data_types.clone(),
+            state_data_types: self.state_data_types.clone(),
             count_data_type: self.data_type.clone(),
         }))
     }
@@ -110,7 +125,7 @@ impl AggregateExpr for DistinctCount {
 #[derive(Debug)]
 struct DistinctCountAccumulator {
     values: HashSet<DistinctScalarValues, RandomState>,
-    data_types: Vec<DataType>,
+    state_data_types: Vec<DataType>,
     count_data_type: DataType,
 }
 
@@ -156,9 +171,11 @@ impl Accumulator for DistinctCountAccumulator {
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut cols_out = self
-            .data_types
+            .state_data_types
             .iter()
-            .map(|data_type| ScalarValue::List(Some(Vec::new()), data_type.clone()))
+            .map(|state_data_type| {
+                ScalarValue::List(Some(Vec::new()), state_data_type.clone())
+            })
             .collect::<Vec<_>>();
 
         let mut cols_vec = cols_out
@@ -195,10 +212,10 @@ impl Accumulator for DistinctCountAccumulator {
 mod tests {
     use super::*;
 
-    use arrow::array::ArrayRef;
     use arrow::array::{
-        Int16Array, Int32Array, Int64Array, Int8Array, ListArray, UInt16Array,
-        UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
+        Int64Array, Int8Array, ListArray, UInt16Array, UInt32Array, UInt64Array,
+        UInt8Array,
     };
     use arrow::array::{Int32Builder, ListBuilder, UInt64Builder};
     use arrow::datatypes::DataType;
@@ -356,6 +373,76 @@ mod tests {
         }};
     }
 
+    //Used trait to create associated constant for f32 and f64
+    trait SubNormal: 'static {
+        const SUBNORMAL: Self;
+    }
+
+    impl SubNormal for f64 {
+        const SUBNORMAL: Self = 1.0e-308_f64;
+    }
+
+    impl SubNormal for f32 {
+        const SUBNORMAL: Self = 1.0e-38_f32;
+    }
+
+    macro_rules! test_count_distinct_update_batch_floating_point {
+        ($ARRAY_TYPE:ident, $DATA_TYPE:ident, $PRIM_TYPE:ty) => {{
+            use ordered_float::OrderedFloat;
+            let values: Vec<Option<$PRIM_TYPE>> = vec![
+                Some(<$PRIM_TYPE>::INFINITY),
+                Some(<$PRIM_TYPE>::NAN),
+                Some(1.0),
+                Some(<$PRIM_TYPE as SubNormal>::SUBNORMAL),
+                Some(1.0),
+                Some(<$PRIM_TYPE>::INFINITY),
+                None,
+                Some(3.0),
+                Some(-4.5),
+                Some(2.0),
+                None,
+                Some(2.0),
+                Some(3.0),
+                Some(<$PRIM_TYPE>::NEG_INFINITY),
+                Some(1.0),
+                Some(<$PRIM_TYPE>::NAN),
+                Some(<$PRIM_TYPE>::NEG_INFINITY),
+            ];
+
+            let arrays = vec![Arc::new($ARRAY_TYPE::from(values)) as ArrayRef];
+
+            let (states, result) = run_update_batch(&arrays)?;
+
+            let mut state_vec =
+                state_to_vec!(&states[0], $DATA_TYPE, $PRIM_TYPE).unwrap();
+            state_vec.sort_by(|a, b| match (a, b) {
+                (Some(lhs), Some(rhs)) => {
+                    OrderedFloat::from(*lhs).cmp(&OrderedFloat::from(*rhs))
+                }
+                _ => a.partial_cmp(b).unwrap(),
+            });
+
+            let nan_idx = state_vec.len() - 1;
+            assert_eq!(states.len(), 1);
+            assert_eq!(
+                &state_vec[..nan_idx],
+                vec![
+                    Some(<$PRIM_TYPE>::NEG_INFINITY),
+                    Some(-4.5),
+                    Some(<$PRIM_TYPE as SubNormal>::SUBNORMAL),
+                    Some(1.0),
+                    Some(2.0),
+                    Some(3.0),
+                    Some(<$PRIM_TYPE>::INFINITY)
+                ]
+            );
+            assert!(state_vec[nan_idx].unwrap_or_default().is_nan());
+            assert_eq!(result, ScalarValue::UInt64(Some(8)));
+
+            Ok(())
+        }};
+    }
+
     #[test]
     fn count_distinct_update_batch_i8() -> Result<()> {
         test_count_distinct_update_batch_numeric!(Int8Array, Int8, i8)
@@ -394,6 +481,71 @@ mod tests {
     #[test]
     fn count_distinct_update_batch_u64() -> Result<()> {
         test_count_distinct_update_batch_numeric!(UInt64Array, UInt64, u64)
+    }
+
+    #[test]
+    fn count_distinct_update_batch_f32() -> Result<()> {
+        test_count_distinct_update_batch_floating_point!(Float32Array, Float32, f32)
+    }
+
+    #[test]
+    fn count_distinct_update_batch_f64() -> Result<()> {
+        test_count_distinct_update_batch_floating_point!(Float64Array, Float64, f64)
+    }
+
+    #[test]
+    fn count_distinct_update_batch_boolean() -> Result<()> {
+        let get_count = |data: BooleanArray| -> Result<(Vec<Option<bool>>, u64)> {
+            let arrays = vec![Arc::new(data) as ArrayRef];
+            let (states, result) = run_update_batch(&arrays)?;
+            let mut state_vec = state_to_vec!(&states[0], Boolean, bool).unwrap();
+            state_vec.sort();
+            let count = match result {
+                ScalarValue::UInt64(c) => c.ok_or_else(|| {
+                    DataFusionError::Internal("Found None count".to_string())
+                }),
+                scalar => Err(DataFusionError::Internal(format!(
+                    "Found non Uint64 scalar value from count: {}",
+                    scalar
+                ))),
+            }?;
+            Ok((state_vec, count))
+        };
+
+        let zero_count_values = BooleanArray::from(Vec::<bool>::new());
+
+        let one_count_values = BooleanArray::from(vec![false, false]);
+        let one_count_values_with_null =
+            BooleanArray::from(vec![Some(true), Some(true), None, None]);
+
+        let two_count_values = BooleanArray::from(vec![true, false, true, false, true]);
+        let two_count_values_with_null = BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+            None,
+            Some(true),
+            Some(false),
+        ]);
+
+        assert_eq!(
+            get_count(zero_count_values)?,
+            (Vec::<Option<bool>>::new(), 0)
+        );
+        assert_eq!(get_count(one_count_values)?, (vec![Some(false)], 1));
+        assert_eq!(
+            get_count(one_count_values_with_null)?,
+            (vec![Some(true)], 1)
+        );
+        assert_eq!(
+            get_count(two_count_values)?,
+            (vec![Some(false), Some(true)], 2)
+        );
+        assert_eq!(
+            get_count(two_count_values_with_null)?,
+            (vec![Some(false), Some(true)], 2)
+        );
+        Ok(())
     }
 
     #[test]

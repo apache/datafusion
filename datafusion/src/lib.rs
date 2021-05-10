@@ -25,7 +25,7 @@
     clippy::upper_case_acronyms
 )]
 
-//! [DataFusion](https://github.com/apache/arrow/tree/master/rust/datafusion)
+//! [DataFusion](https://github.com/apache/arrow-datafusion)
 //! is an extensible query execution framework that uses
 //! [Apache Arrow](https://arrow.apache.org) as its in-memory format.
 //!
@@ -211,4 +211,4 @@ pub mod test;
 extern crate lazy_static;
 
 #[cfg(doctest)]
-doc_comment::doctest!("../README.md", readme_example_test);
+doc_comment::doctest!("../../README.md", readme_example_test);

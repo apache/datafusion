@@ -102,7 +102,9 @@ pub enum BuiltinScalarFunction {
     Exp,
     /// floor
     Floor,
-    /// log, also known as ln
+    /// ln, Natural logarithm
+    Ln,
+    /// log, same as log10
     Log,
     /// log10
     Log10,
@@ -222,6 +224,7 @@ impl FromStr for BuiltinScalarFunction {
             "cos" => BuiltinScalarFunction::Cos,
             "exp" => BuiltinScalarFunction::Exp,
             "floor" => BuiltinScalarFunction::Floor,
+            "ln" => BuiltinScalarFunction::Ln,
             "log" => BuiltinScalarFunction::Log,
             "log10" => BuiltinScalarFunction::Log10,
             "log2" => BuiltinScalarFunction::Log2,
@@ -633,6 +636,7 @@ pub fn return_type(
         | BuiltinScalarFunction::Exp
         | BuiltinScalarFunction::Floor
         | BuiltinScalarFunction::Log
+        | BuiltinScalarFunction::Ln
         | BuiltinScalarFunction::Log10
         | BuiltinScalarFunction::Log2
         | BuiltinScalarFunction::Round
@@ -721,7 +725,8 @@ pub fn create_physical_expr(
         BuiltinScalarFunction::Cos => math_expressions::cos,
         BuiltinScalarFunction::Exp => math_expressions::exp,
         BuiltinScalarFunction::Floor => math_expressions::floor,
-        BuiltinScalarFunction::Log => math_expressions::ln,
+        BuiltinScalarFunction::Log => math_expressions::log10,
+        BuiltinScalarFunction::Ln => math_expressions::ln,
         BuiltinScalarFunction::Log10 => math_expressions::log10,
         BuiltinScalarFunction::Log2 => math_expressions::log2,
         BuiltinScalarFunction::Round => math_expressions::round,

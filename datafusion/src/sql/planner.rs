@@ -18,9 +18,9 @@
 //! SQL Query Planner (produces logical plan from SQL AST)
 
 use std::collections::HashSet;
-use std::convert::TryInto;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::{convert::TryInto, vec};
 
 use crate::catalog::TableReference;
 use crate::datasource::TableProvider;
@@ -539,7 +539,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .as_ref()
             .map::<Result<Expr>, _>(|having_expr| {
                 // having clause may reference aliases defined in select projection
-                let projected_plan = self.project(&plan, select_exprs.clone(), false)?;
+                let projected_plan = self.project(&plan, select_exprs.clone())?;
                 let mut combined_schema = (**projected_plan.schema()).clone();
                 combined_schema.merge(plan.schema());
                 let having_expr =
@@ -620,7 +620,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        self.project(&plan, select_exprs_post_aggr, false)
+        let plan = if select.distinct {
+            return LogicalPlanBuilder::from(&plan)
+                .aggregate(select_exprs_post_aggr, vec![])?
+                .build();
+        } else {
+            plan
+        };
+
+        self.project(&plan, select_exprs_post_aggr)
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
@@ -643,31 +651,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Wrap a plan in a projection
-    ///
-    /// If the `force` argument is `false`, the projection is applied only when
-    /// necessary, i.e., when the input fields are different than the
-    /// projection. Note that if the input fields are the same, but out of
-    /// order, the projection will be applied.
-    fn project(
-        &self,
-        input: &LogicalPlan,
-        expr: Vec<Expr>,
-        force: bool,
-    ) -> Result<LogicalPlan> {
+    fn project(&self, input: &LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(&input.schema(), &expr)?;
-        let plan = LogicalPlanBuilder::from(input).project(expr)?.build()?;
 
-        let project = force
-            || match input {
-                LogicalPlan::TableScan { .. } => true,
-                _ => plan.schema().fields() != input.schema().fields(),
-            };
-
-        if project {
-            Ok(plan)
-        } else {
-            Ok(input.clone())
-        }
+        LogicalPlanBuilder::from(input).project(expr)?.build()
     }
 
     fn aggregate(
@@ -1119,11 +1106,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .collect::<Result<Vec<Expr>>>()?
                     };
 
-                    return Ok(Expr::AggregateFunction {
-                        fun,
-                        distinct: function.distinct,
-                        args,
-                    });
+                    return match &function.over {
+                        Some(window) => Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported OVER clause ({})",
+                            window
+                        ))),
+                        _ => Ok(Expr::AggregateFunction {
+                            fun,
+                            distinct: function.distinct,
+                            args,
+                        }),
+                    };
                 };
 
                 // finally, user-defined functions (UDF) and UDAF
@@ -1743,10 +1736,11 @@ mod tests {
                    )
                    WHERE fn1 = 'X' AND age < 30";
 
-        let expected = "Filter: #fn1 Eq Utf8(\"X\") And #person.age Lt Int64(30)\
-                        \n  Projection: #person.first_name AS fn1, #person.age\
-                        \n    Filter: #person.age Gt Int64(20)\
-                        \n      TableScan: person projection=None";
+        let expected = "Projection: #fn1, #person.age\
+                        \n  Filter: #fn1 Eq Utf8(\"X\") And #person.age Lt Int64(30)\
+                        \n    Projection: #person.first_name AS fn1, #person.age\
+                        \n      Filter: #person.age Gt Int64(20)\
+                        \n        TableScan: person projection=None";
 
         quick_test(sql, expected);
     }
@@ -1803,9 +1797,10 @@ mod tests {
         let sql = "SELECT MAX(age)
                    FROM person
                    HAVING MAX(age) < 30";
-        let expected = "Filter: #MAX(person.age) Lt Int64(30)\
-                        \n  Aggregate: groupBy=[[]], aggr=[[MAX(#person.age)]]\
-                        \n    TableScan: person projection=None";
+        let expected = "Projection: #MAX(person.age)\
+                        \n  Filter: #MAX(person.age) Lt Int64(30)\
+                        \n    Aggregate: groupBy=[[]], aggr=[[MAX(#person.age)]]\
+                        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -1864,9 +1859,10 @@ mod tests {
                    FROM person
                    GROUP BY first_name
                    HAVING first_name = 'M'";
-        let expected = "Filter: #person.first_name Eq Utf8(\"M\")\
-                        \n  Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
-                        \n    TableScan: person projection=None";
+        let expected = "Projection: #person.first_name, #MAX(person.age)\
+                        \n  Filter: #person.first_name Eq Utf8(\"M\")\
+                        \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
+                        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -1877,10 +1873,11 @@ mod tests {
                    WHERE id > 5
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
-        let expected = "Filter: #MAX(person.age) Lt Int64(100)\
-                        \n  Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
-                        \n    Filter: #person.id Gt Int64(5)\
-                        \n      TableScan: person projection=None";
+        let expected = "Projection: #person.first_name, #MAX(person.age)\
+                        \n  Filter: #MAX(person.age) Lt Int64(100)\
+                        \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
+                        \n      Filter: #person.id Gt Int64(5)\
+                        \n        TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -1892,10 +1889,11 @@ mod tests {
                    WHERE id > 5 AND age > 18
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
-        let expected = "Filter: #MAX(person.age) Lt Int64(100)\
-                        \n  Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
-                        \n    Filter: #person.id Gt Int64(5) And #person.age Gt Int64(18)\
-                        \n      TableScan: person projection=None";
+        let expected = "Projection: #person.first_name, #MAX(person.age)\
+                        \n  Filter: #MAX(person.age) Lt Int64(100)\
+                        \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
+                        \n      Filter: #person.id Gt Int64(5) And #person.age Gt Int64(18)\
+                        \n        TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -1932,9 +1930,10 @@ mod tests {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100";
-        let expected = "Filter: #MAX(person.age) Gt Int64(100)\
-                        \n  Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
-                        \n    TableScan: person projection=None";
+        let expected = "Projection: #person.first_name, #MAX(person.age)\
+                        \n  Filter: #MAX(person.age) Gt Int64(100)\
+                        \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
+                        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -1957,9 +1956,10 @@ mod tests {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MAX(age) < 200";
-        let expected = "Filter: #MAX(person.age) Gt Int64(100) And #MAX(person.age) Lt Int64(200)\
-                        \n  Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
-                        \n    TableScan: person projection=None";
+        let expected = "Projection: #person.first_name, #MAX(person.age)\
+                        \n  Filter: #MAX(person.age) Gt Int64(100) And #MAX(person.age) Lt Int64(200)\
+                        \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
+                        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -2052,14 +2052,16 @@ mod tests {
     fn select_wildcard_with_groupby() {
         quick_test(
             "SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date",
-            "Aggregate: groupBy=[[#person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date]], aggr=[[]]\
-             \n  TableScan: person projection=None",
+            "Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date\
+             \n  Aggregate: groupBy=[[#person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date]], aggr=[[]]\
+             \n    TableScan: person projection=None",
         );
         quick_test(
             "SELECT * FROM (SELECT first_name, last_name FROM person) GROUP BY first_name, last_name",
-            "Aggregate: groupBy=[[#person.first_name, #person.last_name]], aggr=[[]]\
-             \n  Projection: #person.first_name, #person.last_name\
-             \n    TableScan: person projection=None",
+            "Projection: #person.first_name, #person.last_name\
+             \n  Aggregate: groupBy=[[#person.first_name, #person.last_name]], aggr=[[]]\
+             \n    Projection: #person.first_name, #person.last_name\
+             \n      TableScan: person projection=None",
         );
     }
 
@@ -2067,8 +2069,9 @@ mod tests {
     fn select_simple_aggregate() {
         quick_test(
             "SELECT MIN(age) FROM person",
-            "Aggregate: groupBy=[[]], aggr=[[MIN(#person.age)]]\
-             \n  TableScan: person projection=None",
+            "Projection: #MIN(person.age)\
+            \n  Aggregate: groupBy=[[]], aggr=[[MIN(#person.age)]]\
+            \n    TableScan: person projection=None",
         );
     }
 
@@ -2076,8 +2079,9 @@ mod tests {
     fn test_sum_aggregate() {
         quick_test(
             "SELECT SUM(age) from person",
-            "Aggregate: groupBy=[[]], aggr=[[SUM(#person.age)]]\
-             \n  TableScan: person projection=None",
+            "Projection: #SUM(person.age)\
+            \n  Aggregate: groupBy=[[]], aggr=[[SUM(#person.age)]]\
+            \n    TableScan: person projection=None",
         );
     }
 
@@ -2135,8 +2139,9 @@ mod tests {
     fn select_simple_aggregate_with_groupby() {
         quick_test(
             "SELECT state, MIN(age), MAX(age) FROM person GROUP BY state",
-            "Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age), MAX(#person.age)]]\
-             \n  TableScan: person projection=None",
+            "Projection: #person.state, #MIN(person.age), #MAX(person.age)\
+            \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age), MAX(#person.age)]]\
+            \n    TableScan: person projection=None",
         );
     }
 
@@ -2264,8 +2269,9 @@ mod tests {
     ) {
         quick_test(
             "SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1",
-            "Aggregate: groupBy=[[#person.age Plus Int64(1)]], aggr=[[MIN(#person.first_name)]]\
-             \n  TableScan: person projection=None",
+            "Projection: #person.age Plus Int64(1), #MIN(person.first_name)\
+             \n  Aggregate: groupBy=[[#person.age Plus Int64(1)]], aggr=[[MIN(#person.first_name)]]\
+             \n    TableScan: person projection=None",
         );
         quick_test(
             "SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1",
@@ -2344,8 +2350,9 @@ mod tests {
     fn select_aggregate_with_non_column_inner_expression_with_groupby() {
         quick_test(
             "SELECT state, MIN(age + 1) FROM person GROUP BY state",
-            "Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age Plus Int64(1))]]\
-             \n  TableScan: person projection=None",
+            "Projection: #person.state, #MIN(person.age Plus Int64(1))\
+            \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age Plus Int64(1))]]\
+            \n    TableScan: person projection=None",
         );
     }
 
@@ -2361,16 +2368,18 @@ mod tests {
     #[test]
     fn select_count_one() {
         let sql = "SELECT COUNT(1) FROM person";
-        let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-                        \n  TableScan: person projection=None";
+        let expected = "Projection: #COUNT(UInt8(1))\
+                        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+                        \n    TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
     #[test]
     fn select_count_column() {
         let sql = "SELECT COUNT(id) FROM person";
-        let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(#person.id)]]\
-                        \n  TableScan: person projection=None";
+        let expected = "Projection: #COUNT(person.id)\
+                        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#person.id)]]\
+                        \n    TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -2456,8 +2465,9 @@ mod tests {
     #[test]
     fn select_group_by() {
         let sql = "SELECT state FROM person GROUP BY state";
-        let expected = "Aggregate: groupBy=[[#person.state]], aggr=[[]]\
-                        \n  TableScan: person projection=None";
+        let expected = "Projection: #person.state\
+                        \n  Aggregate: groupBy=[[#person.state]], aggr=[[]]\
+                        \n    TableScan: person projection=None";
 
         quick_test(sql, expected);
     }
@@ -2475,8 +2485,9 @@ mod tests {
     #[test]
     fn select_group_by_count_star() {
         let sql = "SELECT state, COUNT(*) FROM person GROUP BY state";
-        let expected = "Aggregate: groupBy=[[#person.state]], aggr=[[COUNT(UInt8(1))]]\
-                        \n  TableScan: person projection=None";
+        let expected = "Projection: #person.state, #COUNT(UInt8(1))\
+                        \n  Aggregate: groupBy=[[#person.state]], aggr=[[COUNT(UInt8(1))]]\
+                        \n    TableScan: person projection=None";
 
         quick_test(sql, expected);
     }
@@ -2647,6 +2658,27 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             "Plan(\"UNION ALL schemas are expected to be the same\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn over_not_supported() {
+        let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "NotImplemented(\"Unsupported OVER clause ()\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn over_partition_by_not_supported() {
+        let sql =
+            "SELECT order_id, MAX(delivered) OVER (PARTITION BY order_id) from orders";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "NotImplemented(\"Unsupported OVER clause (PARTITION BY order_id)\")",
             format!("{:?}", err)
         );
     }
