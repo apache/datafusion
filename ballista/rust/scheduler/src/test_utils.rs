@@ -32,10 +32,8 @@ pub const TPCH_TABLES: &[&str] = &[
 
 pub fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
     // remove Repartition rule because that isn't supported yet
-    let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
-        Arc::new(CoalesceBatches::new()),
-        Arc::new(AddMergeExec::new()),
-    ];
+    let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> =
+        vec![Arc::new(AddMergeExec::new())];
     let config = ExecutionConfig::new().with_physical_optimizer_rules(rules);
     let mut ctx = ExecutionContext::with_config(config);
 
