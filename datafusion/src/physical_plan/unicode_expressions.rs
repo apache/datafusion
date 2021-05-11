@@ -26,7 +26,12 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
-use arrow::{array::{ArrayRef, GenericStringArray, Int64Array, PrimitiveArray, StringArray, StringOffsetSizeTrait}, datatypes::{ArrowNativeType, ArrowPrimitiveType}};
+use arrow::{
+    array::{
+        ArrayRef, GenericStringArray, Int64Array, PrimitiveArray, StringOffsetSizeTrait,
+    },
+    datatypes::{ArrowNativeType, ArrowPrimitiveType},
+};
 use hashbrown::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
