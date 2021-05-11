@@ -630,7 +630,7 @@ pub struct ExecutionConfig {
     pub repartition_joins: bool,
     /// Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel
     /// using the provided `concurrency` level
-    pub repartition_aggregates: bool,
+    pub repartition_aggregations: bool,
 }
 
 impl ExecutionConfig {
@@ -658,7 +658,7 @@ impl ExecutionConfig {
             create_default_catalog_and_schema: true,
             information_schema: false,
             repartition_joins: true,
-            repartition_aggregates: true,
+            repartition_aggregations: true,
         }
     }
 
@@ -742,6 +742,12 @@ impl ExecutionConfig {
         self.repartition_joins = enabled;
         self
     }
+        /// Enables or disables the use of repartitioning for aggregations to improve parallelism
+        pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
+            self.repartition_aggregations = enabled;
+            self
+        }
+    
 }
 
 /// Execution context for registering data sources and executing queries

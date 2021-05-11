@@ -192,7 +192,7 @@ impl DefaultPhysicalPlanner {
 
                 if groups.len() > 0
                     && ctx_state.config.concurrency > 1
-                    && ctx_state.config.repartition_aggregates
+                    && ctx_state.config.repartition_aggregations
                     && !contains_dict
                 {
                     // Divide partial hash aggregates into multiple partitions by hash key
