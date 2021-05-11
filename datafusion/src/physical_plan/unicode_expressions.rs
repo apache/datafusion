@@ -26,12 +26,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
-use arrow::{
-    array::{
-        ArrayRef, GenericStringArray, Int64Array, PrimitiveArray, StringOffsetSizeTrait,
-    },
-    datatypes::{ArrowNativeType, ArrowPrimitiveType},
-};
+use arrow::{array::{ArrayRef, GenericStringArray, Int64Array, PrimitiveArray, StringArray, StringOffsetSizeTrait}, datatypes::{ArrowNativeType, ArrowPrimitiveType}};
 use hashbrown::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -93,7 +88,6 @@ where
 pub fn left<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let n_array = downcast_arg!(args[1], "n", Int64Array);
-
     let result = string_array
         .iter()
         .zip(n_array.iter())

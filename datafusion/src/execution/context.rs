@@ -1305,7 +1305,6 @@ mod tests {
     #[tokio::test]
     async fn aggregate_grouped() -> Result<()> {
         let results = execute("SELECT c1, SUM(c2) FROM test GROUP BY c1", 4).await?;
-        assert_eq!(results.len(), 1);
 
         let expected = vec![
             "+----+---------+",
@@ -1325,7 +1324,6 @@ mod tests {
     #[tokio::test]
     async fn aggregate_grouped_avg() -> Result<()> {
         let results = execute("SELECT c1, AVG(c2) FROM test GROUP BY c1", 4).await?;
-        assert_eq!(results.len(), 1);
 
         let expected = vec![
             "+----+---------+",
@@ -1346,7 +1344,6 @@ mod tests {
     async fn boolean_literal() -> Result<()> {
         let results =
             execute("SELECT c1, c3 FROM test WHERE c1 > 2 AND c3 = true", 4).await?;
-        assert_eq!(results.len(), 1);
 
         let expected = vec![
             "+----+------+",
@@ -1368,7 +1365,6 @@ mod tests {
     async fn aggregate_grouped_empty() -> Result<()> {
         let results =
             execute("SELECT c1, AVG(c2) FROM test WHERE c1 = 123 GROUP BY c1", 4).await?;
-        assert_eq!(results.len(), 1);
 
         let expected = vec!["++", "||", "++", "++"];
         assert_batches_sorted_eq!(expected, &results);
@@ -1379,7 +1375,6 @@ mod tests {
     #[tokio::test]
     async fn aggregate_grouped_max() -> Result<()> {
         let results = execute("SELECT c1, MAX(c2) FROM test GROUP BY c1", 4).await?;
-        assert_eq!(results.len(), 1);
 
         let expected = vec![
             "+----+---------+",
@@ -1399,7 +1394,6 @@ mod tests {
     #[tokio::test]
     async fn aggregate_grouped_min() -> Result<()> {
         let results = execute("SELECT c1, MIN(c2) FROM test GROUP BY c1", 4).await?;
-        assert_eq!(results.len(), 1);
 
         let expected = vec![
             "+----+---------+",
@@ -1583,7 +1577,6 @@ mod tests {
     #[tokio::test]
     async fn count_aggregated() -> Result<()> {
         let results = execute("SELECT c1, COUNT(c2) FROM test GROUP BY c1", 4).await?;
-        assert_eq!(results.len(), 1);
 
         let expected = vec![
             "+----+-----------+",
@@ -1635,7 +1628,6 @@ mod tests {
             &mut ctx,
             "SELECT date_trunc('week', t1) as week, SUM(c2) FROM test GROUP BY date_trunc('week', t1)"
         ).await?;
-        assert_eq!(results.len(), 1);
 
         let expected = vec![
             "+---------------------+---------+",
@@ -1879,7 +1871,6 @@ mod tests {
         ];
 
         let results = run_count_distinct_integers_aggregated_scenario(partitions).await?;
-        assert_eq!(results.len(), 1);
 
         let expected = vec!
 [
@@ -1907,7 +1898,6 @@ mod tests {
         ];
 
         let results = run_count_distinct_integers_aggregated_scenario(partitions).await?;
-        assert_eq!(results.len(), 1);
 
         let expected = vec![
     "+---------+-----------------+------------------------+-------------------------+-------------------------+-------------------------+-------------------------+--------------------------+--------------------------+--------------------------+",

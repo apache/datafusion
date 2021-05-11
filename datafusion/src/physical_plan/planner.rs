@@ -184,19 +184,38 @@ impl DefaultPhysicalPlanner {
                 let final_group: Vec<Arc<dyn PhysicalExpr>> =
                     (0..groups.len()).map(|i| col(&groups[i].1)).collect();
 
-                // construct a second aggregation, keeping the final column name equal to the first aggregation
-                // and the expressions corresponding to the respective aggregate
-                Ok(Arc::new(HashAggregateExec::try_new(
-                    AggregateMode::Final,
-                    final_group
-                        .iter()
-                        .enumerate()
-                        .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
-                        .collect(),
-                    aggregates,
-                    initial_aggr,
-                    input_schema,
-                )?))
+                if groups.len() > 0 {
+                    let hash_repartition = Arc::new(RepartitionExec::try_new(
+                        initial_aggr,
+                        Partitioning::Hash(final_group.clone(), 40),
+                    )?);
+                    Ok(Arc::new(HashAggregateExec::try_new(
+                        AggregateMode::FinalPartitioned,
+                        final_group
+                            .iter()
+                            .enumerate()
+                            .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
+                            .collect(),
+                        aggregates,
+                        hash_repartition,
+                        input_schema,
+                    )?))
+                } else {
+                    // construct a second aggregation, keeping the final column name equal to the first aggregation
+                    // and the expressions corresponding to the respective aggregate
+
+                    Ok(Arc::new(HashAggregateExec::try_new(
+                        AggregateMode::Final,
+                        final_group
+                            .iter()
+                            .enumerate()
+                            .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
+                            .collect(),
+                        aggregates,
+                        initial_aggr,
+                        input_schema,
+                    )?))
+                }
             }
             LogicalPlan::Projection { input, expr, .. } => {
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
