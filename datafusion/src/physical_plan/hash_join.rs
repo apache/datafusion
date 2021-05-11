@@ -21,7 +21,16 @@
 use ahash::CallHasher;
 use ahash::RandomState;
 
-use arrow::{array::{ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array, LargeStringArray, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder}, compute, datatypes::{TimeUnit, UInt32Type, UInt64Type}};
+use arrow::{
+    array::{
+        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array,
+        Float64Array, LargeStringArray, PrimitiveArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, UInt32BufferBuilder,
+        UInt32Builder, UInt64BufferBuilder, UInt64Builder,
+    },
+    compute,
+    datatypes::{TimeUnit, UInt32Type, UInt64Type},
+};
 use smallvec::{smallvec, SmallVec};
 use std::{any::Any, usize};
 use std::{hash::Hasher, sync::Arc};
@@ -843,7 +852,10 @@ macro_rules! hash_array_float {
         if array.null_count() == 0 {
             if $multi_col {
                 for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = combine_hashes($ty::get_hash(&value.to_le_bytes(), $random_state), *hash);
+                    *hash = combine_hashes(
+                        $ty::get_hash(&value.to_le_bytes(), $random_state),
+                        *hash,
+                    );
                 }
             } else {
                 for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
@@ -856,8 +868,10 @@ macro_rules! hash_array_float {
                     $hashes.iter_mut().zip(values.iter()).enumerate()
                 {
                     if !array.is_null(i) {
-                        *hash =
-                            combine_hashes($ty::get_hash(&value.to_le_bytes(), $random_state), *hash);
+                        *hash = combine_hashes(
+                            $ty::get_hash(&value.to_le_bytes(), $random_state),
+                            *hash,
+                        );
                     }
                 }
             } else {
