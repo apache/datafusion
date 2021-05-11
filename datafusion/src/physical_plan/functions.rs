@@ -50,7 +50,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use fmt::{Debug, Formatter};
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::{any::Any, fmt, str::FromStr, sync::Arc};
 
 /// A function's signature, which defines the function's supported argument types.
@@ -1359,6 +1359,21 @@ impl fmt::Display for ScalarFunctionExpr {
     }
 }
 
+/// null columnar values are implemented as a scalar columnar value with u32 value, adding a type
+/// alias to hide the fact.
+type NullColumnarValue = ColumnarValue;
+
+impl TryFrom<&RecordBatch> for NullColumnarValue {
+    type Error = DataFusionError;
+    fn try_from(batch: &RecordBatch) -> Result<Self> {
+        let num_rows = batch
+            .num_rows()
+            .try_into()
+            .map_err(|_| DataFusionError::Internal("Batch size too large".to_string()))?;
+        Ok(ColumnarValue::Scalar(ScalarValue::UInt32(Some(num_rows))))
+    }
+}
+
 impl PhysicalExpr for ScalarFunctionExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -1377,11 +1392,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the arguments, if there are no arguments we'll instead pass in an uint32 holding
         // batch size (as a convention)
         let inputs = match self.args.len() {
-            0 => vec![ColumnarValue::Scalar(ScalarValue::UInt32(Some(
-                batch.num_rows().try_into().map_err(|_| {
-                    DataFusionError::Internal("Batch size too large".to_string())
-                })?,
-            )))],
+            0 => vec![NullColumnarValue::try_from(batch)?],
             _ => self
                 .args
                 .iter()
