@@ -31,4 +31,4 @@ clap = "2.33"
 rustyline = "8.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 datafusion = { path = "../datafusion" }
-arrow = { git = "https://github.com/apache/arrow-rs", rev = "508f25c10032857da34ea88cc8166f0741616a32" }
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "8226219fe7104f6c8a2740806f96f02c960d991c" }
