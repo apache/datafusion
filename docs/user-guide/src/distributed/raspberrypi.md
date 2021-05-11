@@ -77,3 +77,32 @@ chmod +x ballista-scheduler ballista-executor
 ```
 
 It is now possible to run the Ballista scheduler and executor natively on the Pi.
+
+## Docker
+
+Using Docker's `buildx` cross-platform functionality, we can also build a docker image targeting ARM64 
+from any desktop environment. This will require write access to a Docker repository 
+on [Docker Hub](https://hub.docker.com/) because the resulting Docker image will be pushed directly 
+to the repo.
+
+```bash
+DOCKER_REPO=myrepo ./dev/build-ballista-docker-arm64.sh
+```
+
+On the Raspberry Pi:
+
+```bash
+docker pull myrepo/ballista-arm64
+```
+
+Run a scheduler:
+
+```bash
+docker run -it myrepo/ballista-arm64 /ballista-scheduler
+```
+
+Run an executor:
+
+```bash
+docker run -it myrepo/ballista-arm64 /ballista-executor
+```
