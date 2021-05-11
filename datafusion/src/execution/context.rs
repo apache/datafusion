@@ -742,12 +742,11 @@ impl ExecutionConfig {
         self.repartition_joins = enabled;
         self
     }
-        /// Enables or disables the use of repartitioning for aggregations to improve parallelism
-        pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
-            self.repartition_aggregations = enabled;
-            self
-        }
-    
+    /// Enables or disables the use of repartitioning for aggregations to improve parallelism
+    pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
+        self.repartition_aggregations = enabled;
+        self
+    }
 }
 
 /// Execution context for registering data sources and executing queries
