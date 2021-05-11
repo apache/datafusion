@@ -18,8 +18,10 @@ There is no need to duplicate the description in the issue here but it is someti
 -->
 
 # Are there any user-facing changes?
-<--
+<!--
 If there are user-facing changes then we may require documentation to be updated before approving the PR.
+-->
 
+<!--
 If there are any breaking changes to public APIs, please add the `breaking change` label.
 -->
