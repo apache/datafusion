@@ -45,7 +45,7 @@ use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, PhysicalP
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::variable::VarType;
-use arrow::compute::can_cast_types;
+use arrow::{compute::can_cast_types, datatypes::DataType};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
@@ -184,11 +184,27 @@ impl DefaultPhysicalPlanner {
                 let final_group: Vec<Arc<dyn PhysicalExpr>> =
                     (0..groups.len()).map(|i| col(&groups[i].1)).collect();
 
-                if groups.len() > 0 {
+                // TODO: dictionary type not yet supported in Hash Repartition
+                let contains_dict = groups
+                    .iter()
+                    .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
+                    .any(|x| matches!(x, DataType::Dictionary(_, _)));
+
+                if groups.len() > 0
+                    && ctx_state.config.concurrency > 1
+                    && ctx_state.config.repartition_aggregates
+                    && !contains_dict
+                {
+                    // Divide partial hash aggregates into multiple partitions by hash key
                     let hash_repartition = Arc::new(RepartitionExec::try_new(
                         initial_aggr,
-                        Partitioning::Hash(final_group.clone(), 40),
+                        Partitioning::Hash(
+                            final_group.clone(),
+                            ctx_state.config.concurrency,
+                        ),
                     )?);
+
+                    // Combine hashaggregates within the partition
                     Ok(Arc::new(HashAggregateExec::try_new(
                         AggregateMode::FinalPartitioned,
                         final_group
