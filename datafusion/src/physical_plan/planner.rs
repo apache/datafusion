@@ -735,12 +735,9 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logical_plan::{DFField, DFSchema, DFSchemaRef};
     use crate::physical_plan::{csv::CsvReadOptions, expressions, Partitioning};
     use crate::scalar::ScalarValue;
-    use crate::{
-        catalog::catalog::MemoryCatalogList,
-        logical_plan::{DFField, DFSchema, DFSchemaRef},
-    };
     use crate::{
         logical_plan::{col, lit, sum, LogicalPlanBuilder},
         physical_plan::SendableRecordBatchStream,
@@ -748,7 +745,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use async_trait::async_trait;
     use fmt::Debug;
-    use std::{any::Any, collections::HashMap, fmt};
+    use std::{any::Any, fmt};
 
     fn make_ctx_state() -> ExecutionContextState {
         ExecutionContextState::new()

@@ -27,7 +27,9 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{DFSchemaRef, Expr, ExprRewriter, LogicalPlan, Operator};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
+use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
+use chrono::{DateTime, Utc};
 
 /// Optimizer that simplifies comparison expressions involving boolean literals.
 ///
@@ -60,6 +62,7 @@ impl OptimizerRule for ConstantFolding {
         // children plans.
         let mut rewriter = ConstantRewriter {
             schemas: plan.all_schemas(),
+            execution_props,
         };
 
         match plan {
@@ -108,6 +111,7 @@ impl OptimizerRule for ConstantFolding {
 struct ConstantRewriter<'a> {
     /// input schemas
     schemas: Vec<&'a DFSchemaRef>,
+    execution_props: &'a ExecutionProps,
 }
 
 impl<'a> ConstantRewriter<'a> {
@@ -205,6 +209,15 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
                     Expr::Not(inner)
                 }
             }
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::Now,
+                ..
+            } => Expr::Literal(ScalarValue::TimestampNanosecond(Some(
+                self.execution_props
+                    .query_execution_start_time
+                    .unwrap()
+                    .timestamp_nanos(),
+            ))),
             expr => {
                 // no rewrite possible
                 expr
@@ -248,6 +261,7 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = ConstantRewriter {
             schemas: vec![&schema],
+            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(
@@ -263,6 +277,7 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = ConstantRewriter {
             schemas: vec![&schema],
+            execution_props: &ExecutionProps::new(),
         };
 
         // x = null is always null
@@ -298,6 +313,7 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = ConstantRewriter {
             schemas: vec![&schema],
+            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(col("c2").get_type(&schema)?, DataType::Boolean);
@@ -328,6 +344,7 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = ConstantRewriter {
             schemas: vec![&schema],
+            execution_props: &ExecutionProps::new(),
         };
 
         // When one of the operand is not of boolean type, folding the other boolean constant will
@@ -367,6 +384,7 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = ConstantRewriter {
             schemas: vec![&schema],
+            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(col("c2").get_type(&schema)?, DataType::Boolean);
@@ -402,6 +420,7 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = ConstantRewriter {
             schemas: vec![&schema],
+            execution_props: &ExecutionProps::new(),
         };
 
         // when one of the operand is not of boolean type, folding the other boolean constant will
@@ -437,6 +456,7 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = ConstantRewriter {
             schemas: vec![&schema],
+            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(
@@ -595,5 +615,78 @@ mod tests {
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
+    }
+
+    fn get_optimized_plan_formatted(
+        plan: &LogicalPlan,
+        date_time: &DateTime<Utc>,
+    ) -> String {
+        let rule = ConstantFolding::new();
+        let execution_props = ExecutionProps {
+            query_execution_start_time: Some(date_time.clone()),
+        };
+
+        let optimized_plan = rule
+            .optimize(plan, &execution_props)
+            .expect("failed to optimize plan");
+        return format!("{:?}", optimized_plan);
+    }
+
+    #[test]
+    fn single_now_expr() {
+        let table_scan = test_table_scan().unwrap();
+        let proj = vec![Expr::ScalarFunction {
+            args: vec![],
+            fun: BuiltinScalarFunction::Now,
+        }];
+        let time = chrono::Utc::now();
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .project(proj)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = format!(
+            "Projection: TimestampNanosecond({})\
+            \n  TableScan: test projection=None",
+            time.timestamp_nanos()
+        );
+        let actual = get_optimized_plan_formatted(&plan, &time);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn multiple_now_expr() {
+        let table_scan = test_table_scan().unwrap();
+        let time = chrono::Utc::now();
+        let proj = vec![
+            Expr::ScalarFunction {
+                args: vec![],
+                fun: BuiltinScalarFunction::Now,
+            },
+            Expr::Alias(
+                Box::new(Expr::ScalarFunction {
+                    args: vec![],
+                    fun: BuiltinScalarFunction::Now,
+                }),
+                "t2".to_string(),
+            ),
+        ];
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .project(proj)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let actual = get_optimized_plan_formatted(&plan, &time);
+        let expected = format!(
+            "Projection: TimestampNanosecond({}), TimestampNanosecond({}) AS t2\
+            \n  TableScan: test projection=None",
+            time.timestamp_nanos(),
+            time.timestamp_nanos()
+        );
+
+        assert_eq!(actual, expected);
     }
 }

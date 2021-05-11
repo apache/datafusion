@@ -59,7 +59,6 @@ use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::projection_push_down::ProjectionPushDown;
-use crate::optimizer::timestamp_evaluation::TimestampEvaluation;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddMergeExec;
 use crate::physical_optimizer::repartition::Repartition;
@@ -650,7 +649,6 @@ impl ExecutionConfig {
                 Arc::new(FilterPushDown::new()),
                 Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(LimitPushDown::new()),
-                Arc::new(TimestampEvaluation::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(CoalesceBatches::new()),
