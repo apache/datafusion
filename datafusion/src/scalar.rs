@@ -104,26 +104,24 @@ macro_rules! typed_cast {
     }};
 }
 
-macro_rules! build_values_list {
+macro_rules! build_list {
     ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
-        let mut builder = ListBuilder::new($VALUE_BUILDER_TY::new($VALUES.len()));
-
-        for _ in 0..$SIZE {
-            for scalar_value in $VALUES {
-                match scalar_value {
-                    ScalarValue::$SCALAR_TY(Some(v)) => {
-                        builder.values().append_value(v.clone()).unwrap()
-                    }
-                    ScalarValue::$SCALAR_TY(None) => {
-                        builder.values().append_null().unwrap();
-                    }
-                    _ => panic!("Incompatible ScalarValue for list"),
-                };
+        match $VALUES {
+            // the return on the macro is necessary, to short-circuit and return ArrayRef
+            None => {
+                return new_null_array(
+                    &DataType::List(Box::new(Field::new(
+                        "item",
+                        DataType::$SCALAR_TY,
+                        true,
+                    ))),
+                    $SIZE,
+                )
             }
-            builder.append(true).unwrap();
+            Some(values) => {
+                build_values_list!($VALUE_BUILDER_TY, $SCALAR_TY, values, $SIZE)
+            }
         }
-
-        builder.finish()
     }};
 }
 
@@ -171,41 +169,26 @@ macro_rules! build_timestamp_list {
     }};
 }
 
-macro_rules! build_list {
+macro_rules! build_values_list {
     ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
-        match $VALUES {
-            // the return on the macro is necessary, to short-circuit and return ArrayRef
-            None => {
-                return new_null_array(
-                    &DataType::List(Box::new(Field::new(
-                        "item",
-                        DataType::$SCALAR_TY,
-                        true,
-                    ))),
-                    $SIZE,
-                )
-            }
-            Some(values) => {
-                let mut builder = ListBuilder::new($VALUE_BUILDER_TY::new(values.len()));
+        let mut builder = ListBuilder::new($VALUE_BUILDER_TY::new($VALUES.len()));
 
-                for _ in 0..$SIZE {
-                    for scalar_value in values {
-                        match scalar_value {
-                            ScalarValue::$SCALAR_TY(Some(v)) => {
-                                builder.values().append_value(v.clone()).unwrap()
-                            }
-                            ScalarValue::$SCALAR_TY(None) => {
-                                builder.values().append_null().unwrap();
-                            }
-                            _ => panic!("Incompatible ScalarValue for list"),
-                        };
+        for _ in 0..$SIZE {
+            for scalar_value in $VALUES {
+                match scalar_value {
+                    ScalarValue::$SCALAR_TY(Some(v)) => {
+                        builder.values().append_value(v.clone()).unwrap()
                     }
-                    builder.append(true).unwrap();
-                }
-
-                builder.finish()
+                    ScalarValue::$SCALAR_TY(None) => {
+                        builder.values().append_null().unwrap();
+                    }
+                    _ => panic!("Incompatible ScalarValue for list"),
+                };
             }
+            builder.append(true).unwrap();
         }
+
+        builder.finish()
     }};
 }
 
