@@ -628,6 +628,9 @@ pub struct ExecutionConfig {
     /// Should DataFusion repartition data using the join keys to execute joins in parallel
     /// using the provided `concurrency` level
     pub repartition_joins: bool,
+    /// Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel
+    /// using the provided `concurrency` level
+    pub repartition_aggregates: bool,
 }
 
 impl ExecutionConfig {
@@ -655,6 +658,7 @@ impl ExecutionConfig {
             create_default_catalog_and_schema: true,
             information_schema: false,
             repartition_joins: true,
+            repartition_aggregates: true,
         }
     }
 

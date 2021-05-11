@@ -128,7 +128,7 @@ impl DistributedPlanner {
             //TODO should insert query stages in more generic way based on partitioning metadata
             // and not specifically for this operator
             match agg.mode() {
-                AggregateMode::Final => {
+                AggregateMode::Final | AggregateMode::FinalPartitioned => {
                     let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
                     for child in &children {
                         let new_stage = create_query_stage(
