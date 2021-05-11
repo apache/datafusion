@@ -55,6 +55,8 @@ Here are some of the projects known to use DataFusion:
 * [delta-rs](https://github.com/delta-io/delta-rs)
 * [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 * [ROAPI](https://github.com/roapi/roapi)
+* [Tensorbase](https://github.com/tensorbase/tensorbase)
+* [Squirtle](https://github.com/DSLAM-UMD/Squirtle)
 
 (if you know of another project, please submit a PR to add a link!)
 
@@ -215,8 +217,8 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
   - [x] INNER JOIN
   - [x] LEFT JOIN
   - [x] RIGHT JOIN
+  - [x] FULL JOIN
   - [x] CROSS JOIN
-  - [ ] OUTER JOIN
 - [ ] Window
 
 ## Data Sources
