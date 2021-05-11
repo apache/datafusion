@@ -190,7 +190,7 @@ impl DefaultPhysicalPlanner {
                     .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
                     .any(|x| matches!(x, DataType::Dictionary(_, _)));
 
-                if groups.len() > 0
+                if !groups.is_empty()
                     && ctx_state.config.concurrency > 1
                     && ctx_state.config.repartition_aggregations
                     && !contains_dict

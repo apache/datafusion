@@ -228,7 +228,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     scalar_functions: Default::default(),
                     var_provider: Default::default(),
                     aggregate_functions: Default::default(),
-                    config: ExecutionConfig::new(),
+                    config: ExecutionConfig::new().with_repartition_aggregations(false),
                 };
 
                 let input_schema = hash_agg
