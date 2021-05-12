@@ -27,28 +27,28 @@ pub struct PrintOptions {
     pub timing: bool,
 }
 
-impl PrintOptions {
-    fn print_timing_info(&self, row_count: usize, now: Instant) {
-        println!(
-            "{} {} in set. Query took {} seconds.",
-            row_count,
-            if row_count == 1 { "row" } else { "rows" },
-            now.elapsed().as_secs()
-        );
-    }
+fn print_timing_info(row_count: usize, now: Instant) {
+    println!(
+        "{} {} in set. Query took {} seconds.",
+        row_count,
+        if row_count == 1 { "row" } else { "rows" },
+        now.elapsed().as_secs()
+    );
+}
 
+impl PrintOptions {
     /// print the batches to stdout using the specified format
     pub fn print_batches(&self, batches: &[RecordBatch]) -> Result<()> {
         let now = Instant::now();
         if batches.is_empty() {
             if self.timing {
-                self.print_timing_info(batches.len(), now);
+                print_timing_info(batches.len(), now);
             }
         } else {
             self.format.print_batches(batches)?;
             if self.timing {
                 let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
-                self.print_timing_info(row_count, now);
+                print_timing_info(row_count, now);
             }
         }
         Ok(())
