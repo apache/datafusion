@@ -44,13 +44,14 @@ use crate::{
     scalar::ScalarValue,
 };
 use arrow::{
-    array::ArrayRef,
+    array::{ArrayRef, NullArray},
     compute::kernels::length::{bit_length, length},
     datatypes::TimeUnit,
     datatypes::{DataType, Field, Int32Type, Int64Type, Schema},
     record_batch::RecordBatch,
 };
 use fmt::{Debug, Formatter};
+use std::convert::From;
 use std::{any::Any, fmt, str::FromStr, sync::Arc};
 
 /// A function's signature, which defines the function's supported argument types.
@@ -76,6 +77,13 @@ pub enum Signature {
 }
 
 /// Scalar function
+///
+/// The Fn param is the wrapped function but be aware that the function will
+/// be passed with the slice / vec of columnar values (either scalar or array)
+/// with the exception of zero param function, where a singular element vec
+/// will be passed. In that case the single element is a null array to indicate
+/// the batch's row count (so that the generative zero-argument function can know
+/// the result array size).
 pub type ScalarFunctionImplementation =
     Arc<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue> + Send + Sync>;
 
@@ -1371,6 +1379,17 @@ impl fmt::Display for ScalarFunctionExpr {
     }
 }
 
+/// null columnar values are implemented as a null array in order to pass batch
+/// num_rows
+type NullColumnarValue = ColumnarValue;
+
+impl From<&RecordBatch> for NullColumnarValue {
+    fn from(batch: &RecordBatch) -> Self {
+        let num_rows = batch.num_rows();
+        ColumnarValue::Array(Arc::new(NullArray::new(num_rows)))
+    }
+}
+
 impl PhysicalExpr for ScalarFunctionExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -1386,12 +1405,16 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        // evaluate the arguments
-        let inputs = self
-            .args
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .collect::<Result<Vec<_>>>()?;
+        // evaluate the arguments, if there are no arguments we'll instead pass in a null array
+        // indicating the batch size (as a convention)
+        let inputs = match self.args.len() {
+            0 => vec![NullColumnarValue::from(batch)],
+            _ => self
+                .args
+                .iter()
+                .map(|e| e.evaluate(batch))
+                .collect::<Result<Vec<_>>>()?,
+        };
 
         // evaluate the function
         let fun = self.fun.as_ref();
@@ -1399,7 +1422,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 }
 
-/// decorates a function to handle [`ScalarValue`]s by coverting them to arrays before calling the function
+/// decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
 /// and vice-versa after evaluation.
 pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
 where
