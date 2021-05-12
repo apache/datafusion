@@ -19,7 +19,7 @@
 
 # DataFusion
 
-<img src="datafusion/docs/images/DataFusion-Logo-Dark.svg" width="256"/>
+<img src="datafusion/docs/images/DataFusion-Logo-Background-White.svg" width="256"/>
 
 DataFusion is an extensible query execution framework, written in
 Rust, that uses [Apache Arrow](https://arrow.apache.org) as its
