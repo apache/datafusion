@@ -21,6 +21,9 @@
 
 This section describes how you can get started at developing DataFusion.
 
+For information on developing with Ballista, see the 
+[Ballista developer documentation](ballista/docs/README.md). 
+
 ### Bootstrap environment
 
 DataFusion is written in Rust and it uses a standard rust toolkit:

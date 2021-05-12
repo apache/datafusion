@@ -30,6 +30,9 @@ logical query plans as well as a query optimizer and execution engine
 capable of parallel execution against partitioned data sources (CSV
 and Parquet) using threads.
 
+DataFusion also supports distributed query execution via the  
+[Ballista](ballista/README.md) crate.
+
 ## Use Cases
 
 DataFusion is used to create modern, fast and efficient data
