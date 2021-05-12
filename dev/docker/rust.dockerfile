@@ -35,6 +35,7 @@ RUN mkdir /tmp/ballista/datafusion-examples
 ADD Cargo.toml .
 COPY benchmarks ./benchmarks/
 COPY datafusion ./datafusion/
+COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
 COPY ballista ./ballista/
 RUN cargo chef prepare --recipe-path recipe.json
@@ -47,11 +48,13 @@ FROM base as builder
 RUN mkdir /tmp/ballista/ballista
 RUN mkdir /tmp/ballista/benchmarks
 RUN mkdir /tmp/ballista/datafusion
+RUN mkdir /tmp/ballista/datafusion-cli
 RUN mkdir /tmp/ballista/datafusion-examples
 ADD Cargo.toml .
 COPY benchmarks ./benchmarks/
 COPY datafusion ./datafusion/
 COPY ballista ./ballista/
+COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
 COPY --from=cacher /tmp/ballista/target target
 ARG RELEASE_FLAG=--release
