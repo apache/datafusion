@@ -203,9 +203,10 @@ impl ExecutionPlan for HashAggregateExec {
 
     fn required_child_distribution(&self) -> Distribution {
         match &self.mode {
-            AggregateMode::Partial | AggregateMode::FinalPartitioned => {
-                Distribution::UnspecifiedDistribution
-            }
+            AggregateMode::Partial => Distribution::UnspecifiedDistribution,
+            AggregateMode::FinalPartitioned => Distribution::HashPartitioned(
+                self.group_expr.iter().map(|x| x.0.clone()).collect(),
+            ),
             AggregateMode::Final => Distribution::SinglePartition,
         }
     }
