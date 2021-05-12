@@ -793,7 +793,7 @@ mod tests {
             scalar_functions: HashMap::new(),
             var_provider: HashMap::new(),
             aggregate_functions: HashMap::new(),
-            config: ExecutionConfig::new(),
+            config: ExecutionConfig::new().with_concurrency(4),
         }
     }
 
@@ -1031,6 +1031,26 @@ mod tests {
         // we need access to the input to the partial aggregate so that other projects can
         // implement serde
         assert_eq!("c2", final_hash_agg.input_schema().field(1).name());
+
+        Ok(())
+    }
+
+    #[test]
+    fn hash_agg_group_by_partitioned() -> Result<()> {
+        let testdata = arrow::util::test_util::arrow_test_data();
+        let path = format!("{}/csv/aggregate_test_100.csv", testdata);
+
+        let options = CsvReadOptions::new().schema_infer_max_records(100);
+        let logical_plan = LogicalPlanBuilder::scan_csv(&path, options, None)?
+            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+            .build()?;
+
+        let execution_plan = plan(&logical_plan)?;
+        let formatted = format!("{:?}", execution_plan);
+
+        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
+        // mode in HashAggregate (which is slower)
+        assert!(formatted.contains("FinalPartitioned"));
 
         Ok(())
     }

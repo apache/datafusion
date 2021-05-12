@@ -81,7 +81,7 @@ pub enum AggregateMode {
     /// This requires the invariant that all rows with a particular
     /// grouping key are in the same partitions, such as is the case
     /// with Hash repartitioning on the group keys. If a group key is
-    /// duplicated, duplicate groups would be produced 
+    /// duplicated, duplicate groups would be produced
     FinalPartitioned,
 }
 
