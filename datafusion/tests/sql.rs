@@ -1960,6 +1960,19 @@ async fn to_timestamp() -> Result<()> {
 }
 
 #[tokio::test]
+async fn count_distinct_timestamps() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
+
+    let sql = "SELECT COUNT(DISTINCT(ts)) FROM ts_data";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["3"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_is_null() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Float64, true)]));
 

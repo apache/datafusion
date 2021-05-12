@@ -119,26 +119,76 @@ macro_rules! build_list {
                 )
             }
             Some(values) => {
-                let mut builder = ListBuilder::new($VALUE_BUILDER_TY::new(values.len()));
-
-                for _ in 0..$SIZE {
-                    for scalar_value in values {
-                        match scalar_value {
-                            ScalarValue::$SCALAR_TY(Some(v)) => {
-                                builder.values().append_value(v.clone()).unwrap()
-                            }
-                            ScalarValue::$SCALAR_TY(None) => {
-                                builder.values().append_null().unwrap();
-                            }
-                            _ => panic!("Incompatible ScalarValue for list"),
-                        };
-                    }
-                    builder.append(true).unwrap();
-                }
-
-                builder.finish()
+                build_values_list!($VALUE_BUILDER_TY, $SCALAR_TY, values, $SIZE)
             }
         }
+    }};
+}
+
+macro_rules! build_timestamp_list {
+    ($TIME_UNIT:expr, $TIME_ZONE:expr, $VALUES:expr, $SIZE:expr) => {{
+        match $VALUES {
+            // the return on the macro is necessary, to short-circuit and return ArrayRef
+            None => {
+                return new_null_array(
+                    &DataType::List(Box::new(Field::new(
+                        "item",
+                        DataType::Timestamp($TIME_UNIT, $TIME_ZONE),
+                        true,
+                    ))),
+                    $SIZE,
+                )
+            }
+            Some(values) => match $TIME_UNIT {
+                TimeUnit::Second => build_values_list!(
+                    TimestampSecondBuilder,
+                    TimestampSecond,
+                    values,
+                    $SIZE
+                ),
+                TimeUnit::Microsecond => build_values_list!(
+                    TimestampMillisecondBuilder,
+                    TimestampMillisecond,
+                    values,
+                    $SIZE
+                ),
+                TimeUnit::Millisecond => build_values_list!(
+                    TimestampMicrosecondBuilder,
+                    TimestampMicrosecond,
+                    values,
+                    $SIZE
+                ),
+                TimeUnit::Nanosecond => build_values_list!(
+                    TimestampNanosecondBuilder,
+                    TimestampNanosecond,
+                    values,
+                    $SIZE
+                ),
+            },
+        }
+    }};
+}
+
+macro_rules! build_values_list {
+    ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
+        let mut builder = ListBuilder::new($VALUE_BUILDER_TY::new($VALUES.len()));
+
+        for _ in 0..$SIZE {
+            for scalar_value in $VALUES {
+                match scalar_value {
+                    ScalarValue::$SCALAR_TY(Some(v)) => {
+                        builder.values().append_value(v.clone()).unwrap()
+                    }
+                    ScalarValue::$SCALAR_TY(None) => {
+                        builder.values().append_null().unwrap();
+                    }
+                    _ => panic!("Incompatible ScalarValue for list"),
+                };
+            }
+            builder.append(true).unwrap();
+        }
+
+        builder.finish()
     }};
 }
 
@@ -360,10 +410,13 @@ impl ScalarValue {
                 DataType::Utf8 => build_list!(StringBuilder, Utf8, values, size),
                 DataType::Float32 => build_list!(Float32Builder, Float32, values, size),
                 DataType::Float64 => build_list!(Float64Builder, Float64, values, size),
+                DataType::Timestamp(unit, tz) => {
+                    build_timestamp_list!(unit.clone(), tz.clone(), values, size)
+                }
                 DataType::LargeUtf8 => {
                     build_list!(LargeStringBuilder, LargeUtf8, values, size)
                 }
-                _ => panic!("Unexpected DataType for list"),
+                dt => panic!("Unexpected DataType for list {:?}", dt),
             }),
             ScalarValue::Date32(e) => match e {
                 Some(value) => Arc::new(Date32Array::from_value(*value, size)),
