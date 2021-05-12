@@ -76,7 +76,12 @@ pub enum AggregateMode {
     Partial,
     /// Final aggregate that produces a single partition of output
     Final,
-    /// Final aggregate that works on pre-partitioned data
+    /// Final aggregate that works on pre-partitioned data.
+    ///
+    /// This requires the invariant that all rows with a particular
+    /// grouping key are in the same partitions, such as is the case
+    /// with Hash repartitioning on the group keys. If a group key is
+    /// duplicated, duplicate groups would be produced 
     FinalPartitioned,
 }
 
