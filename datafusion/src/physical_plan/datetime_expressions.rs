@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use super::ColumnarValue;
+use crate::execution::context::ExecutionProps;
 use crate::{
     error::{DataFusionError, Result},
     scalar::{ScalarType, ScalarValue},
@@ -260,7 +261,7 @@ where
 }
 
 /// to_timestamp SQL function
-pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn to_timestamp(args: &[ColumnarValue], _: &ExecutionProps) -> Result<ColumnarValue> {
     handle::<TimestampNanosecondType, _, TimestampNanosecondType>(
         args,
         string_to_timestamp_nanos,
@@ -269,9 +270,12 @@ pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 /// now SQL function
-pub fn now(_: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn now(
+    _: &[ColumnarValue],
+    execution_props: &ExecutionProps,
+) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-        Some(chrono::Utc::now().timestamp_nanos()),
+        Some(execution_props.query_execution_start_time.timestamp_nanos()),
     )))
 }
 
@@ -315,7 +319,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
 }
 
 /// date_trunc SQL function
-pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn date_trunc(args: &[ColumnarValue], _: &ExecutionProps) -> Result<ColumnarValue> {
     let (granularity, array) = (&args[0], &args[1]);
 
     let granularity =
@@ -404,7 +408,7 @@ macro_rules! extract_date_part {
 }
 
 /// DATE_PART SQL function
-pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn date_part(args: &[ColumnarValue], _: &ExecutionProps) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return Err(DataFusionError::Execution(
             "Expected two arguments in DATE_PART".to_string(),
@@ -470,7 +474,7 @@ mod tests {
 
         let string_array =
             ColumnarValue::Array(Arc::new(string_builder.finish()) as ArrayRef);
-        let parsed_timestamps = to_timestamp(&[string_array])
+        let parsed_timestamps = to_timestamp(&[string_array], &ExecutionProps::new())
             .expect("that to_timestamp parsed values without error");
         if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
             assert_eq!(parsed_array.len(), 2);
@@ -550,7 +554,7 @@ mod tests {
 
         let expected_err =
             "Internal error: Unsupported data type Int64 for function to_timestamp";
-        match to_timestamp(&[int64array]) {
+        match to_timestamp(&[int64array], &ExecutionProps::new()) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
                 assert!(

@@ -31,7 +31,7 @@ use arrow::{
     util::display::array_value_to_string,
 };
 
-use datafusion::execution::context::ExecutionContext;
+use datafusion::execution::context::{ExecutionContext, ExecutionProps};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::prelude::create_udf;
 use datafusion::{
@@ -589,7 +589,7 @@ fn create_ctx() -> Result<ExecutionContext> {
     Ok(ctx)
 }
 
-fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn custom_sqrt(args: &[ColumnarValue], _: &ExecutionProps) -> Result<ColumnarValue> {
     let arg = &args[0];
     if let ColumnarValue::Array(v) = arg {
         let input = v
@@ -2739,10 +2739,39 @@ async fn test_cast_expressions() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_timestamp_expressions() -> Result<()> {
+async fn test_current_timestamp_expressions() -> Result<()> {
     let t1 = chrono::Utc::now().timestamp();
     let mut ctx = ExecutionContext::new();
     let actual = execute(&mut ctx, "SELECT NOW(), NOW() as t2").await;
+    let res1 = actual[0][0].as_str();
+    let res2 = actual[0][1].as_str();
+    let t3 = chrono::Utc::now().timestamp();
+    let t2_naive =
+        chrono::NaiveDateTime::parse_from_str(res1, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
+
+    let t2 = t2_naive.timestamp();
+    assert!(t1 <= t2 && t2 <= t3);
+    assert_eq!(res2, res1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
+    let t1 = chrono::Utc::now().timestamp();
+    let ctx = ExecutionContext::new();
+    let sql = "SELECT NOW(), NOW() as t2";
+
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
+
+    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
+    let plan = ctx.create_physical_plan(&plan).expect(&msg);
+
+    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
+    let res = collect(plan).await.expect(&msg);
+    let actual = result_vec(&res);
+
     let res1 = actual[0][0].as_str();
     let res2 = actual[0][1].as_str();
     let t3 = chrono::Utc::now().timestamp();

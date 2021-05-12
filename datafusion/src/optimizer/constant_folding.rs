@@ -29,7 +29,6 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
-use chrono::{DateTime, Utc};
 
 /// Optimizer that simplifies comparison expressions involving boolean literals.
 ///
@@ -215,7 +214,6 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
             } => Expr::Literal(ScalarValue::TimestampNanosecond(Some(
                 self.execution_props
                     .query_execution_start_time
-                    .unwrap()
                     .timestamp_nanos(),
             ))),
             expr => {
@@ -235,6 +233,7 @@ mod tests {
     };
 
     use arrow::datatypes::*;
+    use chrono::{DateTime, Utc};
 
     fn test_table_scan() -> Result<LogicalPlan> {
         let schema = Schema::new(vec![
@@ -623,7 +622,7 @@ mod tests {
     ) -> String {
         let rule = ConstantFolding::new();
         let execution_props = ExecutionProps {
-            query_execution_start_time: Some(date_time.clone()),
+            query_execution_start_time: date_time.clone(),
         };
 
         let optimized_plan = rule

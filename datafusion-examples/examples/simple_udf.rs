@@ -22,6 +22,7 @@ use datafusion::arrow::{
     util::pretty,
 };
 
+use datafusion::execution::context::ExecutionProps;
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use std::sync::Arc;
@@ -60,7 +61,7 @@ async fn main() -> Result<()> {
     let mut ctx = create_context()?;
 
     // First, declare the actual implementation of the calculation
-    let pow = |args: &[ArrayRef]| {
+    let pow = |args: &[ArrayRef], _: &ExecutionProps| {
         // in DataFusion, all `args` and output are dynamically-typed arrays, which means that we need to:
         // 1. cast the values to the type we want
         // 2. perform the computation for every element in the array (using a loop or SIMD) and construct the result

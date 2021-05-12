@@ -304,7 +304,7 @@ mod tests {
 
         // declare the udf
         let my_fn: ScalarFunctionImplementation =
-            Arc::new(|_: &[ColumnarValue]| unimplemented!("my_fn is not implemented"));
+            Arc::new(|_: &[ColumnarValue], _| unimplemented!("my_fn is not implemented"));
 
         // create and register the udf
         ctx.register_udf(create_udf(

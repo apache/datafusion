@@ -37,6 +37,7 @@ use arrow::{
 };
 
 use super::ColumnarValue;
+use crate::execution::context::ExecutionProps;
 
 macro_rules! downcast_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident) => {{
@@ -174,7 +175,10 @@ where
 
 /// Returns the numeric code of the first character of the argument.
 /// ascii('x') = 120
-pub fn ascii<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn ascii<T: StringOffsetSizeTrait>(
+    args: &[ArrayRef],
+    _: &ExecutionProps,
+) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
 
     let result = string_array
@@ -192,7 +196,10 @@ pub fn ascii<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Removes the longest string containing only characters in characters (a space by default) from the start and end of string.
 /// btrim('xyxtrimyyx', 'xyz') = 'trim'
-pub fn btrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn btrim<T: StringOffsetSizeTrait>(
+    args: &[ArrayRef],
+    _: &ExecutionProps,
+) -> Result<ArrayRef> {
     match args.len() {
         1 => {
             let string_array = downcast_string_arg!(args[0], "string", T);
@@ -240,7 +247,7 @@ pub fn btrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
 /// chr(65) = 'A'
-pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn chr(args: &[ArrayRef], _: &ExecutionProps) -> Result<ArrayRef> {
     let integer_array = downcast_arg!(args[0], "integer", Int64Array);
 
     // first map is the iterator, second is for the `Option<_>`
@@ -271,7 +278,7 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
 /// concat('abcde', 2, NULL, 22) = 'abcde222'
-pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn concat(args: &[ColumnarValue], _: &ExecutionProps) -> Result<ColumnarValue> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return Err(DataFusionError::Internal(format!(
@@ -331,7 +338,7 @@ pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 /// Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.
 /// concat_ws(',', 'abcde', 2, NULL, 22) = 'abcde,2,22'
-pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn concat_ws(args: &[ArrayRef], _: &ExecutionProps) -> Result<ArrayRef> {
     // downcast all arguments to strings
     let args = downcast_vec!(args, StringArray).collect::<Result<Vec<&StringArray>>>()?;
 
@@ -370,7 +377,10 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Converts the first letter of each word to upper case and the rest to lower case. Words are sequences of alphanumeric characters separated by non-alphanumeric characters.
 /// initcap('hi THOMAS') = 'Hi Thomas'
-pub fn initcap<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn initcap<T: StringOffsetSizeTrait>(
+    args: &[ArrayRef],
+    _: &ExecutionProps,
+) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
 
     // first map is the iterator, second is for the `Option<_>`
@@ -400,13 +410,16 @@ pub fn initcap<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
 
 /// Converts the string to all lower case.
 /// lower('TOM') = 'tom'
-pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn lower(args: &[ColumnarValue], _: &ExecutionProps) -> Result<ColumnarValue> {
     handle(args, |string| string.to_ascii_lowercase(), "lower")
 }
 
 /// Removes the longest string containing only characters in characters (a space by default) from the start of string.
 /// ltrim('zzzytest', 'xyz') = 'test'
-pub fn ltrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn ltrim<T: StringOffsetSizeTrait>(
+    args: &[ArrayRef],
+    _: &ExecutionProps,
+) -> Result<ArrayRef> {
     match args.len() {
         1 => {
             let string_array = downcast_string_arg!(args[0], "string", T);
@@ -445,7 +458,10 @@ pub fn ltrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Repeats string the specified number of times.
 /// repeat('Pg', 4) = 'PgPgPgPg'
-pub fn repeat<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn repeat<T: StringOffsetSizeTrait>(
+    args: &[ArrayRef],
+    _: &ExecutionProps,
+) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let number_array = downcast_arg!(args[1], "number", Int64Array);
 
@@ -463,7 +479,10 @@ pub fn repeat<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Replaces all occurrences in string of substring from with substring to.
 /// replace('abcdefabcdef', 'cd', 'XX') = 'abXXefabXXef'
-pub fn replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn replace<T: StringOffsetSizeTrait>(
+    args: &[ArrayRef],
+    _: &ExecutionProps,
+) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let from_array = downcast_string_arg!(args[1], "from", T);
     let to_array = downcast_string_arg!(args[2], "to", T);
@@ -483,7 +502,10 @@ pub fn replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
 
 /// Removes the longest string containing only characters in characters (a space by default) from the end of string.
 /// rtrim('testxxzx', 'xyz') = 'test'
-pub fn rtrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn rtrim<T: StringOffsetSizeTrait>(
+    args: &[ArrayRef],
+    _: &ExecutionProps,
+) -> Result<ArrayRef> {
     match args.len() {
         1 => {
             let string_array = downcast_string_arg!(args[0], "string", T);
@@ -522,7 +544,10 @@ pub fn rtrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Splits string at occurrences of delimiter and returns the n'th field (counting from one).
 /// split_part('abc~@~def~@~ghi', '~@~', 2) = 'def'
-pub fn split_part<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn split_part<T: StringOffsetSizeTrait>(
+    args: &[ArrayRef],
+    _: &ExecutionProps,
+) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let delimiter_array = downcast_string_arg!(args[1], "delimiter", T);
     let n_array = downcast_arg!(args[2], "n", Int64Array);
@@ -554,7 +579,10 @@ pub fn split_part<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRe
 
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
-pub fn starts_with<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn starts_with<T: StringOffsetSizeTrait>(
+    args: &[ArrayRef],
+    _: &ExecutionProps,
+) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let prefix_array = downcast_string_arg!(args[1], "prefix", T);
 
@@ -572,7 +600,10 @@ pub fn starts_with<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayR
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
-pub fn to_hex<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
+pub fn to_hex<T: ArrowPrimitiveType>(
+    args: &[ArrayRef],
+    _: &ExecutionProps,
+) -> Result<ArrayRef>
 where
     T::Native: StringOffsetSizeTrait,
 {
@@ -590,6 +621,6 @@ where
 
 /// Converts the string to all upper case.
 /// upper('tom') = 'TOM'
-pub fn upper(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn upper(args: &[ColumnarValue], _: &ExecutionProps) -> Result<ColumnarValue> {
     handle(args, |string| string.to_ascii_uppercase(), "upper")
 }

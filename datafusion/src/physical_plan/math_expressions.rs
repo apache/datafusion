@@ -23,6 +23,7 @@ use arrow::datatypes::{DataType, ToByteSlice};
 
 use super::{ColumnarValue, ScalarValue};
 use crate::error::{DataFusionError, Result};
+use crate::execution::context::ExecutionProps;
 
 macro_rules! compute_op {
     ($ARRAY:expr, $FUNC:ident, $TYPE:ident) => {{
@@ -93,7 +94,10 @@ macro_rules! unary_primitive_array_op {
 macro_rules! math_unary_function {
     ($NAME:expr, $FUNC:ident) => {
         /// mathematical function that accepts f32 or f64 and returns f64
-        pub fn $FUNC(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        pub fn $FUNC(
+            args: &[ColumnarValue],
+            _: &ExecutionProps,
+        ) -> Result<ColumnarValue> {
             unary_primitive_array_op!(&args[0], $NAME, $FUNC)
         }
     };
