@@ -554,7 +554,7 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .map(|e| self.create_physical_expr(e, input_schema, ctx_state))
                     .collect::<Result<Vec<_>>>()?;
-                functions::create_physical_expr(fun, &physical_args, input_schema)
+                functions::create_physical_expr(fun, &physical_args, input_schema, ctx_state)
             }
             Expr::ScalarUDF { fun, args } => {
                 let mut physical_args = vec![];

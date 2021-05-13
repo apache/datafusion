@@ -33,7 +33,7 @@ use super::{
     type_coercion::{coerce, data_types},
     ColumnarValue, PhysicalExpr,
 };
-use crate::physical_plan::array_expressions;
+use crate::{execution::context::ExecutionContextState, physical_plan::array_expressions};
 use crate::physical_plan::datetime_expressions;
 use crate::physical_plan::expressions::{nullif_func, SUPPORTED_NULLIF_TYPES};
 use crate::physical_plan::math_expressions;
@@ -705,6 +705,7 @@ pub fn create_physical_expr(
     fun: &BuiltinScalarFunction,
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
+    ctx_state: &ExecutionContextState,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let fun_expr: ScalarFunctionImplementation = Arc::new(match fun {
         // math functions
@@ -795,7 +796,22 @@ pub fn create_physical_expr(
         }
         BuiltinScalarFunction::DatePart => datetime_expressions::date_part,
         BuiltinScalarFunction::DateTrunc => datetime_expressions::date_trunc,
-        BuiltinScalarFunction::Now => datetime_expressions::now,
+        BuiltinScalarFunction::Now => {
+            // bind value for now at plan time
+            let fun_expr = Arc::new(datetime_expressions::make_now(
+                ctx_state.execution_props.query_execution_start_time)
+            );
+
+            // TODO refactor code to not return here, but instead fall through below
+            let args = vec![];
+            let arg_types = vec![]; // has no args
+            return Ok(Arc::new(ScalarFunctionExpr::new(
+                &format!("{}", fun),
+                fun_expr,
+                args,
+                &return_type(&fun, &arg_types)?,
+            )))
+        }
         BuiltinScalarFunction::InitCap => |args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::initcap::<i32>)(args)
@@ -1440,6 +1456,7 @@ mod tests {
     /// $ARRAY_TYPE is the column type after function applied
     macro_rules! test_function {
         ($FUNC:ident, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $DATA_TYPE: ident, $ARRAY_TYPE:ident) => {
+            let ctx_state = ExecutionContextState::new();
             // used to provide type annotation
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
 
@@ -1448,7 +1465,7 @@ mod tests {
             let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
 
             let expr =
-                create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema)?;
+                create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &ctx_state)?;
 
             // type is correct
             assert_eq!(expr.data_type(&schema)?, DataType::$DATA_TYPE);
@@ -3627,6 +3644,8 @@ mod tests {
         expected_type: DataType,
         expected: &str,
     ) -> Result<()> {
+        let ctx_state = ExecutionContextState::new();
+
         // any type works here: we evaluate against a literal of `value`
         let schema = Schema::new(vec![
             Field::new("a", value1.data_type().clone(), false),
@@ -3638,6 +3657,7 @@ mod tests {
             &BuiltinScalarFunction::Array,
             &[col("a"), col("b")],
             &schema,
+            &ctx_state,
         )?;
 
         // type is correct
@@ -3692,6 +3712,7 @@ mod tests {
     #[test]
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match() -> Result<()> {
+        let ctx_state = ExecutionContextState::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
 
         // concat(value, value)
@@ -3702,6 +3723,7 @@ mod tests {
             &BuiltinScalarFunction::RegexpMatch,
             &[col("a"), pattern],
             &schema,
+            &ctx_state,
         )?;
 
         // type is correct
@@ -3729,6 +3751,7 @@ mod tests {
     #[test]
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match_all_literals() -> Result<()> {
+        let ctx_state = ExecutionContextState::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         // concat(value, value)
@@ -3739,6 +3762,7 @@ mod tests {
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],
             &schema,
+            &ctx_state,
         )?;
 
         // type is correct
