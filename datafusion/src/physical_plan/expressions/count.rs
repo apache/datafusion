@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
+use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr, WindowExpr};
 use crate::scalar::ScalarValue;
 use arrow::compute;
 use arrow::datatypes::DataType;

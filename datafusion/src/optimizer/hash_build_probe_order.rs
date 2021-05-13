@@ -54,6 +54,10 @@ fn get_num_rows(logical_plan: &LogicalPlan) -> Option<usize> {
             let num_rows_input = get_num_rows(input);
             num_rows_input.map(|rows| std::cmp::min(*limit, rows))
         }
+        LogicalPlan::Window { input, .. } => {
+            // window functions do not change num of rows
+            get_num_rows(input)
+        }
         LogicalPlan::Aggregate { .. } => {
             // we cannot yet predict how many rows will be produced by an aggregate because
             // we do not know the cardinality of the grouping keys
@@ -172,6 +176,7 @@ impl OptimizerRule for HashBuildProbeOrder {
             }
             // Rest: recurse into plan, apply optimization where possible
             LogicalPlan::Projection { .. }
+            | LogicalPlan::Window { .. }
             | LogicalPlan::Aggregate { .. }
             | LogicalPlan::TableScan { .. }
             | LogicalPlan::Limit { .. }
