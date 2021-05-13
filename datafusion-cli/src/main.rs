@@ -70,12 +70,11 @@ pub async fn main() {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("timing")
-                .help("Turn on/off timing information in the output")
-                .long("timing")
-                .default_value_if("file", None, "off")
-                .default_value("on")
-                .takes_value(true),
+            Arg::with_name("quite")
+                .help("Reduce printing other than the results and work quietly")
+                .short("q")
+                .long("quiet")
+                .takes_value(false),
         )
         .get_matches();
 
@@ -93,19 +92,14 @@ pub async fn main() {
         execution_config = execution_config.with_batch_size(batch_size);
     };
 
-    let print_format = matches
+    let format = matches
         .value_of("format")
         .expect("No format is specified")
         .parse::<PrintFormat>()
         .expect("Invalid format");
 
-    let print_timing =
-        "on" == matches.value_of("timing").expect("No timing is specified");
-
-    let print_options = PrintOptions {
-        format: print_format,
-        timing: print_timing,
-    };
+    let quiet = matches.is_present("quiet");
+    let print_options = PrintOptions { format, quiet };
 
     if let Some(file_path) = matches.value_of("file") {
         let file = File::open(file_path)

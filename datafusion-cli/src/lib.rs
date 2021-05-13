@@ -24,7 +24,7 @@ use std::time::Instant;
 #[derive(Debug, Clone)]
 pub struct PrintOptions {
     pub format: PrintFormat,
-    pub timing: bool,
+    pub quiet: bool,
 }
 
 fn print_timing_info(row_count: usize, now: Instant) {
@@ -41,12 +41,12 @@ impl PrintOptions {
     pub fn print_batches(&self, batches: &[RecordBatch]) -> Result<()> {
         let now = Instant::now();
         if batches.is_empty() {
-            if self.timing {
-                print_timing_info(batches.len(), now);
+            if !self.quiet {
+                print_timing_info(0, now);
             }
         } else {
             self.format.print_batches(batches)?;
-            if self.timing {
+            if !self.quiet {
                 let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
                 print_timing_info(row_count, now);
             }
