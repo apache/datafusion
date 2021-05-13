@@ -83,6 +83,10 @@ impl AggregateExpr for Count {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(CountAccumulator::new()))
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Debug)]

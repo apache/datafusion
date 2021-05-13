@@ -75,8 +75,8 @@ use datafusion::{
     optimizer::{optimizer::OptimizerRule, utils::optimize_children},
     physical_plan::{
         planner::{DefaultPhysicalPlanner, ExtensionPlanner},
-        Distribution, ExecutionPlan, Partitioning, PhysicalPlanner, RecordBatchStream,
-        SendableRecordBatchStream,
+        DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalPlanner,
+        RecordBatchStream, SendableRecordBatchStream,
     },
     prelude::{ExecutionConfig, ExecutionContext},
 };
@@ -163,9 +163,9 @@ async fn topk_plan() -> Result<()> {
     let mut ctx = setup_table(make_topk_context()).await?;
 
     let expected = vec![
-        "| logical_plan after topk                 | TopK: k=3                                      |",
-        "|                                         |   Projection: #customer_id, #revenue           |",
-        "|                                         |     TableScan: sales projection=Some([0, 1])   |",
+        "| logical_plan after topk                 | TopK: k=3                                                                            |",
+        "|                                         |   Projection: #customer_id, #revenue                                                 |",
+        "|                                         |     TableScan: sales projection=Some([0, 1])                                         |",
     ].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {}", QUERY);
@@ -396,6 +396,18 @@ impl ExecutionPlan for TopKExec {
             done: false,
             state: BTreeMap::new(),
         }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "TopKExec: k={}", self.k)
+            }
+        }
     }
 }
 
