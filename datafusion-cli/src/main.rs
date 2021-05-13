@@ -17,19 +17,16 @@
 
 #![allow(bare_trait_objects)]
 
-mod format;
-
 use clap::{crate_version, App, Arg};
 use datafusion::error::Result;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
-use format::print_format::PrintFormat;
+use datafusion_cli::{print_format::PrintFormat, PrintOptions};
 use rustyline::Editor;
 use std::env;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::Path;
-use std::time::Instant;
 
 #[tokio::main]
 pub async fn main() {
@@ -72,6 +69,13 @@ pub async fn main() {
                 .validator(is_valid_format)
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("quite")
+                .help("Reduce printing other than the results and work quietly")
+                .short("q")
+                .long("quiet")
+                .takes_value(false),
+        )
         .get_matches();
 
     if let Some(path) = matches.value_of("data-path") {
@@ -88,26 +92,29 @@ pub async fn main() {
         execution_config = execution_config.with_batch_size(batch_size);
     };
 
-    let print_format = matches
+    let format = matches
         .value_of("format")
         .expect("No format is specified")
         .parse::<PrintFormat>()
         .expect("Invalid format");
 
+    let quiet = matches.is_present("quiet");
+    let print_options = PrintOptions { format, quiet };
+
     if let Some(file_path) = matches.value_of("file") {
         let file = File::open(file_path)
             .unwrap_or_else(|err| panic!("cannot open file '{}': {}", file_path, err));
         let mut reader = BufReader::new(file);
-        exec_from_lines(&mut reader, execution_config, print_format).await;
+        exec_from_lines(&mut reader, execution_config, print_options).await;
     } else {
-        exec_from_repl(execution_config, print_format).await;
+        exec_from_repl(execution_config, print_options).await;
     }
 }
 
 async fn exec_from_lines(
     reader: &mut BufReader<File>,
     execution_config: ExecutionConfig,
-    print_format: PrintFormat,
+    print_options: PrintOptions,
 ) {
     let mut ctx = ExecutionContext::with_config(execution_config);
     let mut query = "".to_owned();
@@ -121,7 +128,7 @@ async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match exec_and_print(&mut ctx, print_format.clone(), query).await {
+                    match exec_and_print(&mut ctx, print_options.clone(), query).await {
                         Ok(_) => {}
                         Err(err) => println!("{:?}", err),
                     }
@@ -138,14 +145,14 @@ async fn exec_from_lines(
 
     // run the left over query if the last statement doesn't contain ‘;’
     if !query.is_empty() {
-        match exec_and_print(&mut ctx, print_format, query).await {
+        match exec_and_print(&mut ctx, print_options, query).await {
             Ok(_) => {}
             Err(err) => println!("{:?}", err),
         }
     }
 }
 
-async fn exec_from_repl(execution_config: ExecutionConfig, print_format: PrintFormat) {
+async fn exec_from_repl(execution_config: ExecutionConfig, print_options: PrintOptions) {
     let mut ctx = ExecutionContext::with_config(execution_config);
 
     let mut rl = Editor::<()>::new();
@@ -163,7 +170,7 @@ async fn exec_from_repl(execution_config: ExecutionConfig, print_format: PrintFo
             Ok(ref line) if line.trim_end().ends_with(';') => {
                 query.push_str(line.trim_end());
                 rl.add_history_entry(query.clone());
-                match exec_and_print(&mut ctx, print_format.clone(), query).await {
+                match exec_and_print(&mut ctx, print_options.clone(), query).await {
                     Ok(_) => {}
                     Err(err) => println!("{:?}", err),
                 }
@@ -220,39 +227,11 @@ fn is_exit_command(line: &str) -> bool {
 
 async fn exec_and_print(
     ctx: &mut ExecutionContext,
-    print_format: PrintFormat,
+    print_options: PrintOptions,
     sql: String,
 ) -> Result<()> {
-    let now = Instant::now();
-
     let df = ctx.sql(&sql)?;
     let results = df.collect().await?;
-
-    if results.is_empty() {
-        println!(
-            "0 rows in set. Query took {} seconds.",
-            now.elapsed().as_secs()
-        );
-        return Ok(());
-    }
-
-    print_format.print_batches(&results)?;
-
-    let row_count: usize = results.iter().map(|b| b.num_rows()).sum();
-
-    if row_count > 1 {
-        println!(
-            "{} row in set. Query took {} seconds.",
-            row_count,
-            now.elapsed().as_secs()
-        );
-    } else {
-        println!(
-            "{} rows in set. Query took {} seconds.",
-            row_count,
-            now.elapsed().as_secs()
-        );
-    }
-
+    print_options.print_batches(&results)?;
     Ok(())
 }
