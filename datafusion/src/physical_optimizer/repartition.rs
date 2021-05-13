@@ -52,7 +52,10 @@ fn optimize_concurrency(
             .map(|child| {
                 optimize_concurrency(
                     concurrency,
-                    plan.required_child_distribution() == Distribution::SinglePartition,
+                    matches!(
+                        plan.required_child_distribution(),
+                        Distribution::SinglePartition
+                    ),
                     child.clone(),
                 )
             })

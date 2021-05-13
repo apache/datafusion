@@ -128,7 +128,7 @@ impl DistributedPlanner {
             //TODO should insert query stages in more generic way based on partitioning metadata
             // and not specifically for this operator
             match agg.mode() {
-                AggregateMode::Final => {
+                AggregateMode::Final | AggregateMode::FinalPartitioned => {
                     let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
                     for child in &children {
                         let new_stage = create_query_stage(
@@ -237,10 +237,9 @@ mod test {
     use ballista_core::serde::protobuf;
     use ballista_core::utils::format_plan;
     use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
-    use datafusion::physical_plan::merge::MergeExec;
-    use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::physical_plan::sort::SortExec;
     use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::physical_plan::{merge::MergeExec, projection::ProjectionExec};
     use std::convert::TryInto;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -278,11 +277,9 @@ mod test {
         QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=1
          HashAggregateExec: groupBy=["l_returnflag"], aggrExpr=["SUM(l_extendedprice Multiply Int64(1)) [\"l_extendedprice * CAST(1 AS Float64)\"]"]
           CsvExec: testdata/lineitem; partitions=2
-
         QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=2
          MergeExec
           UnresolvedShuffleExec: stages=[1]
-
         QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=3
          SortExec { input: ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_ext
           ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_extendedprice Multip

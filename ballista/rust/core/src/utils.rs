@@ -322,6 +322,7 @@ pub fn create_datafusion_context() -> ExecutionContext {
     let config = ExecutionConfig::new()
         .with_concurrency(1)
         .with_repartition_joins(false)
+        .with_repartition_aggregations(false)
         .with_physical_optimizer_rules(rules);
     ExecutionContext::with_config(config)
 }
