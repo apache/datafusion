@@ -68,9 +68,10 @@ use arrow::array::{
 use async_trait::async_trait;
 
 use super::{
-    expressions::Column, group_scalar::GroupByScalar, RecordBatchStream,
-    SendableRecordBatchStream,
+    expressions::Column, group_scalar::GroupByScalar, hash_join::IdHashBuilder,
+    RecordBatchStream, SendableRecordBatchStream,
 };
+use smallvec::{smallvec, SmallVec};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone)]
@@ -356,6 +357,7 @@ fn group_aggregate_batch(
             .from_key(hash)
             // 1.3
             .and_modify(|_, items| {
+                // TODO avoid creating group by values
                 let _ = create_group_by_values(&group_values, row, &mut group_by_values);
 
                 // Check potential collisions
@@ -364,7 +366,8 @@ fn group_aggregate_batch(
                         if rows.is_empty() {
                             batch_keys.push(*hash);
                         }
-                        rows.push(row as u32)
+                        rows.push(row as u32);
+                        break;
                     }
                 }
             })
@@ -376,7 +379,11 @@ fn group_aggregate_batch(
                 let _ = create_group_by_values(&group_values, row, &mut group_by_values);
                 (
                     *hash,
-                    vec![(group_by_values.clone(), accumulator_set, vec![row as u32])],
+                    smallvec![(
+                        group_by_values.clone(),
+                        accumulator_set,
+                        vec![row as u32]
+                    )],
                 )
             });
     }
@@ -478,7 +485,7 @@ async fn compute_grouped_hash_aggregate(
     //let mut accumulators: Accumulators = FnvHashMap::default();
 
     // iterate over all input batches and update the accumulators
-    let mut accumulators = Accumulators::default();
+    let mut accumulators = Accumulators::with_hasher(IdHashBuilder {});
     while let Some(batch) = input.next().await {
         let batch = batch?;
         accumulators = group_aggregate_batch(
@@ -532,8 +539,8 @@ impl GroupedHashAggregateStream {
 type AccumulatorItem = Box<dyn Accumulator>;
 type Accumulators = HashMap<
     u64,
-    Vec<(Box<[GroupByScalar]>, Vec<AccumulatorItem>, Vec<u32>)>,
-    RandomState,
+    SmallVec<[(Box<[GroupByScalar]>, Vec<AccumulatorItem>, Vec<u32>); 1]>,
+    IdHashBuilder,
 >;
 
 impl Stream for GroupedHashAggregateStream {

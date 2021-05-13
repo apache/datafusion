@@ -682,7 +682,7 @@ use core::hash::BuildHasher;
 
 /// `Hasher` that returns the same `u64` value as a hash, to avoid re-hashing
 /// it when inserting/indexing or regrowing the `HashMap`
-struct IdHasher {
+pub struct IdHasher {
     hash: u64,
 }
 
@@ -701,7 +701,7 @@ impl Hasher for IdHasher {
 }
 
 #[derive(Debug)]
-struct IdHashBuilder {}
+pub struct IdHashBuilder {}
 
 impl BuildHasher for IdHashBuilder {
     type Hasher = IdHasher;
