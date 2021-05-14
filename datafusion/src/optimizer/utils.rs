@@ -22,6 +22,7 @@ use std::{collections::HashSet, sync::Arc};
 use arrow::datatypes::Schema;
 
 use super::optimizer::OptimizerRule;
+use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
     Expr, LogicalPlan, Operator, Partitioning, PlanType, Recursion, StringifiedPlan,
     ToDFSchema,
@@ -101,11 +102,12 @@ pub fn optimize_explain(
     plan: &LogicalPlan,
     stringified_plans: &[StringifiedPlan],
     schema: &Schema,
+    execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
     // These are the fields of LogicalPlan::Explain It might be nice
     // to transform that enum Variant into its own struct and avoid
     // passing the fields individually
-    let plan = Arc::new(optimizer.optimize(plan)?);
+    let plan = Arc::new(optimizer.optimize(plan, execution_props)?);
     let mut stringified_plans = stringified_plans.to_vec();
     let optimizer_name = optimizer.name().into();
     stringified_plans.push(StringifiedPlan::new(
@@ -128,6 +130,7 @@ pub fn optimize_explain(
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
+    execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
     if let LogicalPlan::Explain {
         verbose,
@@ -142,6 +145,7 @@ pub fn optimize_children(
             &*plan,
             stringified_plans,
             &schema.as_ref().to_owned().into(),
+            execution_props,
         );
     }
 
@@ -149,7 +153,7 @@ pub fn optimize_children(
     let new_inputs = plan
         .inputs()
         .into_iter()
-        .map(|plan| optimizer.optimize(plan))
+        .map(|plan| optimizer.optimize(plan, execution_props))
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, &new_exprs, &new_inputs)
@@ -443,7 +447,11 @@ mod tests {
     struct TestOptimizer {}
 
     impl OptimizerRule for TestOptimizer {
-        fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        fn optimize(
+            &self,
+            plan: &LogicalPlan,
+            _: &ExecutionProps,
+        ) -> Result<LogicalPlan> {
             Ok(plan.clone())
         }
 
@@ -465,6 +473,7 @@ mod tests {
             &empty_plan,
             &[StringifiedPlan::new(PlanType::LogicalPlan, "...")],
             schema.as_ref(),
+            &ExecutionProps::new(),
         )?;
 
         match &optimized_explain {

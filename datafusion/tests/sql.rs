@@ -2342,7 +2342,7 @@ macro_rules! test_expression {
         let mut ctx = ExecutionContext::new();
         let sql = format!("SELECT {}", $SQL);
         let actual = execute(&mut ctx, sql.as_str()).await;
-        assert_eq!($EXPECTED, actual[0][0]);
+        assert_eq!(actual[0][0], $EXPECTED);
     };
 }
 
@@ -2860,6 +2860,53 @@ async fn test_cast_expressions() -> Result<()> {
     test_expression!("CAST(NULL AS INT)", "NULL");
     test_expression!("TRY_CAST('0' AS INT)", "0");
     test_expression!("TRY_CAST('x' AS INT)", "NULL");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_current_timestamp_expressions() -> Result<()> {
+    let t1 = chrono::Utc::now().timestamp();
+    let mut ctx = ExecutionContext::new();
+    let actual = execute(&mut ctx, "SELECT NOW(), NOW() as t2").await;
+    let res1 = actual[0][0].as_str();
+    let res2 = actual[0][1].as_str();
+    let t3 = chrono::Utc::now().timestamp();
+    let t2_naive =
+        chrono::NaiveDateTime::parse_from_str(res1, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
+
+    let t2 = t2_naive.timestamp();
+    assert!(t1 <= t2 && t2 <= t3);
+    assert_eq!(res2, res1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
+    let t1 = chrono::Utc::now().timestamp();
+    let ctx = ExecutionContext::new();
+    let sql = "SELECT NOW(), NOW() as t2";
+
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
+
+    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
+    let plan = ctx.create_physical_plan(&plan).expect(&msg);
+
+    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
+    let res = collect(plan).await.expect(&msg);
+    let actual = result_vec(&res);
+
+    let res1 = actual[0][0].as_str();
+    let res2 = actual[0][1].as_str();
+    let t3 = chrono::Utc::now().timestamp();
+    let t2_naive =
+        chrono::NaiveDateTime::parse_from_str(res1, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
+
+    let t2 = t2_naive.timestamp();
+    assert!(t1 <= t2 && t2 <= t3);
+    assert_eq!(res2, res1);
+
     Ok(())
 }
 

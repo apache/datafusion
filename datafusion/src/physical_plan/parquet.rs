@@ -21,25 +21,18 @@ use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{
-    any::Any,
-    collections::{HashMap, HashSet},
-};
+use std::{any::Any, collections::HashSet};
 
 use super::{
     planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream,
 };
-use crate::{
-    catalog::catalog::MemoryCatalogList,
-    physical_plan::{common, ExecutionPlan, Partitioning},
-};
+use crate::physical_plan::{common, ExecutionPlan, Partitioning};
 use crate::{
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,
     logical_plan::{Expr, Operator},
     optimizer::utils,
-    prelude::ExecutionConfig,
 };
 use arrow::record_batch::RecordBatch;
 use arrow::{
@@ -393,13 +386,7 @@ impl RowGroupPredicateBuilder {
             .map(|(_, _, f)| f.clone())
             .collect::<Vec<_>>();
         let stat_schema = Schema::new(stat_fields);
-        let execution_context_state = ExecutionContextState {
-            catalog_list: Arc::new(MemoryCatalogList::new()),
-            scalar_functions: HashMap::new(),
-            var_provider: HashMap::new(),
-            aggregate_functions: HashMap::new(),
-            config: ExecutionConfig::new(),
-        };
+        let execution_context_state = ExecutionContextState::new();
         let predicate_expr = DefaultPhysicalPlanner::default().create_physical_expr(
             &logical_predicate_expr,
             &stat_schema,
