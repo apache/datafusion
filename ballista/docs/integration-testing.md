@@ -18,15 +18,11 @@
 -->
 # Integration Testing
 
-Ballista has a [benchmark crate](https://github.com/ballista-compute/ballista/tree/main/rust/benchmarks/tpch) which is
-derived from TPC-H and this is currently the main form of integration testing. 
+We use the [DataFusion Benchmarks](https://github.com/apache/arrow-datafusion/tree/master/benchmarks) for integration 
+testing. 
 
-The following command can be used to run the integration tests.
+The integration tests can be executed by running the following command from the root of the DataFusion repository.
 
 ```bash
 ./dev/integration-tests.sh
 ```
-
-Please refer to the
-[benchmark documentation](https://github.com/ballista-compute/ballista/blob/main/rust/benchmarks/tpch/README.md)
-for more information.
