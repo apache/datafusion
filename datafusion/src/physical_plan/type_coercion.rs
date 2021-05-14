@@ -46,6 +46,10 @@ pub fn coerce(
     schema: &Schema,
     signature: &Signature,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+    if expressions.is_empty() {
+        return Ok(vec![]);
+    }
+
     let current_types = expressions
         .iter()
         .map(|e| e.data_type(schema))
@@ -68,6 +72,10 @@ pub fn data_types(
     current_types: &[DataType],
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
+    if current_types.is_empty() {
+        return Ok(vec![]);
+    }
+
     let valid_types = get_valid_types(signature, current_types)?;
 
     if valid_types
