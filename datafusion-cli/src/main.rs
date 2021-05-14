@@ -20,7 +20,10 @@
 use clap::{crate_version, App, Arg};
 use datafusion::error::Result;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
-use datafusion_cli::{print_format::PrintFormat, PrintOptions};
+use datafusion_cli::{
+    print_format::{all_print_formats, PrintFormat},
+    PrintOptions,
+};
 use rustyline::Editor;
 use std::env;
 use std::fs::File;
@@ -63,14 +66,22 @@ pub async fn main() {
         )
         .arg(
             Arg::with_name("format")
-                .help("Output format (possible values: table, csv, tsv, json)")
+                .help("Output format")
                 .long("format")
                 .default_value("table")
-                .validator(is_valid_format)
+                .possible_values(
+                    &all_print_formats()
+                        .iter()
+                        .map(|format| format.to_string())
+                        .collect::<Vec<_>>()
+                        .iter()
+                        .map(|i| i.as_str())
+                        .collect::<Vec<_>>(),
+                )
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("quite")
+            Arg::with_name("quiet")
                 .help("Reduce printing other than the results and work quietly")
                 .short("q")
                 .long("quiet")
@@ -187,14 +198,6 @@ async fn exec_from_repl(execution_config: ExecutionConfig, print_options: PrintO
     }
 
     rl.save_history(".history").ok();
-}
-
-fn is_valid_format(format: String) -> std::result::Result<(), String> {
-    if format.parse::<PrintFormat>().is_ok() {
-        Ok(())
-    } else {
-        Err(format!("Format '{}' not supported", format))
-    }
 }
 
 fn is_valid_file(dir: String) -> std::result::Result<(), String> {

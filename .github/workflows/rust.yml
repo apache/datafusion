@@ -23,7 +23,6 @@ on:
   pull_request:
 
 jobs:
-
   # build the library, a compilation step used by multiple steps below
   linux-build-lib:
     name: Build Libraries on AMD64 Rust ${{ matrix.rust }}
@@ -61,17 +60,19 @@ jobs:
           rustup component add rustfmt
       - name: Build Workspace
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cargo build
+        env:
+          CARGO_HOME: "/github/home/.cargo"
+          CARGO_TARGET_DIR: "/github/home/target"
       # Ballista is currently not part of the main workspace so requires a separate build step
       - name: Build Ballista
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cd ballista/rust
           # snmalloc requires cmake so build without default features
           cargo build --no-default-features
+        env:
+          CARGO_HOME: "/github/home/.cargo"
+          CARGO_TARGET_DIR: "/github/home/target"
 
   # test the crate
   linux-test:
@@ -111,8 +112,6 @@ jobs:
           rustup component add rustfmt
       - name: Run tests
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           # run tests on all workspace members with default feature list
@@ -122,16 +121,69 @@ jobs:
           cargo test --no-default-features
           cargo run --example csv_sql
           cargo run --example parquet_sql
+        env:
+          CARGO_HOME: "/github/home/.cargo"
+          CARGO_TARGET_DIR: "/github/home/target"
       # Ballista is currently not part of the main workspace so requires a separate test step
       - name: Run Ballista tests
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           cd ballista/rust
           # snmalloc requires cmake so build without default features
           cargo test --no-default-features
+        env:
+          CARGO_HOME: "/github/home/.cargo"
+          CARGO_TARGET_DIR: "/github/home/target"
+
+  integration-test:
+    name: "Integration Test"
+    needs: [linux-build-lib]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: db_test
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-python@v2
+        with:
+          python-version: "3.8"
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --upgrade numpy==1.20.3 pandas==1.2.4
+      - name: Allow access of psql
+        run: |
+          # make sure psql can access the server
+          echo "$POSTGRES_HOST:$POSTGRES_PORT:$POSTGRES_DB:$POSTGRES_USER:$POSTGRES_PASSWORD" | tee ~/.pgpass
+          chmod 0600 ~/.pgpass
+          psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -c 'select now() as now'
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
+          POSTGRES_DB: db_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+      - name: Build datafusion-cli
+        run: cargo build --bin datafusion-cli
+      - name: Test Psql Parity
+        run: python -m unittest -v integration-tests/test_psql_parity.py
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
+          POSTGRES_DB: db_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
 
   windows-and-macos:
     name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
@@ -156,9 +208,10 @@ jobs:
         run: |
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          # do not produce debug symbols to keep memory usage down
-          export RUSTFLAGS="-C debuginfo=0"
           cargo test
+        env:
+          # do not produce debug symbols to keep memory usage down
+          RUSTFLAGS: "-C debuginfo=0"
 
   lint:
     name: Lint
@@ -212,9 +265,10 @@ jobs:
           rustup component add rustfmt clippy
       - name: Run clippy
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cargo clippy --all-targets --workspace -- -D warnings
+        env:
+          CARGO_HOME: "/github/home/.cargo"
+          CARGO_TARGET_DIR: "/github/home/target"
 
   miri-checks:
     name: MIRI
@@ -242,9 +296,9 @@ jobs:
       - name: Run Miri Checks
         env:
           RUST_BACKTRACE: full
-          RUST_LOG: 'trace'
+          RUST_LOG: "trace"
+          MIRIFLAGS: "-Zmiri-disable-isolation"
         run: |
-          export MIRIFLAGS="-Zmiri-disable-isolation"
           cargo miri setup
           cargo clean
           # Ignore MIRI errors until we can get a clean run
@@ -275,9 +329,6 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.arch }}-target-coverage-cache-${{ matrix.rust }}-
       - name: Run coverage
         run: |
-          export CARGO_HOME="/home/runner/.cargo"
-          export CARGO_TARGET_DIR="/home/runner/target"
-
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
 
@@ -285,6 +336,9 @@ jobs:
           # see https://github.com/xd009642/tarpaulin/issues/618
           cargo install --version 0.16.0 cargo-tarpaulin
           cargo tarpaulin --out Xml
+        env:
+          CARGO_HOME: "/home/runner/.cargo"
+          CARGO_TARGET_DIR: "/home/runner/target"
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
