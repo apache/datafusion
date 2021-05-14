@@ -275,9 +275,9 @@ pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// whenever it is called in a query. This this value is chosen during
 /// planning time and bound into a closure that
 pub fn make_now(
-    now_ts: Option<DateTime<Utc>>,
+    now_ts: DateTime<Utc>,
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
-    let now_ts = now_ts.map(|t| t.timestamp_nanos());
+    let now_ts = Some(now_ts.timestamp_nanos());
     move |_arg| {
         Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
             now_ts,

@@ -754,7 +754,7 @@ impl ExecutionConfig {
 /// `ExecutionProps` is created each time.
 #[derive(Clone)]
 pub struct ExecutionProps {
-    pub(crate) query_execution_start_time: Option<DateTime<Utc>>,
+    pub(crate) query_execution_start_time: DateTime<Utc>,
 }
 
 /// Execution context for registering data sources and executing queries
@@ -778,13 +778,13 @@ impl ExecutionProps {
     /// Creates a new execution props
     pub fn new() -> Self {
         ExecutionProps {
-            query_execution_start_time: None,
+            query_execution_start_time: chrono::Utc::now(),
         }
     }
 
     /// Marks the execution of query started timestamp
     pub fn start_execution(&mut self) -> &Self {
-        self.query_execution_start_time = Some(chrono::Utc::now());
+        self.query_execution_start_time = chrono::Utc::now();
         &*self
     }
 }

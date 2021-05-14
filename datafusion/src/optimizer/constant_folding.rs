@@ -214,7 +214,6 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
             } => Expr::Literal(ScalarValue::TimestampNanosecond(Some(
                 self.execution_props
                     .query_execution_start_time
-                    .unwrap()
                     .timestamp_nanos(),
             ))),
             expr => {
@@ -623,7 +622,7 @@ mod tests {
     ) -> String {
         let rule = ConstantFolding::new();
         let execution_props = ExecutionProps {
-            query_execution_start_time: Some(*date_time),
+            query_execution_start_time: *date_time,
         };
 
         let optimized_plan = rule
