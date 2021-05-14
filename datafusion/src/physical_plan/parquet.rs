@@ -27,9 +27,7 @@ use super::{
     planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream,
 };
-use crate::{
-    physical_plan::{common, DisplayFormatType, ExecutionPlan, Partitioning},
-};
+use crate::physical_plan::{common, DisplayFormatType, ExecutionPlan, Partitioning};
 use crate::{
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,
