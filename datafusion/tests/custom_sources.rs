@@ -20,10 +20,13 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use datafusion::error::{DataFusionError, Result};
 use datafusion::{
     datasource::{datasource::Statistics, TableProvider},
     physical_plan::collect,
+};
+use datafusion::{
+    error::{DataFusionError, Result},
+    physical_plan::DisplayFormatType,
 };
 
 use datafusion::execution::context::ExecutionContext;
@@ -127,6 +130,18 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
     async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "CustomExecutionPlan: projection={:#?}", self.projection)
+            }
+        }
     }
 }
 

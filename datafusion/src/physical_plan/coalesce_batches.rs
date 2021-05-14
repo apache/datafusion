@@ -25,7 +25,8 @@ use std::task::{Context, Poll};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
-    ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream,
 };
 
 use arrow::compute::kernels::concat::concat;
@@ -113,6 +114,22 @@ impl ExecutionPlan for CoalesceBatchesExec {
             buffered_rows: 0,
             is_closed: false,
         }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "CoalesceBatchesExec: target_batch_size={}",
+                    self.target_batch_size
+                )
+            }
+        }
     }
 }
 

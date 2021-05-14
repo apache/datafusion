@@ -25,7 +25,9 @@ use std::task::{Context, Poll};
 
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr};
+use crate::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
+};
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
@@ -118,6 +120,18 @@ impl ExecutionPlan for FilterExec {
             predicate: self.predicate.clone(),
             input: self.input.execute(partition).await?,
         }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "FilterExec: {}", self.predicate)
+            }
+        }
     }
 }
 

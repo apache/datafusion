@@ -27,7 +27,7 @@ use super::{
     planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream,
 };
-use crate::physical_plan::{common, ExecutionPlan, Partitioning};
+use crate::physical_plan::{common, DisplayFormatType, ExecutionPlan, Partitioning};
 use crate::{
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,
@@ -863,6 +863,32 @@ impl ExecutionPlan for ParquetExec {
             schema: self.schema.clone(),
             inner: ReceiverStream::new(response_rx),
         }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                let files: Vec<_> = self
+                    .partitions
+                    .iter()
+                    .map(|pp| pp.filenames.iter())
+                    .flatten()
+                    .map(|s| s.as_str())
+                    .collect();
+
+                write!(
+                    f,
+                    "ParquetExec: batch_size={}, limit={:?}, partitions=[{}]",
+                    self.batch_size,
+                    self.limit,
+                    files.join(", ")
+                )
+            }
+        }
     }
 }
 

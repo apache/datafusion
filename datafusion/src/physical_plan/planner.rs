@@ -23,7 +23,6 @@ use super::{
     aggregates, cross_join::CrossJoinExec, empty::EmptyExec, expressions::binary,
     functions, hash_join::PartitionMode, udaf, union::UnionExec,
 };
-use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::{
     DFSchema, Expr, LogicalPlan, Operator, Partitioning as LogicalPartitioning, PlanType,
@@ -45,6 +44,10 @@ use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, PhysicalP
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::variable::VarType;
+use crate::{
+    error::{DataFusionError, Result},
+    physical_plan::displayable,
+};
 use arrow::compute::can_cast_types;
 
 use arrow::compute::SortOptions;
@@ -383,7 +386,7 @@ impl DefaultPhysicalPlanner {
                 if *verbose {
                     stringified_plans.push(StringifiedPlan::new(
                         PlanType::PhysicalPlan,
-                        format!("{:#?}", input),
+                        displayable(input.as_ref()).indent().to_string(),
                     ));
                 }
                 Ok(Arc::new(ExplainExec::new(

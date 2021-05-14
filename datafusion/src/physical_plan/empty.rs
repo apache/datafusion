@@ -21,8 +21,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::memory::MemoryStream;
-use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
+use crate::physical_plan::{
+    memory::MemoryStream, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+};
 use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -119,6 +120,18 @@ impl ExecutionPlan for EmptyExec {
             self.schema.clone(),
             None,
         )?))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "EmptyExec: produce_one_row={}", self.produce_one_row)
+            }
+        }
     }
 }
 
