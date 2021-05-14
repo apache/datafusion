@@ -109,6 +109,10 @@ impl AggregateExpr for Avg {
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr.clone()]
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 /// An accumulator to compute the average
