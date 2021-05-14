@@ -31,7 +31,6 @@ use super::{
     },
     type_coercion::coerce,
 };
-use crate::execution::context::ExecutionProps;
 use std::sync::Arc;
 
 /// Logical representation of a UDF.
@@ -109,6 +108,5 @@ pub fn create_physical_expr(
         fun.fun.clone(),
         args,
         (fun.return_type)(&arg_types)?.as_ref(),
-        &ExecutionProps::new(),
     )))
 }

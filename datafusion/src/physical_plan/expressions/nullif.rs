@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::ExecutionProps;
 use crate::scalar::ScalarValue;
 use arrow::array::Array;
 use arrow::array::{
@@ -72,7 +71,7 @@ macro_rules! primitive_bool_array_op {
 /// Args: 0 - left expr is any array
 ///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
 ///
-pub fn nullif_func(args: &[ColumnarValue], _: &ExecutionProps) -> Result<ColumnarValue> {
+pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return Err(DataFusionError::Internal(format!(
             "{:?} args were supplied but NULLIF takes exactly two args",
@@ -143,7 +142,7 @@ mod tests {
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
 
-        let result = nullif_func(&[a, lit_array], &ExecutionProps::new())?;
+        let result = nullif_func(&[a, lit_array])?;
         let result = result.into_array(0);
 
         let expected = Arc::new(Int32Array::from(vec![
@@ -169,7 +168,7 @@ mod tests {
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
 
-        let result = nullif_func(&[a, lit_array], &ExecutionProps::new())?;
+        let result = nullif_func(&[a, lit_array])?;
         let result = result.into_array(0);
 
         let expected = Arc::new(Int32Array::from(vec![

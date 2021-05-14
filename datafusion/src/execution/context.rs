@@ -476,8 +476,7 @@ impl ExecutionContext {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut state = self.state.lock().unwrap();
-        state.execution_props.start_execution();
+        let state = self.state.lock().unwrap();
         state
             .config
             .query_planner
@@ -747,13 +746,13 @@ impl ExecutionConfig {
     }
 }
 
-/// Holds per-execution properties and data (such as starting timestamps, etc).
-/// An instance of this struct is created each time a [`LogicalPlan`] is prepared for
-/// execution (optimized). If the same plan is optimized multiple times, a new
-/// `ExecutionProps` is created each time.
+/// Holds per-execution properties and data (such as starting timestamps, etc). 
+/// An instance of this struct is created each time a [`LogicalPlan`] is prepared for 
+/// execution (optimized). If the same plan is optimized multiple times, a new 
+/// `ExecutionProps` is created each time. 
 #[derive(Clone)]
 pub struct ExecutionProps {
-    pub(crate) query_execution_start_time: DateTime<Utc>,
+    pub(crate) query_execution_start_time: Option<DateTime<Utc>>,
 }
 
 /// Execution context for registering data sources and executing queries
@@ -777,13 +776,15 @@ impl ExecutionProps {
     /// Creates a new execution props
     pub fn new() -> Self {
         ExecutionProps {
-            query_execution_start_time: chrono::Utc::now(),
+            query_execution_start_time: None,
         }
     }
 
     /// Marks the execution of query started
     pub fn start_execution(&mut self) -> &Self {
-        self.query_execution_start_time = chrono::Utc::now();
+        if self.query_execution_start_time.is_none() {
+            self.query_execution_start_time = Some(chrono::Utc::now());
+        }
         &*self
     }
 }
@@ -2095,7 +2096,7 @@ mod tests {
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
             .unwrap();
 
-        let myfunc = |args: &[ArrayRef], _: &ExecutionProps| Ok(Arc::clone(&args[0]));
+        let myfunc = |args: &[ArrayRef]| Ok(Arc::clone(&args[0]));
         let myfunc = make_scalar_function(myfunc);
 
         ctx.register_udf(create_udf(
@@ -2375,7 +2376,7 @@ mod tests {
         let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
         ctx.register_table("t", Arc::new(provider))?;
 
-        let myfunc = |args: &[ArrayRef], _: &ExecutionProps| {
+        let myfunc = |args: &[ArrayRef]| {
             let l = &args[0]
                 .as_any()
                 .downcast_ref::<Int32Array>()

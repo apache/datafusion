@@ -23,7 +23,6 @@ use arrow::datatypes::DataType;
 use std::sync::Arc;
 
 use super::ColumnarValue;
-use crate::execution::context::ExecutionProps;
 
 macro_rules! downcast_vec {
     ($ARGS:expr, $ARRAY_TYPE:ident) => {{
@@ -91,7 +90,7 @@ fn array_array(args: &[&dyn Array]) -> Result<ArrayRef> {
 }
 
 /// put values in an array.
-pub fn array(values: &[ColumnarValue], _: &ExecutionProps) -> Result<ColumnarValue> {
+pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays: Vec<&dyn Array> = values
         .iter()
         .map(|value| {

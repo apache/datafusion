@@ -33,7 +33,6 @@ use super::{
     type_coercion::{coerce, data_types},
     ColumnarValue, PhysicalExpr,
 };
-use crate::execution::context::ExecutionProps;
 use crate::physical_plan::array_expressions;
 use crate::physical_plan::datetime_expressions;
 use crate::physical_plan::expressions::{nullif_func, SUPPORTED_NULLIF_TYPES};
@@ -77,7 +76,7 @@ pub enum Signature {
 
 /// Scalar function
 pub type ScalarFunctionImplementation =
-    Arc<dyn Fn(&[ColumnarValue], &ExecutionProps) -> Result<ColumnarValue> + Send + Sync>;
+    Arc<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue> + Send + Sync>;
 
 /// A function's return type
 pub type ReturnTypeFunction =
@@ -282,7 +281,7 @@ impl FromStr for BuiltinScalarFunction {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",
                     name
-                )));
+                )))
             }
         })
     }
@@ -706,469 +705,411 @@ pub fn create_physical_expr(
     fun: &BuiltinScalarFunction,
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
-    execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let fun_expr: ScalarFunctionImplementation =
-        Arc::new(match fun {
-            // math functions
-            BuiltinScalarFunction::Abs => math_expressions::abs,
-            BuiltinScalarFunction::Acos => math_expressions::acos,
-            BuiltinScalarFunction::Asin => math_expressions::asin,
-            BuiltinScalarFunction::Atan => math_expressions::atan,
-            BuiltinScalarFunction::Ceil => math_expressions::ceil,
-            BuiltinScalarFunction::Cos => math_expressions::cos,
-            BuiltinScalarFunction::Exp => math_expressions::exp,
-            BuiltinScalarFunction::Floor => math_expressions::floor,
-            BuiltinScalarFunction::Log => math_expressions::ln,
-            BuiltinScalarFunction::Log10 => math_expressions::log10,
-            BuiltinScalarFunction::Log2 => math_expressions::log2,
-            BuiltinScalarFunction::Round => math_expressions::round,
-            BuiltinScalarFunction::Signum => math_expressions::signum,
-            BuiltinScalarFunction::Sin => math_expressions::sin,
-            BuiltinScalarFunction::Sqrt => math_expressions::sqrt,
-            BuiltinScalarFunction::Tan => math_expressions::tan,
-            BuiltinScalarFunction::Trunc => math_expressions::trunc,
+    let fun_expr: ScalarFunctionImplementation = Arc::new(match fun {
+        // math functions
+        BuiltinScalarFunction::Abs => math_expressions::abs,
+        BuiltinScalarFunction::Acos => math_expressions::acos,
+        BuiltinScalarFunction::Asin => math_expressions::asin,
+        BuiltinScalarFunction::Atan => math_expressions::atan,
+        BuiltinScalarFunction::Ceil => math_expressions::ceil,
+        BuiltinScalarFunction::Cos => math_expressions::cos,
+        BuiltinScalarFunction::Exp => math_expressions::exp,
+        BuiltinScalarFunction::Floor => math_expressions::floor,
+        BuiltinScalarFunction::Log => math_expressions::ln,
+        BuiltinScalarFunction::Log10 => math_expressions::log10,
+        BuiltinScalarFunction::Log2 => math_expressions::log2,
+        BuiltinScalarFunction::Round => math_expressions::round,
+        BuiltinScalarFunction::Signum => math_expressions::signum,
+        BuiltinScalarFunction::Sin => math_expressions::sin,
+        BuiltinScalarFunction::Sqrt => math_expressions::sqrt,
+        BuiltinScalarFunction::Tan => math_expressions::tan,
+        BuiltinScalarFunction::Trunc => math_expressions::trunc,
 
-            // string functions
-            BuiltinScalarFunction::Array => array_expressions::array,
-            BuiltinScalarFunction::Ascii => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => make_scalar_function(
-                        string_expressions::ascii::<i32>,
-                    )(args, execution_props),
-                    DataType::LargeUtf8 => make_scalar_function(
-                        string_expressions::ascii::<i64>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function ascii",
-                        other,
-                    ))),
-                }
+        // string functions
+        BuiltinScalarFunction::Array => array_expressions::array,
+        BuiltinScalarFunction::Ascii => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::ascii::<i32>)(args)
             }
-            BuiltinScalarFunction::BitLength => |args, _| match &args[0] {
-                ColumnarValue::Array(v) => {
-                    Ok(ColumnarValue::Array(bit_length(v.as_ref())?))
-                }
-                ColumnarValue::Scalar(v) => match v {
-                    ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(
-                        ScalarValue::Int32(v.as_ref().map(|x| (x.len() * 8) as i32)),
-                    )),
-                    ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
-                        ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64)),
-                    )),
-                    _ => unreachable!(),
-                },
-            },
-            BuiltinScalarFunction::Btrim => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => make_scalar_function(
-                        string_expressions::btrim::<i32>,
-                    )(args, execution_props),
-                    DataType::LargeUtf8 => make_scalar_function(
-                        string_expressions::btrim::<i64>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function btrim",
-                        other,
-                    ))),
-                }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::ascii::<i64>)(args)
             }
-            BuiltinScalarFunction::CharacterLength => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => {
-                        let func = invoke_if_unicode_expressions_feature_flag!(
-                            character_length,
-                            Int32Type,
-                            "character_length"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    DataType::LargeUtf8 => {
-                        let func = invoke_if_unicode_expressions_feature_flag!(
-                            character_length,
-                            Int64Type,
-                            "character_length"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function character_length",
-                        other,
-                    ))),
-                }
-            }
-            BuiltinScalarFunction::Chr => |args, execution_props| {
-                make_scalar_function(string_expressions::chr)(args, execution_props)
-            },
-            BuiltinScalarFunction::Concat => string_expressions::concat,
-            BuiltinScalarFunction::ConcatWithSeparator => |args, execution_props| {
-                make_scalar_function(string_expressions::concat_ws)(args, execution_props)
-            },
-            BuiltinScalarFunction::DatePart => datetime_expressions::date_part,
-            BuiltinScalarFunction::DateTrunc => datetime_expressions::date_trunc,
-            BuiltinScalarFunction::Now => datetime_expressions::now,
-            BuiltinScalarFunction::InitCap => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => make_scalar_function(
-                        string_expressions::initcap::<i32>,
-                    )(args, execution_props),
-                    DataType::LargeUtf8 => make_scalar_function(
-                        string_expressions::initcap::<i64>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function initcap",
-                        other,
-                    ))),
-                }
-            }
-            BuiltinScalarFunction::Left => |args, execution_props| match args[0]
-                .data_type()
-            {
-                DataType::Utf8 => {
-                    let func =
-                        invoke_if_unicode_expressions_feature_flag!(left, i32, "left");
-                    make_scalar_function(func)(args, execution_props)
-                }
-                DataType::LargeUtf8 => {
-                    let func =
-                        invoke_if_unicode_expressions_feature_flag!(left, i64, "left");
-                    make_scalar_function(func)(args, execution_props)
-                }
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {:?} for function left",
-                    other,
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function ascii",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::BitLength => |args| match &args[0] {
+            ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
+            ColumnarValue::Scalar(v) => match v {
+                ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
+                    v.as_ref().map(|x| (x.len() * 8) as i32),
                 ))),
+                ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
+                    ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64)),
+                )),
+                _ => unreachable!(),
             },
-            BuiltinScalarFunction::Lower => string_expressions::lower,
-            BuiltinScalarFunction::Lpad => |args, execution_props| match args[0]
-                .data_type()
-            {
-                DataType::Utf8 => {
-                    let func =
-                        invoke_if_unicode_expressions_feature_flag!(lpad, i32, "lpad");
-                    make_scalar_function(func)(args, execution_props)
-                }
-                DataType::LargeUtf8 => {
-                    let func =
-                        invoke_if_unicode_expressions_feature_flag!(lpad, i64, "lpad");
-                    make_scalar_function(func)(args, execution_props)
-                }
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {:?} for function lpad",
-                    other,
+        },
+        BuiltinScalarFunction::Btrim => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::btrim::<i32>)(args)
+            }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::btrim::<i64>)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function btrim",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::CharacterLength => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(
+                    character_length,
+                    Int32Type,
+                    "character_length"
+                );
+                make_scalar_function(func)(args)
+            }
+            DataType::LargeUtf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(
+                    character_length,
+                    Int64Type,
+                    "character_length"
+                );
+                make_scalar_function(func)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function character_length",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Chr => {
+            |args| make_scalar_function(string_expressions::chr)(args)
+        }
+        BuiltinScalarFunction::Concat => string_expressions::concat,
+        BuiltinScalarFunction::ConcatWithSeparator => {
+            |args| make_scalar_function(string_expressions::concat_ws)(args)
+        }
+        BuiltinScalarFunction::DatePart => datetime_expressions::date_part,
+        BuiltinScalarFunction::DateTrunc => datetime_expressions::date_trunc,
+        BuiltinScalarFunction::Now => datetime_expressions::now,
+        BuiltinScalarFunction::InitCap => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::initcap::<i32>)(args)
+            }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::initcap::<i64>)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function initcap",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Left => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(left, i32, "left");
+                make_scalar_function(func)(args)
+            }
+            DataType::LargeUtf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(left, i64, "left");
+                make_scalar_function(func)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function left",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Lower => string_expressions::lower,
+        BuiltinScalarFunction::Lpad => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(lpad, i32, "lpad");
+                make_scalar_function(func)(args)
+            }
+            DataType::LargeUtf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(lpad, i64, "lpad");
+                make_scalar_function(func)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function lpad",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Ltrim => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::ltrim::<i32>)(args)
+            }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::ltrim::<i64>)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function ltrim",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::MD5 => {
+            invoke_if_crypto_expressions_feature_flag!(md5, "md5")
+        }
+        BuiltinScalarFunction::NullIf => nullif_func,
+        BuiltinScalarFunction::OctetLength => |args| match &args[0] {
+            ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
+            ColumnarValue::Scalar(v) => match v {
+                ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
+                    v.as_ref().map(|x| x.len() as i32),
                 ))),
+                ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
+                    ScalarValue::Int64(v.as_ref().map(|x| x.len() as i64)),
+                )),
+                _ => unreachable!(),
             },
-            BuiltinScalarFunction::Ltrim => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => make_scalar_function(
-                        string_expressions::ltrim::<i32>,
-                    )(args, execution_props),
-                    DataType::LargeUtf8 => make_scalar_function(
-                        string_expressions::ltrim::<i64>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function ltrim",
-                        other,
-                    ))),
-                }
+        },
+        BuiltinScalarFunction::RegexpMatch => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_if_regex_expressions_feature_flag!(
+                    regexp_match,
+                    i32,
+                    "regexp_match"
+                );
+                make_scalar_function(func)(args)
             }
-            BuiltinScalarFunction::MD5 => {
-                invoke_if_crypto_expressions_feature_flag!(md5, "md5")
+            DataType::LargeUtf8 => {
+                let func = invoke_if_regex_expressions_feature_flag!(
+                    regexp_match,
+                    i64,
+                    "regexp_match"
+                );
+                make_scalar_function(func)(args)
             }
-            BuiltinScalarFunction::NullIf => nullif_func,
-            BuiltinScalarFunction::OctetLength => |args, _| match &args[0] {
-                ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
-                ColumnarValue::Scalar(v) => match v {
-                    ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(
-                        ScalarValue::Int32(v.as_ref().map(|x| x.len() as i32)),
-                    )),
-                    ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
-                        ScalarValue::Int64(v.as_ref().map(|x| x.len() as i64)),
-                    )),
-                    _ => unreachable!(),
-                },
-            },
-            BuiltinScalarFunction::RegexpMatch => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => {
-                        let func = invoke_if_regex_expressions_feature_flag!(
-                            regexp_match,
-                            i32,
-                            "regexp_match"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    DataType::LargeUtf8 => {
-                        let func = invoke_if_regex_expressions_feature_flag!(
-                            regexp_match,
-                            i64,
-                            "regexp_match"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function regexp_match",
-                        other
-                    ))),
-                }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function regexp_match",
+                other
+            ))),
+        },
+        BuiltinScalarFunction::RegexpReplace => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_if_regex_expressions_feature_flag!(
+                    regexp_replace,
+                    i32,
+                    "regexp_replace"
+                );
+                make_scalar_function(func)(args)
             }
-            BuiltinScalarFunction::RegexpReplace => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => {
-                        let func = invoke_if_regex_expressions_feature_flag!(
-                            regexp_replace,
-                            i32,
-                            "regexp_replace"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    DataType::LargeUtf8 => {
-                        let func = invoke_if_regex_expressions_feature_flag!(
-                            regexp_replace,
-                            i64,
-                            "regexp_replace"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function regexp_replace",
-                        other,
-                    ))),
-                }
+            DataType::LargeUtf8 => {
+                let func = invoke_if_regex_expressions_feature_flag!(
+                    regexp_replace,
+                    i64,
+                    "regexp_replace"
+                );
+                make_scalar_function(func)(args)
             }
-            BuiltinScalarFunction::Repeat => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => make_scalar_function(
-                        string_expressions::repeat::<i32>,
-                    )(args, execution_props),
-                    DataType::LargeUtf8 => make_scalar_function(
-                        string_expressions::repeat::<i64>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function repeat",
-                        other,
-                    ))),
-                }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function regexp_replace",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Repeat => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::repeat::<i32>)(args)
             }
-            BuiltinScalarFunction::Replace => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => make_scalar_function(
-                        string_expressions::replace::<i32>,
-                    )(args, execution_props),
-                    DataType::LargeUtf8 => make_scalar_function(
-                        string_expressions::replace::<i64>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function replace",
-                        other,
-                    ))),
-                }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::repeat::<i64>)(args)
             }
-            BuiltinScalarFunction::Reverse => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => {
-                        let func = invoke_if_unicode_expressions_feature_flag!(
-                            reverse, i32, "reverse"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    DataType::LargeUtf8 => {
-                        let func = invoke_if_unicode_expressions_feature_flag!(
-                            reverse, i64, "reverse"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function reverse",
-                        other,
-                    ))),
-                }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function repeat",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Replace => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::replace::<i32>)(args)
             }
-            BuiltinScalarFunction::Right => |args, execution_props| match args[0]
-                .data_type()
-            {
-                DataType::Utf8 => {
-                    let func =
-                        invoke_if_unicode_expressions_feature_flag!(right, i32, "right");
-                    make_scalar_function(func)(args, execution_props)
-                }
-                DataType::LargeUtf8 => {
-                    let func =
-                        invoke_if_unicode_expressions_feature_flag!(right, i64, "right");
-                    make_scalar_function(func)(args, execution_props)
-                }
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {:?} for function right",
-                    other,
-                ))),
-            },
-            BuiltinScalarFunction::Rpad => |args, execution_props| match args[0]
-                .data_type()
-            {
-                DataType::Utf8 => {
-                    let func =
-                        invoke_if_unicode_expressions_feature_flag!(rpad, i32, "rpad");
-                    make_scalar_function(func)(args, execution_props)
-                }
-                DataType::LargeUtf8 => {
-                    let func =
-                        invoke_if_unicode_expressions_feature_flag!(rpad, i64, "rpad");
-                    make_scalar_function(func)(args, execution_props)
-                }
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {:?} for function rpad",
-                    other,
-                ))),
-            },
-            BuiltinScalarFunction::Rtrim => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => make_scalar_function(
-                        string_expressions::rtrim::<i32>,
-                    )(args, execution_props),
-                    DataType::LargeUtf8 => make_scalar_function(
-                        string_expressions::rtrim::<i64>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function rtrim",
-                        other,
-                    ))),
-                }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::replace::<i64>)(args)
             }
-            BuiltinScalarFunction::SHA224 => {
-                invoke_if_crypto_expressions_feature_flag!(sha224, "sha224")
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function replace",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Reverse => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func =
+                    invoke_if_unicode_expressions_feature_flag!(reverse, i32, "reverse");
+                make_scalar_function(func)(args)
             }
-            BuiltinScalarFunction::SHA256 => {
-                invoke_if_crypto_expressions_feature_flag!(sha256, "sha256")
+            DataType::LargeUtf8 => {
+                let func =
+                    invoke_if_unicode_expressions_feature_flag!(reverse, i64, "reverse");
+                make_scalar_function(func)(args)
             }
-            BuiltinScalarFunction::SHA384 => {
-                invoke_if_crypto_expressions_feature_flag!(sha384, "sha384")
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function reverse",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Right => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func =
+                    invoke_if_unicode_expressions_feature_flag!(right, i32, "right");
+                make_scalar_function(func)(args)
             }
-            BuiltinScalarFunction::SHA512 => {
-                invoke_if_crypto_expressions_feature_flag!(sha512, "sha512")
+            DataType::LargeUtf8 => {
+                let func =
+                    invoke_if_unicode_expressions_feature_flag!(right, i64, "right");
+                make_scalar_function(func)(args)
             }
-            BuiltinScalarFunction::SplitPart => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => make_scalar_function(
-                        string_expressions::split_part::<i32>,
-                    )(args, execution_props),
-                    DataType::LargeUtf8 => make_scalar_function(
-                        string_expressions::split_part::<i64>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function split_part",
-                        other,
-                    ))),
-                }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function right",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Rpad => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(rpad, i32, "rpad");
+                make_scalar_function(func)(args)
             }
-            BuiltinScalarFunction::StartsWith => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => make_scalar_function(
-                        string_expressions::starts_with::<i32>,
-                    )(args, execution_props),
-                    DataType::LargeUtf8 => make_scalar_function(
-                        string_expressions::starts_with::<i64>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function starts_with",
-                        other,
-                    ))),
-                }
+            DataType::LargeUtf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(rpad, i64, "rpad");
+                make_scalar_function(func)(args)
             }
-            BuiltinScalarFunction::Strpos => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => {
-                        let func = invoke_if_unicode_expressions_feature_flag!(
-                            strpos, Int32Type, "strpos"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    DataType::LargeUtf8 => {
-                        let func = invoke_if_unicode_expressions_feature_flag!(
-                            strpos, Int64Type, "strpos"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function strpos",
-                        other,
-                    ))),
-                }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function rpad",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Rtrim => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::rtrim::<i32>)(args)
             }
-            BuiltinScalarFunction::Substr => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => {
-                        let func = invoke_if_unicode_expressions_feature_flag!(
-                            substr, i32, "substr"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    DataType::LargeUtf8 => {
-                        let func = invoke_if_unicode_expressions_feature_flag!(
-                            substr, i64, "substr"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function substr",
-                        other,
-                    ))),
-                }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::rtrim::<i64>)(args)
             }
-            BuiltinScalarFunction::ToHex => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Int32 => make_scalar_function(
-                        string_expressions::to_hex::<Int32Type>,
-                    )(args, execution_props),
-                    DataType::Int64 => make_scalar_function(
-                        string_expressions::to_hex::<Int64Type>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function to_hex",
-                        other,
-                    ))),
-                }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function rtrim",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::SHA224 => {
+            invoke_if_crypto_expressions_feature_flag!(sha224, "sha224")
+        }
+        BuiltinScalarFunction::SHA256 => {
+            invoke_if_crypto_expressions_feature_flag!(sha256, "sha256")
+        }
+        BuiltinScalarFunction::SHA384 => {
+            invoke_if_crypto_expressions_feature_flag!(sha384, "sha384")
+        }
+        BuiltinScalarFunction::SHA512 => {
+            invoke_if_crypto_expressions_feature_flag!(sha512, "sha512")
+        }
+        BuiltinScalarFunction::SplitPart => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::split_part::<i32>)(args)
             }
-            BuiltinScalarFunction::ToTimestamp => datetime_expressions::to_timestamp,
-            BuiltinScalarFunction::Translate => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => {
-                        let func = invoke_if_unicode_expressions_feature_flag!(
-                            translate,
-                            i32,
-                            "translate"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    DataType::LargeUtf8 => {
-                        let func = invoke_if_unicode_expressions_feature_flag!(
-                            translate,
-                            i64,
-                            "translate"
-                        );
-                        make_scalar_function(func)(args, execution_props)
-                    }
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function translate",
-                        other,
-                    ))),
-                }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::split_part::<i64>)(args)
             }
-            BuiltinScalarFunction::Trim => {
-                |args, execution_props| match args[0].data_type() {
-                    DataType::Utf8 => make_scalar_function(
-                        string_expressions::btrim::<i32>,
-                    )(args, execution_props),
-                    DataType::LargeUtf8 => make_scalar_function(
-                        string_expressions::btrim::<i64>,
-                    )(args, execution_props),
-                    other => Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function trim",
-                        other,
-                    ))),
-                }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function split_part",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::StartsWith => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::starts_with::<i32>)(args)
             }
-            BuiltinScalarFunction::Upper => string_expressions::upper,
-        });
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::starts_with::<i64>)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function starts_with",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Strpos => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(
+                    strpos, Int32Type, "strpos"
+                );
+                make_scalar_function(func)(args)
+            }
+            DataType::LargeUtf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(
+                    strpos, Int64Type, "strpos"
+                );
+                make_scalar_function(func)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function strpos",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Substr => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func =
+                    invoke_if_unicode_expressions_feature_flag!(substr, i32, "substr");
+                make_scalar_function(func)(args)
+            }
+            DataType::LargeUtf8 => {
+                let func =
+                    invoke_if_unicode_expressions_feature_flag!(substr, i64, "substr");
+                make_scalar_function(func)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function substr",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::ToHex => |args| match args[0].data_type() {
+            DataType::Int32 => {
+                make_scalar_function(string_expressions::to_hex::<Int32Type>)(args)
+            }
+            DataType::Int64 => {
+                make_scalar_function(string_expressions::to_hex::<Int64Type>)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function to_hex",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::ToTimestamp => datetime_expressions::to_timestamp,
+        BuiltinScalarFunction::Translate => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(
+                    translate,
+                    i32,
+                    "translate"
+                );
+                make_scalar_function(func)(args)
+            }
+            DataType::LargeUtf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(
+                    translate,
+                    i64,
+                    "translate"
+                );
+                make_scalar_function(func)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function translate",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Trim => |args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::btrim::<i32>)(args)
+            }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::btrim::<i64>)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {:?} for function trim",
+                other,
+            ))),
+        },
+        BuiltinScalarFunction::Upper => string_expressions::upper,
+    });
     // coerce
     let args = coerce(args, input_schema, &signature(fun))?;
 
@@ -1182,7 +1123,6 @@ pub fn create_physical_expr(
         fun_expr,
         args,
         &return_type(&fun, &arg_types)?,
-        execution_props,
     )))
 }
 
@@ -1344,7 +1284,6 @@ pub struct ScalarFunctionExpr {
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
-    execution_props: ExecutionProps,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -1365,14 +1304,12 @@ impl ScalarFunctionExpr {
         fun: ScalarFunctionImplementation,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: &DataType,
-        execution_props: &ExecutionProps,
     ) -> Self {
         Self {
             fun,
             name: name.to_owned(),
             args,
             return_type: return_type.clone(),
-            execution_props: execution_props.clone(),
         }
     }
 
@@ -1436,8 +1373,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
         // evaluate the function
         let fun = self.fun.as_ref();
-        let execution_props = &self.execution_props;
-        (fun)(&inputs, execution_props)
+        (fun)(&inputs)
     }
 }
 
@@ -1445,40 +1381,38 @@ impl PhysicalExpr for ScalarFunctionExpr {
 /// and vice-versa after evaluation.
 pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
 where
-    F: Fn(&[ArrayRef], &ExecutionProps) -> Result<ArrayRef> + Sync + Send + 'static,
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
 {
-    Arc::new(
-        move |args: &[ColumnarValue], execution_props: &ExecutionProps| {
-            // first, identify if any of the arguments is an Array. If yes, store its `len`,
-            // as any scalar will need to be converted to an array of len `len`.
-            let len = args
-                .iter()
-                .fold(Option::<usize>::None, |acc, arg| match arg {
-                    ColumnarValue::Scalar(_) => acc,
-                    ColumnarValue::Array(a) => Some(a.len()),
-                });
+    Arc::new(move |args: &[ColumnarValue]| {
+        // first, identify if any of the arguments is an Array. If yes, store its `len`,
+        // as any scalar will need to be converted to an array of len `len`.
+        let len = args
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            });
 
-            // to array
-            let args = if let Some(len) = len {
-                args.iter()
-                    .map(|arg| arg.clone().into_array(len))
-                    .collect::<Vec<ArrayRef>>()
-            } else {
-                args.iter()
-                    .map(|arg| arg.clone().into_array(1))
-                    .collect::<Vec<ArrayRef>>()
-            };
+        // to array
+        let args = if let Some(len) = len {
+            args.iter()
+                .map(|arg| arg.clone().into_array(len))
+                .collect::<Vec<ArrayRef>>()
+        } else {
+            args.iter()
+                .map(|arg| arg.clone().into_array(1))
+                .collect::<Vec<ArrayRef>>()
+        };
 
-            let result = (inner)(&args, execution_props);
+        let result = (inner)(&args);
 
-            // maybe back to scalar
-            if len.is_some() {
-                result.map(ColumnarValue::Array)
-            } else {
-                ScalarValue::try_from_array(&result?, 0).map(ColumnarValue::Scalar)
-            }
-        },
-    )
+        // maybe back to scalar
+        if len.is_some() {
+            result.map(ColumnarValue::Array)
+        } else {
+            ScalarValue::try_from_array(&result?, 0).map(ColumnarValue::Scalar)
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1505,7 +1439,7 @@ mod tests {
     /// $DATA_TYPE is the function to test result type
     /// $ARRAY_TYPE is the column type after function applied
     macro_rules! test_function {
-        ($FUNC:ident, $ARGS:expr, $EXECUTION_PROPS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $DATA_TYPE: ident, $ARRAY_TYPE:ident) => {
+        ($FUNC:ident, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $DATA_TYPE: ident, $ARRAY_TYPE:ident) => {
             // used to provide type annotation
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
 
@@ -1514,7 +1448,7 @@ mod tests {
             let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
 
             let expr =
-                create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, $EXECUTION_PROPS)?;
+                create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema)?;
 
             // type is correct
             assert_eq!(expr.data_type(&schema)?, DataType::$DATA_TYPE);
@@ -1548,11 +1482,9 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        let execution_props = &ExecutionProps::new();
         test_function!(
             Ascii,
             &[lit(ScalarValue::Utf8(Some("x".to_string())))],
-            execution_props,
             Ok(Some(120)),
             i32,
             Int32,
@@ -1561,7 +1493,6 @@ mod tests {
         test_function!(
             Ascii,
             &[lit(ScalarValue::Utf8(Some("ésoj".to_string())))],
-            execution_props,
             Ok(Some(233)),
             i32,
             Int32,
@@ -1570,7 +1501,6 @@ mod tests {
         test_function!(
             Ascii,
             &[lit(ScalarValue::Utf8(Some("💯".to_string())))],
-            execution_props,
             Ok(Some(128175)),
             i32,
             Int32,
@@ -1579,7 +1509,6 @@ mod tests {
         test_function!(
             Ascii,
             &[lit(ScalarValue::Utf8(Some("💯a".to_string())))],
-            execution_props,
             Ok(Some(128175)),
             i32,
             Int32,
@@ -1588,7 +1517,6 @@ mod tests {
         test_function!(
             Ascii,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some(0)),
             i32,
             Int32,
@@ -1597,7 +1525,6 @@ mod tests {
         test_function!(
             Ascii,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             i32,
             Int32,
@@ -1606,7 +1533,6 @@ mod tests {
         test_function!(
             BitLength,
             &[lit(ScalarValue::Utf8(Some("chars".to_string())))],
-            execution_props,
             Ok(Some(40)),
             i32,
             Int32,
@@ -1615,7 +1541,6 @@ mod tests {
         test_function!(
             BitLength,
             &[lit(ScalarValue::Utf8(Some("josé".to_string())))],
-            execution_props,
             Ok(Some(40)),
             i32,
             Int32,
@@ -1624,7 +1549,6 @@ mod tests {
         test_function!(
             BitLength,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some(0)),
             i32,
             Int32,
@@ -1633,7 +1557,6 @@ mod tests {
         test_function!(
             Btrim,
             &[lit(ScalarValue::Utf8(Some(" trim ".to_string())))],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -1642,7 +1565,6 @@ mod tests {
         test_function!(
             Btrim,
             &[lit(ScalarValue::Utf8(Some(" trim".to_string())))],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -1651,7 +1573,6 @@ mod tests {
         test_function!(
             Btrim,
             &[lit(ScalarValue::Utf8(Some("trim ".to_string())))],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -1660,7 +1581,6 @@ mod tests {
         test_function!(
             Btrim,
             &[lit(ScalarValue::Utf8(Some("\n trim \n".to_string())))],
-            execution_props,
             Ok(Some("\n trim \n")),
             &str,
             Utf8,
@@ -1672,7 +1592,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("xyxtrimyyx".to_string()))),
                 lit(ScalarValue::Utf8(Some("xyz".to_string()))),
             ],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -1684,7 +1603,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("\nxyxtrimyyx\n".to_string()))),
                 lit(ScalarValue::Utf8(Some("xyz\n".to_string()))),
             ],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -1696,7 +1614,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Utf8(Some("xyz".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -1708,7 +1625,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("xyxtrimyyx".to_string()))),
                 lit(ScalarValue::Utf8(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -1718,7 +1634,6 @@ mod tests {
         test_function!(
             CharacterLength,
             &[lit(ScalarValue::Utf8(Some("chars".to_string())))],
-            execution_props,
             Ok(Some(5)),
             i32,
             Int32,
@@ -1728,7 +1643,6 @@ mod tests {
         test_function!(
             CharacterLength,
             &[lit(ScalarValue::Utf8(Some("josé".to_string())))],
-            execution_props,
             Ok(Some(4)),
             i32,
             Int32,
@@ -1738,7 +1652,6 @@ mod tests {
         test_function!(
             CharacterLength,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some(0)),
             i32,
             Int32,
@@ -1748,7 +1661,6 @@ mod tests {
         test_function!(
             CharacterLength,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             i32,
             Int32,
@@ -1768,7 +1680,6 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(128175)))],
-            execution_props,
             Ok(Some("💯")),
             &str,
             Utf8,
@@ -1777,7 +1688,6 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(None))],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -1786,7 +1696,6 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(120)))],
-            execution_props,
             Ok(Some("x")),
             &str,
             Utf8,
@@ -1795,7 +1704,6 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(128175)))],
-            execution_props,
             Ok(Some("💯")),
             &str,
             Utf8,
@@ -1804,7 +1712,6 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(None))],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -1813,7 +1720,6 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(0)))],
-            execution_props,
             Err(DataFusionError::Execution(
                 "null character not permitted.".to_string(),
             )),
@@ -1824,7 +1730,6 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(i64::MAX)))],
-            execution_props,
             Err(DataFusionError::Execution(
                 "requested character too large for encoding.".to_string(),
             )),
@@ -1839,7 +1744,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("bb".to_string()))),
                 lit(ScalarValue::Utf8(Some("cc".to_string()))),
             ],
-            execution_props,
             Ok(Some("aabbcc")),
             &str,
             Utf8,
@@ -1852,7 +1756,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Utf8(Some("cc".to_string()))),
             ],
-            execution_props,
             Ok(Some("aacc")),
             &str,
             Utf8,
@@ -1861,7 +1764,6 @@ mod tests {
         test_function!(
             Concat,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -1875,7 +1777,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("bb".to_string()))),
                 lit(ScalarValue::Utf8(Some("cc".to_string()))),
             ],
-            execution_props,
             Ok(Some("aa|bb|cc")),
             &str,
             Utf8,
@@ -1887,7 +1788,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("|".to_string()))),
                 lit(ScalarValue::Utf8(None)),
             ],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -1901,7 +1801,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("bb".to_string()))),
                 lit(ScalarValue::Utf8(Some("cc".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -1915,7 +1814,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Utf8(Some("cc".to_string()))),
             ],
-            execution_props,
             Ok(Some("aa|cc")),
             &str,
             Utf8,
@@ -1924,7 +1822,6 @@ mod tests {
         test_function!(
             Exp,
             &[lit(ScalarValue::Int32(Some(1)))],
-            execution_props,
             Ok(Some((1.0_f64).exp())),
             f64,
             Float64,
@@ -1933,7 +1830,6 @@ mod tests {
         test_function!(
             Exp,
             &[lit(ScalarValue::UInt32(Some(1)))],
-            execution_props,
             Ok(Some((1.0_f64).exp())),
             f64,
             Float64,
@@ -1942,7 +1838,6 @@ mod tests {
         test_function!(
             Exp,
             &[lit(ScalarValue::UInt64(Some(1)))],
-            execution_props,
             Ok(Some((1.0_f64).exp())),
             f64,
             Float64,
@@ -1951,7 +1846,6 @@ mod tests {
         test_function!(
             Exp,
             &[lit(ScalarValue::Float64(Some(1.0)))],
-            execution_props,
             Ok(Some((1.0_f64).exp())),
             f64,
             Float64,
@@ -1960,7 +1854,6 @@ mod tests {
         test_function!(
             Exp,
             &[lit(ScalarValue::Float32(Some(1.0)))],
-            execution_props,
             Ok(Some((1.0_f32).exp() as f64)),
             f64,
             Float64,
@@ -1969,7 +1862,6 @@ mod tests {
         test_function!(
             InitCap,
             &[lit(ScalarValue::Utf8(Some("hi THOMAS".to_string())))],
-            execution_props,
             Ok(Some("Hi Thomas")),
             &str,
             Utf8,
@@ -1978,7 +1870,6 @@ mod tests {
         test_function!(
             InitCap,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -1987,7 +1878,6 @@ mod tests {
         test_function!(
             InitCap,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -1996,7 +1886,6 @@ mod tests {
         test_function!(
             InitCap,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2009,7 +1898,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int8(Some(2))),
             ],
-            execution_props,
             Ok(Some("ab")),
             &str,
             Utf8,
@@ -2022,7 +1910,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int64(Some(200))),
             ],
-            execution_props,
             Ok(Some("abcde")),
             &str,
             Utf8,
@@ -2035,7 +1922,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int64(Some(-2))),
             ],
-            execution_props,
             Ok(Some("abc")),
             &str,
             Utf8,
@@ -2048,7 +1934,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int64(Some(-200))),
             ],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -2061,7 +1946,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int64(Some(0))),
             ],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -2074,7 +1958,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Int64(Some(2))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2087,7 +1970,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int64(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2100,7 +1982,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            execution_props,
             Ok(Some("joséé")),
             &str,
             Utf8,
@@ -2113,7 +1994,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
                 lit(ScalarValue::Int64(Some(-3))),
             ],
-            execution_props,
             Ok(Some("joséé")),
             &str,
             Utf8,
@@ -2140,7 +2020,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("josé".to_string()))),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            execution_props,
             Ok(Some(" josé")),
             &str,
             Utf8,
@@ -2153,7 +2032,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("hi".to_string()))),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            execution_props,
             Ok(Some("   hi")),
             &str,
             Utf8,
@@ -2166,7 +2044,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("hi".to_string()))),
                 lit(ScalarValue::Int64(Some(0))),
             ],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -2179,7 +2056,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("hi".to_string()))),
                 lit(ScalarValue::Int64(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2192,7 +2068,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2206,7 +2081,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Utf8(Some("xy".to_string()))),
             ],
-            execution_props,
             Ok(Some("xyxhi")),
             &str,
             Utf8,
@@ -2220,7 +2094,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(21))),
                 lit(ScalarValue::Utf8(Some("abcdef".to_string()))),
             ],
-            execution_props,
             Ok(Some("abcdefabcdefabcdefahi")),
             &str,
             Utf8,
@@ -2234,7 +2107,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Utf8(Some(" ".to_string()))),
             ],
-            execution_props,
             Ok(Some("   hi")),
             &str,
             Utf8,
@@ -2248,7 +2120,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Utf8(Some("".to_string()))),
             ],
-            execution_props,
             Ok(Some("hi")),
             &str,
             Utf8,
@@ -2262,7 +2133,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Utf8(Some("xy".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2276,7 +2146,6 @@ mod tests {
                 lit(ScalarValue::Int64(None)),
                 lit(ScalarValue::Utf8(Some("xy".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2290,7 +2159,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Utf8(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2304,7 +2172,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(10))),
                 lit(ScalarValue::Utf8(Some("xy".to_string()))),
             ],
-            execution_props,
             Ok(Some("xyxyxyjosé")),
             &str,
             Utf8,
@@ -2318,7 +2185,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(10))),
                 lit(ScalarValue::Utf8(Some("éñ".to_string()))),
             ],
-            execution_props,
             Ok(Some("éñéñéñjosé")),
             &str,
             Utf8,
@@ -2341,7 +2207,6 @@ mod tests {
         test_function!(
             Ltrim,
             &[lit(ScalarValue::Utf8(Some(" trim".to_string())))],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -2350,7 +2215,6 @@ mod tests {
         test_function!(
             Ltrim,
             &[lit(ScalarValue::Utf8(Some(" trim ".to_string())))],
-            execution_props,
             Ok(Some("trim ")),
             &str,
             Utf8,
@@ -2359,7 +2223,6 @@ mod tests {
         test_function!(
             Ltrim,
             &[lit(ScalarValue::Utf8(Some("trim ".to_string())))],
-            execution_props,
             Ok(Some("trim ")),
             &str,
             Utf8,
@@ -2368,7 +2231,6 @@ mod tests {
         test_function!(
             Ltrim,
             &[lit(ScalarValue::Utf8(Some("trim".to_string())))],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -2377,7 +2239,6 @@ mod tests {
         test_function!(
             Ltrim,
             &[lit(ScalarValue::Utf8(Some("\n trim ".to_string())))],
-            execution_props,
             Ok(Some("\n trim ")),
             &str,
             Utf8,
@@ -2386,7 +2247,6 @@ mod tests {
         test_function!(
             Ltrim,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2396,7 +2256,6 @@ mod tests {
         test_function!(
             MD5,
             &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
-            execution_props,
             Ok(Some("34b7da764b21d298ef307d04d8152dc5")),
             &str,
             Utf8,
@@ -2406,7 +2265,6 @@ mod tests {
         test_function!(
             MD5,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some("d41d8cd98f00b204e9800998ecf8427e")),
             &str,
             Utf8,
@@ -2416,7 +2274,6 @@ mod tests {
         test_function!(
             MD5,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2436,7 +2293,6 @@ mod tests {
         test_function!(
             OctetLength,
             &[lit(ScalarValue::Utf8(Some("chars".to_string())))],
-            execution_props,
             Ok(Some(5)),
             i32,
             Int32,
@@ -2445,7 +2301,6 @@ mod tests {
         test_function!(
             OctetLength,
             &[lit(ScalarValue::Utf8(Some("josé".to_string())))],
-            execution_props,
             Ok(Some(5)),
             i32,
             Int32,
@@ -2454,7 +2309,6 @@ mod tests {
         test_function!(
             OctetLength,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some(0)),
             i32,
             Int32,
@@ -2463,7 +2317,6 @@ mod tests {
         test_function!(
             OctetLength,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             i32,
             Int32,
@@ -2477,7 +2330,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some(".[mN]a.".to_string()))),
                 lit(ScalarValue::Utf8(Some("M".to_string()))),
             ],
-            execution_props,
             Ok(Some("ThM")),
             &str,
             Utf8,
@@ -2491,7 +2343,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("b..".to_string()))),
                 lit(ScalarValue::Utf8(Some("X".to_string()))),
             ],
-            execution_props,
             Ok(Some("fooXbaz")),
             &str,
             Utf8,
@@ -2506,7 +2357,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("X".to_string()))),
                 lit(ScalarValue::Utf8(Some("g".to_string()))),
             ],
-            execution_props,
             Ok(Some("fooXX")),
             &str,
             Utf8,
@@ -2521,7 +2371,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("X\\1Y".to_string()))),
                 lit(ScalarValue::Utf8(Some("g".to_string()))),
             ],
-            execution_props,
             Ok(Some("fooXarYXazY")),
             &str,
             Utf8,
@@ -2536,7 +2385,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("X\\1Y".to_string()))),
                 lit(ScalarValue::Utf8(Some("g".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2551,7 +2399,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("X\\1Y".to_string()))),
                 lit(ScalarValue::Utf8(Some("g".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2566,7 +2413,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Utf8(Some("g".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2581,7 +2427,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("X\\1Y".to_string()))),
                 lit(ScalarValue::Utf8(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2596,7 +2441,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("X".to_string()))),
                 lit(ScalarValue::Utf8(Some("gi".to_string()))),
             ],
-            execution_props,
             Ok(Some("XXX")),
             &str,
             Utf8,
@@ -2611,7 +2455,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("X".to_string()))),
                 lit(ScalarValue::Utf8(Some("i".to_string()))),
             ],
-            execution_props,
             Ok(Some("XabcABC")),
             &str,
             Utf8,
@@ -2638,7 +2481,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("Pg".to_string()))),
                 lit(ScalarValue::Int64(Some(4))),
             ],
-            execution_props,
             Ok(Some("PgPgPgPg")),
             &str,
             Utf8,
@@ -2650,7 +2492,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Int64(Some(4))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2662,7 +2503,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("Pg".to_string()))),
                 lit(ScalarValue::Int64(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2672,7 +2512,6 @@ mod tests {
         test_function!(
             Reverse,
             &[lit(ScalarValue::Utf8(Some("abcde".to_string())))],
-            execution_props,
             Ok(Some("edcba")),
             &str,
             Utf8,
@@ -2682,7 +2521,6 @@ mod tests {
         test_function!(
             Reverse,
             &[lit(ScalarValue::Utf8(Some("loẅks".to_string())))],
-            execution_props,
             Ok(Some("skẅol")),
             &str,
             Utf8,
@@ -2692,7 +2530,6 @@ mod tests {
         test_function!(
             Reverse,
             &[lit(ScalarValue::Utf8(Some("loẅks".to_string())))],
-            execution_props,
             Ok(Some("skẅol")),
             &str,
             Utf8,
@@ -2702,7 +2539,6 @@ mod tests {
         test_function!(
             Reverse,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2726,7 +2562,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int8(Some(2))),
             ],
-            execution_props,
             Ok(Some("de")),
             &str,
             Utf8,
@@ -2739,7 +2574,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int64(Some(200))),
             ],
-            execution_props,
             Ok(Some("abcde")),
             &str,
             Utf8,
@@ -2752,7 +2586,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int64(Some(-2))),
             ],
-            execution_props,
             Ok(Some("cde")),
             &str,
             Utf8,
@@ -2765,7 +2598,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int64(Some(-200))),
             ],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -2778,7 +2610,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int64(Some(0))),
             ],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -2791,7 +2622,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Int64(Some(2))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2804,7 +2634,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abcde".to_string()))),
                 lit(ScalarValue::Int64(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2817,7 +2646,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            execution_props,
             Ok(Some("éésoj")),
             &str,
             Utf8,
@@ -2830,7 +2658,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
                 lit(ScalarValue::Int64(Some(-3))),
             ],
-            execution_props,
             Ok(Some("éésoj")),
             &str,
             Utf8,
@@ -2857,7 +2684,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("josé".to_string()))),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            execution_props,
             Ok(Some("josé ")),
             &str,
             Utf8,
@@ -2870,7 +2696,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("hi".to_string()))),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            execution_props,
             Ok(Some("hi   ")),
             &str,
             Utf8,
@@ -2883,7 +2708,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("hi".to_string()))),
                 lit(ScalarValue::Int64(Some(0))),
             ],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -2896,7 +2720,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("hi".to_string()))),
                 lit(ScalarValue::Int64(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2909,7 +2732,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2923,7 +2745,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Utf8(Some("xy".to_string()))),
             ],
-            execution_props,
             Ok(Some("hixyx")),
             &str,
             Utf8,
@@ -2937,7 +2758,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(21))),
                 lit(ScalarValue::Utf8(Some("abcdef".to_string()))),
             ],
-            execution_props,
             Ok(Some("hiabcdefabcdefabcdefa")),
             &str,
             Utf8,
@@ -2951,7 +2771,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Utf8(Some(" ".to_string()))),
             ],
-            execution_props,
             Ok(Some("hi   ")),
             &str,
             Utf8,
@@ -2965,7 +2784,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Utf8(Some("".to_string()))),
             ],
-            execution_props,
             Ok(Some("hi")),
             &str,
             Utf8,
@@ -2979,7 +2797,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Utf8(Some("xy".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -2993,7 +2810,6 @@ mod tests {
                 lit(ScalarValue::Int64(None)),
                 lit(ScalarValue::Utf8(Some("xy".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3007,7 +2823,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Utf8(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3021,7 +2836,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(10))),
                 lit(ScalarValue::Utf8(Some("xy".to_string()))),
             ],
-            execution_props,
             Ok(Some("joséxyxyxy")),
             &str,
             Utf8,
@@ -3035,7 +2849,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(10))),
                 lit(ScalarValue::Utf8(Some("éñ".to_string()))),
             ],
-            execution_props,
             Ok(Some("josééñéñéñ")),
             &str,
             Utf8,
@@ -3058,7 +2871,6 @@ mod tests {
         test_function!(
             Rtrim,
             &[lit(ScalarValue::Utf8(Some("trim ".to_string())))],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -3067,7 +2879,6 @@ mod tests {
         test_function!(
             Rtrim,
             &[lit(ScalarValue::Utf8(Some(" trim ".to_string())))],
-            execution_props,
             Ok(Some(" trim")),
             &str,
             Utf8,
@@ -3076,7 +2887,6 @@ mod tests {
         test_function!(
             Rtrim,
             &[lit(ScalarValue::Utf8(Some(" trim \n".to_string())))],
-            execution_props,
             Ok(Some(" trim \n")),
             &str,
             Utf8,
@@ -3085,7 +2895,6 @@ mod tests {
         test_function!(
             Rtrim,
             &[lit(ScalarValue::Utf8(Some(" trim".to_string())))],
-            execution_props,
             Ok(Some(" trim")),
             &str,
             Utf8,
@@ -3094,7 +2903,6 @@ mod tests {
         test_function!(
             Rtrim,
             &[lit(ScalarValue::Utf8(Some("trim".to_string())))],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -3103,7 +2911,6 @@ mod tests {
         test_function!(
             Rtrim,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3113,7 +2920,6 @@ mod tests {
         test_function!(
             SHA224,
             &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
-            execution_props,
             Ok(Some(&[
                 11u8, 246u8, 203u8, 98u8, 100u8, 156u8, 66u8, 169u8, 174u8, 56u8, 118u8,
                 171u8, 111u8, 109u8, 146u8, 173u8, 54u8, 203u8, 84u8, 20u8, 228u8, 149u8,
@@ -3127,7 +2933,6 @@ mod tests {
         test_function!(
             SHA224,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some(&[
                 209u8, 74u8, 2u8, 140u8, 42u8, 58u8, 43u8, 201u8, 71u8, 97u8, 2u8, 187u8,
                 40u8, 130u8, 52u8, 196u8, 21u8, 162u8, 176u8, 31u8, 130u8, 142u8, 166u8,
@@ -3141,7 +2946,6 @@ mod tests {
         test_function!(
             SHA224,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &[u8],
             Binary,
@@ -3162,7 +2966,6 @@ mod tests {
         test_function!(
             SHA256,
             &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
-            execution_props,
             Ok(Some(&[
                 225u8, 96u8, 143u8, 117u8, 197u8, 215u8, 129u8, 63u8, 61u8, 64u8, 49u8,
                 203u8, 48u8, 191u8, 183u8, 134u8, 80u8, 125u8, 152u8, 19u8, 117u8, 56u8,
@@ -3176,7 +2979,6 @@ mod tests {
         test_function!(
             SHA256,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some(&[
                 227u8, 176u8, 196u8, 66u8, 152u8, 252u8, 28u8, 20u8, 154u8, 251u8, 244u8,
                 200u8, 153u8, 111u8, 185u8, 36u8, 39u8, 174u8, 65u8, 228u8, 100u8, 155u8,
@@ -3190,7 +2992,6 @@ mod tests {
         test_function!(
             SHA256,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &[u8],
             Binary,
@@ -3211,7 +3012,6 @@ mod tests {
         test_function!(
             SHA384,
             &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
-            execution_props,
             Ok(Some(&[
                 9u8, 111u8, 91u8, 104u8, 170u8, 119u8, 132u8, 142u8, 79u8, 223u8, 92u8,
                 28u8, 11u8, 53u8, 13u8, 226u8, 219u8, 250u8, 214u8, 15u8, 253u8, 124u8,
@@ -3227,7 +3027,6 @@ mod tests {
         test_function!(
             SHA384,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some(&[
                 56u8, 176u8, 96u8, 167u8, 81u8, 172u8, 150u8, 56u8, 76u8, 217u8, 50u8,
                 126u8, 177u8, 177u8, 227u8, 106u8, 33u8, 253u8, 183u8, 17u8, 20u8, 190u8,
@@ -3243,7 +3042,6 @@ mod tests {
         test_function!(
             SHA384,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &[u8],
             Binary,
@@ -3264,7 +3062,6 @@ mod tests {
         test_function!(
             SHA512,
             &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
-            execution_props,
             Ok(Some(&[
                 110u8, 27u8, 155u8, 63u8, 232u8, 64u8, 104u8, 14u8, 55u8, 5u8, 31u8,
                 122u8, 213u8, 233u8, 89u8, 214u8, 243u8, 154u8, 208u8, 248u8, 136u8,
@@ -3281,7 +3078,6 @@ mod tests {
         test_function!(
             SHA512,
             &[lit(ScalarValue::Utf8(Some("".to_string())))],
-            execution_props,
             Ok(Some(&[
                 207u8, 131u8, 225u8, 53u8, 126u8, 239u8, 184u8, 189u8, 241u8, 84u8, 40u8,
                 80u8, 214u8, 109u8, 128u8, 7u8, 214u8, 32u8, 228u8, 5u8, 11u8, 87u8,
@@ -3298,7 +3094,6 @@ mod tests {
         test_function!(
             SHA512,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &[u8],
             Binary,
@@ -3322,7 +3117,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("~@~".to_string()))),
                 lit(ScalarValue::Int64(Some(2))),
             ],
-            execution_props,
             Ok(Some("def")),
             &str,
             Utf8,
@@ -3335,7 +3129,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("~@~".to_string()))),
                 lit(ScalarValue::Int64(Some(20))),
             ],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -3348,7 +3141,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("~@~".to_string()))),
                 lit(ScalarValue::Int64(Some(-1))),
             ],
-            execution_props,
             Err(DataFusionError::Execution(
                 "field position must be greater than zero".to_string(),
             )),
@@ -3362,7 +3154,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Utf8(Some("alph".to_string()))),
             ],
-            execution_props,
             Ok(Some(true)),
             bool,
             Boolean,
@@ -3374,7 +3165,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Utf8(Some("blph".to_string()))),
             ],
-            execution_props,
             Ok(Some(false)),
             bool,
             Boolean,
@@ -3386,7 +3176,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Utf8(Some("alph".to_string()))),
             ],
-            execution_props,
             Ok(None),
             bool,
             Boolean,
@@ -3398,7 +3187,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Utf8(None)),
             ],
-            execution_props,
             Ok(None),
             bool,
             Boolean,
@@ -3411,7 +3199,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("abc".to_string()))),
                 lit(ScalarValue::Utf8(Some("c".to_string()))),
             ],
-            execution_props,
             Ok(Some(3)),
             i32,
             Int32,
@@ -3424,7 +3211,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("josé".to_string()))),
                 lit(ScalarValue::Utf8(Some("é".to_string()))),
             ],
-            execution_props,
             Ok(Some(4)),
             i32,
             Int32,
@@ -3437,7 +3223,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
                 lit(ScalarValue::Utf8(Some("so".to_string()))),
             ],
-            execution_props,
             Ok(Some(6)),
             i32,
             Int32,
@@ -3450,7 +3235,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
                 lit(ScalarValue::Utf8(Some("abc".to_string()))),
             ],
-            execution_props,
             Ok(Some(0)),
             i32,
             Int32,
@@ -3463,7 +3247,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Utf8(Some("abc".to_string()))),
             ],
-            execution_props,
             Ok(None),
             i32,
             Int32,
@@ -3476,7 +3259,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
                 lit(ScalarValue::Utf8(None)),
             ],
-            execution_props,
             Ok(None),
             i32,
             Int32,
@@ -3503,7 +3285,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(Some(0))),
             ],
-            execution_props,
             Ok(Some("alphabet")),
             &str,
             Utf8,
@@ -3516,7 +3297,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            execution_props,
             Ok(Some("ésoj")),
             &str,
             Utf8,
@@ -3529,7 +3309,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(Some(1))),
             ],
-            execution_props,
             Ok(Some("alphabet")),
             &str,
             Utf8,
@@ -3542,7 +3321,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(Some(2))),
             ],
-            execution_props,
             Ok(Some("lphabet")),
             &str,
             Utf8,
@@ -3555,7 +3333,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(Some(3))),
             ],
-            execution_props,
             Ok(Some("phabet")),
             &str,
             Utf8,
@@ -3568,7 +3345,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(Some(-3))),
             ],
-            execution_props,
             Ok(Some("alphabet")),
             &str,
             Utf8,
@@ -3581,7 +3357,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(Some(30))),
             ],
-            execution_props,
             Ok(Some("")),
             &str,
             Utf8,
@@ -3594,7 +3369,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3608,7 +3382,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(3))),
                 lit(ScalarValue::Int64(Some(2))),
             ],
-            execution_props,
             Ok(Some("ph")),
             &str,
             Utf8,
@@ -3622,7 +3395,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(3))),
                 lit(ScalarValue::Int64(Some(20))),
             ],
-            execution_props,
             Ok(Some("phabet")),
             &str,
             Utf8,
@@ -3636,7 +3408,6 @@ mod tests {
                 lit(ScalarValue::Int64(None)),
                 lit(ScalarValue::Int64(Some(20))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3650,7 +3421,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(3))),
                 lit(ScalarValue::Int64(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3664,7 +3434,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(-1))),
             ],
-            execution_props,
             Err(DataFusionError::Execution(
                 "negative substring length not allowed".to_string(),
             )),
@@ -3680,7 +3449,6 @@ mod tests {
                 lit(ScalarValue::Int64(Some(5))),
                 lit(ScalarValue::Int64(Some(2))),
             ],
-            execution_props,
             Ok(Some("és")),
             &str,
             Utf8,
@@ -3708,7 +3476,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("143".to_string()))),
                 lit(ScalarValue::Utf8(Some("ax".to_string()))),
             ],
-            execution_props,
             Ok(Some("a2x5")),
             &str,
             Utf8,
@@ -3722,7 +3489,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("143".to_string()))),
                 lit(ScalarValue::Utf8(Some("ax".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3736,7 +3502,6 @@ mod tests {
                 lit(ScalarValue::Utf8(None)),
                 lit(ScalarValue::Utf8(Some("ax".to_string()))),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3750,7 +3515,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("143".to_string()))),
                 lit(ScalarValue::Utf8(None)),
             ],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3764,7 +3528,6 @@ mod tests {
                 lit(ScalarValue::Utf8(Some("éñí".to_string()))),
                 lit(ScalarValue::Utf8(Some("óü".to_string()))),
             ],
-            execution_props,
             Ok(Some("ó2ü5")),
             &str,
             Utf8,
@@ -3788,7 +3551,6 @@ mod tests {
         test_function!(
             Trim,
             &[lit(ScalarValue::Utf8(Some(" trim ".to_string())))],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -3797,7 +3559,6 @@ mod tests {
         test_function!(
             Trim,
             &[lit(ScalarValue::Utf8(Some("trim ".to_string())))],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -3806,7 +3567,6 @@ mod tests {
         test_function!(
             Trim,
             &[lit(ScalarValue::Utf8(Some(" trim".to_string())))],
-            execution_props,
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -3815,7 +3575,6 @@ mod tests {
         test_function!(
             Trim,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3824,7 +3583,6 @@ mod tests {
         test_function!(
             Upper,
             &[lit(ScalarValue::Utf8(Some("upper".to_string())))],
-            execution_props,
             Ok(Some("UPPER")),
             &str,
             Utf8,
@@ -3833,7 +3591,6 @@ mod tests {
         test_function!(
             Upper,
             &[lit(ScalarValue::Utf8(Some("UPPER".to_string())))],
-            execution_props,
             Ok(Some("UPPER")),
             &str,
             Utf8,
@@ -3842,7 +3599,6 @@ mod tests {
         test_function!(
             Upper,
             &[lit(ScalarValue::Utf8(None))],
-            execution_props,
             Ok(None),
             &str,
             Utf8,
@@ -3877,13 +3633,11 @@ mod tests {
             Field::new("b", value2.data_type().clone(), false),
         ]);
         let columns: Vec<ArrayRef> = vec![value1, value2];
-        let execution_props = ExecutionProps::new();
 
         let expr = create_physical_expr(
             &BuiltinScalarFunction::Array,
             &[col("a"), col("b")],
             &schema,
-            &execution_props,
         )?;
 
         // type is correct
@@ -3948,7 +3702,6 @@ mod tests {
             &BuiltinScalarFunction::RegexpMatch,
             &[col("a"), pattern],
             &schema,
-            &ExecutionProps::new(),
         )?;
 
         // type is correct
@@ -3986,7 +3739,6 @@ mod tests {
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],
             &schema,
-            &ExecutionProps::new(),
         )?;
 
         // type is correct
