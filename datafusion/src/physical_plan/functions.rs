@@ -3625,19 +3625,30 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // fn test_concat_error() -> Result<()> {
-    //     let result = return_type(&BuiltinScalarFunction::Concat, &[]);
-    //
-    //     if result.is_ok() {
-    //         println!("{}", result.unwrap());
-    //         Err(DataFusionError::Plan(
-    //             "Function 'concat' cannot accept zero arguments".to_string(),
-    //         ))
-    //     } else {
-    //         Ok(())
-    //     }
-    // }
+    #[test]
+    fn test_concat_error() -> Result<()> {
+        let ctx_state = ExecutionContextState::new();
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        let expr = create_physical_expr(
+            &BuiltinScalarFunction::Concat,
+            &[],
+            &schema,
+            &ctx_state,
+        )?;
+
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
+        let result = expr.evaluate(&batch);
+
+        if result.is_ok() {
+            Err(DataFusionError::Plan(
+                "Function 'concat' cannot accept zero arguments".to_string(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
 
     fn generic_test_array(
         value1: ArrayRef,

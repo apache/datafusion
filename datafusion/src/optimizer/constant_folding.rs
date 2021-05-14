@@ -623,7 +623,7 @@ mod tests {
     ) -> String {
         let rule = ConstantFolding::new();
         let execution_props = ExecutionProps {
-            query_execution_start_time: Some(date_time.clone()),
+            query_execution_start_time: Some(*date_time),
         };
 
         let optimized_plan = rule
