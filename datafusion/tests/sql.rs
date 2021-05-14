@@ -32,7 +32,7 @@ use arrow::{
 };
 
 use datafusion::logical_plan::LogicalPlan;
-use datafusion::prelude::create_udf;
+use datafusion::prelude::*;
 use datafusion::{
     datasource::{csv::CsvReadOptions, MemTable},
     physical_plan::collect,
@@ -2935,7 +2935,9 @@ async fn test_cast_expressions_error() -> Result<()> {
 
 #[tokio::test]
 async fn test_physical_plan_display_indent() {
-    let mut ctx = ExecutionContext::new();
+    // Hard code concurrency as it appears in the RepartitionExec output
+    let config = ExecutionConfig::new().with_concurrency(3);
+    let mut ctx = ExecutionContext::with_config(config);
     register_aggregate_csv(&mut ctx).unwrap();
     let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
          FROM aggregate_test_100 \
@@ -2948,22 +2950,22 @@ async fn test_physical_plan_display_indent() {
 
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
     let expected = vec![
-        "GlobalLimitExec: limit=10",
-        "  SortExec: [the_min DESC]",
-        "    ProjectionExec: expr=[c1, MAX(c12), MIN(c12) as the_min]",
-        "      HashAggregateExec: mode=Final, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
-        "        MergeExec",
-        "          HashAggregateExec: mode=Partial, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
-        "            CoalesceBatchesExec: target_batch_size=4096",
-        "              FilterExec: c12 < CAST(10 AS Float64)",
-        "                RepartitionExec: partitioning=RoundRobinBatch(16)",
-        "                  CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+    "GlobalLimitExec: limit=10",
+    "  SortExec: [the_min DESC]",
+    "    ProjectionExec: expr=[c1, MAX(c12), MIN(c12) as the_min]",
+    "      HashAggregateExec: mode=Final, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
+    "        MergeExec",
+    "          HashAggregateExec: mode=Partial, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
+    "            CoalesceBatchesExec: target_batch_size=4096",
+    "              FilterExec: c12 < CAST(10 AS Float64)",
+    "                RepartitionExec: partitioning=RoundRobinBatch(3)",
+    "                  CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
     ];
 
     let data_path = arrow::util::test_util::arrow_test_data();
     let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
         .trim()
-        .split('\n')
+        .lines()
         // normalize paths
         .map(|s| s.replace(&data_path, "ARROW_TEST_DATA"))
         .collect::<Vec<_>>();
