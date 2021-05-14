@@ -476,7 +476,9 @@ impl ExecutionContext {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        state.execution_props.start_execution();
+
         state
             .config
             .query_planner
@@ -746,10 +748,10 @@ impl ExecutionConfig {
     }
 }
 
-/// Holds per-execution properties and data (such as starting timestamps, etc). 
-/// An instance of this struct is created each time a [`LogicalPlan`] is prepared for 
-/// execution (optimized). If the same plan is optimized multiple times, a new 
-/// `ExecutionProps` is created each time. 
+/// Holds per-execution properties and data (such as starting timestamps, etc).
+/// An instance of this struct is created each time a [`LogicalPlan`] is prepared for
+/// execution (optimized). If the same plan is optimized multiple times, a new
+/// `ExecutionProps` is created each time.
 #[derive(Clone)]
 pub struct ExecutionProps {
     pub(crate) query_execution_start_time: Option<DateTime<Utc>>,
@@ -780,11 +782,9 @@ impl ExecutionProps {
         }
     }
 
-    /// Marks the execution of query started
+    /// Marks the execution of query started timestamp
     pub fn start_execution(&mut self) -> &Self {
-        if self.query_execution_start_time.is_none() {
-            self.query_execution_start_time = Some(chrono::Utc::now());
-        }
+        self.query_execution_start_time = Some(chrono::Utc::now());
         &*self
     }
 }

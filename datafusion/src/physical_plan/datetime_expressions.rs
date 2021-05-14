@@ -268,11 +268,21 @@ pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     )
 }
 
-/// now SQL function
-pub fn now(_: &[ColumnarValue]) -> Result<ColumnarValue> {
-    Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-        Some(chrono::Utc::now().timestamp_nanos()),
-    )))
+/// Create an implementation of `now()` that always returns the
+/// specified timestamp.
+///
+/// The semantics of `now()` require it to return the same value
+/// whenever it is called in a query. This this value is chosen during
+/// planning time and bound into a closure that
+pub fn make_now(
+    now_ts: Option<DateTime<Utc>>,
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
+    let now_ts = now_ts.map(|t| t.timestamp_nanos());
+    move |_arg| {
+        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+            now_ts,
+        )))
+    }
 }
 
 fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {

@@ -29,7 +29,6 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
-use chrono::{DateTime, Utc};
 
 /// Optimizer that simplifies comparison expressions involving boolean literals.
 ///
@@ -235,6 +234,7 @@ mod tests {
     };
 
     use arrow::datatypes::*;
+    use chrono::{DateTime, Utc};
 
     fn test_table_scan() -> Result<LogicalPlan> {
         let schema = Schema::new(vec![
