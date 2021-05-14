@@ -20,7 +20,7 @@
 
 This directory contains documentation for developers that are contributing to Ballista. If you are looking for 
 end-user documentation for a published release, please start with the 
-[Ballista User Guide](https://ballistacompute.org/docs/) instead.
+[DataFusion User Guide](../../docs/user-guide) instead.
 
 ## Architecture & Design
 
@@ -29,9 +29,6 @@ end-user documentation for a published release, please start with the
 
 ## Build, Test, Release
 
-- Setting up a [Rust development environment](dev-env-rust.md).
-- Setting up a [Java development environment](dev-env-jvm.md).
-- Notes on building [Rust docker images](rust-docker.md)  
+- Setting up a [development environment](dev-env.md).
 - [Integration Testing](integration-testing.md)
-- [Release process](release-process.md)
 
