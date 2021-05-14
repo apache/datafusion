@@ -182,8 +182,12 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 /// use datafusion::prelude::*;
 /// use datafusion::physical_plan::displayable;
 ///
+/// // Hard code concurrency as it appears in the RepartitionExec output
+/// let config = ExecutionConfig::new()
+///     .with_concurrency(3);
+/// let mut ctx = ExecutionContext::with_config(config);
+///
 /// // register the a table
-/// let mut ctx = ExecutionContext::new();
 /// ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).unwrap();
 ///
 /// // create a plan to run a SQL query
@@ -200,7 +204,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 /// assert_eq!("ProjectionExec: expr=[a]\
 ///            \n  CoalesceBatchesExec: target_batch_size=4096\
 ///            \n    FilterExec: a < 5\
-///            \n      RepartitionExec: partitioning=RoundRobinBatch(16)\
+///            \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
 ///            \n        CsvExec: source=Path(tests/example.csv: [tests/example.csv]), has_header=true",
 ///             plan_string.trim());
 /// ```
