@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use super::utils;
 use crate::error::Result;
+use crate::execution::context::ExecutionProps;
 use crate::logical_plan::LogicalPlan;
 use crate::optimizer::optimizer::OptimizerRule;
 
@@ -125,7 +126,7 @@ fn limit_push_down(
 }
 
 impl OptimizerRule for LimitPushDown {
-    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+    fn optimize(&self, plan: &LogicalPlan, _: &ExecutionProps) -> Result<LogicalPlan> {
         limit_push_down(None, plan)
     }
 
@@ -143,7 +144,9 @@ mod test {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = LimitPushDown::new();
-        let optimized_plan = rule.optimize(plan).expect("failed to optimize plan");
+        let optimized_plan = rule
+            .optimize(plan, &ExecutionProps::new())
+            .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
     }

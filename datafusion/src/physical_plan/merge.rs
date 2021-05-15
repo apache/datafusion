@@ -36,8 +36,7 @@ use arrow::{
 
 use super::RecordBatchStream;
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::Partitioning;
+use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use super::SendableRecordBatchStream;
 use pin_project_lite::pin_project;
@@ -148,6 +147,18 @@ impl ExecutionPlan for MergeExec {
                     input: receiver,
                     schema: self.schema(),
                 }))
+            }
+        }
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "MergeExec")
             }
         }
     }

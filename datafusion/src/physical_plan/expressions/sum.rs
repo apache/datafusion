@@ -104,6 +104,10 @@ impl AggregateExpr for Sum {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(SumAccumulator::try_new(&self.data_type)?))
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Debug)]

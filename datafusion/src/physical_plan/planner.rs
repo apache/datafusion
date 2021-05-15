@@ -23,7 +23,6 @@ use super::{
     aggregates, cross_join::CrossJoinExec, empty::EmptyExec, expressions::binary,
     functions, hash_join::PartitionMode, udaf, union::UnionExec,
 };
-use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::{
     DFSchema, Expr, LogicalPlan, Operator, Partitioning as LogicalPartitioning, PlanType,
@@ -45,6 +44,10 @@ use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, PhysicalP
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::variable::VarType;
+use crate::{
+    error::{DataFusionError, Result},
+    physical_plan::displayable,
+};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 
 use arrow::compute::SortOptions;
@@ -418,7 +421,7 @@ impl DefaultPhysicalPlanner {
                 if *verbose {
                     stringified_plans.push(StringifiedPlan::new(
                         PlanType::PhysicalPlan,
-                        format!("{:#?}", input),
+                        displayable(input.as_ref()).indent().to_string(),
                     ));
                 }
                 Ok(Arc::new(ExplainExec::new(
@@ -590,7 +593,12 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .map(|e| self.create_physical_expr(e, input_schema, ctx_state))
                     .collect::<Result<Vec<_>>>()?;
-                functions::create_physical_expr(fun, &physical_args, input_schema)
+                functions::create_physical_expr(
+                    fun,
+                    &physical_args,
+                    input_schema,
+                    ctx_state,
+                )
             }
             Expr::ScalarUDF { fun, args } => {
                 let mut physical_args = vec![];
@@ -771,13 +779,9 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logical_plan::{DFField, DFSchema, DFSchemaRef};
     use crate::physical_plan::{csv::CsvReadOptions, expressions, Partitioning};
-    use crate::prelude::ExecutionConfig;
     use crate::scalar::ScalarValue;
-    use crate::{
-        catalog::catalog::MemoryCatalogList,
-        logical_plan::{DFField, DFSchema, DFSchemaRef},
-    };
     use crate::{
         logical_plan::{col, lit, sum, LogicalPlanBuilder},
         physical_plan::SendableRecordBatchStream,
@@ -785,16 +789,10 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use async_trait::async_trait;
     use fmt::Debug;
-    use std::{any::Any, collections::HashMap, fmt};
+    use std::{any::Any, fmt};
 
     fn make_ctx_state() -> ExecutionContextState {
-        ExecutionContextState {
-            catalog_list: Arc::new(MemoryCatalogList::new()),
-            scalar_functions: HashMap::new(),
-            var_provider: HashMap::new(),
-            aggregate_functions: HashMap::new(),
-            config: ExecutionConfig::new().with_concurrency(4),
-        }
+        ExecutionContextState::new()
     }
 
     fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {

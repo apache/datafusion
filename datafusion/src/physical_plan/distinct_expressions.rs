@@ -120,6 +120,10 @@ impl AggregateExpr for DistinctCount {
             count_data_type: self.data_type.clone(),
         }))
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Debug)]

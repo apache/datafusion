@@ -22,7 +22,7 @@
 # as a mounted directory.
 
 ARG RELEASE_FLAG=--release
-FROM ballistacompute/rust-base:0.5.0-SNAPSHOT AS base
+FROM ballista-base:0.5.0-SNAPSHOT AS base
 WORKDIR /tmp/ballista
 RUN apt-get -y install cmake
 RUN cargo install cargo-chef 
@@ -35,6 +35,7 @@ RUN mkdir /tmp/ballista/datafusion-examples
 ADD Cargo.toml .
 COPY benchmarks ./benchmarks/
 COPY datafusion ./datafusion/
+COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
 COPY ballista ./ballista/
 RUN cargo chef prepare --recipe-path recipe.json
@@ -47,11 +48,13 @@ FROM base as builder
 RUN mkdir /tmp/ballista/ballista
 RUN mkdir /tmp/ballista/benchmarks
 RUN mkdir /tmp/ballista/datafusion
+RUN mkdir /tmp/ballista/datafusion-cli
 RUN mkdir /tmp/ballista/datafusion-examples
 ADD Cargo.toml .
 COPY benchmarks ./benchmarks/
 COPY datafusion ./datafusion/
 COPY ballista ./ballista/
+COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
 COPY --from=cacher /tmp/ballista/target target
 ARG RELEASE_FLAG=--release
@@ -73,7 +76,7 @@ ENV RELEASE_FLAG=${RELEASE_FLAG}
 RUN if [ -z "$RELEASE_FLAG" ]; then mv /tmp/ballista/target/debug/tpch /tpch; else mv /tmp/ballista/target/release/tpch /tpch; fi
 
 # Copy the binary into a new container for a smaller docker image
-FROM ballistacompute/rust-base:0.5.0-SNAPSHOT
+FROM ballista-base:0.5.0-SNAPSHOT
 
 COPY --from=builder /executor /
 

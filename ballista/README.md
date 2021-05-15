@@ -50,15 +50,14 @@ Although Ballista is largely inspired by Apache Spark, there are some key differ
 - The use of Apache Arrow as the memory model and network protocol means that data can be exchanged between executors
   in any programming language with minimal serialization overhead.
 
-# Status
+## Status
 
-The Ballista project was donated to Apache Arrow in April 2021 and work is underway to integrate more tightly with 
-DataFusion.
+Ballista was [donated](https://arrow.apache.org/blog/2021/04/12/ballista-donation/) to the Apache Arrow project in
+April 2021 and should be considered experimental.
 
-One of the goals is to implement a common scheduler that can seamlessly scale queries across cores in DataFusion and 
-across nodes in Ballista.
+## Getting Started
 
-Ballista issues are tracked in ASF JIRA [here](https://issues.apache.org/jira/issues/?jql=project%20%3D%20ARROW%20AND%20component%20%3D%20%22Rust%20-%20Ballista%22)
-
-
+The [Ballista Developer Documentation](docs/README.md) and the 
+[DataFusion User Guide](https://github.com/apache/arrow-datafusion/tree/master/docs/user-guide) are currently the 
+best sources of information for getting started with Ballista.
 

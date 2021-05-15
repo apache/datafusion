@@ -18,8 +18,7 @@
 //! Execution plan for reading CSV files
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::{common, Partitioning};
+use crate::physical_plan::{common, DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::csv;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
@@ -132,6 +131,19 @@ impl std::fmt::Debug for Source {
             Source::Reader(_) => f.write_str("Reader")?,
         };
         Ok(())
+    }
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Source::PartitionedFiles { path, filenames } => {
+                write!(f, "Path({}: [{}])", path, filenames.join(","))
+            }
+            Source::Reader(_) => {
+                write!(f, "Reader(...)")
+            }
+        }
     }
 }
 
@@ -402,6 +414,22 @@ impl ExecutionPlan for CsvExec {
                             .to_string(),
                     ))
                 }
+            }
+        }
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "CsvExec: source={}, has_header={}",
+                    self.source, self.has_header
+                )
             }
         }
     }

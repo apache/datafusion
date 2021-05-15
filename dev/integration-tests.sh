@@ -17,8 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 set -e
-./dev/build-rust-base.sh
-./dev/build-rust.sh
+./dev/build-ballista-docker.sh
 pushd benchmarks
 ./tpch-gen.sh
 

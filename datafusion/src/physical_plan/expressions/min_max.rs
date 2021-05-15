@@ -88,6 +88,10 @@ impl AggregateExpr for Max {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(MaxAccumulator::try_new(&self.data_type)?))
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types.
@@ -386,6 +390,10 @@ impl AggregateExpr for Min {
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(MinAccumulator::try_new(&self.data_type)?))
+    }
+
+    fn name(&self) -> &str {
+        &self.name
     }
 }
 

@@ -31,9 +31,8 @@ use arrow::{
     util::display::array_value_to_string,
 };
 
-use datafusion::execution::context::ExecutionContext;
 use datafusion::logical_plan::LogicalPlan;
-use datafusion::prelude::create_udf;
+use datafusion::prelude::*;
 use datafusion::{
     datasource::{csv::CsvReadOptions, MemTable},
     physical_plan::collect,
@@ -42,6 +41,7 @@ use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::ColumnarValue,
 };
+use datafusion::{execution::context::ExecutionContext, physical_plan::displayable};
 
 #[tokio::test]
 async fn nyc() -> Result<()> {
@@ -1960,6 +1960,19 @@ async fn to_timestamp() -> Result<()> {
 }
 
 #[tokio::test]
+async fn count_distinct_timestamps() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
+
+    let sql = "SELECT COUNT(DISTINCT(ts)) FROM ts_data";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["3"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_is_null() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Float64, true)]));
 
@@ -2329,7 +2342,7 @@ macro_rules! test_expression {
         let mut ctx = ExecutionContext::new();
         let sql = format!("SELECT {}", $SQL);
         let actual = execute(&mut ctx, sql.as_str()).await;
-        assert_eq!($EXPECTED, actual[0][0]);
+        assert_eq!(actual[0][0], $EXPECTED);
     };
 }
 
@@ -2851,6 +2864,53 @@ async fn test_cast_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_current_timestamp_expressions() -> Result<()> {
+    let t1 = chrono::Utc::now().timestamp();
+    let mut ctx = ExecutionContext::new();
+    let actual = execute(&mut ctx, "SELECT NOW(), NOW() as t2").await;
+    let res1 = actual[0][0].as_str();
+    let res2 = actual[0][1].as_str();
+    let t3 = chrono::Utc::now().timestamp();
+    let t2_naive =
+        chrono::NaiveDateTime::parse_from_str(res1, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
+
+    let t2 = t2_naive.timestamp();
+    assert!(t1 <= t2 && t2 <= t3);
+    assert_eq!(res2, res1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
+    let t1 = chrono::Utc::now().timestamp();
+    let ctx = ExecutionContext::new();
+    let sql = "SELECT NOW(), NOW() as t2";
+
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
+
+    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
+    let plan = ctx.create_physical_plan(&plan).expect(&msg);
+
+    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
+    let res = collect(plan).await.expect(&msg);
+    let actual = result_vec(&res);
+
+    let res1 = actual[0][0].as_str();
+    let res2 = actual[0][1].as_str();
+    let t3 = chrono::Utc::now().timestamp();
+    let t2_naive =
+        chrono::NaiveDateTime::parse_from_str(res1, "%Y-%m-%d %H:%M:%S%.6f").unwrap();
+
+    let t2 = t2_naive.timestamp();
+    assert!(t1 <= t2 && t2 <= t3);
+    assert_eq!(res2, res1);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_cast_expressions_error() -> Result<()> {
     // sin(utf8) should error
     let mut ctx = create_ctx()?;
@@ -2871,4 +2931,48 @@ async fn test_cast_expressions_error() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[tokio::test]
+async fn test_physical_plan_display_indent() {
+    // Hard code concurrency as it appears in the RepartitionExec output
+    let config = ExecutionConfig::new().with_concurrency(3);
+    let mut ctx = ExecutionContext::with_config(config);
+    register_aggregate_csv(&mut ctx).unwrap();
+    let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
+         FROM aggregate_test_100 \
+         WHERE c12 < 10 \
+         GROUP BY c1 \
+         ORDER BY the_min DESC \
+         LIMIT 10";
+    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
+
+    let physical_plan = ctx.create_physical_plan(&plan).unwrap();
+    let expected = vec![
+    "GlobalLimitExec: limit=10",
+    "  SortExec: [the_min DESC]",
+    "    ProjectionExec: expr=[c1, MAX(c12), MIN(c12) as the_min]",
+    "      HashAggregateExec: mode=Final, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
+    "        MergeExec",
+    "          HashAggregateExec: mode=Partial, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
+    "            CoalesceBatchesExec: target_batch_size=4096",
+    "              FilterExec: c12 < CAST(10 AS Float64)",
+    "                RepartitionExec: partitioning=RoundRobinBatch(3)",
+    "                  CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+    ];
+
+    let data_path = arrow::util::test_util::arrow_test_data();
+    let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
+        .trim()
+        .lines()
+        // normalize paths
+        .map(|s| s.replace(&data_path, "ARROW_TEST_DATA"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        expected, actual,
+        "expected:\n{:#?}\nactual:\n\n{:#?}\n",
+        expected, actual
+    );
 }

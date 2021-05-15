@@ -59,7 +59,10 @@ use super::{
 };
 use crate::error::{DataFusionError, Result};
 
-use super::{ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream};
+use super::{
+    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream,
+};
 use crate::physical_plan::coalesce_batches::concat_batches;
 use log::debug;
 
@@ -393,6 +396,22 @@ impl ExecutionPlan for HashJoinExec {
             visited_left_side,
             is_exhausted: false,
         }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "HashJoinExec: mode={:?}, join_type={:?}, on={:?}",
+                    self.mode, self.join_type, self.on
+                )
+            }
+        }
     }
 }
 

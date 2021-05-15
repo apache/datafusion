@@ -19,7 +19,7 @@
 
 # DataFusion
 
-<img src="datafusion/docs/images/DataFusion-Logo-Dark.svg" width="256"/>
+<img src="datafusion/docs/images/DataFusion-Logo-Background-White.svg" width="256"/>
 
 DataFusion is an extensible query execution framework, written in
 Rust, that uses [Apache Arrow](https://arrow.apache.org) as its
@@ -29,6 +29,9 @@ DataFusion supports both an SQL and a DataFrame API for building
 logical query plans as well as a query optimizer and execution engine
 capable of parallel execution against partitioned data sources (CSV
 and Parquet) using threads.
+
+DataFusion also supports distributed query execution via the  
+[Ballista](ballista/README.md) crate.
 
 ## Use Cases
 

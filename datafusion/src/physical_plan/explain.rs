@@ -20,14 +20,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result};
 use crate::{
+    error::{DataFusionError, Result},
     logical_plan::StringifiedPlan,
-    physical_plan::{common::SizedRecordBatchStream, ExecutionPlan},
+    physical_plan::Partitioning,
+    physical_plan::{common::SizedRecordBatchStream, DisplayFormatType, ExecutionPlan},
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
-
-use crate::physical_plan::Partitioning;
 
 use super::SendableRecordBatchStream;
 use async_trait::async_trait;
@@ -121,5 +120,17 @@ impl ExecutionPlan for ExplainExec {
             self.schema.clone(),
             vec![Arc::new(record_batch)],
         )))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "ExplainExec")
+            }
+        }
     }
 }

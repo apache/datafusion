@@ -29,7 +29,8 @@ pub struct IndentVisitor<'a, 'b> {
     f: &'a mut fmt::Formatter<'b>,
     /// If true, includes summarized schema information
     with_schema: bool,
-    indent: u32,
+    /// The current indent
+    indent: usize,
 }
 
 impl<'a, 'b> IndentVisitor<'a, 'b> {
@@ -42,13 +43,6 @@ impl<'a, 'b> IndentVisitor<'a, 'b> {
             indent: 0,
         }
     }
-
-    fn write_indent(&mut self) -> fmt::Result {
-        for _ in 0..self.indent {
-            write!(self.f, "  ")?;
-        }
-        Ok(())
-    }
 }
 
 impl<'a, 'b> PlanVisitor for IndentVisitor<'a, 'b> {
@@ -58,8 +52,7 @@ impl<'a, 'b> PlanVisitor for IndentVisitor<'a, 'b> {
         if self.indent > 0 {
             writeln!(self.f)?;
         }
-        self.write_indent()?;
-
+        write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         write!(self.f, "{}", plan.display())?;
         if self.with_schema {
             write!(
