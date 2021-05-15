@@ -52,11 +52,114 @@ use arrow::datatypes::{Schema, SchemaRef};
 use expressions::col;
 use log::debug;
 
+fn create_function_physical_name(
+    fun: &str,
+    distinct: bool,
+    args: &[Expr],
+    input_schema: &DFSchema,
+) -> Result<String> {
+    let names: Vec<String> = args
+        .iter()
+        .map(|e| physical_name(e, input_schema))
+        .collect::<Result<_>>()?;
+    let distinct_str = match distinct {
+        true => "DISTINCT ",
+        false => "",
+    };
+    Ok(format!("{}({}{})", fun, distinct_str, names.join(",")))
+}
+
 fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
-    // FIXME: finish this
     match e {
         Expr::Column(c) => Ok(c.name.clone()),
-        _ => e.name(&input_schema),
+        Expr::Alias(_, name) => Ok(name.clone()),
+        Expr::ScalarVariable(variable_names) => Ok(variable_names.join(".")),
+        Expr::Literal(value) => Ok(format!("{:?}", value)),
+        Expr::BinaryExpr { left, op, right } => {
+            let left = physical_name(left, input_schema)?;
+            let right = physical_name(right, input_schema)?;
+            Ok(format!("{} {:?} {}", left, op, right))
+        }
+        Expr::Case {
+            expr,
+            when_then_expr,
+            else_expr,
+        } => {
+            let mut name = "CASE ".to_string();
+            if let Some(e) = expr {
+                name += &format!("{:?} ", e);
+            }
+            for (w, t) in when_then_expr {
+                name += &format!("WHEN {:?} THEN {:?} ", w, t);
+            }
+            if let Some(e) = else_expr {
+                name += &format!("ELSE {:?} ", e);
+            }
+            name += "END";
+            Ok(name)
+        }
+        Expr::Cast { expr, data_type } => {
+            let expr = physical_name(expr, input_schema)?;
+            Ok(format!("CAST({} AS {:?})", expr, data_type))
+        }
+        Expr::TryCast { expr, data_type } => {
+            let expr = physical_name(expr, input_schema)?;
+            Ok(format!("TRY_CAST({} AS {:?})", expr, data_type))
+        }
+        Expr::Not(expr) => {
+            let expr = physical_name(expr, input_schema)?;
+            Ok(format!("NOT {}", expr))
+        }
+        Expr::Negative(expr) => {
+            let expr = physical_name(expr, input_schema)?;
+            Ok(format!("(- {})", expr))
+        }
+        Expr::IsNull(expr) => {
+            let expr = physical_name(expr, input_schema)?;
+            Ok(format!("{} IS NULL", expr))
+        }
+        Expr::IsNotNull(expr) => {
+            let expr = physical_name(expr, input_schema)?;
+            Ok(format!("{} IS NOT NULL", expr))
+        }
+        Expr::ScalarFunction { fun, args, .. } => {
+            create_function_physical_name(&fun.to_string(), false, args, input_schema)
+        }
+        Expr::ScalarUDF { fun, args, .. } => {
+            create_function_physical_name(&fun.name, false, args, input_schema)
+        }
+        Expr::AggregateFunction {
+            fun,
+            distinct,
+            args,
+            ..
+        } => {
+            create_function_physical_name(&fun.to_string(), *distinct, args, input_schema)
+        }
+        Expr::AggregateUDF { fun, args } => {
+            let mut names = Vec::with_capacity(args.len());
+            for e in args {
+                names.push(physical_name(e, input_schema)?);
+            }
+            Ok(format!("{}({})", fun.name, names.join(",")))
+        }
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => {
+            let expr = physical_name(expr, input_schema)?;
+            let list = list.iter().map(|expr| physical_name(expr, input_schema));
+            if *negated {
+                Ok(format!("{} NOT IN ({:?})", expr, list))
+            } else {
+                Ok(format!("{} IN ({:?})", expr, list))
+            }
+        }
+        other => Err(DataFusionError::NotImplemented(format!(
+            "Physical plan does not support logical expression {:?}",
+            other
+        ))),
     }
 }
 

@@ -227,6 +227,7 @@ impl DFSchema {
         }
     }
 
+    /// Check to see if unqualified field names matches field names in Arrow schema
     pub fn matches_arrow_schema(&self, arrow_schema: &Schema) -> bool {
         self.fields
             .iter()

@@ -418,7 +418,7 @@ impl Expr {
         }
     }
 
-    /// Returns the name of this expression based on [arrow::datatypes::Schema].
+    /// Returns the name of this expression based on [crate::logical_plan::DFSchema].
     ///
     /// This represents how a column with this expression is named when no alias is chosen
     pub fn name(&self, input_schema: &DFSchema) -> Result<String> {
@@ -1031,6 +1031,24 @@ pub fn col(ident: &str) -> Expr {
     Expr::Column(ident.into())
 }
 
+/// Convert an expression into Column expression if it's already provided as input
+pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
+    match e {
+        Expr::Column(_) => e,
+        Expr::Alias(inner_expr, name) => {
+            Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
+        }
+        _ => match e.name(input_schema) {
+            Ok(name) => match input_schema.field_with_unqualified_name(&name) {
+                Ok(field) => Expr::Column(field.qualified_column()),
+                // expression not provided as input, do not convert to a column reference
+                Err(_) => e,
+            },
+            Err(_) => e,
+        },
+    }
+}
+
 /// Recursively normalize all Column expressions in a given expression tree
 pub fn normalize_col(e: Expr, schemas: &[&DFSchemaRef]) -> Result<Expr> {
     struct ColumnNormalizer<'a, 'b> {
@@ -1519,7 +1537,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             }
         }
         other => Err(DataFusionError::NotImplemented(format!(
-            "Physical plan does not support logical expression {:?}",
+            "Logical plan does not support logical expression {:?}",
             other
         ))),
     }

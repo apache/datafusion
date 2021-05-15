@@ -257,7 +257,7 @@ fn optimize_plan(
             ..
         } => {
             let (projection, projected_schema) = get_projected_schema(
-                table_name.as_ref(),
+                Some(&table_name),
                 &source.schema(),
                 required_columns,
                 has_projection,

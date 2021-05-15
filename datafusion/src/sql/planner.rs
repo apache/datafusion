@@ -417,7 +417,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         alias
                             .as_ref()
                             .map(|a| a.name.value.as_str())
-                            .or(Some(&table_name)),
+                            .unwrap_or(&table_name),
                         provider,
                         None,
                     )?

@@ -137,7 +137,7 @@ pub enum LogicalPlan {
     /// Produces rows from a table provider by reference or from the context
     TableScan {
         /// The name of the table
-        table_name: Option<String>,
+        table_name: String,
         /// The source of the table
         source: Arc<dyn TableProvider>,
         /// Optional column indices to use as a projection
@@ -629,16 +629,10 @@ impl LogicalPlan {
                         ref limit,
                         ..
                     } => {
-                        let sep = match table_name {
-                            Some(_) => " ",
-                            None => "",
-                        };
                         write!(
                             f,
-                            "TableScan: {}{}projection={:?}",
-                            table_name.as_ref().map(|s| s.as_str()).unwrap_or(""),
-                            sep,
-                            projection
+                            "TableScan: {} projection={:?}",
+                            table_name, projection
                         )?;
 
                         if !filters.is_empty() {

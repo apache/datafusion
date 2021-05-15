@@ -1013,7 +1013,7 @@ mod tests {
         let test_provider = PushDownProvider { filter_support };
 
         let table_scan = LogicalPlan::TableScan {
-            table_name: None,
+            table_name: "test".to_string(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
@@ -1033,7 +1033,7 @@ mod tests {
         let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Exact)?;
 
         let expected = "\
-        TableScan: projection=None, filters=[#a Eq Int64(1)]";
+        TableScan: test projection=None, filters=[#a Eq Int64(1)]";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1045,7 +1045,7 @@ mod tests {
 
         let expected = "\
         Filter: #a Eq Int64(1)\
-        \n  TableScan: projection=None, filters=[#a Eq Int64(1)]";
+        \n  TableScan: test projection=None, filters=[#a Eq Int64(1)]";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1057,7 +1057,7 @@ mod tests {
 
         let expected = "\
         Filter: #a Eq Int64(1)\
-        \n  TableScan: projection=None";
+        \n  TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }

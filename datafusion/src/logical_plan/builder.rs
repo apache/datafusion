@@ -34,9 +34,13 @@ use crate::{
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinType, LogicalPlan, PlanType, StringifiedPlan};
 use crate::logical_plan::{
-    normalize_col, normalize_cols, Column, DFField, DFSchema, DFSchemaRef, Partitioning,
+    columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
+    DFSchemaRef, Partitioning,
 };
 use std::collections::HashSet;
+
+/// Default table name for unnamed table
+pub const UNNAMED_TABLE: &str = "?table?";
 
 pub enum JoinConstraint {
     On,
@@ -108,7 +112,7 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let provider = Arc::new(MemTable::try_new(schema, partitions)?);
-        Self::scan(None, provider, projection)
+        Self::scan(UNNAMED_TABLE, provider, projection)
     }
 
     /// Scan a CSV data source
@@ -118,7 +122,7 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let provider = Arc::new(CsvFile::try_new(path, options)?);
-        Self::scan(None, provider, projection)
+        Self::scan(path, provider, projection)
     }
 
     /// Scan a Parquet data source
@@ -128,7 +132,7 @@ impl LogicalPlanBuilder {
         max_concurrency: usize,
     ) -> Result<Self> {
         let provider = Arc::new(ParquetTable::try_new(path, max_concurrency)?);
-        Self::scan(None, provider, projection)
+        Self::scan(path, provider, projection)
     }
 
     /// Scan an empty data source, mainly used in tests
@@ -139,21 +143,19 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let table_schema = Arc::new(table_schema.clone());
         let provider = Arc::new(EmptyTable::new(table_schema));
-        Self::scan(name, provider, projection)
+        Self::scan(name.unwrap_or(UNNAMED_TABLE), provider, projection)
     }
 
     /// Convert a table provider into a builder with a TableScan
     pub fn scan(
-        table_name: Option<&str>,
+        table_name: &str,
         provider: Arc<dyn TableProvider>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        if let Some(name) = table_name {
-            if name.is_empty() {
-                return Err(DataFusionError::Plan(
-                    "table_name cannot be empty".to_string(),
-                ));
-            }
+        if table_name.is_empty() {
+            return Err(DataFusionError::Plan(
+                "table_name cannot be empty".to_string(),
+            ));
         }
 
         let schema = provider.schema();
@@ -163,33 +165,17 @@ impl LogicalPlanBuilder {
             .map(|p| DFSchema {
                 fields: p
                     .iter()
-                    .map(|i| match table_name {
-                        // FIXME: move if check outside
-                        Some(name) => {
-                            DFField::from_qualified(name, schema.field(*i).clone())
-                        }
-                        None => DFField::from(schema.field(*i).clone()),
+                    .map(|i| {
+                        DFField::from_qualified(table_name, schema.field(*i).clone())
                     })
                     .collect(),
             })
             .unwrap_or_else(|| {
-                // FIXME: remove unwrap
-                match table_name {
-                    Some(name) => DFSchema::try_from_qualified(name, &schema).unwrap(),
-                    None => DFSchema::new(
-                        schema
-                            .fields()
-                            .iter()
-                            .map(|f| DFField::from(f.clone()))
-                            .collect(),
-                    )
-                    .unwrap(),
-                }
+                DFSchema::try_from_qualified(table_name, &schema).unwrap()
             });
 
-        // FIXME: check for empty table name
         let table_scan = LogicalPlan::TableScan {
-            table_name: table_name.clone().map(|s| s.to_string()),
+            table_name: table_name.to_string(),
             source: provider,
             projected_schema: Arc::new(projected_schema),
             projection,
@@ -219,7 +205,7 @@ impl LogicalPlanBuilder {
                             .push(Expr::Column(input_schema.field(i).qualified_column()))
                     });
                 }
-                _ => projected_expr.push(normalized_e),
+                _ => projected_expr.push(columnize_expr(normalized_e, input_schema)),
             }
         }
 

@@ -52,7 +52,7 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::execution::dataframe_impl::DataFrameImpl;
 use crate::logical_plan::{
-    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, ToDFSchema,
+    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::constant_folding::ConstantFolding;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -294,19 +294,9 @@ impl ExecutionContext {
         &mut self,
         provider: Arc<dyn TableProvider>,
     ) -> Result<Arc<dyn DataFrame>> {
-        // FIMXE: add table name method to table provider?
-        let schema = provider.schema();
-        let table_scan = LogicalPlan::TableScan {
-            table_name: None,
-            source: provider,
-            projected_schema: schema.to_dfschema_ref()?,
-            projection: None,
-            filters: vec![],
-            limit: None,
-        };
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
-            &LogicalPlanBuilder::from(&table_scan).build()?,
+            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
         )))
     }
 
@@ -411,7 +401,7 @@ impl ExecutionContext {
         match schema.table(table_ref.table()) {
             Some(ref provider) => {
                 let plan = LogicalPlanBuilder::scan(
-                    Some(table_ref.table()),
+                    &table_ref.table(),
                     Arc::clone(provider),
                     None,
                 )?
@@ -1116,8 +1106,11 @@ mod tests {
             _ => panic!("expect optimized_plan to be projection"),
         }
 
-        let expected = "Projection: #b\
-        \n  TableScan: projection=Some([1])";
+        let expected = format!(
+            "Projection: #{}.b\
+        \n  TableScan: {} projection=Some([1])",
+            UNNAMED_TABLE, UNNAMED_TABLE
+        );
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
         let physical_plan = ctx.create_physical_plan(&optimized_plan)?;
@@ -1928,7 +1921,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::scan_empty(None, schema.as_ref(), None)?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .project(vec![col("c1"), col("SUM(c2)").alias("total_salary")])?
+            .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
             .build()?;
 
         let plan = ctx.optimize(&plan)?;
@@ -2024,11 +2017,11 @@ mod tests {
             .unwrap();
 
         let expected = vec![
-            "+-----------+",
-            "| sqrt(t.i) |",
-            "+-----------+",
-            "| 1         |",
-            "+-----------+",
+            "+---------+",
+            "| sqrt(i) |",
+            "+---------+",
+            "| 1       |",
+            "+---------+",
         ];
 
         let results = plan_and_collect(&mut ctx, "SELECT sqrt(i) FROM t")
@@ -2086,11 +2079,11 @@ mod tests {
         let result = plan_and_collect(&mut ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
 
         let expected = vec![
-            "+--------------+",
-            "| MY_FUNC(t.i) |",
-            "+--------------+",
-            "| 1            |",
-            "+--------------+",
+            "+------------+",
+            "| MY_FUNC(i) |",
+            "+------------+",
+            "| 1          |",
+            "+------------+",
         ];
         assert_batches_eq!(expected, &result);
 
@@ -2385,14 +2378,14 @@ mod tests {
         let result = collect(plan).await?;
 
         let expected = vec![
-            "+-----+-----+-----------------+",
-            "| a   | b   | my_add(t.a,t.b) |",
-            "+-----+-----+-----------------+",
-            "| 1   | 2   | 3               |",
-            "| 10  | 12  | 22              |",
-            "| 10  | 12  | 22              |",
-            "| 100 | 120 | 220             |",
-            "+-----+-----+-----------------+",
+            "+-----+-----+-------------+",
+            "| a   | b   | my_add(a,b) |",
+            "+-----+-----+-------------+",
+            "| 1   | 2   | 3           |",
+            "| 10  | 12  | 22          |",
+            "| 10  | 12  | 22          |",
+            "| 100 | 120 | 220         |",
+            "+-----+-----+-------------+",
         ];
         assert_batches_eq!(expected, &result);
 

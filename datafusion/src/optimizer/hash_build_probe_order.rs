@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn test_swap_order() {
         let lp_left = LogicalPlan::TableScan {
-            table_name: Some("left".to_string()),
+            table_name: "left".to_string(),
             projection: None,
             source: Arc::new(TestTableProvider { num_rows: 1000 }),
             projected_schema: Arc::new(DFSchema::empty()),
@@ -274,7 +274,7 @@ mod tests {
         };
 
         let lp_right = LogicalPlan::TableScan {
-            table_name: Some("right".to_string()),
+            table_name: "right".to_string(),
             projection: None,
             source: Arc::new(TestTableProvider { num_rows: 100 }),
             projected_schema: Arc::new(DFSchema::empty()),
