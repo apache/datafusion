@@ -26,7 +26,7 @@ use std::time::Instant;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::decode_protobuf;
 use ballista_core::serde::scheduler::{Action as BallistaAction, PartitionStats};
-use ballista_core::utils::{self, format_plan};
+use ballista_core::utils;
 
 use arrow::array::{ArrayRef, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -40,6 +40,7 @@ use arrow_flight::{
     PutResult, SchemaResult, Ticket,
 };
 use datafusion::error::DataFusionError;
+use datafusion::physical_plan::displayable;
 use futures::{Stream, StreamExt};
 use log::{info, warn};
 use std::io::{Read, Seek};
@@ -97,8 +98,7 @@ impl FlightService for BallistaFlightService {
                     partition.job_id,
                     partition.stage_id,
                     partition.partition_id,
-                    format_plan(partition.plan.as_ref(), 0)
-                        .map_err(|e| from_ballista_err(&e))?
+                    displayable(partition.plan.as_ref()).indent().to_string()
                 );
 
                 let mut tasks: Vec<JoinHandle<Result<_, BallistaError>>> = vec![];
