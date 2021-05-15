@@ -22,7 +22,10 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::{ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream};
+use super::{
+    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream,
+};
 use crate::error::{DataFusionError, Result};
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
@@ -87,6 +90,25 @@ impl ExecutionPlan for MemoryExec {
             self.schema.clone(),
             self.projection.clone(),
         )?))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                let partitions: Vec<_> =
+                    self.partitions.iter().map(|b| b.len()).collect();
+                write!(
+                    f,
+                    "MemoryExec: partitions={}, partition_sizes={:?}",
+                    partitions.len(),
+                    partitions
+                )
+            }
+        }
     }
 }
 

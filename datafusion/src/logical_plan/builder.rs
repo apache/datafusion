@@ -408,7 +408,7 @@ fn build_join_schema(
     join_constraint: JoinConstraint,
 ) -> Result<DFSchema> {
     let fields: Vec<DFField> = match join_type {
-        JoinType::Inner | JoinType::Left => {
+        JoinType::Inner | JoinType::Left | JoinType::Full => {
             let duplicate_keys = match join_constraint {
                 JoinConstraint::On => on
                     .iter()

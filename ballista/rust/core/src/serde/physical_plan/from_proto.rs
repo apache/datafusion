@@ -33,7 +33,9 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
     CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
 };
-use datafusion::execution::context::{ExecutionConfig, ExecutionContextState};
+use datafusion::execution::context::{
+    ExecutionConfig, ExecutionContextState, ExecutionProps,
+};
 use datafusion::logical_plan::{DFSchema, Expr};
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
 use datafusion::physical_plan::expressions::col;
@@ -226,6 +228,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     var_provider: Default::default(),
                     aggregate_functions: Default::default(),
                     config: ExecutionConfig::new(),
+                    execution_props: ExecutionProps::new(),
                 };
 
                 let input_schema = hash_agg
@@ -297,6 +300,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     protobuf::JoinType::Inner => JoinType::Inner,
                     protobuf::JoinType::Left => JoinType::Left,
                     protobuf::JoinType::Right => JoinType::Right,
+                    protobuf::JoinType::Full => JoinType::Full,
                 };
                 Ok(Arc::new(HashJoinExec::try_new(
                     left,
@@ -390,6 +394,7 @@ fn compile_expr(
         var_provider: HashMap::new(),
         aggregate_functions: HashMap::new(),
         config: ExecutionConfig::new(),
+        execution_props: ExecutionProps::new(),
     };
     let expr: Expr = expr.try_into()?;
     df_planner

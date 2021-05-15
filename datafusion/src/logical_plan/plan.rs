@@ -35,12 +35,14 @@ use crate::logical_plan::dfschema::DFSchemaRef;
 /// Join type
 #[derive(Debug, Clone, Copy)]
 pub enum JoinType {
-    /// Inner join
+    /// Inner Join
     Inner,
-    /// Left join
+    /// Left Join
     Left,
-    /// Right join
+    /// Right Join
     Right,
+    /// Full Join
+    Full,
 }
 
 /// A LogicalPlan represents the different types of relational
@@ -351,13 +353,15 @@ pub enum Partitioning {
 /// after all children have been visited.
 ////
 /// To use, define a struct that implements this trait and then invoke
-/// "LogicalPlan::accept".
+/// [`LogicalPlan::accept`].
 ///
 /// For example, for a logical plan like:
 ///
+/// ```text
 /// Projection: #id
 ///    Filter: #state Eq Utf8(\"CO\")\
 ///       CsvScan: employee.csv projection=Some([0, 3])";
+/// ```
 ///
 /// The sequence of visit operations would be:
 /// ```text

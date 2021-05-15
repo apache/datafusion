@@ -41,7 +41,7 @@ use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
-    common, Distribution, ExecutionPlan, Partitioning, SQLMetric,
+    common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning, SQLMetric,
 };
 
 /// Sort execution plan
@@ -143,6 +143,19 @@ impl ExecutionPlan for SortExec {
             self.output_rows.clone(),
             self.sort_time_nanos.clone(),
         )))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
+                write!(f, "SortExec: [{}]", expr.join(","))
+            }
+        }
     }
 
     fn metrics(&self) -> HashMap<String, SQLMetric> {

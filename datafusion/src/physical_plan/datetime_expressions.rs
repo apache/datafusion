@@ -268,6 +268,23 @@ pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     )
 }
 
+/// Create an implementation of `now()` that always returns the
+/// specified timestamp.
+///
+/// The semantics of `now()` require it to return the same value
+/// whenever it is called in a query. This this value is chosen during
+/// planning time and bound into a closure that
+pub fn make_now(
+    now_ts: DateTime<Utc>,
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
+    let now_ts = Some(now_ts.timestamp_nanos());
+    move |_arg| {
+        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+            now_ts,
+        )))
+    }
+}
+
 fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
     let value = timestamp_ns_to_datetime(value).with_nanosecond(0);
     let value = match granularity {
@@ -300,7 +317,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
             return Err(DataFusionError::Execution(format!(
                 "Unsupported date_trunc granularity: {}",
                 unsupported
-            )))
+            )));
         }
     };
     // `with_x(0)` are infalible because `0` are always a valid

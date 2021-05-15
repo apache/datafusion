@@ -165,4 +165,8 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         (self.fun.accumulator)()
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
 }

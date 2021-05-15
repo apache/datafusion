@@ -58,7 +58,10 @@ use super::{
 };
 use crate::error::{DataFusionError, Result};
 
-use super::{ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream};
+use super::{
+    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream,
+};
 use crate::physical_plan::coalesce_batches::concat_batches;
 use crate::physical_plan::PhysicalExpr;
 use log::debug;
@@ -176,7 +179,7 @@ impl HashJoinExec {
     /// Calculates column indices and left/right placement on input / output schemas and jointype
     fn column_indices_from_schema(&self) -> ArrowResult<Vec<ColumnIndex>> {
         let (primary_is_left, primary_schema, secondary_schema) = match self.join_type {
-            JoinType::Inner | JoinType::Left => {
+            JoinType::Inner | JoinType::Left | JoinType::Full => {
                 (true, self.left.schema(), self.right.schema())
             }
             JoinType::Right => (false, self.right.schema(), self.left.schema()),
@@ -368,7 +371,7 @@ impl ExecutionPlan for HashJoinExec {
         let column_indices = self.column_indices_from_schema()?;
         let num_rows = left_data.1.num_rows();
         let visited_left_side = match self.join_type {
-            JoinType::Left => vec![false; num_rows],
+            JoinType::Left | JoinType::Full => vec![false; num_rows],
             JoinType::Inner | JoinType::Right => vec![],
         };
         Ok(Box::pin(HashJoinStream::new(
@@ -382,6 +385,22 @@ impl ExecutionPlan for HashJoinExec {
             self.random_state.clone(),
             visited_left_side,
         )))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "HashJoinExec: mode={:?}, join_type={:?}, on={:?}",
+                    self.mode, self.join_type, self.on
+                )
+            }
+        }
     }
 }
 
@@ -662,7 +681,7 @@ fn build_join_indexes(
             }
             Ok((left_indices.finish(), right_indices.finish()))
         }
-        JoinType::Right => {
+        JoinType::Right | JoinType::Full => {
             let mut left_indices = UInt64Builder::new(0);
             let mut right_indices = UInt32Builder::new(0);
 
@@ -1076,7 +1095,7 @@ impl Stream for HashJoinStream {
                         self.num_output_rows += batch.num_rows();
 
                         match self.join_type {
-                            JoinType::Left => {
+                            JoinType::Left | JoinType::Full => {
                                 left_side.iter().flatten().for_each(|x| {
                                     self.visited_left_side[x as usize] = true;
                                 });
@@ -1090,7 +1109,7 @@ impl Stream for HashJoinStream {
                     let start = Instant::now();
                     // For the left join, produce rows for unmatched rows
                     match self.join_type {
-                        JoinType::Left if !self.is_exhausted => {
+                        JoinType::Left | JoinType::Full if !self.is_exhausted => {
                             let result = produce_unmatched(
                                 &self.visited_left_side,
                                 &self.schema,
@@ -1110,7 +1129,10 @@ impl Stream for HashJoinStream {
                             self.is_exhausted = true;
                             return Some(result);
                         }
-                        JoinType::Left | JoinType::Inner | JoinType::Right => {}
+                        JoinType::Left
+                        | JoinType::Full
+                        | JoinType::Inner
+                        | JoinType::Right => {}
                     }
 
                     // End of right batch, print stats in debug mode
@@ -1551,6 +1573,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn join_full_multi_batch() {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        // create two identical batches for the right side
+        let right = build_table_two_batches(
+            ("a2", &vec![10, 20, 30]),
+            ("b2", &vec![4, 5, 6]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = vec![(
+            Column::new("b1", left.schema().index_of("b1").unwrap()),
+            Column::new("b2", right.schema().index_of("b2").unwrap()),
+        )];
+
+        let join = join(left, right, on, &JoinType::Full).unwrap();
+
+        let columns = columns(&join.schema());
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
+        let stream = join.execute(0).await.unwrap();
+        let batches = common::collect(stream).await.unwrap();
+
+        let expected = vec![
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "|    |    |    | 30 | 6  | 90 |",
+            "|    |    |    | 30 | 6  | 90 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 7  | 9  |    |    |    |",
+            "+----+----+----+----+----+----+",
+        ];
+
+        assert_batches_sorted_eq!(expected, &batches);
+    }
+
+    #[tokio::test]
     async fn join_left_empty_right() {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -1580,6 +1645,41 @@ mod tests {
             "| 2  | 5  | 8  |    |    |",
             "| 3  | 7  | 9  |    |    |",
             "+----+----+----+----+----+",
+        ];
+
+        assert_batches_sorted_eq!(expected, &batches);
+    }
+
+    #[tokio::test]
+    async fn join_full_empty_right() {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table_i32(("a2", &vec![]), ("b2", &vec![]), ("c2", &vec![]));
+        let on = vec![(
+            Column::new("b1", left.schema().index_of("b1").unwrap()),
+            Column::new("b2", right.schema().index_of("b2").unwrap()),
+        )];
+        let schema = right.schema();
+        let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
+        let join = join(left, right, on, &JoinType::Full).unwrap();
+
+        let columns = columns(&join.schema());
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
+        let stream = join.execute(0).await.unwrap();
+        let batches = common::collect(stream).await.unwrap();
+
+        let expected = vec![
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  |    |    |    |",
+            "| 2  | 5  | 8  |    |    |    |",
+            "| 3  | 7  | 9  |    |    |    |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1729,6 +1829,46 @@ mod tests {
             "+----+----+----+----+----+",
         ];
 
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_full_one() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b2", &vec![4, 5, 6]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = vec![(
+            Column::new("b1", left.schema().index_of("b1").unwrap()),
+            Column::new("b2", right.schema().index_of("b2").unwrap()),
+        )];
+
+        let join = join(left, right, on, &JoinType::Full)?;
+
+        let columns = columns(&join.schema());
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
+        let stream = join.execute(0).await?;
+        let batches = common::collect(stream).await?;
+
+        let expected = vec![
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "|    |    |    | 30 | 6  | 90 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 7  | 9  |    |    |    |",
+            "+----+----+----+----+----+----+",
+        ];
         assert_batches_sorted_eq!(expected, &batches);
 
         Ok(())

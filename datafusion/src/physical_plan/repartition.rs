@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use std::{any::Any, collections::HashMap, vec};
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{ExecutionPlan, Partitioning};
+use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
@@ -234,6 +234,18 @@ impl ExecutionPlan for RepartitionExec {
             schema: self.input.schema(),
             input: UnboundedReceiverStream::new(channels.remove(&partition).unwrap().1),
         }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "RepartitionExec: partitioning={:?}", self.partitioning)
+            }
+        }
     }
 }
 

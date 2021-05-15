@@ -19,6 +19,7 @@
 //! loaded into memory
 
 use crate::error::Result;
+use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
     Column, DFField, DFSchema, DFSchemaRef, LogicalPlan, ToDFSchema,
 };
@@ -34,7 +35,11 @@ use utils::optimize_explain;
 pub struct ProjectionPushDown {}
 
 impl OptimizerRule for ProjectionPushDown {
-    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+    fn optimize(
+        &self,
+        plan: &LogicalPlan,
+        execution_props: &ExecutionProps,
+    ) -> Result<LogicalPlan> {
         // set of all columns refered by the plan (and thus considered required by the root)
         let required_columns = plan
             .schema()
@@ -42,7 +47,7 @@ impl OptimizerRule for ProjectionPushDown {
             .iter()
             .map(|f| f.qualified_column())
             .collect::<HashSet<Column>>();
-        optimize_plan(self, plan, &required_columns, false)
+        optimize_plan(self, plan, &required_columns, false, execution_props)
     }
 
     fn name(&self) -> &str {
@@ -121,6 +126,7 @@ fn optimize_plan(
     plan: &LogicalPlan,
     required_columns: &HashSet<Column>, // set of columns required up to this step
     has_projection: bool,
+    execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
     match plan {
@@ -153,8 +159,13 @@ fn optimize_plan(
                     }
                 })?;
 
-            let new_input =
-                optimize_plan(optimizer, &input, &new_required_columns, true)?;
+            let new_input = optimize_plan(
+                optimizer,
+                &input,
+                &new_required_columns,
+                true,
+                execution_props,
+            )?;
             if new_fields.is_empty() {
                 // no need for an expression at all
                 Ok(new_input)
@@ -183,12 +194,14 @@ fn optimize_plan(
                     &left,
                     &new_required_columns,
                     true,
+                    execution_props,
                 )?),
                 right: Arc::new(optimize_plan(
                     optimizer,
                     &right,
                     &new_required_columns,
                     true,
+                    execution_props,
                 )?),
 
                 join_type: *join_type,
@@ -243,6 +256,7 @@ fn optimize_plan(
                     &input,
                     &new_required_columns,
                     true,
+                    execution_props,
                 )?),
                 schema: DFSchemaRef::new(new_schema),
             })
@@ -279,7 +293,14 @@ fn optimize_plan(
             schema,
         } => {
             let schema = schema.as_ref().to_owned().into();
-            optimize_explain(optimizer, *verbose, &*plan, stringified_plans, &schema)
+            optimize_explain(
+                optimizer,
+                *verbose,
+                &*plan,
+                stringified_plans,
+                &schema,
+                execution_props,
+            )
         }
         LogicalPlan::Union {
             inputs,
@@ -312,6 +333,7 @@ fn optimize_plan(
                         input_plan,
                         &new_required_columns,
                         has_projection,
+                        execution_props,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -346,6 +368,7 @@ fn optimize_plan(
                         input_plan,
                         &new_required_columns,
                         has_projection,
+                        execution_props,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -603,6 +626,6 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rule = ProjectionPushDown::new();
-        rule.optimize(plan)
+        rule.optimize(plan, &ExecutionProps::new())
     }
 }

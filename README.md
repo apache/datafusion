@@ -19,7 +19,7 @@
 
 # DataFusion
 
-<img src="datafusion/docs/images/DataFusion-Logo-Dark.svg" width="256"/>
+<img src="datafusion/docs/images/DataFusion-Logo-Background-White.svg" width="256"/>
 
 DataFusion is an extensible query execution framework, written in
 Rust, that uses [Apache Arrow](https://arrow.apache.org) as its
@@ -29,6 +29,9 @@ DataFusion supports both an SQL and a DataFrame API for building
 logical query plans as well as a query optimizer and execution engine
 capable of parallel execution against partitioned data sources (CSV
 and Parquet) using threads.
+
+DataFusion also supports distributed query execution via the  
+[Ballista](ballista/README.md) crate.
 
 ## Use Cases
 
@@ -55,6 +58,8 @@ Here are some of the projects known to use DataFusion:
 * [delta-rs](https://github.com/delta-io/delta-rs)
 * [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 * [ROAPI](https://github.com/roapi/roapi)
+* [Tensorbase](https://github.com/tensorbase/tensorbase)
+* [Squirtle](https://github.com/DSLAM-UMD/Squirtle)
 
 (if you know of another project, please submit a PR to add a link!)
 
@@ -215,8 +220,8 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
   - [x] INNER JOIN
   - [x] LEFT JOIN
   - [x] RIGHT JOIN
+  - [x] FULL JOIN
   - [x] CROSS JOIN
-  - [ ] OUTER JOIN
 - [ ] Window
 
 ## Data Sources

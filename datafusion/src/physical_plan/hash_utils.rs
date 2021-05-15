@@ -26,12 +26,14 @@ use crate::physical_plan::expressions::Column;
 /// All valid types of joins.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JoinType {
-    /// Inner join
+    /// Inner Join
     Inner,
-    /// Left
+    /// Left Join
     Left,
-    /// Right
+    /// Right Join
     Right,
+    /// Full Join
+    Full,
 }
 
 /// The on clause of the join, as vector of (left, right) columns.
@@ -103,7 +105,7 @@ pub fn build_join_schema(
     join_type: &JoinType,
 ) -> Schema {
     let fields: Vec<Field> = match join_type {
-        JoinType::Inner | JoinType::Left => {
+        JoinType::Inner | JoinType::Left | JoinType::Full => {
             // remove right-side join keys if they have the same names as the left-side
             let duplicate_keys = &on
                 .iter()

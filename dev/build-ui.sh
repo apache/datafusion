@@ -20,4 +20,4 @@
 set -e
 
 . ./dev/build-set-env.sh
-docker build -t ballistacompute/ballista-scheduler-ui:$BALLISTA_VERSION -f dev/docker/ui.scheduler.dockerfile ballista/ui/scheduler
+docker build -t ballista-scheduler-ui:$BALLISTA_VERSION -f dev/docker/ballista-scheduler-ui.dockerfile ballista/ui/scheduler

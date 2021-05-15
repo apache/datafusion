@@ -28,8 +28,10 @@ use futures::{
 };
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{Accumulator, AggregateExpr, SQLMetric};
-use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning, PhysicalExpr};
+use crate::physical_plan::{
+    Accumulator, AggregateExpr, DisplayFormatType, Distribution, ExecutionPlan,
+    Partitioning, PhysicalExpr, SQLMetric,
+};
 
 use arrow::{
     array::{Array, UInt32Builder},
@@ -256,6 +258,39 @@ impl ExecutionPlan for HashAggregateExec {
         let mut metrics = HashMap::new();
         metrics.insert("outputRows".to_owned(), (*self.output_rows).clone());
         metrics
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "HashAggregateExec: mode={:?}", self.mode)?;
+                let g: Vec<String> = self
+                    .group_expr
+                    .iter()
+                    .map(|(e, alias)| {
+                        let e = e.to_string();
+                        if &e != alias {
+                            format!("{} as {}", e, alias)
+                        } else {
+                            e
+                        }
+                    })
+                    .collect();
+                write!(f, ", gby=[{}]", g.join(", "))?;
+
+                let a: Vec<String> = self
+                    .aggr_expr
+                    .iter()
+                    .map(|agg| agg.name().to_string())
+                    .collect();
+                write!(f, ", aggr=[{}]", a.join(", "))?;
+            }
+        }
+        Ok(())
     }
 }
 

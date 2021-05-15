@@ -26,7 +26,9 @@ use futures::stream::Stream;
 use futures::stream::StreamExt;
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
+use crate::physical_plan::{
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+};
 use arrow::array::ArrayRef;
 use arrow::compute::limit;
 use arrow::datatypes::SchemaRef;
@@ -121,6 +123,18 @@ impl ExecutionPlan for GlobalLimitExec {
         let stream = self.input.execute(0).await?;
         Ok(Box::pin(LimitStream::new(stream, self.limit)))
     }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "GlobalLimitExec: limit={}", self.limit)
+            }
+        }
+    }
 }
 
 /// LocalLimitExec applies a limit to a single partition
@@ -186,6 +200,18 @@ impl ExecutionPlan for LocalLimitExec {
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         let stream = self.input.execute(partition).await?;
         Ok(Box::pin(LimitStream::new(stream, self.limit)))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "LocalLimitExec: limit={}", self.limit)
+            }
+        }
     }
 }
 

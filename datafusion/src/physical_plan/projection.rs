@@ -26,7 +26,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr};
+use crate::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
+};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -129,6 +131,31 @@ impl ExecutionPlan for ProjectionExec {
             expr: self.expr.iter().map(|x| x.0.clone()).collect(),
             input: self.input.execute(partition).await?,
         }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                let expr: Vec<String> = self
+                    .expr
+                    .iter()
+                    .map(|(e, alias)| {
+                        let e = e.to_string();
+                        if &e != alias {
+                            format!("{} as {}", e, alias)
+                        } else {
+                            e
+                        }
+                    })
+                    .collect();
+
+                write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
+            }
+        }
     }
 }
 

@@ -21,7 +21,6 @@
 use futures::{lock::Mutex, StreamExt};
 use std::{any::Any, sync::Arc, task::Poll};
 
-use crate::physical_plan::memory::MemoryStream;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -36,8 +35,10 @@ use crate::{
 use async_trait::async_trait;
 use std::time::Instant;
 
-use super::{ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream};
-use crate::physical_plan::coalesce_batches::concat_batches;
+use super::{
+    coalesce_batches::concat_batches, memory::MemoryStream, DisplayFormatType,
+    ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+};
 use log::debug;
 
 /// Data of the left side
@@ -191,6 +192,18 @@ impl ExecutionPlan for CrossJoinExec {
             num_output_rows: 0,
             join_time: 0,
         }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "CrossJoinExec")
+            }
+        }
     }
 }
 
