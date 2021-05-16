@@ -201,6 +201,9 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let agg_mode: AggregateMode = match mode {
                     protobuf::AggregateMode::Partial => AggregateMode::Partial,
                     protobuf::AggregateMode::Final => AggregateMode::Final,
+                    protobuf::AggregateMode::FinalPartitioned => {
+                        AggregateMode::FinalPartitioned
+                    }
                 };
 
                 let group = hash_agg

@@ -359,12 +359,15 @@ impl Partitioning {
 }
 
 /// Distribution schemes
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Distribution {
     /// Unspecified distribution
     UnspecifiedDistribution,
     /// A single partition is required
     SinglePartition,
+    /// Requires children to be distributed in such a way that the same
+    /// values of the keys end up in the same partition
+    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
 /// Represents the result from an expression

@@ -172,6 +172,9 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
             let agg_mode = match exec.mode() {
                 AggregateMode::Partial => protobuf::AggregateMode::Partial,
                 AggregateMode::Final => protobuf::AggregateMode::Final,
+                AggregateMode::FinalPartitioned => {
+                    protobuf::AggregateMode::FinalPartitioned
+                }
             };
             let input_schema = exec.input_schema();
             let input: protobuf::PhysicalPlanNode = exec.input().to_owned().try_into()?;
