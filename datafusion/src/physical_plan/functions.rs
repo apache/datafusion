@@ -221,7 +221,10 @@ impl BuiltinScalarFunction {
     /// an allowlist of functions to take zero arguments, so that they will get special treatment
     /// while executing.
     fn supports_zero_argument(&self) -> bool {
-        matches!(self, BuiltinScalarFunction::Now)
+        matches!(
+            self,
+            BuiltinScalarFunction::Random | BuiltinScalarFunction::Now
+        )
     }
 }
 
