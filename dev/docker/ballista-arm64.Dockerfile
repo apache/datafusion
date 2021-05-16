@@ -19,4 +19,9 @@ FROM arm64v8/ubuntu
 ADD ballista-scheduler /
 ADD ballista-executor /
 
+# Add benchmarks
+ADD tpch /
+RUN mkdir /queries
+ADD queries/*.sql /queries/
+
 ENV RUST_LOG=info

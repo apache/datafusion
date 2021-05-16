@@ -33,6 +33,9 @@ The Rust implementation of Arrow does not work correctly on 32-bit ARM architect
 
 ## Cross Compiling DataFusion for the Raspberry Pi
 
+We do not yet publish official Docker images as part of the release process, although we do plan to do this in the 
+future ([issue #228](https://github.com/apache/arrow-datafusion/issues/228)). 
+
 Although it is technically possible to build DataFusion directly on a Raspberry Pi, it really isn't very practical. 
 It is much faster to use [cross](https://github.com/rust-embedded/cross) to cross-compile from a more powerful 
 desktop computer.
@@ -106,3 +109,20 @@ Run an executor:
 ```bash
 docker run -it myrepo/ballista-arm64 /ballista-executor
 ```
+
+Run the benchmarks:
+
+```bash
+docker run -it myrepo/ballista-arm64 \
+  /tpch benchmark --query=1 --path=/path/to/data --format=parquet \
+  --concurrency=24 --iterations=1 --debug --host=ballista-scheduler --port=50050
+```
+
+Note that it will be necessary to mount appropriate volumes into the containers and also configure networking 
+so that the Docker containers can communicate with each other. This can be achieved using Docker compose or Kubernetes.
+
+## Kubernetes
+
+With Docker images built using the instructions above, it is now possible to deploy Ballista to a Kubernetes cluster
+running on one of more Raspberry Pi computers. Refer to the instructions in the [Kubernetes](kubernetes.md) chapter
+for more information, and remember to change the Docker image name to `myrepo/ballista-arm64`.

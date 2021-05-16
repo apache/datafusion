@@ -27,5 +27,8 @@ rm -rf temp-ballista-docker
 mkdir temp-ballista-docker
 cp target/aarch64-unknown-linux-gnu/release/ballista-executor temp-ballista-docker
 cp target/aarch64-unknown-linux-gnu/release/ballista-scheduler temp-ballista-docker
+cp target/aarch64-unknown-linux-gnu/release/tpch temp-ballista-docker
+mkdir temp-ballista-docker/queries/
+cp benchmarks/queries/*.sql temp-ballista-docker/queries/
 docker buildx build --push -t $DOCKER_REPO/ballista-arm64 --platform=linux/arm64 -f dev/docker/ballista-arm64.Dockerfile temp-ballista-docker
 rm -rf temp-ballista-docker
