@@ -215,6 +215,14 @@ pub enum BuiltinScalarFunction {
     RegexpMatch,
 }
 
+impl BuiltinScalarFunction {
+    /// an allowlist of functions to take zero arguments, so that they will get special treatment
+    /// while executing.
+    fn supports_zero_argument(&self) -> bool {
+        matches!(self, BuiltinScalarFunction::Now)
+    }
+}
+
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // lowercase of the debug.
@@ -1407,8 +1415,10 @@ impl PhysicalExpr for ScalarFunctionExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         // evaluate the arguments, if there are no arguments we'll instead pass in a null array
         // indicating the batch size (as a convention)
-        let inputs = match self.args.len() {
-            0 => vec![NullColumnarValue::from(batch)],
+        let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
+            (0, Ok(scalar_fun)) if scalar_fun.supports_zero_argument() => {
+                vec![NullColumnarValue::from(batch)]
+            }
             _ => self
                 .args
                 .iter()
