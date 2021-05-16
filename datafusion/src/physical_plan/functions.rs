@@ -313,6 +313,28 @@ impl FromStr for BuiltinScalarFunction {
     }
 }
 
+macro_rules! make_utf8_to_return_type {
+    ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
+        fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
+            Ok(match arg_type {
+                DataType::LargeUtf8 => $largeUtf8Type,
+                DataType::Utf8 => $utf8Type,
+                _ => {
+                    // this error is internal as `data_types` should have captured this.
+                    return Err(DataFusionError::Internal(format!(
+                        "The {:?} function can only accept strings.",
+                        name
+                    )));
+                }
+            })
+        }
+    };
+}
+
+make_utf8_to_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
+make_utf8_to_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
+make_utf8_to_return_type!(utf8_to_binary_type, DataType::Binary, DataType::Binary);
+
 /// Returns the datatype of the scalar function
 pub fn return_type(
     fun: &BuiltinScalarFunction,
@@ -332,36 +354,11 @@ pub fn return_type(
             arg_types.len() as i32,
         )),
         BuiltinScalarFunction::Ascii => Ok(DataType::Int32),
-        BuiltinScalarFunction::BitLength => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::Int64,
-            DataType::Utf8 => DataType::Int32,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The bit_length function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Btrim => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The btrim function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::CharacterLength => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::Int64,
-            DataType::Utf8 => DataType::Int32,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The character_length function can only accept strings.".to_string(),
-                ));
-            }
-        }),
+        BuiltinScalarFunction::BitLength => utf8_to_int_type(&arg_types[0], "bit_length"),
+        BuiltinScalarFunction::Btrim => utf8_to_str_type(&arg_types[0], "btrim"),
+        BuiltinScalarFunction::CharacterLength => {
+            utf8_to_int_type(&arg_types[0], "character_length")
+        }
         BuiltinScalarFunction::Chr => Ok(DataType::Utf8),
         BuiltinScalarFunction::Concat => Ok(DataType::Utf8),
         BuiltinScalarFunction::ConcatWithSeparator => Ok(DataType::Utf8),
@@ -369,223 +366,38 @@ pub fn return_type(
         BuiltinScalarFunction::DateTrunc => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
-        BuiltinScalarFunction::InitCap => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The initcap function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Left => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The left function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Lower => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The upper function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Lpad => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The lpad function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Ltrim => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The ltrim function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::MD5 => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The md5 function can only accept strings.".to_string(),
-                ));
-            }
-        }),
+        BuiltinScalarFunction::InitCap => utf8_to_str_type(&arg_types[0], "initcap"),
+        BuiltinScalarFunction::Left => utf8_to_str_type(&arg_types[0], "left"),
+        BuiltinScalarFunction::Lower => utf8_to_str_type(&arg_types[0], "lower"),
+        BuiltinScalarFunction::Lpad => utf8_to_str_type(&arg_types[0], "lpad"),
+        BuiltinScalarFunction::Ltrim => utf8_to_str_type(&arg_types[0], "ltrim"),
+        BuiltinScalarFunction::MD5 => utf8_to_str_type(&arg_types[0], "md5"),
         BuiltinScalarFunction::NullIf => {
             // NULLIF has two args and they might get coerced, get a preview of this
             let coerced_types = data_types(arg_types, &signature(fun));
             coerced_types.map(|typs| typs[0].clone())
         }
-        BuiltinScalarFunction::OctetLength => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::Int64,
-            DataType::Utf8 => DataType::Int32,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The octet_length function can only accept strings.".to_string(),
-                ));
-            }
-        }),
+        BuiltinScalarFunction::OctetLength => {
+            utf8_to_int_type(&arg_types[0], "octet_length")
+        }
         BuiltinScalarFunction::Random => Ok(DataType::Float64),
-        BuiltinScalarFunction::RegexpReplace => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The regexp_replace function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Repeat => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The repeat function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Replace => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The replace function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Reverse => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The reverse function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Right => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The right function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Rpad => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The rpad function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Rtrim => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The rtrim function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::SHA224 => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::Binary,
-            DataType::Utf8 => DataType::Binary,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The sha224 function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::SHA256 => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::Binary,
-            DataType::Utf8 => DataType::Binary,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The sha256 function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::SHA384 => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::Binary,
-            DataType::Utf8 => DataType::Binary,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The sha384 function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::SHA512 => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::Binary,
-            DataType::Utf8 => DataType::Binary,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The sha512 function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::SplitPart => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The split_part function can only accept strings.".to_string(),
-                ));
-            }
-        }),
+        BuiltinScalarFunction::RegexpReplace => {
+            utf8_to_str_type(&arg_types[0], "regex_replace")
+        }
+        BuiltinScalarFunction::Repeat => utf8_to_str_type(&arg_types[0], "repeat"),
+        BuiltinScalarFunction::Replace => utf8_to_str_type(&arg_types[0], "replace"),
+        BuiltinScalarFunction::Reverse => utf8_to_str_type(&arg_types[0], "reverse"),
+        BuiltinScalarFunction::Right => utf8_to_str_type(&arg_types[0], "right"),
+        BuiltinScalarFunction::Rpad => utf8_to_str_type(&arg_types[0], "rpad"),
+        BuiltinScalarFunction::Rtrim => utf8_to_str_type(&arg_types[0], "rtrimp"),
+        BuiltinScalarFunction::SHA224 => utf8_to_binary_type(&arg_types[0], "sha224"),
+        BuiltinScalarFunction::SHA256 => utf8_to_binary_type(&arg_types[0], "sha256"),
+        BuiltinScalarFunction::SHA384 => utf8_to_binary_type(&arg_types[0], "sha384"),
+        BuiltinScalarFunction::SHA512 => utf8_to_binary_type(&arg_types[0], "sha512"),
+        BuiltinScalarFunction::SplitPart => utf8_to_str_type(&arg_types[0], "split_part"),
         BuiltinScalarFunction::StartsWith => Ok(DataType::Boolean),
-        BuiltinScalarFunction::Strpos => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::Int64,
-            DataType::Utf8 => DataType::Int32,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The strpos function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Substr => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The substr function can only accept strings.".to_string(),
-                ));
-            }
-        }),
+        BuiltinScalarFunction::Strpos => utf8_to_int_type(&arg_types[0], "strpos"),
+        BuiltinScalarFunction::Substr => utf8_to_str_type(&arg_types[0], "substr"),
         BuiltinScalarFunction::ToHex => Ok(match arg_types[0] {
             DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
                 DataType::Utf8
@@ -601,36 +413,9 @@ pub fn return_type(
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
         BuiltinScalarFunction::Now => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-        BuiltinScalarFunction::Translate => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The translate function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Trim => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The trim function can only accept strings.".to_string(),
-                ));
-            }
-        }),
-        BuiltinScalarFunction::Upper => Ok(match arg_types[0] {
-            DataType::LargeUtf8 => DataType::LargeUtf8,
-            DataType::Utf8 => DataType::Utf8,
-            _ => {
-                // this error is internal as `data_types` should have captured this.
-                return Err(DataFusionError::Internal(
-                    "The upper function can only accept strings.".to_string(),
-                ));
-            }
-        }),
+        BuiltinScalarFunction::Translate => utf8_to_str_type(&arg_types[0], "translate"),
+        BuiltinScalarFunction::Trim => utf8_to_str_type(&arg_types[0], "trim"),
+        BuiltinScalarFunction::Upper => utf8_to_str_type(&arg_types[0], "upper"),
         BuiltinScalarFunction::RegexpMatch => Ok(match arg_types[0] {
             DataType::LargeUtf8 => {
                 DataType::List(Box::new(Field::new("item", DataType::LargeUtf8, true)))
