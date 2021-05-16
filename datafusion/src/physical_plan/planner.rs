@@ -796,7 +796,8 @@ mod tests {
     }
 
     fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
-        let ctx_state = make_ctx_state();
+        let mut ctx_state = make_ctx_state();
+        ctx_state.config.concurrency = 4;
         let planner = DefaultPhysicalPlanner::default();
         planner.create_physical_plan(logical_plan, &ctx_state)
     }
