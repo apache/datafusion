@@ -2950,17 +2950,19 @@ async fn test_physical_plan_display_indent() {
 
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
     let expected = vec![
-    "GlobalLimitExec: limit=10",
-    "  SortExec: [the_min DESC]",
-    "    ProjectionExec: expr=[c1, MAX(c12), MIN(c12) as the_min]",
-    "      HashAggregateExec: mode=Final, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
-    "        MergeExec",
-    "          HashAggregateExec: mode=Partial, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
-    "            CoalesceBatchesExec: target_batch_size=4096",
-    "              FilterExec: c12 < CAST(10 AS Float64)",
-    "                RepartitionExec: partitioning=RoundRobinBatch(3)",
-    "                  CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
-    ];
+        "GlobalLimitExec: limit=10",
+        "  SortExec: [the_min DESC]",
+        "    MergeExec",
+        "      ProjectionExec: expr=[c1, MAX(c12), MIN(c12) as the_min]",
+        "        HashAggregateExec: mode=FinalPartitioned, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
+        "          CoalesceBatchesExec: target_batch_size=4096",
+        "            RepartitionExec: partitioning=Hash([Column { name: \"c1\" }], 3)",
+        "              HashAggregateExec: mode=Partial, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
+        "                CoalesceBatchesExec: target_batch_size=4096",
+        "                  FilterExec: c12 < CAST(10 AS Float64)",
+        "                    RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "                      CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+        ];
 
     let data_path = arrow::util::test_util::arrow_test_data();
     let actual = format!("{}", displayable(physical_plan.as_ref()).indent())

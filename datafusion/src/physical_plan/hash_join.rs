@@ -23,8 +23,9 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        ArrayData, ArrayRef, BooleanArray, LargeStringArray, PrimitiveArray,
-        TimestampMicrosecondArray, TimestampNanosecondArray, UInt32BufferBuilder,
+        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array,
+        Float64Array, LargeStringArray, PrimitiveArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, UInt32BufferBuilder,
         UInt32Builder, UInt64BufferBuilder, UInt64Builder,
     },
     compute,
@@ -862,6 +863,49 @@ macro_rules! hash_array_primitive {
     };
 }
 
+macro_rules! hash_array_float {
+    ($array_type:ident, $column: ident, $ty: ident, $hashes: ident, $random_state: ident, $multi_col: ident) => {
+        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
+        let values = array.values();
+
+        if array.null_count() == 0 {
+            if $multi_col {
+                for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
+                    *hash = combine_hashes(
+                        $ty::get_hash(&value.to_le_bytes(), $random_state),
+                        *hash,
+                    );
+                }
+            } else {
+                for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
+                    *hash = $ty::get_hash(&value.to_le_bytes(), $random_state)
+                }
+            }
+        } else {
+            if $multi_col {
+                for (i, (hash, value)) in
+                    $hashes.iter_mut().zip(values.iter()).enumerate()
+                {
+                    if !array.is_null(i) {
+                        *hash = combine_hashes(
+                            $ty::get_hash(&value.to_le_bytes(), $random_state),
+                            *hash,
+                        );
+                    }
+                }
+            } else {
+                for (i, (hash, value)) in
+                    $hashes.iter_mut().zip(values.iter()).enumerate()
+                {
+                    if !array.is_null(i) {
+                        *hash = $ty::get_hash(&value.to_le_bytes(), $random_state);
+                    }
+                }
+            }
+        }
+    };
+}
+
 /// Creates hash values for every element in the row based on the values in the columns
 pub fn create_hashes<'a>(
     arrays: &[ArrayRef],
@@ -953,6 +997,36 @@ pub fn create_hashes<'a>(
                     multi_col
                 );
             }
+            DataType::Float32 => {
+                hash_array_float!(
+                    Float32Array,
+                    col,
+                    u32,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Float64 => {
+                hash_array_float!(
+                    Float64Array,
+                    col,
+                    u64,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+                hash_array_primitive!(
+                    TimestampMillisecondArray,
+                    col,
+                    i64,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
                 hash_array_primitive!(
                     TimestampMicrosecondArray,
@@ -966,6 +1040,26 @@ pub fn create_hashes<'a>(
             DataType::Timestamp(TimeUnit::Nanosecond, None) => {
                 hash_array_primitive!(
                     TimestampNanosecondArray,
+                    col,
+                    i64,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Date32 => {
+                hash_array_primitive!(
+                    Date32Array,
+                    col,
+                    i32,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Date64 => {
+                hash_array_primitive!(
+                    Date64Array,
                     col,
                     i64,
                     hashes_buffer,
