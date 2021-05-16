@@ -124,8 +124,14 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 .on()
                 .iter()
                 .map(|tuple| protobuf::JoinOn {
-                    left: tuple.0.to_owned(),
-                    right: tuple.1.to_owned(),
+                    left: Some(protobuf::PhysicalColumn {
+                        name: tuple.0.name().to_string(),
+                        index: tuple.0.index() as u32,
+                    }),
+                    right: Some(protobuf::PhysicalColumn {
+                        name: tuple.1.name().to_string(),
+                        index: tuple.1.index() as u32,
+                    }),
                 })
                 .collect();
             let join_type = match exec.join_type() {
@@ -404,8 +410,11 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::LogicalExprNode {
 
         if let Some(expr) = expr.downcast_ref::<Column>() {
             Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::ColumnName(
-                    expr.name().to_owned(),
+                expr_type: Some(protobuf::logical_expr_node::ExprType::Column(
+                    protobuf::Column {
+                        name: expr.name().to_owned(),
+                        relation: None,
+                    },
                 )),
             })
         } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {

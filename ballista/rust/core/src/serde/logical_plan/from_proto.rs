@@ -19,6 +19,7 @@
 
 use std::{
     convert::{From, TryInto},
+    sync::Arc,
     unimplemented,
 };
 
@@ -29,7 +30,8 @@ use crate::{convert_box_required, convert_required};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::logical_plan::{
     abs, acos, asin, atan, ceil, cos, exp, floor, ln, log10, log2, round, signum, sin,
-    sqrt, tan, trunc, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
+    sqrt, tan, trunc, Column, DFField, DFSchema, Expr, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Operator,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::csv::CsvReadOptions;
@@ -101,8 +103,8 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .has_header(scan.has_header);
 
                 let mut projection = None;
-                if let Some(column_names) = &scan.projection {
-                    let column_indices = column_names
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
                         .columns
                         .iter()
                         .map(|name| schema.index_of(name))
@@ -220,10 +222,10 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Join(join) => {
-                let left_keys: Vec<&str> =
-                    join.left_join_column.iter().map(|i| i.as_str()).collect();
-                let right_keys: Vec<&str> =
-                    join.right_join_column.iter().map(|i| i.as_str()).collect();
+                let left_keys: Vec<Column> =
+                    join.left_join_column.iter().map(|i| i.into()).collect();
+                let right_keys: Vec<Column> =
+                    join.right_join_column.iter().map(|i| i.into()).collect();
                 let join_type =
                     protobuf::JoinType::from_i32(join.join_type).ok_or_else(|| {
                         proto_error(format!(
@@ -241,8 +243,8 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .join(
                         &convert_box_required!(join.right)?,
                         join_type,
-                        &left_keys,
-                        &right_keys,
+                        left_keys,
+                        right_keys,
                     )?
                     .build()
                     .map_err(|e| e.into())
@@ -251,22 +253,47 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
     }
 }
 
-impl TryInto<datafusion::logical_plan::DFSchema> for protobuf::Schema {
-    type Error = BallistaError;
-    fn try_into(self) -> Result<datafusion::logical_plan::DFSchema, Self::Error> {
-        let schema: Schema = (&self).try_into()?;
-        schema.try_into().map_err(BallistaError::DataFusionError)
+impl From<&protobuf::Column> for Column {
+    fn from(c: &protobuf::Column) -> Column {
+        Column {
+            relation: c.relation.map(|r| r.relation),
+            name: c.name,
+        }
     }
 }
 
-impl TryInto<datafusion::logical_plan::DFSchemaRef> for protobuf::Schema {
+impl TryInto<DFSchema> for &protobuf::DfSchema {
     type Error = BallistaError;
+
+    fn try_into(self) -> Result<DFSchema, BallistaError> {
+        let fields = self
+            .columns
+            .iter()
+            .map(|c| c.try_into())
+            .collect::<Result<Vec<DFField>, _>>()?;
+        Ok(DFSchema::new(fields)?)
+    }
+}
+
+impl TryInto<datafusion::logical_plan::DFSchemaRef> for protobuf::DfSchema {
+    type Error = BallistaError;
+
     fn try_into(self) -> Result<datafusion::logical_plan::DFSchemaRef, Self::Error> {
-        use datafusion::logical_plan::ToDFSchema;
-        let schema: Schema = (&self).try_into()?;
-        schema
-            .to_dfschema_ref()
-            .map_err(BallistaError::DataFusionError)
+        let dfschema: DFSchema = (&self).try_into()?;
+        Ok(Arc::new(dfschema))
+    }
+}
+
+impl TryInto<DFField> for &protobuf::DfField {
+    type Error = BallistaError;
+
+    fn try_into(self) -> Result<DFField, Self::Error> {
+        let field: Field = convert_required!(self.field)?;
+
+        Ok(match self.qualifier {
+            Some(q) => DFField::from_qualified(&q.relation, field),
+            None => DFField::from(field),
+        })
     }
 }
 
@@ -883,7 +910,7 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                 op: from_proto_binary_op(&binary_expr.op)?,
                 right: Box::new(parse_required_expr(&binary_expr.r)?),
             }),
-            ExprType::ColumnName(column_name) => Ok(Expr::Column(column_name.to_owned())),
+            ExprType::Column(column) => Ok(Expr::Column(column.into())),
             ExprType::Literal(literal) => {
                 use datafusion::scalar::ScalarValue;
                 let scalar_value: datafusion::scalar::ScalarValue = literal.try_into()?;

@@ -58,6 +58,17 @@ macro_rules! convert_required {
 }
 
 #[macro_export]
+macro_rules! into_required {
+    ($PB:expr) => {{
+        if let Some(field) = $PB.as_ref() {
+            Ok(field.into())
+        } else {
+            Err(proto_error("Missing required field in protobuf"))
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! convert_box_required {
     ($PB:expr) => {{
         if let Some(field) = $PB.as_ref() {

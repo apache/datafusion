@@ -27,7 +27,7 @@ use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::protobuf::LogicalExprNode;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{proto_error, protobuf};
-use crate::{convert_box_required, convert_required};
+use crate::{convert_box_required, convert_required, into_required};
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
@@ -284,11 +284,15 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let left: Arc<dyn ExecutionPlan> = convert_box_required!(hashjoin.left)?;
                 let right: Arc<dyn ExecutionPlan> =
                     convert_box_required!(hashjoin.right)?;
-                let on: Vec<(String, String)> = hashjoin
+                let on: Vec<(Column, Column)> = hashjoin
                     .on
                     .iter()
-                    .map(|col| (col.left.clone(), col.right.clone()))
-                    .collect();
+                    .map(|col| {
+                        let left = into_required!(col.left)?;
+                        let right = into_required!(col.right)?;
+                        Ok((left, right))
+                    })
+                    .collect::<Result<_, _>>()?;
                 let join_type = protobuf::JoinType::from_i32(hashjoin.join_type)
                     .ok_or_else(|| {
                         proto_error(format!(
@@ -305,7 +309,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 Ok(Arc::new(HashJoinExec::try_new(
                     left,
                     right,
-                    &on,
+                    on,
                     &join_type,
                     PartitionMode::CollectLeft,
                 )?))
@@ -378,6 +382,15 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     partition_count: unresolved_shuffle.partition_count as usize,
                 }))
             }
+        }
+    }
+}
+
+impl From<&protobuf::PhysicalColumn> for Column {
+    fn from(c: &protobuf::PhysicalColumn) -> Column {
+        Column {
+            index: c.index as usize,
+            name: c.name,
         }
     }
 }
