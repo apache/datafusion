@@ -169,6 +169,8 @@ pub enum BuiltinScalarFunction {
     NullIf,
     /// octet_length
     OctetLength,
+    /// random
+    Random,
     /// regexp_replace
     RegexpReplace,
     /// repeat
@@ -219,7 +221,10 @@ impl BuiltinScalarFunction {
     /// an allowlist of functions to take zero arguments, so that they will get special treatment
     /// while executing.
     fn supports_zero_argument(&self) -> bool {
-        matches!(self, BuiltinScalarFunction::Now)
+        matches!(
+            self,
+            BuiltinScalarFunction::Random | BuiltinScalarFunction::Now
+        )
     }
 }
 
@@ -275,6 +280,7 @@ impl FromStr for BuiltinScalarFunction {
             "md5" => BuiltinScalarFunction::MD5,
             "nullif" => BuiltinScalarFunction::NullIf,
             "octet_length" => BuiltinScalarFunction::OctetLength,
+            "random" => BuiltinScalarFunction::Random,
             "regexp_replace" => BuiltinScalarFunction::RegexpReplace,
             "repeat" => BuiltinScalarFunction::Repeat,
             "replace" => BuiltinScalarFunction::Replace,
@@ -438,6 +444,7 @@ pub fn return_type(
                 ));
             }
         }),
+        BuiltinScalarFunction::Random => Ok(DataType::Float64),
         BuiltinScalarFunction::RegexpReplace => Ok(match arg_types[0] {
             DataType::LargeUtf8 => DataType::LargeUtf8,
             DataType::Utf8 => DataType::Utf8,
@@ -742,6 +749,7 @@ pub fn create_physical_expr(
         BuiltinScalarFunction::Ln => math_expressions::ln,
         BuiltinScalarFunction::Log10 => math_expressions::log10,
         BuiltinScalarFunction::Log2 => math_expressions::log2,
+        BuiltinScalarFunction::Random => math_expressions::random,
         BuiltinScalarFunction::Round => math_expressions::round,
         BuiltinScalarFunction::Signum => math_expressions::signum,
         BuiltinScalarFunction::Sin => math_expressions::sin,
@@ -1307,6 +1315,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
             Signature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8]),
             Signature::Exact(vec![DataType::LargeUtf8, DataType::Utf8, DataType::Utf8]),
         ]),
+        BuiltinScalarFunction::Random => Signature::Exact(vec![]),
         // math expressions expect 1 argument of type f64 or f32
         // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
         // return the best approximation for it (in f64).

@@ -2911,6 +2911,17 @@ async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_random_expression() -> Result<()> {
+    let mut ctx = create_ctx()?;
+    let sql = "SELECT random() r1";
+    let actual = execute(&mut ctx, sql).await;
+    let r1 = actual[0][0].parse::<f64>().unwrap();
+    assert!(0.0 <= r1);
+    assert!(r1 < 1.0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_cast_expressions_error() -> Result<()> {
     // sin(utf8) should error
     let mut ctx = create_ctx()?;
