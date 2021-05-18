@@ -857,7 +857,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ),
 
             SQLExpr::Identifier(ref id) => {
-                if &id.value[0..1] == "@" {
+                if id.value.chars().nth(0) == Some('@') {
                     let var_names = vec![id.value.clone()];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
@@ -2679,6 +2679,14 @@ mod tests {
         quick_test(sql, expected);
     }
 
+    #[test]
+    fn select_multibyte_column() {
+        let sql = r#"SELECT "😀" FROM person"#;
+        let expected = "Projection: #😀\
+            \n  TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
         let planner = SqlToRel::new(&MockContextProvider {});
         let result = DFParser::parse_sql(&sql);
@@ -2712,6 +2720,7 @@ mod tests {
                         DataType::Timestamp(TimeUnit::Nanosecond, None),
                         false,
                     ),
+                    Field::new("😀", DataType::Int32, false),
                 ])),
                 "orders" => Some(Schema::new(vec![
                     Field::new("order_id", DataType::UInt32, false),
