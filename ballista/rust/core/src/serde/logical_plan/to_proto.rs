@@ -1277,16 +1277,20 @@ impl From<WindowFrameUnits> for protobuf::WindowFrameUnits {
 impl TryFrom<WindowFrameBound> for protobuf::WindowFrameBound {
     type Error = BallistaError;
 
-    fn try_from(bound: WindowFrameBound) -> Result<Self, Self::Error> {
-        unimplemented!("not implemented")
+    fn try_from(_bound: WindowFrameBound) -> Result<Self, Self::Error> {
+        Err(BallistaError::NotImplemented(
+            "WindowFrameBound => protobuf::WindowFrameBound".to_owned(),
+        ))
     }
 }
 
 impl TryFrom<WindowFrame> for protobuf::WindowFrame {
     type Error = BallistaError;
 
-    fn try_from(window: WindowFrame) -> Result<Self, Self::Error> {
-        unimplemented!("not implemented")
+    fn try_from(_window: WindowFrame) -> Result<Self, Self::Error> {
+        Err(BallistaError::NotImplemented(
+            "WindowFrame => protobuf::WindowFrame".to_owned(),
+        ))
     }
 }
 

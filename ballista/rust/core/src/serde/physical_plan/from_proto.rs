@@ -297,7 +297,6 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     .map(|(expr, name)| expr.try_into().map(|expr| (expr, name.clone())))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let df_planner = DefaultPhysicalPlanner::default();
                 let catalog_list =
                     Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
                 let ctx_state = ExecutionContextState {

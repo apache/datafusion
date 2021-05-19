@@ -29,7 +29,7 @@
 use super::{
     functions::Signature,
     type_coercion::{coerce, data_types},
-    Accumulator, AggregateExpr, PhysicalExpr, WindowExpr,
+    Accumulator, AggregateExpr, PhysicalExpr,
 };
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::distinct_expressions;

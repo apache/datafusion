@@ -21,14 +21,11 @@
 //! see also https://www.postgresql.org/docs/current/functions-window.html
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::ExecutionContextState;
 use crate::physical_plan::{
     aggregates, aggregates::AggregateFunction, functions::Signature,
-    type_coercion::data_types, PhysicalExpr,
+    type_coercion::data_types,
 };
 use arrow::datatypes::DataType;
-use arrow::datatypes::{Schema, SchemaRef};
-use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 /// WindowFunction
@@ -149,17 +146,4 @@ fn signature(fun: &WindowFunction) -> Signature {
             | BuiltInWindowFunction::LastValue => Signature::Any(1),
         },
     }
-}
-
-/// Create a physical (function) expression.
-/// This function errors when `args`' can't be coerced to a valid argument type of the function.
-pub fn create_physical_expr(
-    fun: &WindowFunction,
-    args: &[Arc<dyn PhysicalExpr>],
-    input_schema: &Schema,
-    ctx_state: &ExecutionContextState,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    Err(DataFusionError::NotImplemented(format!(
-        "Physical expr not implemented"
-    )))
 }

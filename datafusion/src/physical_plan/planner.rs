@@ -21,8 +21,7 @@ use std::sync::Arc;
 
 use super::{
     aggregates, cross_join::CrossJoinExec, empty::EmptyExec, expressions::binary,
-    functions, hash_join::PartitionMode, udaf, union::UnionExec, window_functions,
-    windows,
+    functions, hash_join::PartitionMode, udaf, union::UnionExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::{

@@ -35,7 +35,6 @@ use crate::{
     datasource::{empty::EmptyTable, parquet::ParquetTable, CsvFile, MemTable},
     prelude::CsvReadOptions,
 };
-use sqlparser::ast::WindowFrame;
 use std::collections::HashSet;
 
 /// Builder for logical plans

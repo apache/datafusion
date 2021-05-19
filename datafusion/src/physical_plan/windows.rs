@@ -22,10 +22,10 @@ use crate::physical_plan::{
     aggregates, window_functions::WindowFunction, AggregateExpr, Distribution,
     ExecutionPlan, Partitioning, PhysicalExpr, SendableRecordBatchStream, WindowExpr,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_trait::async_trait;
+use std::any::Any;
 use std::sync::Arc;
-use std::{any::Any, pin::Pin};
 
 /// Window execution plan
 #[derive(Debug)]
