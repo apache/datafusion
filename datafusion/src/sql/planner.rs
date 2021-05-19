@@ -2703,14 +2703,20 @@ mod tests {
     #[test]
     fn empty_over() {
         let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
-        let expected = "Projection: #order_id, AGGREGATEFUNCTION(MAX)(#order_id)\n  WindowAggr: windowExpr=[[AGGREGATEFUNCTION(MAX)(#order_id)]] partitionBy=[], orderBy=[]\n    TableScan: orders projection=None";
+        let expected = "\
+        Projection: #order_id, #MAX(order_id)\
+        \n  WindowAggr: windowExpr=[[MAX(#order_id)]] partitionBy=[], orderBy=[]\
+        \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
     #[test]
-    fn empty_over_with_alias() {
-        let sql = "SELECT order_id, MAX(order_id) OVER () max_order_id from orders";
-        let expected = "Projection: #order_id, AGGREGATEFUNCTION(MAX)(#order_id) AS max_order_id\n  WindowAggr: windowExpr=[[AGGREGATEFUNCTION(MAX)(#order_id)]] partitionBy=[], orderBy=[]\n    TableScan: orders projection=None";
+    fn empty_over_plus() {
+        let sql = "SELECT order_id, MAX(qty * 1.1) OVER () from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty Multiply Float64(1.1))\
+        \n  WindowAggr: windowExpr=[[MAX(#qty Multiply Float64(1.1))]] partitionBy=[], orderBy=[]\
+        \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
