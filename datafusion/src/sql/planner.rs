@@ -857,7 +857,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ),
 
             SQLExpr::Identifier(ref id) => {
-                if id.value.chars().nth(0) == Some('@') {
+                if id.value.starts_with('@') {
                     let var_names = vec![id.value.clone()];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
