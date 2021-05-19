@@ -1520,7 +1520,7 @@ mod tests {
     use functions::ScalarFunctionImplementation;
 
     const PERSON_COLUMN_NAMES: &str =
-        "id, first_name, last_name, age, state, salary, birth_date";
+        "id, first_name, last_name, age, state, salary, birth_date, 😀";
 
     #[test]
     fn select_no_relation() {
@@ -1559,7 +1559,7 @@ mod tests {
         let sql = "SELECT *, age FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"#age\\\" at position 3 and \\\"#age\\\" at position 7 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            "Plan(\"Projections require unique expression names but the expression \\\"#age\\\" at position 3 and \\\"#age\\\" at position 8 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
             format!("{:?}", err)
         );
     }
@@ -1568,7 +1568,7 @@ mod tests {
     fn select_wildcard_with_repeated_column_but_is_aliased() {
         quick_test(
             "SELECT *, first_name AS fn from person",
-            "Projection: #id, #first_name, #last_name, #age, #state, #salary, #birth_date, #first_name AS fn\
+            "Projection: #id, #first_name, #last_name, #age, #state, #salary, #birth_date, #😀, #first_name AS fn\
             \n  TableScan: person projection=None",
         );
     }
@@ -2044,9 +2044,9 @@ mod tests {
     #[test]
     fn select_wildcard_with_groupby() {
         quick_test(
-            "SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date",
-            "Projection: #id, #first_name, #last_name, #age, #state, #salary, #birth_date\
-             \n  Aggregate: groupBy=[[#id, #first_name, #last_name, #age, #state, #salary, #birth_date]], aggr=[[]]\
+            r#"SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date, "😀""#,
+            "Projection: #id, #first_name, #last_name, #age, #state, #salary, #birth_date, #😀\
+             \n  Aggregate: groupBy=[[#id, #first_name, #last_name, #age, #state, #salary, #birth_date, #😀]], aggr=[[]]\
              \n    TableScan: person projection=None",
         );
         quick_test(
@@ -2365,7 +2365,7 @@ mod tests {
     fn test_wildcard() {
         quick_test(
             "SELECT * from person",
-            "Projection: #id, #first_name, #last_name, #age, #state, #salary, #birth_date\
+            "Projection: #id, #first_name, #last_name, #age, #state, #salary, #birth_date, #😀\
             \n  TableScan: person projection=None",
         );
     }
