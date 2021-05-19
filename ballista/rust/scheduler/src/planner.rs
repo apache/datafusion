@@ -235,10 +235,9 @@ mod test {
     use ballista_core::error::BallistaError;
     use ballista_core::execution_plans::UnresolvedShuffleExec;
     use ballista_core::serde::protobuf;
-    use ballista_core::utils::format_plan;
     use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
     use datafusion::physical_plan::sort::SortExec;
-    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::physical_plan::{displayable, ExecutionPlan};
     use datafusion::physical_plan::{merge::MergeExec, projection::ProjectionExec};
     use std::convert::TryInto;
     use std::sync::Arc;
@@ -270,7 +269,7 @@ mod test {
         let job_uuid = Uuid::new_v4();
         let stages = planner.plan_query_stages(&job_uuid.to_string(), plan)?;
         for stage in &stages {
-            println!("{}", format_plan(stage.as_ref(), 0)?);
+            println!("{}", displayable(stage.as_ref()).indent().to_string());
         }
 
         /* Expected result:
