@@ -18,6 +18,10 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use parquet::file::{
+    metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics,
+};
+
 use crate::{
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,
@@ -26,30 +30,28 @@ use crate::{
     physical_plan::{planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr},
 };
 
-use parquet::file::{
-    metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics,
-};
-
 #[derive(Debug, Clone)]
-/// Predicate builder used for generating of predicate functions, used to filter row group metadata
-pub struct RowGroupPredicateBuilder {
-    parquet_schema: Schema,
+/// Builder used for generating predicate functions that can be used
+/// to prune data based on statistics (e.g. parquet row group metadata)
+pub struct PruningPredicateBuilder {
+    schema: Schema,
     predicate_expr: Arc<dyn PhysicalExpr>,
     stat_column_req: Vec<(String, StatisticsType, Field)>,
 }
 
-impl RowGroupPredicateBuilder {
-    /// Try to create a new instance of PredicateExpressionBuilder.
+impl PruningPredicateBuilder {
+    /// Try to create a new instance of [`PruningPredicateBuilder`]
+    ///
     /// This will translate the filter expression into a statistics predicate expression
-    /// (for example (column / 2) = 4 becomes (column_min / 2) <= 4 && 4 <= (column_max / 2)),
-    /// then convert it to a DataFusion PhysicalExpression and cache it for later use by build_row_group_predicate.
-    pub fn try_new(expr: &Expr, parquet_schema: Schema) -> Result<Self> {
+    ///
+    /// For example,  `(column / 2) = 4` becomes `(column_min / 2) <= 4 && 4 <= (column_max / 2))`
+    pub fn try_new(expr: &Expr, schema: Schema) -> Result<Self> {
         // build predicate expression once
         let mut stat_column_req = Vec::<(String, StatisticsType, Field)>::new();
         let logical_predicate_expr =
-            build_predicate_expression(expr, &parquet_schema, &mut stat_column_req)?;
+            build_predicate_expression(expr, &schema, &mut stat_column_req)?;
         // println!(
-        //     "RowGroupPredicateBuilder::try_new, logical_predicate_expr: {:?}",
+        //     "PruningPredicateBuilder::try_new, logical_predicate_expr: {:?}",
         //     logical_predicate_expr
         // );
         // build physical predicate expression
@@ -65,30 +67,35 @@ impl RowGroupPredicateBuilder {
             &execution_context_state,
         )?;
         // println!(
-        //     "RowGroupPredicateBuilder::try_new, predicate_expr: {:?}",
+        //     "PruningPredicateBuilder::try_new, predicate_expr: {:?}",
         //     predicate_expr
         // );
         Ok(Self {
-            parquet_schema,
+            schema,
             predicate_expr,
             stat_column_req,
         })
     }
 
-    /// Generate a predicate function used to filter row group metadata.
-    /// This function takes a list of all row groups as parameter,
-    /// so that DataFusion's physical expressions can be re-used by
-    /// generating a RecordBatch, containing statistics arrays,
-    /// on which the physical predicate expression is executed to generate a row group filter array.
-    /// The generated filter array is then used in the returned closure to filter row groups.
-    pub fn build_row_group_predicate(
+    /// Generate a predicate function used to filter based on
+    /// statistics
+    ///
+    /// This function takes a slice of statistics as parameter, so
+    /// that DataFusion's physical expressions can be executed once
+    /// against a single RecordBatch, containing statistics arrays, on
+    /// which the physical predicate expression is executed to
+    /// generate a row group filter array.
+    ///
+    /// The generated filter function is then used in the returned
+    /// closure to filter row groups. NOTE this is parquet specific at the moment
+    pub fn build_pruning_predicate(
         &self,
         row_group_metadata: &[RowGroupMetaData],
     ) -> Box<dyn Fn(&RowGroupMetaData, usize) -> bool> {
         // build statistics record batch
         let predicate_result = build_statistics_record_batch(
             row_group_metadata,
-            &self.parquet_schema,
+            &self.schema,
             &self.stat_column_req,
         )
         .and_then(|statistics_batch| {
@@ -127,18 +134,18 @@ impl RowGroupPredicateBuilder {
     }
 }
 
-/// Build a RecordBatch from a list of RowGroupMetadata structs,
-/// creating arrays, one for each statistics column,
-/// as requested in the stat_column_req parameter.
+/// Build a RecordBatch from a list of statistics (currently parquet
+/// [`RowGroupMetadata`] structs), creating arrays, one for each
+/// statistics column, as requested in the stat_column_req parameter.
 fn build_statistics_record_batch(
     row_groups: &[RowGroupMetaData],
-    parquet_schema: &Schema,
+    schema: &Schema,
     stat_column_req: &[(String, StatisticsType, Field)],
 ) -> Result<RecordBatch> {
     let mut fields = Vec::<Field>::new();
     let mut arrays = Vec::<ArrayRef>::new();
     for (column_name, statistics_type, stat_field) in stat_column_req {
-        if let Some((column_index, _)) = parquet_schema.column_with_name(column_name) {
+        if let Some((column_index, _)) = schema.column_with_name(column_name) {
             let statistics = row_groups
                 .iter()
                 .map(|g| g.column(column_index).statistics())
@@ -161,7 +168,7 @@ struct StatisticsExpressionBuilder<'a> {
     column_name: String,
     column_expr: &'a Expr,
     scalar_expr: &'a Expr,
-    parquet_field: &'a Field,
+    field: &'a Field,
     stat_column_req: &'a mut Vec<(String, StatisticsType, Field)>,
     reverse_operator: bool,
 }
@@ -170,7 +177,7 @@ impl<'a> StatisticsExpressionBuilder<'a> {
     fn try_new(
         left: &'a Expr,
         right: &'a Expr,
-        parquet_schema: &'a Schema,
+        schema: &'a Schema,
         stat_column_req: &'a mut Vec<(String, StatisticsType, Field)>,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
@@ -191,12 +198,11 @@ impl<'a> StatisticsExpressionBuilder<'a> {
                 }
             };
         let column_name = column_names.iter().next().unwrap().clone();
-        let field = match parquet_schema.column_with_name(&column_name) {
+        let field = match schema.column_with_name(&column_name) {
             Some((_, f)) => f,
             _ => {
-                // field not found in parquet schema
                 return Err(DataFusionError::Plan(
-                    "Field not found in parquet schema".to_string(),
+                    "Field not found in schema".to_string(),
                 ));
             }
         };
@@ -205,7 +211,7 @@ impl<'a> StatisticsExpressionBuilder<'a> {
             column_name,
             column_expr,
             scalar_expr,
-            parquet_field: field,
+            field,
             stat_column_req,
             reverse_operator,
         })
@@ -253,8 +259,8 @@ impl<'a> StatisticsExpressionBuilder<'a> {
         let stat_column_name = format!("{}_{}", self.column_name, suffix);
         let stat_field = Field::new(
             stat_column_name.as_str(),
-            self.parquet_field.data_type().clone(),
-            self.parquet_field.is_nullable(),
+            self.field.data_type().clone(),
+            self.field.is_nullable(),
         );
         if self.is_stat_column_missing(stat_type) {
             // only add statistics column if not previously added
@@ -297,10 +303,10 @@ fn rewrite_column_expr(
     utils::rewrite_expression(&expr, &expressions)
 }
 
-/// Translate logical filter expression into parquet statistics predicate expression
+/// Translate logical filter expression into statistics predicate expression
 fn build_predicate_expression(
     expr: &Expr,
-    parquet_schema: &Schema,
+    schema: &Schema,
     stat_column_req: &mut Vec<(String, StatisticsType, Field)>,
 ) -> Result<Expr> {
     use crate::logical_plan;
@@ -316,19 +322,13 @@ fn build_predicate_expression(
     };
 
     if op == Operator::And || op == Operator::Or {
-        let left_expr =
-            build_predicate_expression(left, parquet_schema, stat_column_req)?;
-        let right_expr =
-            build_predicate_expression(right, parquet_schema, stat_column_req)?;
+        let left_expr = build_predicate_expression(left, schema, stat_column_req)?;
+        let right_expr = build_predicate_expression(right, schema, stat_column_req)?;
         return Ok(logical_plan::binary_expr(left_expr, op, right_expr));
     }
 
-    let expr_builder = StatisticsExpressionBuilder::try_new(
-        left,
-        right,
-        parquet_schema,
-        stat_column_req,
-    );
+    let expr_builder =
+        StatisticsExpressionBuilder::try_new(left, right, schema, stat_column_req);
     let mut expr_builder = match expr_builder {
         Ok(builder) => builder,
         // allow partial failure in predicate expression generation

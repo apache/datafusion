@@ -26,7 +26,7 @@ use std::task::{Context, Poll};
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::Expr,
-    physical_optimizer::pruning::RowGroupPredicateBuilder,
+    physical_optimizer::pruning::PruningPredicateBuilder,
     physical_plan::{
         common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
         SendableRecordBatchStream,
@@ -66,7 +66,7 @@ pub struct ParquetExec {
     /// Statistics for the data set (sum of statistics for all partitions)
     statistics: Statistics,
     /// Optional predicate builder
-    predicate_builder: Option<RowGroupPredicateBuilder>,
+    predicate_builder: Option<PruningPredicateBuilder>,
     /// Optional limit of the number of rows
     limit: Option<usize>,
 }
@@ -219,7 +219,7 @@ impl ParquetExec {
         }
         let schema = schemas[0].clone();
         let predicate_builder = predicate.and_then(|predicate_expr| {
-            RowGroupPredicateBuilder::try_new(&predicate_expr, schema.clone()).ok()
+            PruningPredicateBuilder::try_new(&predicate_expr, schema.clone()).ok()
         });
 
         Ok(Self::new(
@@ -237,7 +237,7 @@ impl ParquetExec {
         partitions: Vec<ParquetPartition>,
         schema: Schema,
         projection: Option<Vec<usize>>,
-        predicate_builder: Option<RowGroupPredicateBuilder>,
+        predicate_builder: Option<PruningPredicateBuilder>,
         batch_size: usize,
         limit: Option<usize>,
     ) -> Self {
@@ -457,7 +457,7 @@ fn send_result(
 fn read_files(
     filenames: &[String],
     projection: &[usize],
-    predicate_builder: &Option<RowGroupPredicateBuilder>,
+    predicate_builder: &Option<PruningPredicateBuilder>,
     batch_size: usize,
     response_tx: Sender<ArrowResult<RecordBatch>>,
     limit: Option<usize>,
@@ -468,7 +468,7 @@ fn read_files(
         let mut file_reader = SerializedFileReader::new(file)?;
         if let Some(predicate_builder) = predicate_builder {
             let row_group_predicate = predicate_builder
-                .build_row_group_predicate(file_reader.metadata().row_groups());
+                .build_pruning_predicate(file_reader.metadata().row_groups());
             file_reader.filter_row_groups(&row_group_predicate);
         }
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
@@ -630,7 +630,7 @@ mod tests {
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let predicate_builder = RowGroupPredicateBuilder::try_new(&expr, schema)?;
+        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
 
         let schema_descr = get_test_schema_descr(vec![("c1", PhysicalType::INT32)]);
         let rgm1 = get_row_group_meta_data(
@@ -643,7 +643,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_row_group_predicate(&row_group_metadata);
+            predicate_builder.build_pruning_predicate(&row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -660,7 +660,7 @@ mod tests {
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let predicate_builder = RowGroupPredicateBuilder::try_new(&expr, schema)?;
+        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
 
         let schema_descr = get_test_schema_descr(vec![("c1", PhysicalType::INT32)]);
         let rgm1 = get_row_group_meta_data(
@@ -673,7 +673,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_row_group_predicate(&row_group_metadata);
+            predicate_builder.build_pruning_predicate(&row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -696,7 +696,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
         ]);
-        let predicate_builder = RowGroupPredicateBuilder::try_new(&expr, schema.clone())?;
+        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema.clone())?;
 
         let schema_descr = get_test_schema_descr(vec![
             ("c1", PhysicalType::INT32),
@@ -718,7 +718,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_row_group_predicate(&row_group_metadata);
+            predicate_builder.build_pruning_predicate(&row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -731,9 +731,9 @@ mod tests {
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
         let expr = col("c1").gt(lit(15)).or(col("c2").modulus(lit(2)));
-        let predicate_builder = RowGroupPredicateBuilder::try_new(&expr, schema)?;
+        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
         let row_group_predicate =
-            predicate_builder.build_row_group_predicate(&row_group_metadata);
+            predicate_builder.build_pruning_predicate(&row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -755,7 +755,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]);
-        let predicate_builder = RowGroupPredicateBuilder::try_new(&expr, schema)?;
+        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
 
         let schema_descr = get_test_schema_descr(vec![
             ("c1", PhysicalType::INT32),
@@ -777,7 +777,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_row_group_predicate(&row_group_metadata);
+            predicate_builder.build_pruning_predicate(&row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
