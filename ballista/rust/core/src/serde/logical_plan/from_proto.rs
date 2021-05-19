@@ -1290,7 +1290,7 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
                 "Received a WindowFrameBound message with unknown WindowFrameBoundType {}",
                 bound.window_frame_bound_type
             ))
-        })?.into();
+        })?;
         match bound_type {
             protobuf::WindowFrameBoundType::CurrentRow => {
                 Ok(WindowFrameBound::CurrentRow)

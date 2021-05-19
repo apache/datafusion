@@ -678,7 +678,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         select_exprs: &[Expr],
     ) -> Result<(LogicalPlan, Vec<Expr>)> {
         let plan = LogicalPlanBuilder::from(input)
-            .window(window_exprs.clone())?
+            .window(window_exprs)?
             .build()?;
         let select_exprs = select_exprs
             .iter()

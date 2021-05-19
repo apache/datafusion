@@ -164,7 +164,7 @@ impl DefaultPhysicalPlanner {
                 Ok(Arc::new(WindowAggExec::try_new(
                     window_expr,
                     input_exec.clone(),
-                    input_schema.clone(),
+                    input_schema,
                 )?))
             }
             LogicalPlan::Aggregate {

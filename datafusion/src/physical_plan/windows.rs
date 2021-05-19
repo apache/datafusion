@@ -163,7 +163,7 @@ impl ExecutionPlan for WindowAggExec {
             1 => Ok(Arc::new(WindowAggExec::try_new(
                 self.window_expr.clone(),
                 children[0].clone(),
-                children[0].schema().clone(),
+                children[0].schema(),
             )?)),
             _ => Err(DataFusionError::Internal(
                 "WindowAggExec wrong number of children".to_owned(),
