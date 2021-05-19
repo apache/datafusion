@@ -237,8 +237,8 @@ mod test {
     use ballista_core::serde::protobuf;
     use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
     use datafusion::physical_plan::sort::SortExec;
-    use datafusion::physical_plan::{merge::MergeExec, projection::ProjectionExec};
     use datafusion::physical_plan::{displayable, ExecutionPlan};
+    use datafusion::physical_plan::{merge::MergeExec, projection::ProjectionExec};
     use std::convert::TryInto;
     use std::sync::Arc;
     use uuid::Uuid;
