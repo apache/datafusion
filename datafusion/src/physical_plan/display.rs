@@ -87,4 +87,9 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
         self.indent += 1;
         Ok(true)
     }
+
+    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+        self.indent -= 1;
+        Ok(true)
+    }
 }
