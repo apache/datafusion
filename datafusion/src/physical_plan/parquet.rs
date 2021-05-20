@@ -26,11 +26,12 @@ use std::task::{Context, Poll};
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::Expr,
-    physical_optimizer::pruning::PruningPredicateBuilder,
+    physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
         common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
         SendableRecordBatchStream,
     },
+    scalar::ScalarValue,
 };
 
 use arrow::{
@@ -41,10 +42,12 @@ use arrow::{
 use parquet::file::{
     metadata::RowGroupMetaData,
     reader::{FileReader, SerializedFileReader},
+    statistics::Statistics as ParquetStatistics,
 };
 
 use fmt::Debug;
 use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
+
 use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
     task,
@@ -69,7 +72,7 @@ pub struct ParquetExec {
     /// Statistics for the data set (sum of statistics for all partitions)
     statistics: Statistics,
     /// Optional predicate builder
-    predicate_builder: Option<PruningPredicateBuilder>,
+    predicate_builder: Option<PruningPredicate>,
     /// Optional limit of the number of rows
     limit: Option<usize>,
 }
@@ -220,9 +223,9 @@ impl ParquetExec {
                 schemas.len()
             )));
         }
-        let schema = schemas[0].clone();
+        let schema = Arc::new(schemas.pop().unwrap());
         let predicate_builder = predicate.and_then(|predicate_expr| {
-            PruningPredicateBuilder::try_new(&predicate_expr, schema.clone()).ok()
+            PruningPredicate::try_new(&predicate_expr, schema.clone()).ok()
         });
 
         Ok(Self::new(
@@ -238,9 +241,9 @@ impl ParquetExec {
     /// Create a new Parquet reader execution plan with provided partitions and schema
     pub fn new(
         partitions: Vec<ParquetPartition>,
-        schema: Schema,
+        schema: SchemaRef,
         projection: Option<Vec<usize>>,
-        predicate_builder: Option<PruningPredicateBuilder>,
+        predicate_builder: Option<PruningPredicate>,
         batch_size: usize,
         limit: Option<usize>,
     ) -> Self {
@@ -457,11 +460,75 @@ fn send_result(
     Ok(())
 }
 
+/// Wraps parquet statistics in a way
+/// that implements [`PruningStatistics`]
+struct RowGroupPruningStatistics<'a> {
+    row_group_metadata: &'a RowGroupMetaData,
+    parquet_schema: &'a Schema,
+}
+
+impl<'a> RowGroupPruningStatistics<'a> {
+    /// return the column statistics for the specified column
+    fn column_statistics(&self, column: &str) -> Option<&ParquetStatistics> {
+        self.parquet_schema
+            .column_with_name(column)
+            .and_then(|(column_index, _)| {
+                self.row_group_metadata.column(column_index).statistics()
+            })
+    }
+}
+
+/// Extract the min/max statistics from a parquet file
+macro_rules! get_statistic {
+    ($statistics:expr, $func:ident, $bytes_func:ident) => {{
+        if !$statistics.has_min_max_set() {
+            return None;
+        }
+        match $statistics {
+            ParquetStatistics::Boolean(s) => Some(ScalarValue::Boolean(Some(*s.$func()))),
+            ParquetStatistics::Int32(s) => Some(ScalarValue::Int32(Some(*s.$func()))),
+            ParquetStatistics::Int64(s) => Some(ScalarValue::Int64(Some(*s.$func()))),
+            // 96 bit ints not supported
+            ParquetStatistics::Int96(_) => None,
+            ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
+            ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
+            ParquetStatistics::ByteArray(s) => {
+                let s = std::str::from_utf8(s.$bytes_func())
+                    .map(|s| s.to_string())
+                    .ok();
+                Some(ScalarValue::Utf8(s))
+            }
+            // type not supported yet
+            ParquetStatistics::FixedLenByteArray(_) => None,
+        }
+    }};
+}
+
+impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
+    fn min_value(&self, column: &str) -> Option<ScalarValue> {
+        self.column_statistics(column)
+            .and_then(|statistics| get_statistic!(statistics, min, min_bytes))
+    }
+
+    fn max_value(&self, column: &str) -> Option<ScalarValue> {
+        self.column_statistics(column)
+            .and_then(|statistics| get_statistic!(statistics, max, max_bytes))
+    }
+}
+
 fn build_row_group_predicate(
-    predicate_builder: &PruningPredicateBuilder,
+    predicate_builder: &PruningPredicate,
     row_group_metadata: &[RowGroupMetaData],
 ) -> Box<dyn Fn(&RowGroupMetaData, usize) -> bool> {
-    let predicate_values = predicate_builder.build_pruning_predicate(row_group_metadata);
+    let pruning_stats: Vec<_> = row_group_metadata
+        .iter()
+        .map(|meta| RowGroupPruningStatistics {
+            row_group_metadata: meta,
+            parquet_schema: predicate_builder.schema().as_ref(),
+        })
+        .collect();
+
+    let predicate_values = predicate_builder.prune(&pruning_stats);
 
     let predicate_values = match predicate_values {
         Ok(values) => values,
@@ -476,7 +543,7 @@ fn build_row_group_predicate(
 fn read_files(
     filenames: &[String],
     projection: &[usize],
-    predicate_builder: &Option<PruningPredicateBuilder>,
+    predicate_builder: &Option<PruningPredicate>,
     batch_size: usize,
     response_tx: Sender<ArrowResult<RecordBatch>>,
     limit: Option<usize>,
@@ -651,7 +718,7 @@ mod tests {
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
+        let predicate_builder = PruningPredicate::try_new(&expr, Arc::new(schema))?;
 
         let schema_descr = get_test_schema_descr(vec![("c1", PhysicalType::INT32)]);
         let rgm1 = get_row_group_meta_data(
@@ -681,7 +748,7 @@ mod tests {
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
+        let predicate_builder = PruningPredicate::try_new(&expr, Arc::new(schema))?;
 
         let schema_descr = get_test_schema_descr(vec![("c1", PhysicalType::INT32)]);
         let rgm1 = get_row_group_meta_data(
@@ -713,11 +780,11 @@ mod tests {
         // test row group predicate with partially supported expression
         // int > 1 and int % 2 => c1_max > 1 and true
         let expr = col("c1").gt(lit(15)).and(col("c2").modulus(lit(2)));
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
-        ]);
-        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema.clone())?;
+        ]));
+        let predicate_builder = PruningPredicate::try_new(&expr, schema.clone())?;
 
         let schema_descr = get_test_schema_descr(vec![
             ("c1", PhysicalType::INT32),
@@ -752,7 +819,7 @@ mod tests {
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
         let expr = col("c1").gt(lit(15)).or(col("c2").modulus(lit(2)));
-        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
+        let predicate_builder = PruningPredicate::try_new(&expr, schema)?;
         let row_group_predicate =
             build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
@@ -772,11 +839,11 @@ mod tests {
         // where a null array is generated for some statistics columns
         // int > 1 and bool = true => c1_max > 1 and null
         let expr = col("c1").gt(lit(15)).and(col("c2").eq(lit(true)));
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
-        ]);
-        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
+        ]));
+        let predicate_builder = PruningPredicate::try_new(&expr, schema)?;
 
         let schema_descr = get_test_schema_descr(vec![
             ("c1", PhysicalType::INT32),
