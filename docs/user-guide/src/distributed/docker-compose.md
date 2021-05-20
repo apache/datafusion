@@ -19,12 +19,12 @@
 
 # Installing Ballista with Docker Compose
 
-Docker Compose is a convenient way to launch a cluister when testing locally. The following Docker Compose example 
-demonstrates how to start a cluster using a single process that acts as both a scheduler and an executor, with a data 
+Docker Compose is a convenient way to launch a cluister when testing locally. The following Docker Compose example
+demonstrates how to start a cluster using a single process that acts as both a scheduler and an executor, with a data
 volume mounted into the container so that Ballista can access the host file system.
 
 ```yaml
-version: '2.0'
+version: "2.0"
 services:
   etcd:
     image: quay.io/coreos/etcd:v3.4.9
@@ -41,11 +41,9 @@ services:
       - "50051:50051"
     volumes:
       - ./data:/data
-
-
 ```
 
-With the above content saved to a `docker-compose.yaml` file, the following command can be used to start the single 
+With the above content saved to a `docker-compose.yaml` file, the following command can be used to start the single
 node cluster.
 
 ```bash

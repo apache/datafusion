@@ -21,57 +21,57 @@
 
 This section describes how you can get started at developing DataFusion.
 
-For information on developing with Ballista, see the 
-[Ballista developer documentation](ballista/docs/README.md). 
+For information on developing with Ballista, see the
+[Ballista developer documentation](ballista/docs/README.md).
 
 ### Bootstrap environment
 
 DataFusion is written in Rust and it uses a standard rust toolkit:
 
-* `cargo build`
-* `cargo fmt` to format the code
-* `cargo test` to test
-* etc.
+- `cargo build`
+- `cargo fmt` to format the code
+- `cargo test` to test
+- etc.
 
 ## How to add a new scalar function
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
 
-* Add the actual implementation of the function:
-  * [here](datafusion/src/physical_plan/string_expressions.rs) for string functions
-  * [here](datafusion/src/physical_plan/math_expressions.rs) for math functions
-  * [here](datafusion/src/physical_plan/datetime_expressions.rs) for datetime functions
-  * create a new module [here](datafusion/src/physical_plan) for other functions
-* In [src/physical_plan/functions](datafusion/src/physical_plan/functions.rs), add:
-  * a new variant to `BuiltinScalarFunction`
-  * a new entry to `FromStr` with the name of the function as called by SQL
-  * a new line in `return_type` with the expected return type of the function, given an incoming type
-  * a new line in `signature` with the signature of the function (number and types of its arguments)
-  * a new line in `create_physical_expr` mapping the built-in to the implementation
-  * tests to the function.
-* In [tests/sql.rs](datafusion/tests/sql.rs), add a new test where the function is called through SQL against well known data and returns the expected result.
-* In [src/logical_plan/expr](datafusion/src/logical_plan/expr.rs), add:
-  * a new entry of the `unary_scalar_expr!` macro for the new function.
-* In [src/logical_plan/mod](datafusion/src/logical_plan/mod.rs), add:
-  * a new entry in the `pub use expr::{}` set.
+- Add the actual implementation of the function:
+  - [here](datafusion/src/physical_plan/string_expressions.rs) for string functions
+  - [here](datafusion/src/physical_plan/math_expressions.rs) for math functions
+  - [here](datafusion/src/physical_plan/datetime_expressions.rs) for datetime functions
+  - create a new module [here](datafusion/src/physical_plan) for other functions
+- In [src/physical_plan/functions](datafusion/src/physical_plan/functions.rs), add:
+  - a new variant to `BuiltinScalarFunction`
+  - a new entry to `FromStr` with the name of the function as called by SQL
+  - a new line in `return_type` with the expected return type of the function, given an incoming type
+  - a new line in `signature` with the signature of the function (number and types of its arguments)
+  - a new line in `create_physical_expr` mapping the built-in to the implementation
+  - tests to the function.
+- In [tests/sql.rs](datafusion/tests/sql.rs), add a new test where the function is called through SQL against well known data and returns the expected result.
+- In [src/logical_plan/expr](datafusion/src/logical_plan/expr.rs), add:
+  - a new entry of the `unary_scalar_expr!` macro for the new function.
+- In [src/logical_plan/mod](datafusion/src/logical_plan/mod.rs), add:
+  - a new entry in the `pub use expr::{}` set.
 
 ## How to add a new aggregate function
 
 Below is a checklist of what you need to do to add a new aggregate function to DataFusion:
 
-* Add the actual implementation of an `Accumulator` and `AggregateExpr`:
-  * [here](datafusion/src/physical_plan/string_expressions.rs) for string functions
-  * [here](datafusion/src/physical_plan/math_expressions.rs) for math functions
-  * [here](datafusion/src/physical_plan/datetime_expressions.rs) for datetime functions
-  * create a new module [here](datafusion/src/physical_plan) for other functions
-* In [src/physical_plan/aggregates](datafusion/src/physical_plan/aggregates.rs), add:
-  * a new variant to `BuiltinAggregateFunction`
-  * a new entry to `FromStr` with the name of the function as called by SQL
-  * a new line in `return_type` with the expected return type of the function, given an incoming type
-  * a new line in `signature` with the signature of the function (number and types of its arguments)
-  * a new line in `create_aggregate_expr` mapping the built-in to the implementation
-  * tests to the function.
-* In [tests/sql.rs](datafusion/tests/sql.rs), add a new test where the function is called through SQL against well known data and returns the expected result.
+- Add the actual implementation of an `Accumulator` and `AggregateExpr`:
+  - [here](datafusion/src/physical_plan/string_expressions.rs) for string functions
+  - [here](datafusion/src/physical_plan/math_expressions.rs) for math functions
+  - [here](datafusion/src/physical_plan/datetime_expressions.rs) for datetime functions
+  - create a new module [here](datafusion/src/physical_plan) for other functions
+- In [src/physical_plan/aggregates](datafusion/src/physical_plan/aggregates.rs), add:
+  - a new variant to `BuiltinAggregateFunction`
+  - a new entry to `FromStr` with the name of the function as called by SQL
+  - a new line in `return_type` with the expected return type of the function, given an incoming type
+  - a new line in `signature` with the signature of the function (number and types of its arguments)
+  - a new line in `create_aggregate_expr` mapping the built-in to the implementation
+  - tests to the function.
+- In [tests/sql.rs](datafusion/tests/sql.rs), add a new test where the function is called through SQL against well known data and returns the expected result.
 
 ## How to display plans graphically
 
