@@ -16,19 +16,19 @@
   specific language governing permissions and limitations
   under the License.
 -->
+
 # Ballista Developer Documentation
 
-This directory contains documentation for developers that are contributing to Ballista. If you are looking for 
-end-user documentation for a published release, please start with the 
+This directory contains documentation for developers that are contributing to Ballista. If you are looking for
+end-user documentation for a published release, please start with the
 [DataFusion User Guide](../../docs/user-guide) instead.
 
 ## Architecture & Design
 
-- Read the [Architecture Overview](architecture.md) to get an understanding of the scheduler and executor 
+- Read the [Architecture Overview](architecture.md) to get an understanding of the scheduler and executor
   processes and how distributed query execution works.
 
 ## Build, Test, Release
 
 - Setting up a [development environment](dev-env.md).
 - [Integration Testing](integration-testing.md)
-
