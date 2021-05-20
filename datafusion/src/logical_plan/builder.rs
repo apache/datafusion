@@ -294,6 +294,7 @@ impl LogicalPlanBuilder {
     pub fn window(
         &self,
         window_expr: impl IntoIterator<Item = Expr>,
+        // filter: impl IntoIterator<Item = Expr>,
         // partition_by_expr: impl IntoIterator<Item = Expr>,
         // order_by_expr: impl IntoIterator<Item = Expr>,
         // window_frame: Option<WindowFrame>,
