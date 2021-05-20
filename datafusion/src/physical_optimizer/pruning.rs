@@ -67,11 +67,6 @@ impl PruningPredicateBuilder {
         let mut stat_column_req = Vec::<(String, StatisticsType, Field)>::new();
         let logical_predicate_expr =
             build_predicate_expression(expr, &schema, &mut stat_column_req)?;
-        // println!(
-        //     "PruningPredicateBuilder::try_new, logical_predicate_expr: {:?}",
-        //     logical_predicate_expr
-        // );
-        // build physical predicate expression
         let stat_fields = stat_column_req
             .iter()
             .map(|(_, _, f)| f.clone())
@@ -83,10 +78,6 @@ impl PruningPredicateBuilder {
             &stat_schema,
             &execution_context_state,
         )?;
-        // println!(
-        //     "PruningPredicateBuilder::try_new, predicate_expr: {:?}",
-        //     predicate_expr
-        // );
         Ok(Self {
             schema,
             predicate_expr,
@@ -248,17 +239,9 @@ impl<'a> StatisticsExpressionBuilder<'a> {
         }
     }
 
-    // fn column_expr(&self) -> &Expr {
-    //     self.column_expr
-    // }
-
     fn scalar_expr(&self) -> &Expr {
         self.scalar_expr
     }
-
-    // fn column_name(&self) -> &String {
-    //     &self.column_name
-    // }
 
     fn is_stat_column_missing(&self, statistics_type: StatisticsType) -> bool {
         self.stat_column_req
