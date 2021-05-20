@@ -289,6 +289,8 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a window
+    /// 
+    /// NOTE: this feature is under development and this API will be changing 
     pub fn window(
         &self,
         window_expr: impl IntoIterator<Item = Expr>,
