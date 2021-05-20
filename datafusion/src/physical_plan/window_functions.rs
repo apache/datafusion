@@ -101,7 +101,7 @@ impl FromStr for BuiltInWindowFunction {
             "lead" => BuiltInWindowFunction::Lead,
             _ => {
                 return Err(DataFusionError::Plan(format!(
-                    "There is no built-in function named {}",
+                    "There is no built-in window function named {}",
                     name
                 )))
             }
