@@ -32,7 +32,7 @@ DataFusion supports the following syntax for queries:
 [ [GROUP BY](#group-by-clause) grouping_element [, ...] ] <br/>
 [ [HAVING](#having-clause) condition] <br/>
 [ [UNION](#union-clause) [ ALL | select ] <br/>
-[ [ORDER BY](#order-by-clause) expression [ ASC | DESC ] [, ...] ] <br/>
+[ [ORDER BY](#order-by-clause) expression [ ASC | DESC ][, ...] ] <br/>
 [ [LIMIT](#limit-clause) count ] <br/>
 
 </code>

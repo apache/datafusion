@@ -16,6 +16,7 @@
   specific language governing permissions and limitations
   under the License.
 -->
+
 # Example Usage
 
 Run a SQL query against data stored in a CSV:

@@ -16,6 +16,7 @@
   specific language governing permissions and limitations
   under the License.
 -->
+
 # DataFusion User Guide Source
 
 This directory contains the sources for the DataFusion user guide.
