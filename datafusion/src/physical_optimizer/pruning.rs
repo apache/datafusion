@@ -244,11 +244,10 @@ impl<'a> StatisticsExpressionBuilder<'a> {
     }
 
     fn is_stat_column_missing(&self, statistics_type: StatisticsType) -> bool {
-        self.stat_column_req
+        !self
+            .stat_column_req
             .iter()
-            .filter(|(c, t, _f)| c == &self.column_name && t == &statistics_type)
-            .count()
-            == 0
+            .any(|(c, t, _f)| c == &self.column_name && t == &statistics_type)
     }
 
     fn stat_column_expr(
