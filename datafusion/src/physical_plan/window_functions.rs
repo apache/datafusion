@@ -72,33 +72,51 @@ impl fmt::Display for WindowFunction {
 /// An aggregate function that is part of a built-in window function
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuiltInWindowFunction {
-    /// row number
+    /// number of the current row within its partition, counting from 1
     RowNumber,
-    /// rank
+    /// rank of the current row with gaps; same as row_number of its first peer
     Rank,
-    /// dense rank
+    /// ank of the current row without gaps; this function counts peer groups
     DenseRank,
-    /// lag
+    /// relative rank of the current row: (rank - 1) / (total rows - 1)
+    PercentRank,
+    /// relative rank of the current row: (number of rows preceding or peer with current row) / (total rows)
+    CumeDist,
+    /// integer ranging from 1 to the argument value, dividing the partition as equally as possible
+    Ntile,
+    /// returns value evaluated at the row that is offset rows before the current row within the partition;
+    /// if there is no such row, instead return default (which must be of the same type as value).
+    /// Both offset and default are evaluated with respect to the current row.
+    /// If omitted, offset defaults to 1 and default to null
     Lag,
-    /// lead
+    /// returns value evaluated at the row that is offset rows after the current row within the partition;
+    /// if there is no such row, instead return default (which must be of the same type as value).
+    /// Both offset and default are evaluated with respect to the current row.
+    /// If omitted, offset defaults to 1 and default to null
     Lead,
-    /// first value
+    /// returns value evaluated at the row that is the first row of the window frame
     FirstValue,
-    /// last value
+    /// returns value evaluated at the row that is the last row of the window frame
     LastValue,
+    /// returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row
+    NthValue,
 }
 
 impl FromStr for BuiltInWindowFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltInWindowFunction> {
-        Ok(match name {
+        Ok(match name.to_lowercase().as_str() {
             "row_number" => BuiltInWindowFunction::RowNumber,
             "rank" => BuiltInWindowFunction::Rank,
             "dense_rank" => BuiltInWindowFunction::DenseRank,
-            "first_value" => BuiltInWindowFunction::FirstValue,
-            "last_value" => BuiltInWindowFunction::LastValue,
+            "percent_rank" => BuiltInWindowFunction::PercentRank,
+            "cume_dist" => BuiltInWindowFunction::CumeDist,
+            "ntile" => BuiltInWindowFunction::Ntile,
             "lag" => BuiltInWindowFunction::Lag,
             "lead" => BuiltInWindowFunction::Lead,
+            "first_value" => BuiltInWindowFunction::FirstValue,
+            "last_value" => BuiltInWindowFunction::LastValue,
+            "nth_value" => BuiltInWindowFunction::NthValue,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in window function named {}",
@@ -123,10 +141,15 @@ pub fn return_type(fun: &WindowFunction, arg_types: &[DataType]) -> Result<DataT
             BuiltInWindowFunction::RowNumber
             | BuiltInWindowFunction::Rank
             | BuiltInWindowFunction::DenseRank => Ok(DataType::UInt64),
+            BuiltInWindowFunction::PercentRank | BuiltInWindowFunction::CumeDist => {
+                Ok(DataType::Float64)
+            }
+            BuiltInWindowFunction::Ntile => Ok(DataType::UInt32),
             BuiltInWindowFunction::Lag
             | BuiltInWindowFunction::Lead
             | BuiltInWindowFunction::FirstValue
-            | BuiltInWindowFunction::LastValue => Ok(arg_types[0].clone()),
+            | BuiltInWindowFunction::LastValue
+            | BuiltInWindowFunction::NthValue => Ok(arg_types[0].clone()),
         },
     }
 }
@@ -139,11 +162,42 @@ fn signature(fun: &WindowFunction) -> Signature {
         WindowFunction::BuiltInWindowFunction(fun) => match fun {
             BuiltInWindowFunction::RowNumber
             | BuiltInWindowFunction::Rank
-            | BuiltInWindowFunction::DenseRank => Signature::Any(0),
+            | BuiltInWindowFunction::DenseRank
+            | BuiltInWindowFunction::PercentRank
+            | BuiltInWindowFunction::CumeDist => Signature::Any(0),
             BuiltInWindowFunction::Lag
             | BuiltInWindowFunction::Lead
             | BuiltInWindowFunction::FirstValue
             | BuiltInWindowFunction::LastValue => Signature::Any(1),
+            BuiltInWindowFunction::Ntile => Signature::Exact(vec![DataType::UInt64]),
+            BuiltInWindowFunction::NthValue => Signature::Any(2),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field};
+
+    #[test]
+    fn test_window_function_from_str() -> Result<()> {
+        assert_eq!(
+            WindowFunction::from_str("max")?,
+            WindowFunction::AggregateFunction(AggregateFunction::Max)
+        );
+        assert_eq!(
+            WindowFunction::from_str("min")?,
+            WindowFunction::AggregateFunction(AggregateFunction::Min)
+        );
+        assert_eq!(
+            WindowFunction::from_str("avg")?,
+            WindowFunction::AggregateFunction(AggregateFunction::Avg)
+        );
+        assert_eq!(
+            WindowFunction::from_str("cum_dist")?,
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::CumeDist)
+        );
+        Ok(())
     }
 }

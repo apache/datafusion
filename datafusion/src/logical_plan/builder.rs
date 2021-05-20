@@ -289,18 +289,30 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a window
-    /// 
-    /// NOTE: this feature is under development and this API will be changing 
+    ///
+    /// NOTE: this feature is under development and this API will be changing
+    ///
+    /// - https://github.com/apache/arrow-datafusion/issues/359 basic structure
+    /// - https://github.com/apache/arrow-datafusion/issues/298 empty over clause
+    /// - https://github.com/apache/arrow-datafusion/issues/299 with partition clause
+    /// - https://github.com/apache/arrow-datafusion/issues/360 with order by
+    /// - https://github.com/apache/arrow-datafusion/issues/361 with window frame
     pub fn window(
         &self,
         window_expr: impl IntoIterator<Item = Expr>,
-        // filter: impl IntoIterator<Item = Expr>,
+        // FIXME: implement next
+        // filter_by_expr: impl IntoIterator<Item = Expr>,
+        // FIXME: implement next
         // partition_by_expr: impl IntoIterator<Item = Expr>,
+        // FIXME: implement next
         // order_by_expr: impl IntoIterator<Item = Expr>,
+        // FIXME: implement next
         // window_frame: Option<WindowFrame>,
     ) -> Result<Self> {
         let window_expr = window_expr.into_iter().collect::<Vec<Expr>>();
+        // FIXME: implement next
         // let partition_by_expr = partition_by_expr.into_iter().collect::<Vec<Expr>>();
+        // FIXME: implement next
         // let order_by_expr = order_by_expr.into_iter().collect::<Vec<Expr>>();
         let all_expr = window_expr.iter();
         validate_unique_names("Windows", all_expr.clone(), self.plan.schema())?;

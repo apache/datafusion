@@ -1356,6 +1356,9 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
                 BuiltInWindowFunction::RowNumber
             }
             protobuf::BuiltInWindowFunction::Rank => BuiltInWindowFunction::Rank,
+            protobuf::BuiltInWindowFunction::PercentRank => {
+                BuiltInWindowFunction::PercentRank
+            }
             protobuf::BuiltInWindowFunction::DenseRank => {
                 BuiltInWindowFunction::DenseRank
             }
@@ -1364,6 +1367,9 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
             protobuf::BuiltInWindowFunction::FirstValue => {
                 BuiltInWindowFunction::FirstValue
             }
+            protobuf::BuiltInWindowFunction::CumeDist => BuiltInWindowFunction::CumeDist,
+            protobuf::BuiltInWindowFunction::Ntile => BuiltInWindowFunction::Ntile,
+            protobuf::BuiltInWindowFunction::NthValue => BuiltInWindowFunction::NthValue,
             protobuf::BuiltInWindowFunction::LastValue => {
                 BuiltInWindowFunction::LastValue
             }
