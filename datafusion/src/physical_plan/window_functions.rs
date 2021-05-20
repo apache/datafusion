@@ -109,7 +109,7 @@ impl FromStr for BuiltInWindowFunction {
     }
 }
 
-/// Returns the datatype of the scalar function
+/// Returns the datatype of the window function
 pub fn return_type(fun: &WindowFunction, arg_types: &[DataType]) -> Result<DataType> {
     // Note that this function *must* return the same type that the respective physical expression returns
     // or the execution panics.
