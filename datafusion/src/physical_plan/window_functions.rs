@@ -178,7 +178,36 @@ fn signature(fun: &WindowFunction) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field};
+
+    #[test]
+    fn test_window_function_from_str_to_str_round_trip_eq() -> Result<()> {
+        let names = vec![
+            "row_number",
+            "rank",
+            "dense_rank",
+            "percent_rank",
+            "cume_dist",
+            "ntile",
+            "lag",
+            "lead",
+            "first_value",
+            "last_value",
+            "nth_value",
+            "min",
+            "max",
+            "count",
+            "avg",
+            "sum",
+        ];
+        for name in names {
+            let fun = WindowFunction::from_str(name)?;
+            assert_eq!(fun.to_string(), name.to_uppercase());
+
+            let fun2 = WindowFunction::from_str(name.to_uppercase().as_str())?;
+            assert_eq!(fun, fun2);
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_window_function_from_str() -> Result<()> {
@@ -198,6 +227,76 @@ mod tests {
             WindowFunction::from_str("cum_dist")?,
             WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::CumeDist)
         );
+        assert_eq!(
+            WindowFunction::from_str("first_value")?,
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue)
+        );
+        assert_eq!(
+            WindowFunction::from_str("LAST_value")?,
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::LastValue)
+        );
+        assert_eq!(
+            WindowFunction::from_str("LAG")?,
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lag)
+        );
+        assert_eq!(
+            WindowFunction::from_str("LEAD")?,
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lead)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_count_return_type() -> Result<()> {
+        let fun = WindowFunction::from_str("count")?;
+        let observed = return_type(&fun, &[DataType::Utf8])?;
+        assert_eq!(DataType::UInt64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_value_return_type() -> Result<()> {
+        let fun = WindowFunction::from_str("first_value")?;
+        let observed = return_type(&fun, &[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_last_value_return_type() -> Result<()> {
+        let fun = WindowFunction::from_str("last_value")?;
+        let observed = return_type(&fun, &[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lead_return_type() -> Result<()> {
+        let fun = WindowFunction::from_str("lead")?;
+        let observed = return_type(&fun, &[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lag_return_type() -> Result<()> {
+        let fun = WindowFunction::from_str("lag")?;
+        let observed = return_type(&fun, &[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cume_dist_return_type() -> Result<()> {
+        let fun = WindowFunction::from_str("cume_dist")?;
+        let observed = return_type(&fun, &[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
         Ok(())
     }
 }
