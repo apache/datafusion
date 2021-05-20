@@ -2721,9 +2721,29 @@ mod tests {
     }
 
     #[test]
+    fn empty_over_multiple() {
+        let sql = "SELECT order_id, MAX(qty) OVER (), CUMe_dist(qty), lag(qty) OVER () from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty Multiply Float64(1.1))\
+        \n  WindowAggr: windowExpr=[[MAX(#qty Multiply Float64(1.1))]] partitionBy=[], orderBy=[]\
+        \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn over_partition_by_not_supported() {
         let sql =
             "SELECT order_id, MAX(delivered) OVER (PARTITION BY order_id) from orders";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "NotImplemented(\"Unsupported OVER clause (PARTITION BY order_id)\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn over_order_by_not_supported() {
+        let sql = "SELECT order_id, MAX(delivered) OVER (order BY order_id) from orders";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             "NotImplemented(\"Unsupported OVER clause (PARTITION BY order_id)\")",

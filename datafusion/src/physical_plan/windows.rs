@@ -59,7 +59,7 @@ pub fn create_window_expr(
         })),
         WindowFunction::BuiltInWindowFunction(fun) => {
             Err(DataFusionError::NotImplemented(format!(
-                "window funtion with {:?} not implemented",
+                "window function with {:?} not implemented",
                 fun
             )))
         }
