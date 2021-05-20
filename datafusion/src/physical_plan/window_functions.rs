@@ -40,9 +40,12 @@ pub enum WindowFunction {
 impl FromStr for WindowFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<WindowFunction> {
-        if let Ok(aggregate) = AggregateFunction::from_str(name) {
+        let name = name.to_lowercase();
+        if let Ok(aggregate) = AggregateFunction::from_str(name.as_str()) {
             Ok(WindowFunction::AggregateFunction(aggregate))
-        } else if let Ok(built_in_function) = BuiltInWindowFunction::from_str(name) {
+        } else if let Ok(built_in_function) =
+            BuiltInWindowFunction::from_str(name.as_str())
+        {
             Ok(WindowFunction::BuiltInWindowFunction(built_in_function))
         } else {
             Err(DataFusionError::Plan(format!(
@@ -180,7 +183,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_window_function_from_str_to_str_round_trip_eq() -> Result<()> {
+    fn test_window_function_case_insensitive() -> Result<()> {
         let names = vec![
             "row_number",
             "rank",
@@ -201,8 +204,6 @@ mod tests {
         ];
         for name in names {
             let fun = WindowFunction::from_str(name)?;
-            assert_eq!(fun.to_string(), name.to_uppercase());
-
             let fun2 = WindowFunction::from_str(name.to_uppercase().as_str())?;
             assert_eq!(fun, fun2);
         }
