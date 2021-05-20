@@ -779,6 +779,8 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 input,
                 window_expr,
                 // FIXME implement next
+                // filter_by_expr,
+                // FIXME implement next
                 // partition_by_expr,
                 // FIXME implement next
                 // order_by_expr,
@@ -787,6 +789,8 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 ..
             } => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+                // FIXME: implement
+                // let filter_by_expr = vec![];
                 // FIXME: implement
                 let partition_by_expr = vec![];
                 // FIXME: implement

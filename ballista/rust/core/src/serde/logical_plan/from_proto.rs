@@ -94,11 +94,12 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                 //     .iter()
                 //     .map(|expr| expr.try_into())
                 //     .collect::<Result<Vec<_>, _>>()?;
-                // // FIXME parse the window_frame data
+                // // FIXME: add filter by expr
+                // // FIXME: parse the window_frame data
                 // let window_frame = None;
                 LogicalPlanBuilder::from(&input)
                     .window(
-                        window_expr, /*, partition_by_expr, order_by_expr, window_frame*/
+                        window_expr, /* filter_by_expr, partition_by_expr, order_by_expr, window_frame*/
                     )?
                     .build()
                     .map_err(|e| e.into())

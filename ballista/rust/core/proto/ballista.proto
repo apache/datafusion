@@ -324,6 +324,7 @@ message WindowNode {
   oneof window_frame {
     WindowFrame frame = 5;
   }
+  // TODO add filter by expr
 }
 
 enum WindowFrameUnits {

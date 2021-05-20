@@ -198,6 +198,8 @@ fn optimize_plan(
             window_expr,
             input,
             // FIXME implement next
+            // filter_by_expr,
+            // FIXME implement next
             // partition_by_expr,
             // FIXME implement next
             // order_by_expr,

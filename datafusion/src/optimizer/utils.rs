@@ -191,6 +191,8 @@ pub fn from_plan(
         },
         LogicalPlan::Window {
             // FIXME implement next
+            // filter_by_expr,
+            // FIXME implement next
             // partition_by_expr,
             // FIXME implement next
             // order_by_expr,
