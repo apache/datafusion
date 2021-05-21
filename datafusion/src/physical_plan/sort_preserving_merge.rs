@@ -422,7 +422,7 @@ impl SortPreservingMergeStream {
                 let mut array_data = MutableArrayData::new(
                     arrays,
                     field.is_nullable(),
-                    self.target_batch_size,
+                    self.in_progress.len(),
                 );
 
                 for row_index in &self.in_progress {
