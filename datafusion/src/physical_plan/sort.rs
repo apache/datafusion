@@ -99,11 +99,11 @@ impl ExecutionPlan for SortExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
+        self.input.output_partitioning()
     }
 
     fn required_child_distribution(&self) -> Distribution {
-        Distribution::SinglePartition
+        Distribution::UnspecifiedDistribution
     }
 
     fn with_new_children(
@@ -122,21 +122,7 @@ impl ExecutionPlan for SortExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
-                "SortExec invalid partition {}",
-                partition
-            )));
-        }
-
-        // sort needs to operate on a single partition currently
-        if 1 != self.input.output_partitioning().partition_count() {
-            return Err(DataFusionError::Internal(
-                "SortExec requires a single input partition".to_owned(),
-            ));
-        }
-
-        let input = self.input.execute(0).await?;
+        let input = self.input.execute(partition).await?;
 
         Ok(Box::pin(SortStream::new(
             input,
