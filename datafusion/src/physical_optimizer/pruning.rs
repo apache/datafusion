@@ -96,7 +96,7 @@ impl PruningPredicateBuilder {
     ///
     /// `true`: The container MAY contain rows that match the predicate
     ///
-    /// `false`: The container definitely does NOT contain rows that match the predicate
+    /// `false`: The container MUST NOT contain rows that match the predicate
     ///
     /// Note this function takes a slice of statistics as a parameter
     /// to amortize the cost of the evaluation of the predicate
