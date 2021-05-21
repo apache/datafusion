@@ -805,11 +805,9 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
     // FIXME: so far the WindowAggExec is not implemented
     // and the current behavior is to throw not implemented exception
 
-    let plan = ctx.create_logical_plan(&sql)?;
-    let plan = ctx.optimize(&plan)?;
-    let plan = ctx.create_physical_plan(&plan)?;
-    let result = collect(plan).await;
-    assert!(result.is_err());
+    let result = execute(&mut ctx, sql).await;
+    let expected: Vec<Vec<String>> = vec![];
+    assert_eq!(result, expected);
     Ok(())
 }
 
