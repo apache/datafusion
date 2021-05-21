@@ -35,6 +35,7 @@ use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::HashJoinExec;
 use datafusion::physical_plan::merge::MergeExec;
+use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::ExecutionPlan;
 use log::info;
 
@@ -150,6 +151,13 @@ impl DistributedPlanner {
         } else if let Some(join) = execution_plan.as_any().downcast_ref::<HashJoinExec>()
         {
             Ok((join.with_new_children(children)?, stages))
+        } else if let Some(window) =
+            execution_plan.as_any().downcast_ref::<WindowAggExec>()
+        {
+            Err(BallistaError::NotImplemented(format!(
+                "WindowAggExec with window {:?}",
+                window
+            )))
         } else {
             // TODO check for compatible partitioning schema, not just count
             if execution_plan.output_partitioning().partition_count()

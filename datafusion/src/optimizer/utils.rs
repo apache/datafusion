@@ -78,6 +78,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             Expr::Sort { .. } => {}
             Expr::ScalarFunction { .. } => {}
             Expr::ScalarUDF { .. } => {}
+            Expr::WindowFunction { .. } => {}
             Expr::AggregateFunction { .. } => {}
             Expr::AggregateUDF { .. } => {}
             Expr::InList { .. } => {}
@@ -188,6 +189,23 @@ pub fn from_plan(
                 input: Arc::new(inputs[0].clone()),
             }),
         },
+        LogicalPlan::Window {
+            // FIXME implement next
+            // filter_by_expr,
+            // FIXME implement next
+            // partition_by_expr,
+            // FIXME implement next
+            // order_by_expr,
+            // FIXME implement next
+            // window_frame,
+            window_expr,
+            schema,
+            ..
+        } => Ok(LogicalPlan::Window {
+            input: Arc::new(inputs[0].clone()),
+            window_expr: expr[0..window_expr.len()].to_vec(),
+            schema: schema.clone(),
+        }),
         LogicalPlan::Aggregate {
             group_expr, schema, ..
         } => Ok(LogicalPlan::Aggregate {
@@ -247,6 +265,7 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         Expr::IsNotNull(e) => Ok(vec![e.as_ref().to_owned()]),
         Expr::ScalarFunction { args, .. } => Ok(args.clone()),
         Expr::ScalarUDF { args, .. } => Ok(args.clone()),
+        Expr::WindowFunction { args, .. } => Ok(args.clone()),
         Expr::AggregateFunction { args, .. } => Ok(args.clone()),
         Expr::AggregateUDF { args, .. } => Ok(args.clone()),
         Expr::Case {
@@ -316,6 +335,10 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
             args: expressions.to_vec(),
         }),
         Expr::ScalarUDF { fun, .. } => Ok(Expr::ScalarUDF {
+            fun: fun.clone(),
+            args: expressions.to_vec(),
+        }),
+        Expr::WindowFunction { fun, .. } => Ok(Expr::WindowFunction {
             fun: fun.clone(),
             args: expressions.to_vec(),
         }),

@@ -30,6 +30,7 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{DFField, DFSchema};
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
+    window_functions,
 };
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
@@ -190,6 +191,13 @@ pub enum Expr {
         /// Whether this is a DISTINCT aggregation or not
         distinct: bool,
     },
+    /// Represents the call of a window function with arguments.
+    WindowFunction {
+        /// Name of the function
+        fun: window_functions::WindowFunction,
+        /// List of expressions to feed to the functions as arguments
+        args: Vec<Expr>,
+    },
     /// aggregate function
     AggregateUDF {
         /// The function
@@ -243,6 +251,13 @@ impl Expr {
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                 functions::return_type(fun, &data_types)
+            }
+            Expr::WindowFunction { fun, args, .. } => {
+                let data_types = args
+                    .iter()
+                    .map(|e| e.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
+                window_functions::return_type(fun, &data_types)
             }
             Expr::AggregateFunction { fun, args, .. } => {
                 let data_types = args
@@ -316,6 +331,7 @@ impl Expr {
             Expr::TryCast { .. } => Ok(true),
             Expr::ScalarFunction { .. } => Ok(true),
             Expr::ScalarUDF { .. } => Ok(true),
+            Expr::WindowFunction { .. } => Ok(true),
             Expr::AggregateFunction { .. } => Ok(true),
             Expr::AggregateUDF { .. } => Ok(true),
             Expr::Not(expr) => expr.nullable(input_schema),
@@ -571,6 +587,9 @@ impl Expr {
             Expr::ScalarUDF { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
+            Expr::WindowFunction { args, .. } => args
+                .iter()
+                .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
             Expr::AggregateFunction { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
@@ -701,6 +720,10 @@ impl Expr {
                 fun,
             },
             Expr::ScalarUDF { args, fun } => Expr::ScalarUDF {
+                args: rewrite_vec(args, rewriter)?,
+                fun,
+            },
+            Expr::WindowFunction { args, fun } => Expr::WindowFunction {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
             },
@@ -1151,7 +1174,7 @@ pub fn create_udf(
 }
 
 /// Creates a new UDAF with a specific signature, state type and return type.
-/// The signature and state type must match the `Acumulator's implementation`.
+/// The signature and state type must match the `Accumulator's implementation`.
 #[allow(clippy::rc_buffer)]
 pub fn create_udaf(
     name: &str,
@@ -1244,6 +1267,9 @@ impl fmt::Debug for Expr {
             }
             Expr::ScalarUDF { fun, ref args, .. } => {
                 fmt_function(f, &fun.name, false, args)
+            }
+            Expr::WindowFunction { fun, ref args, .. } => {
+                fmt_function(f, &fun.to_string(), false, args)
             }
             Expr::AggregateFunction {
                 fun,
@@ -1360,6 +1386,9 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::ScalarUDF { fun, args, .. } => {
             create_function_name(&fun.name, false, args, input_schema)
         }
+        Expr::WindowFunction { fun, args } => {
+            create_function_name(&fun.to_string(), false, args, input_schema)
+        }
         Expr::AggregateFunction {
             fun,
             distinct,
@@ -1387,7 +1416,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             }
         }
         other => Err(DataFusionError::NotImplemented(format!(
-            "Physical plan does not support logical expression {:?}",
+            "Create name does not support logical expression {:?}",
             other
         ))),
     }

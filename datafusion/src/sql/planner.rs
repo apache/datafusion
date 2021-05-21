@@ -35,7 +35,7 @@ use crate::{
 };
 use crate::{
     physical_plan::udf::ScalarUDF,
-    physical_plan::{aggregates, functions},
+    physical_plan::{aggregates, functions, window_functions},
     sql::parser::{CreateExternalTable, FileType, Statement as DFStatement},
 };
 
@@ -57,7 +57,8 @@ use super::{
     parser::DFParser,
     utils::{
         can_columns_satisfy_exprs, expand_wildcard, expr_as_column_expr, extract_aliases,
-        find_aggregate_exprs, find_column_exprs, rebase_expr, resolve_aliases_to_exprs,
+        find_aggregate_exprs, find_column_exprs, find_window_exprs, rebase_expr,
+        resolve_aliases_to_exprs,
     },
 };
 
@@ -413,7 +414,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ))
             }
             JoinConstraint::None => Err(DataFusionError::NotImplemented(
-                "NONE contraint is not supported".to_string(),
+                "NONE constraint is not supported".to_string(),
             )),
         }
     }
@@ -624,15 +625,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
+        // window function
+        let window_func_exprs = find_window_exprs(&select_exprs_post_aggr);
+
+        let (plan, exprs) = if window_func_exprs.is_empty() {
+            (plan, select_exprs_post_aggr)
+        } else {
+            self.window(&plan, window_func_exprs, &select_exprs_post_aggr)?
+        };
+
         let plan = if select.distinct {
             return LogicalPlanBuilder::from(&plan)
-                .aggregate(select_exprs_post_aggr, vec![])?
+                .aggregate(exprs, vec![])?
                 .build();
         } else {
             plan
         };
 
-        self.project(&plan, select_exprs_post_aggr)
+        self.project(&plan, exprs)
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
@@ -657,10 +667,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Wrap a plan in a projection
     fn project(&self, input: &LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(&input.schema(), &expr)?;
-
         LogicalPlanBuilder::from(input).project(expr)?.build()
     }
 
+    /// Wrap a plan in a window
+    fn window(
+        &self,
+        input: &LogicalPlan,
+        window_exprs: Vec<Expr>,
+        select_exprs: &[Expr],
+    ) -> Result<(LogicalPlan, Vec<Expr>)> {
+        let plan = LogicalPlanBuilder::from(input)
+            .window(window_exprs)?
+            .build()?;
+        let select_exprs = select_exprs
+            .iter()
+            .map(|expr| expr_as_column_expr(&expr, &plan))
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        Ok((plan, select_exprs))
+    }
+
+    /// Wrap a plan in an aggregate
     fn aggregate(
         &self,
         input: &LogicalPlan,
@@ -1059,70 +1087,69 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 // first, scalar built-in
                 if let Ok(fun) = functions::BuiltinScalarFunction::from_str(&name) {
-                    let args = function
-                        .args
-                        .iter()
-                        .map(|a| self.sql_fn_arg_to_logical_expr(a))
-                        .collect::<Result<Vec<Expr>>>()?;
+                    let args = self.function_args_to_expr(function)?;
 
                     return Ok(Expr::ScalarFunction { fun, args });
                 };
 
+                // then, window function
+                if let Some(window) = &function.over {
+                    if window.partition_by.is_empty()
+                        && window.order_by.is_empty()
+                        && window.window_frame.is_none()
+                    {
+                        let fun = window_functions::WindowFunction::from_str(&name);
+                        if let Ok(window_functions::WindowFunction::AggregateFunction(
+                            aggregate_fun,
+                        )) = fun
+                        {
+                            return Ok(Expr::WindowFunction {
+                                fun: window_functions::WindowFunction::AggregateFunction(
+                                    aggregate_fun.clone(),
+                                ),
+                                args: self
+                                    .aggregate_fn_to_expr(&aggregate_fun, function)?,
+                            });
+                        } else if let Ok(
+                            window_functions::WindowFunction::BuiltInWindowFunction(
+                                window_fun,
+                            ),
+                        ) = fun
+                        {
+                            return Ok(Expr::WindowFunction {
+                                fun: window_functions::WindowFunction::BuiltInWindowFunction(
+                                    window_fun,
+                                ),
+                                args:self.function_args_to_expr(function)?,
+                            });
+                        }
+                    }
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported OVER clause ({})",
+                        window
+                    )));
+                }
+
                 // next, aggregate built-ins
                 if let Ok(fun) = aggregates::AggregateFunction::from_str(&name) {
-                    let args = if fun == aggregates::AggregateFunction::Count {
-                        function
-                            .args
-                            .iter()
-                            .map(|a| match a {
-                                FunctionArg::Unnamed(SQLExpr::Value(Value::Number(
-                                    _,
-                                    _,
-                                ))) => Ok(lit(1_u8)),
-                                FunctionArg::Unnamed(SQLExpr::Wildcard) => Ok(lit(1_u8)),
-                                _ => self.sql_fn_arg_to_logical_expr(a),
-                            })
-                            .collect::<Result<Vec<Expr>>>()?
-                    } else {
-                        function
-                            .args
-                            .iter()
-                            .map(|a| self.sql_fn_arg_to_logical_expr(a))
-                            .collect::<Result<Vec<Expr>>>()?
-                    };
-
-                    return match &function.over {
-                        Some(window) => Err(DataFusionError::NotImplemented(format!(
-                            "Unsupported OVER clause ({})",
-                            window
-                        ))),
-                        _ => Ok(Expr::AggregateFunction {
-                            fun,
-                            distinct: function.distinct,
-                            args,
-                        }),
-                    };
+                    let args = self.aggregate_fn_to_expr(&fun, function)?;
+                    return Ok(Expr::AggregateFunction {
+                        fun,
+                        distinct: function.distinct,
+                        args,
+                    });
                 };
 
                 // finally, user-defined functions (UDF) and UDAF
                 match self.schema_provider.get_function_meta(&name) {
                     Some(fm) => {
-                        let args = function
-                            .args
-                            .iter()
-                            .map(|a| self.sql_fn_arg_to_logical_expr(a))
-                            .collect::<Result<Vec<Expr>>>()?;
+                        let args = self.function_args_to_expr(function)?;
 
                         Ok(Expr::ScalarUDF { fun: fm, args })
                     }
                     None => match self.schema_provider.get_aggregate_meta(&name) {
                         Some(fm) => {
-                            let args = function
-                                .args
-                                .iter()
-                                .map(|a| self.sql_fn_arg_to_logical_expr(a))
-                                .collect::<Result<Vec<Expr>>>()?;
-
+                            let args = self.function_args_to_expr(function)?;
                             Ok(Expr::AggregateUDF { fun: fm, args })
                         }
                         _ => Err(DataFusionError::Plan(format!(
@@ -1139,6 +1166,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Unsupported ast node {:?} in sqltorel",
                 sql
             ))),
+        }
+    }
+
+    fn function_args_to_expr(
+        &self,
+        function: &sqlparser::ast::Function,
+    ) -> Result<Vec<Expr>> {
+        function
+            .args
+            .iter()
+            .map(|a| self.sql_fn_arg_to_logical_expr(a))
+            .collect::<Result<Vec<Expr>>>()
+    }
+
+    fn aggregate_fn_to_expr(
+        &self,
+        fun: &aggregates::AggregateFunction,
+        function: &sqlparser::ast::Function,
+    ) -> Result<Vec<Expr>> {
+        if *fun == aggregates::AggregateFunction::Count {
+            function
+                .args
+                .iter()
+                .map(|a| match a {
+                    FunctionArg::Unnamed(SQLExpr::Value(Value::Number(_, _))) => {
+                        Ok(lit(1_u8))
+                    }
+                    FunctionArg::Unnamed(SQLExpr::Wildcard) => Ok(lit(1_u8)),
+                    _ => self.sql_fn_arg_to_logical_expr(a),
+                })
+                .collect::<Result<Vec<Expr>>>()
+        } else {
+            self.function_args_to_expr(function)
         }
     }
 
@@ -2641,13 +2701,34 @@ mod tests {
     }
 
     #[test]
-    fn over_not_supported() {
+    fn empty_over() {
         let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "NotImplemented(\"Unsupported OVER clause ()\")",
-            format!("{:?}", err)
-        );
+        let expected = "\
+        Projection: #order_id, #MAX(order_id)\
+        \n  WindowAggr: windowExpr=[[MAX(#order_id)]] partitionBy=[], orderBy=[]\
+        \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn empty_over_plus() {
+        let sql = "SELECT order_id, MAX(qty * 1.1) OVER () from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty Multiply Float64(1.1))\
+        \n  WindowAggr: windowExpr=[[MAX(#qty Multiply Float64(1.1))]] partitionBy=[], orderBy=[]\
+        \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn empty_over_multiple() {
+        let sql =
+            "SELECT order_id, MAX(qty) OVER (), min(qty) over (), aVg(qty) OVER () from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty), #MIN(qty), #AVG(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty), MIN(#qty), AVG(#qty)]] partitionBy=[], orderBy=[]\
+        \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2657,6 +2738,16 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             "NotImplemented(\"Unsupported OVER clause (PARTITION BY order_id)\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn over_order_by_not_supported() {
+        let sql = "SELECT order_id, MAX(delivered) OVER (order BY order_id) from orders";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "NotImplemented(\"Unsupported OVER clause (ORDER BY order_id)\")",
             format!("{:?}", err)
         );
     }

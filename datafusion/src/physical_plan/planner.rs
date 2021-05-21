@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use super::{
     aggregates, cross_join::CrossJoinExec, empty::EmptyExec, expressions::binary,
-    functions, hash_join::PartitionMode, udaf, union::UnionExec,
+    functions, hash_join::PartitionMode, udaf, union::UnionExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::{
@@ -39,8 +39,11 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sort::SortExec;
 use crate::physical_plan::udf;
+use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{hash_utils, Partitioning};
-use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, PhysicalPlanner};
+use crate::physical_plan::{
+    AggregateExpr, ExecutionPlan, PhysicalExpr, PhysicalPlanner, WindowExpr,
+};
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::variable::VarType;
@@ -48,10 +51,9 @@ use crate::{
     error::{DataFusionError, Result},
     physical_plan::displayable,
 };
-use arrow::{compute::can_cast_types, datatypes::DataType};
-
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
+use arrow::{compute::can_cast_types, datatypes::DataType};
 use expressions::col;
 use log::debug;
 
@@ -139,6 +141,32 @@ impl DefaultPhysicalPlanner {
                 limit,
                 ..
             } => source.scan(projection, batch_size, filters, *limit),
+            LogicalPlan::Window {
+                input, window_expr, ..
+            } => {
+                // Initially need to perform the aggregate and then merge the partitions
+                let input_exec = self.create_initial_plan(input, ctx_state)?;
+                let input_schema = input_exec.schema();
+                let physical_input_schema = input_exec.as_ref().schema();
+                let logical_input_schema = input.as_ref().schema();
+                let window_expr = window_expr
+                    .iter()
+                    .map(|e| {
+                        self.create_window_expr(
+                            e,
+                            &logical_input_schema,
+                            &physical_input_schema,
+                            ctx_state,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(Arc::new(WindowAggExec::try_new(
+                    window_expr,
+                    input_exec.clone(),
+                    input_schema,
+                )?))
+            }
             LogicalPlan::Aggregate {
                 input,
                 group_expr,
@@ -695,6 +723,37 @@ impl DefaultPhysicalPlanner {
             },
             other => Err(DataFusionError::NotImplemented(format!(
                 "Physical plan does not support logical expression {:?}",
+                other
+            ))),
+        }
+    }
+
+    /// Create a window expression from a logical expression
+    pub fn create_window_expr(
+        &self,
+        e: &Expr,
+        logical_input_schema: &DFSchema,
+        physical_input_schema: &Schema,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn WindowExpr>> {
+        // unpack aliased logical expressions, e.g. "sum(col) over () as total"
+        let (name, e) = match e {
+            Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
+            _ => (e.name(logical_input_schema)?, e),
+        };
+
+        match e {
+            Expr::WindowFunction { fun, args } => {
+                let args = args
+                    .iter()
+                    .map(|e| {
+                        self.create_physical_expr(e, physical_input_schema, ctx_state)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                windows::create_window_expr(fun, &args, physical_input_schema, name)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Invalid window expression '{:?}'",
                 other
             ))),
         }

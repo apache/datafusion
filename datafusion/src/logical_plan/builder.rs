@@ -24,18 +24,17 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::datasource::TableProvider;
-use crate::error::{DataFusionError, Result};
-use crate::{
-    datasource::{empty::EmptyTable, parquet::ParquetTable, CsvFile, MemTable},
-    prelude::CsvReadOptions,
-};
-
 use super::dfschema::ToDFSchema;
 use super::{
     col, exprlist_to_fields, Expr, JoinType, LogicalPlan, PlanType, StringifiedPlan,
 };
+use crate::datasource::TableProvider;
+use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{DFField, DFSchema, DFSchemaRef, Partitioning};
+use crate::{
+    datasource::{empty::EmptyTable, parquet::ParquetTable, CsvFile, MemTable},
+    prelude::CsvReadOptions,
+};
 use std::collections::HashSet;
 
 /// Builder for logical plans
@@ -286,6 +285,52 @@ impl LogicalPlanBuilder {
         Ok(Self::from(&LogicalPlan::Repartition {
             input: Arc::new(self.plan.clone()),
             partitioning_scheme,
+        }))
+    }
+
+    /// Apply a window
+    ///
+    /// NOTE: this feature is under development and this API will be changing
+    ///
+    /// - https://github.com/apache/arrow-datafusion/issues/359 basic structure
+    /// - https://github.com/apache/arrow-datafusion/issues/298 empty over clause
+    /// - https://github.com/apache/arrow-datafusion/issues/299 with partition clause
+    /// - https://github.com/apache/arrow-datafusion/issues/360 with order by
+    /// - https://github.com/apache/arrow-datafusion/issues/361 with window frame
+    pub fn window(
+        &self,
+        window_expr: impl IntoIterator<Item = Expr>,
+        // FIXME: implement next
+        // filter_by_expr: impl IntoIterator<Item = Expr>,
+        // FIXME: implement next
+        // partition_by_expr: impl IntoIterator<Item = Expr>,
+        // FIXME: implement next
+        // order_by_expr: impl IntoIterator<Item = Expr>,
+        // FIXME: implement next
+        // window_frame: Option<WindowFrame>,
+    ) -> Result<Self> {
+        let window_expr = window_expr.into_iter().collect::<Vec<Expr>>();
+        // FIXME: implement next
+        // let partition_by_expr = partition_by_expr.into_iter().collect::<Vec<Expr>>();
+        // FIXME: implement next
+        // let order_by_expr = order_by_expr.into_iter().collect::<Vec<Expr>>();
+        let all_expr = window_expr.iter();
+        validate_unique_names("Windows", all_expr.clone(), self.plan.schema())?;
+
+        let mut window_fields: Vec<DFField> =
+            exprlist_to_fields(all_expr, self.plan.schema())?;
+        window_fields.extend_from_slice(self.plan.schema().fields());
+
+        Ok(Self::from(&LogicalPlan::Window {
+            input: Arc::new(self.plan.clone()),
+            // FIXME implement next
+            // partition_by_expr,
+            // FIXME implement next
+            // order_by_expr,
+            // FIXME implement next
+            // window_frame,
+            window_expr,
+            schema: Arc::new(DFSchema::new(window_fields)?),
         }))
     }
 

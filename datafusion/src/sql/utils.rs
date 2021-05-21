@@ -46,6 +46,14 @@ pub(crate) fn find_aggregate_exprs(exprs: &[Expr]) -> Vec<Expr> {
     })
 }
 
+/// Collect all deeply nested `Expr::WindowFunction`. They are returned in order of occurrence
+/// (depth first), with duplicates omitted.
+pub(crate) fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
+    find_exprs_in_exprs(exprs, &|nested_expr| {
+        matches!(nested_expr, Expr::WindowFunction { .. })
+    })
+}
+
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of
 /// appearance (depth first), with duplicates omitted.
 pub(crate) fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
@@ -216,6 +224,13 @@ where
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<Expr>>>()?,
                 distinct: *distinct,
+            }),
+            Expr::WindowFunction { fun, args } => Ok(Expr::WindowFunction {
+                fun: fun.clone(),
+                args: args
+                    .iter()
+                    .map(|e| clone_with_replacement(e, replacement_fn))
+                    .collect::<Result<Vec<Expr>>>()?,
             }),
             Expr::AggregateUDF { fun, args } => Ok(Expr::AggregateUDF {
                 fun: fun.clone(),

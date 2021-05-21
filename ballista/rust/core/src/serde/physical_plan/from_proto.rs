@@ -28,7 +28,6 @@ use crate::serde::protobuf::LogicalExprNode;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{proto_error, protobuf};
 use crate::{convert_box_required, convert_required};
-
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
     CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
@@ -43,6 +42,11 @@ use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec
 use datafusion::physical_plan::hash_join::PartitionMode;
 use datafusion::physical_plan::merge::MergeExec;
 use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
+use datafusion::physical_plan::window_functions::{
+    BuiltInWindowFunction, WindowFunction,
+};
+use datafusion::physical_plan::windows::create_window_expr;
+use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::{
     coalesce_batches::CoalesceBatchesExec,
     csv::CsvExec,
@@ -58,7 +62,7 @@ use datafusion::physical_plan::{
     sort::{SortExec, SortOptions},
     Partitioning,
 };
-use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
+use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use datafusion::prelude::CsvReadOptions;
 use log::debug;
 use protobuf::logical_expr_node::ExprType;
@@ -189,6 +193,77 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let input: Arc<dyn ExecutionPlan> = convert_box_required!(limit.input)?;
                 Ok(Arc::new(LocalLimitExec::new(input, limit.limit as usize)))
             }
+            PhysicalPlanType::Window(window_agg) => {
+                let input: Arc<dyn ExecutionPlan> =
+                    convert_box_required!(window_agg.input)?;
+                let input_schema = window_agg
+                    .input_schema
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BallistaError::General(
+                            "input_schema in WindowAggrNode is missing.".to_owned(),
+                        )
+                    })?
+                    .clone();
+
+                let physical_schema: SchemaRef =
+                    SchemaRef::new((&input_schema).try_into()?);
+
+                let catalog_list =
+                    Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+                let ctx_state = ExecutionContextState {
+                    catalog_list,
+                    scalar_functions: Default::default(),
+                    var_provider: Default::default(),
+                    aggregate_functions: Default::default(),
+                    config: ExecutionConfig::new(),
+                    execution_props: ExecutionProps::new(),
+                };
+
+                let window_agg_expr: Vec<(Expr, String)> = window_agg
+                    .window_expr
+                    .iter()
+                    .zip(window_agg.window_expr_name.iter())
+                    .map(|(expr, name)| expr.try_into().map(|expr| (expr, name.clone())))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let mut physical_window_expr = vec![];
+
+                let df_planner = DefaultPhysicalPlanner::default();
+
+                for (expr, name) in &window_agg_expr {
+                    match expr {
+                        Expr::WindowFunction { fun, args } => {
+                            let arg = df_planner
+                                .create_physical_expr(
+                                    &args[0],
+                                    &physical_schema,
+                                    &ctx_state,
+                                )
+                                .map_err(|e| {
+                                    BallistaError::General(format!("{:?}", e))
+                                })?;
+                            physical_window_expr.push(create_window_expr(
+                                &fun,
+                                &[arg],
+                                &physical_schema,
+                                name.to_owned(),
+                            )?);
+                        }
+                        _ => {
+                            return Err(BallistaError::General(
+                                "Invalid expression for WindowAggrExec".to_string(),
+                            ));
+                        }
+                    }
+                }
+
+                Ok(Arc::new(WindowAggExec::try_new(
+                    physical_window_expr,
+                    input,
+                    Arc::new((&input_schema).try_into()?),
+                )?))
+            }
             PhysicalPlanType::HashAggregate(hash_agg) => {
                 let input: Arc<dyn ExecutionPlan> =
                     convert_box_required!(hash_agg.input)?;
@@ -222,7 +297,6 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     .map(|(expr, name)| expr.try_into().map(|expr| (expr, name.clone())))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let df_planner = DefaultPhysicalPlanner::default();
                 let catalog_list =
                     Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
                 let ctx_state = ExecutionContextState {
@@ -248,6 +322,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
 
                 let mut physical_aggr_expr = vec![];
 
+                let df_planner = DefaultPhysicalPlanner::default();
                 for (expr, name) in &logical_agg_expr {
                     match expr {
                         Expr::AggregateFunction { fun, args, .. } => {
