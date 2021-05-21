@@ -2746,7 +2746,7 @@ mod tests {
         let sql = "SELECT order_id, MAX(delivered) OVER (order BY order_id) from orders";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "NotImplemented(\"Unsupported OVER clause (PARTITION BY order_id)\")",
+            "NotImplemented(\"Unsupported OVER clause (ORDER BY order_id)\")",
             format!("{:?}", err)
         );
     }

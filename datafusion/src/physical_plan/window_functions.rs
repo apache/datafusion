@@ -49,7 +49,7 @@ impl FromStr for WindowFunction {
             Ok(WindowFunction::BuiltInWindowFunction(built_in_function))
         } else {
             Err(DataFusionError::Plan(format!(
-                "There is no built-in function named {}",
+                "There is no window function named {}",
                 name
             )))
         }
@@ -286,6 +286,15 @@ mod tests {
     #[test]
     fn test_lag_return_type() -> Result<()> {
         let fun = WindowFunction::from_str("lag")?;
+        let observed = return_type(&fun, &[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nth_value_return_type() -> Result<()> {
+        let fun = WindowFunction::from_str("nth_value")?;
         let observed = return_type(&fun, &[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
 
