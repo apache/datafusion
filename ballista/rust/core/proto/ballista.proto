@@ -39,7 +39,6 @@ message LogicalExprNode {
 
     ScalarValue literal = 3;
 
-
     // binary expressions
     BinaryExprNode binary_expr = 4;
 
@@ -60,6 +59,9 @@ message LogicalExprNode {
     bool wildcard = 15;
     ScalarFunctionNode scalar_function = 16;
     TryCastNode try_cast = 17;
+
+    // window expressions
+    WindowExprNode window_expr = 18;
   }
 }
 
@@ -151,6 +153,29 @@ message AggregateExprNode {
   LogicalExprNode expr = 2;
 }
 
+enum BuiltInWindowFunction {
+  ROW_NUMBER = 0;
+  RANK = 1;
+  DENSE_RANK = 2;
+  PERCENT_RANK = 3;
+  CUME_DIST = 4;
+  NTILE = 5;
+  LAG = 6;
+  LEAD = 7;
+  FIRST_VALUE = 8;
+  LAST_VALUE = 9;
+  NTH_VALUE = 10;
+}
+
+message WindowExprNode {
+  oneof window_function {
+    AggregateFunction aggr_function = 1;
+    BuiltInWindowFunction built_in_function = 2;
+    // udaf = 3
+  }
+  LogicalExprNode expr = 4;
+}
+
 message BetweenNode {
   LogicalExprNode expr = 1;
   bool negated = 2;
@@ -200,6 +225,7 @@ message LogicalPlanNode {
     EmptyRelationNode empty_relation = 10;
     CreateExternalTableNode create_external_table = 11;
     ExplainNode explain = 12;
+    WindowNode window = 13;
   }
 }
 
@@ -288,6 +314,50 @@ message AggregateNode {
   repeated LogicalExprNode aggr_expr = 3;
 }
 
+message WindowNode {
+  LogicalPlanNode input = 1;
+  repeated LogicalExprNode window_expr = 2;
+  repeated LogicalExprNode partition_by_expr = 3;
+  repeated LogicalExprNode order_by_expr = 4;
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
+  oneof window_frame {
+    WindowFrame frame = 5;
+  }
+  // TODO add filter by expr
+}
+
+enum WindowFrameUnits {
+  ROWS = 0;
+  RANGE = 1;
+  GROUPS = 2;
+}
+
+message WindowFrame {
+  WindowFrameUnits window_frame_units = 1;
+  WindowFrameBound start_bound = 2;
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
+  oneof end_bound {
+    WindowFrameBound bound = 3;
+  }
+}
+
+enum WindowFrameBoundType {
+  CURRENT_ROW = 0;
+  PRECEDING = 1;
+  FOLLOWING = 2;
+}
+
+message WindowFrameBound {
+  WindowFrameBoundType window_frame_bound_type = 1;
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
+  oneof bound_value {
+    uint64 value = 2;
+  }
+}
+
 enum JoinType {
   INNER = 0;
   LEFT = 1;
@@ -334,6 +404,7 @@ message PhysicalPlanNode {
     MergeExecNode merge = 14;
     UnresolvedShuffleExecNode unresolved = 15;
     RepartitionExecNode repartition = 16;
+    WindowAggExecNode window = 17;
   }
 }
 
@@ -397,6 +468,13 @@ enum AggregateMode {
   PARTIAL = 0;
   FINAL = 1;
   FINAL_PARTITIONED = 2;
+}
+
+message WindowAggExecNode {
+  PhysicalPlanNode input = 1;
+  repeated LogicalExprNode window_expr = 2;
+  repeated string window_expr_name = 3;
+  Schema input_schema = 4;
 }
 
 message HashAggregateExecNode {

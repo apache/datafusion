@@ -26,16 +26,19 @@ use std::{
 
 use crate::datasource::DfTableAdapter;
 use crate::serde::{protobuf, BallistaError};
-
 use arrow::datatypes::{DataType, Schema};
 use datafusion::datasource::CsvFile;
 use datafusion::logical_plan::{Expr, JoinType, LogicalPlan};
 use datafusion::physical_plan::aggregates::AggregateFunction;
+use datafusion::physical_plan::window_functions::{
+    BuiltInWindowFunction, WindowFunction,
+};
 use datafusion::{datasource::parquet::ParquetTable, logical_plan::exprlist_to_fields};
 use protobuf::{
     arrow_type, logical_expr_node::ExprType, scalar_type, DateUnit, Field,
     PrimitiveScalarType, ScalarListValue, ScalarType,
 };
+use sqlparser::ast::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 use super::super::proto_error;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -772,6 +775,43 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
+            LogicalPlan::Window {
+                input,
+                window_expr,
+                // FIXME implement next
+                // filter_by_expr,
+                // FIXME implement next
+                // partition_by_expr,
+                // FIXME implement next
+                // order_by_expr,
+                // FIXME implement next
+                // window_frame,
+                ..
+            } => {
+                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+                // FIXME: implement
+                // let filter_by_expr = vec![];
+                // FIXME: implement
+                let partition_by_expr = vec![];
+                // FIXME: implement
+                let order_by_expr = vec![];
+                // FIXME: implement
+                let window_frame = None;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Window(Box::new(
+                        protobuf::WindowNode {
+                            input: Some(Box::new(input)),
+                            window_expr: window_expr
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<_>, BallistaError>>()?,
+                            partition_by_expr,
+                            order_by_expr,
+                            window_frame,
+                        },
+                    ))),
+                })
+            }
             LogicalPlan::Aggregate {
                 input,
                 group_expr,
@@ -997,6 +1037,30 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
                 })
             }
+            Expr::WindowFunction {
+                ref fun, ref args, ..
+            } => {
+                let window_function = match fun {
+                    WindowFunction::AggregateFunction(fun) => {
+                        protobuf::window_expr_node::WindowFunction::AggrFunction(
+                            protobuf::AggregateFunction::from(fun).into(),
+                        )
+                    }
+                    WindowFunction::BuiltInWindowFunction(fun) => {
+                        protobuf::window_expr_node::WindowFunction::BuiltInFunction(
+                            protobuf::BuiltInWindowFunction::from(fun).into(),
+                        )
+                    }
+                };
+                let arg = &args[0];
+                let window_expr = Box::new(protobuf::WindowExprNode {
+                    expr: Some(Box::new(arg.try_into()?)),
+                    window_function: Some(window_function),
+                });
+                Ok(protobuf::LogicalExprNode {
+                    expr_type: Some(ExprType::WindowExpr(window_expr)),
+                })
+            }
             Expr::AggregateFunction {
                 ref fun, ref args, ..
             } => {
@@ -1175,6 +1239,66 @@ impl Into<protobuf::Schema> for &Schema {
                 .map(protobuf::Field::from)
                 .collect::<Vec<_>>(),
         }
+    }
+}
+
+impl From<&AggregateFunction> for protobuf::AggregateFunction {
+    fn from(value: &AggregateFunction) -> Self {
+        match value {
+            AggregateFunction::Min => Self::Min,
+            AggregateFunction::Max => Self::Max,
+            AggregateFunction::Sum => Self::Sum,
+            AggregateFunction::Avg => Self::Avg,
+            AggregateFunction::Count => Self::Count,
+        }
+    }
+}
+
+impl From<&BuiltInWindowFunction> for protobuf::BuiltInWindowFunction {
+    fn from(value: &BuiltInWindowFunction) -> Self {
+        match value {
+            BuiltInWindowFunction::FirstValue => Self::FirstValue,
+            BuiltInWindowFunction::LastValue => Self::LastValue,
+            BuiltInWindowFunction::NthValue => Self::NthValue,
+            BuiltInWindowFunction::Ntile => Self::Ntile,
+            BuiltInWindowFunction::CumeDist => Self::CumeDist,
+            BuiltInWindowFunction::PercentRank => Self::PercentRank,
+            BuiltInWindowFunction::RowNumber => Self::RowNumber,
+            BuiltInWindowFunction::Rank => Self::Rank,
+            BuiltInWindowFunction::Lag => Self::Lag,
+            BuiltInWindowFunction::Lead => Self::Lead,
+            BuiltInWindowFunction::DenseRank => Self::DenseRank,
+        }
+    }
+}
+
+impl From<WindowFrameUnits> for protobuf::WindowFrameUnits {
+    fn from(units: WindowFrameUnits) -> Self {
+        match units {
+            WindowFrameUnits::Rows => protobuf::WindowFrameUnits::Rows,
+            WindowFrameUnits::Range => protobuf::WindowFrameUnits::Range,
+            WindowFrameUnits::Groups => protobuf::WindowFrameUnits::Groups,
+        }
+    }
+}
+
+impl TryFrom<WindowFrameBound> for protobuf::WindowFrameBound {
+    type Error = BallistaError;
+
+    fn try_from(_bound: WindowFrameBound) -> Result<Self, Self::Error> {
+        Err(BallistaError::NotImplemented(
+            "WindowFrameBound => protobuf::WindowFrameBound".to_owned(),
+        ))
+    }
+}
+
+impl TryFrom<WindowFrame> for protobuf::WindowFrame {
+    type Error = BallistaError;
+
+    fn try_from(_window: WindowFrame) -> Result<Self, Self::Error> {
+        Err(BallistaError::NotImplemented(
+            "WindowFrame => protobuf::WindowFrame".to_owned(),
+        ))
     }
 }
 
