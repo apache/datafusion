@@ -225,7 +225,7 @@ mod tests {
             WindowFunction::AggregateFunction(AggregateFunction::Avg)
         );
         assert_eq!(
-            WindowFunction::from_str("cum_dist")?,
+            WindowFunction::from_str("cume_dist")?,
             WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::CumeDist)
         );
         assert_eq!(
@@ -253,6 +253,9 @@ mod tests {
         let observed = return_type(&fun, &[DataType::Utf8])?;
         assert_eq!(DataType::UInt64, observed);
 
+        let observed = return_type(&fun, &[DataType::UInt64])?;
+        assert_eq!(DataType::UInt64, observed);
+
         Ok(())
     }
 
@@ -261,6 +264,9 @@ mod tests {
         let fun = WindowFunction::from_str("first_value")?;
         let observed = return_type(&fun, &[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
+
+        let observed = return_type(&fun, &[DataType::UInt64])?;
+        assert_eq!(DataType::UInt64, observed);
 
         Ok(())
     }
@@ -271,6 +277,9 @@ mod tests {
         let observed = return_type(&fun, &[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
 
+        let observed = return_type(&fun, &[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
         Ok(())
     }
 
@@ -279,6 +288,9 @@ mod tests {
         let fun = WindowFunction::from_str("lead")?;
         let observed = return_type(&fun, &[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
+
+        let observed = return_type(&fun, &[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
 
         Ok(())
     }
@@ -289,14 +301,20 @@ mod tests {
         let observed = return_type(&fun, &[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
 
+        let observed = return_type(&fun, &[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
         Ok(())
     }
 
     #[test]
     fn test_nth_value_return_type() -> Result<()> {
         let fun = WindowFunction::from_str("nth_value")?;
-        let observed = return_type(&fun, &[DataType::Utf8])?;
+        let observed = return_type(&fun, &[DataType::Utf8, DataType::UInt64])?;
         assert_eq!(DataType::Utf8, observed);
+
+        let observed = return_type(&fun, &[DataType::Float64, DataType::UInt64])?;
+        assert_eq!(DataType::Float64, observed);
 
         Ok(())
     }
@@ -304,7 +322,7 @@ mod tests {
     #[test]
     fn test_cume_dist_return_type() -> Result<()> {
         let fun = WindowFunction::from_str("cume_dist")?;
-        let observed = return_type(&fun, &[DataType::Float64])?;
+        let observed = return_type(&fun, &[])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())

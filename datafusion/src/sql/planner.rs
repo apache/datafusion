@@ -2722,10 +2722,11 @@ mod tests {
 
     #[test]
     fn empty_over_multiple() {
-        let sql = "SELECT order_id, MAX(qty) OVER (), CUMe_dist(qty), lag(qty) OVER () from orders";
+        let sql =
+            "SELECT order_id, MAX(qty) OVER (), min(qty) over (), aVg(qty) OVER () from orders";
         let expected = "\
-        Projection: #order_id, #MAX(qty Multiply Float64(1.1))\
-        \n  WindowAggr: windowExpr=[[MAX(#qty Multiply Float64(1.1))]] partitionBy=[], orderBy=[]\
+        Projection: #order_id, #MAX(qty), #MIN(qty), #AVG(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty), MIN(#qty), AVG(#qty)]] partitionBy=[], orderBy=[]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }

@@ -798,6 +798,20 @@ async fn csv_query_count() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_window_with_empty_over() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "SELECT count(c12) over () FROM aggregate_test_100";
+    let actual = execute(&mut ctx, sql).await;
+    // FIXME: so far the WindowAggExec is not implemented
+    // and the current behavior is to return empty result
+    // when it is done this test shall be updated
+    let expected: Vec<Vec<String>> = vec![];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_group_by_int_count() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
