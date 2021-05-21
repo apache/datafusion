@@ -457,10 +457,46 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn name(&self) -> &str {
         "WindowExpr: default name"
     }
+
+    /// the accumulator used to accumulate values from the expressions.
+    /// the accumulator expects the same number of arguments as `expressions` and must
+    /// return states with the same description as `state_fields`
+    fn create_accumulator(&self) -> Result<Box<dyn WindowAccumulator>>;
+
+    /// expressions that are passed to the WindowAccumulator.
+    /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
+}
+
+/// A window expression that is a built-in window function
+pub trait BuiltInWindowFunctionExpr: Send + Sync + Debug {
+    /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+
+    /// the field of the final result of this aggregation.
+    fn field(&self) -> Result<Field>;
+
+    /// expressions that are passed to the Accumulator.
+    /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
+
+    /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
+    /// implementation returns placeholder text.
+    fn name(&self) -> &str {
+        "BuiltInWindowFunctionExpr: default name"
+    }
+
+    /// the accumulator used to accumulate values from the expressions.
+    /// the accumulator expects the same number of arguments as `expressions` and must
+    /// return states with the same description as `state_fields`
+    fn create_accumulator(&self) -> Result<Box<dyn WindowAccumulator>>;
 }
 
 /// An accumulator represents a stateful object that lives throughout the evaluation of multiple rows and
-/// generically accumulates values. An accumulator knows how to:
+/// generically accumulates values.
+///
+/// An accumulator knows how to:
 /// * update its state from inputs via `update`
 /// * convert its internal state to a vector of scalar values
 /// * update its state from multiple accumulators' states via `merge`
@@ -507,6 +543,48 @@ pub trait Accumulator: Send + Sync + Debug {
 
     /// returns its value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;
+}
+
+/// A window accumulator represents a stateful object that lives throughout the evaluation of multiple
+/// rows and generically accumulates values.
+///
+/// An accumulator knows how to:
+/// * update its state from inputs via `update`
+/// * convert its internal state to a vector of scalar values
+/// * update its state from multiple accumulators' states via `merge`
+/// * compute the final value from its internal state via `evaluate`
+pub trait WindowAccumulator: Send + Sync + Debug {
+    /// scans the accumulator's state from a vector of scalars, similar to Accumulator it also
+    /// optionally generates values.
+    fn scan(&mut self, values: &[ScalarValue]) -> Result<Option<ScalarValue>>;
+
+    /// scans the accumulator's state from a vector of arrays.
+    fn scan_batch(
+        &mut self,
+        num_rows: usize,
+        values: &[ArrayRef],
+    ) -> Result<Option<Vec<ScalarValue>>> {
+        // note that for row_number and rank this might be different
+        if values.is_empty() {
+            return Ok(None);
+        };
+        // transpose columnar to row based so that we can apply window
+        let result: Vec<Option<ScalarValue>> = (0..num_rows)
+            .map(|index| {
+                let v = values
+                    .iter()
+                    .map(|array| ScalarValue::try_from_array(array, index))
+                    .collect::<Result<Vec<_>>>()?;
+                self.scan(&v)
+            })
+            .into_iter()
+            .collect::<Result<Vec<Option<ScalarValue>>>>()?;
+        let result: Option<Vec<ScalarValue>> = result.into_iter().collect();
+        Ok(result)
+    }
+
+    /// returns its value based on its current state.
+    fn evaluate(&self) -> Result<Option<ScalarValue>>;
 }
 
 pub mod aggregates;

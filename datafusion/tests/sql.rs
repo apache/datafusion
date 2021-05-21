@@ -797,20 +797,43 @@ async fn csv_query_count() -> Result<()> {
     Ok(())
 }
 
-// FIXME uncomment this when exec is done
-// #[tokio::test]
-// async fn csv_query_window_with_empty_over() -> Result<()> {
-//     let mut ctx = ExecutionContext::new();
-//     register_aggregate_csv(&mut ctx)?;
-//     let sql = "SELECT count(c12) over () FROM aggregate_test_100";
-//     // FIXME: so far the WindowAggExec is not implemented
-//     // and the current behavior is to throw not implemented exception
-
-//     let result = execute(&mut ctx, sql).await;
-//     let expected: Vec<Vec<String>> = vec![];
-//     assert_eq!(result, expected);
-//     Ok(())
-// }
+#[tokio::test]
+async fn csv_query_window_with_empty_over() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "select \
+    c2, \
+    row_number() over (),
+    sum(c3) over (), \
+    avg(c3) over (), \
+    count(c3) over (), \
+    max(c3) over (), \
+    min(c3) over (), \
+    first_value(c3) over (), \
+    last_value(c3) over (), \
+    nth_value(c3, 2) over ()
+    from aggregate_test_100 limit 5";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec![
+            "2", "1", "781", "7.81", "100", "125", "-117", "1", "30", "-40",
+        ],
+        vec![
+            "5", "2", "781", "7.81", "100", "125", "-117", "1", "30", "-40",
+        ],
+        vec![
+            "1", "3", "781", "7.81", "100", "125", "-117", "1", "30", "-40",
+        ],
+        vec![
+            "1", "4", "781", "7.81", "100", "125", "-117", "1", "30", "-40",
+        ],
+        vec![
+            "5", "5", "781", "7.81", "100", "125", "-117", "1", "30", "-40",
+        ],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
 
 #[tokio::test]
 async fn csv_query_group_by_int_count() -> Result<()> {

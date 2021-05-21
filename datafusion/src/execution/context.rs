@@ -1269,6 +1269,13 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn window() -> Result<()> {
+        let results = execute("SELECT c1, MAX(c2) OVER () FROM test", 4).await?;
+        assert_eq!(results.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn aggregate() -> Result<()> {
         let results = execute("SELECT SUM(c1), SUM(c2) FROM test", 4).await?;
         assert_eq!(results.len(), 1);
