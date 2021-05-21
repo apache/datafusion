@@ -147,8 +147,10 @@ impl DefaultPhysicalPlanner {
                 // Initially need to perform the aggregate and then merge the partitions
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
                 let input_schema = input_exec.schema();
-                let physical_input_schema = input_exec.as_ref().schema();
+
                 let logical_input_schema = input.as_ref().schema();
+                let physical_input_schema = input_exec.as_ref().schema();
+
                 let window_expr = window_expr
                     .iter()
                     .map(|e| {

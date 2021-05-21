@@ -17,22 +17,23 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
-use std::fmt::{self, Debug, Display};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::{any::Any, pin::Pin};
-
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::LogicalPlan;
-use crate::{error::Result, scalar::ScalarValue};
+use crate::{
+    error::{DataFusionError, Result},
+    scalar::ScalarValue,
+};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-
 use async_trait::async_trait;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
+use std::fmt::{self, Debug, Display};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::{any::Any, pin::Pin};
 
 use self::{display::DisplayableExecutionPlan, merge::MergeExec};
 use hashbrown::HashMap;
@@ -457,10 +458,22 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn name(&self) -> &str {
         "WindowExpr: default name"
     }
+
+    /// the accumulator used to accumulate values from the expressions.
+    /// the accumulator expects the same number of arguments as `expressions` and must
+    /// return states with the same description as `state_fields`
+    fn create_accumulator(&self) -> Result<Box<dyn WindowAccumulator>>;
+
+    /// expressions that are passed to the WindowAccumulator.
+    /// Functions which take a single input argument, such as `sum`, return a single [`Expr`],
+    /// others (e.g. `cov`) return many.
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
 }
 
 /// An accumulator represents a stateful object that lives throughout the evaluation of multiple rows and
-/// generically accumulates values. An accumulator knows how to:
+/// generically accumulates values.
+///
+/// An accumulator knows how to:
 /// * update its state from inputs via `update`
 /// * convert its internal state to a vector of scalar values
 /// * update its state from multiple accumulators' states via `merge`
@@ -507,6 +520,58 @@ pub trait Accumulator: Send + Sync + Debug {
 
     /// returns its value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;
+}
+
+/// A window accumulator represents a stateful object that lives throughout the evaluation of multiple
+/// rows and generically accumulates values.
+///
+/// An accumulator knows how to:
+/// * update its state from inputs via `update`
+/// * convert its internal state to a vector of scalar values
+/// * update its state from multiple accumulators' states via `merge`
+/// * compute the final value from its internal state via `evaluate`
+pub trait WindowAccumulator: Send + Sync + Debug {
+    /// scans the accumulator's state from a vector of scalars, similar to Accumulator it also
+    /// optionally generates values.
+    fn scan(&mut self, values: &[ScalarValue]) -> Result<Option<ScalarValue>>;
+
+    /// scans the accumulator's state from a vector of arrays.
+    fn scan_batch(
+        &mut self,
+        num_rows: usize,
+        values: &[ArrayRef],
+    ) -> Result<Option<ArrayRef>> {
+        if values.is_empty() {
+            return Ok(None);
+        };
+        // transpose columnar to row based so that we can apply window
+        let result = (0..num_rows)
+            .map(|index| {
+                let v = values
+                    .iter()
+                    .map(|array| ScalarValue::try_from_array(array, index))
+                    .collect::<Result<Vec<_>>>()?;
+                self.scan(&v)
+            })
+            .collect::<Result<Vec<Option<ScalarValue>>>>()?
+            .into_iter()
+            .collect::<Option<Vec<ScalarValue>>>();
+
+        Ok(match result {
+            Some(arr) if num_rows == arr.len() => Some(ScalarValue::iter_to_array(&arr)?),
+            None => None,
+            Some(arr) => {
+                return Err(DataFusionError::Internal(format!(
+                    "expect scan batch to return {:?} rows, but got {:?}",
+                    num_rows,
+                    arr.len()
+                )))
+            }
+        })
+    }
+
+    /// returns its value based on its current state.
+    fn evaluate(&self) -> Result<Option<ScalarValue>>;
 }
 
 pub mod aggregates;

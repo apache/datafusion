@@ -250,6 +250,7 @@ fn sort_batches(
 }
 
 pin_project! {
+    /// stream for sort plan
     struct SortStream {
         #[pin]
         output: futures::channel::oneshot::Receiver<ArrowResult<Option<RecordBatch>>>,
