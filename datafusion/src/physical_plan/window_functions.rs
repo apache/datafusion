@@ -58,8 +58,19 @@ impl FromStr for WindowFunction {
 
 impl fmt::Display for BuiltInWindowFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // uppercase of the debug.
-        write!(f, "{}", format!("{:?}", self).to_uppercase())
+        match self {
+            BuiltInWindowFunction::RowNumber => write!(f, "ROW_NUMBER"),
+            BuiltInWindowFunction::Rank => write!(f, "RANK"),
+            BuiltInWindowFunction::DenseRank => write!(f, "DENSE_RANK"),
+            BuiltInWindowFunction::PercentRank => write!(f, "PERCENT_RANK"),
+            BuiltInWindowFunction::CumeDist => write!(f, "CUME_DIST"),
+            BuiltInWindowFunction::Ntile => write!(f, "NTILE"),
+            BuiltInWindowFunction::Lag => write!(f, "LAG"),
+            BuiltInWindowFunction::Lead => write!(f, "LEAD"),
+            BuiltInWindowFunction::FirstValue => write!(f, "FIRST_VALUE"),
+            BuiltInWindowFunction::LastValue => write!(f, "LAST_VALUE"),
+            BuiltInWindowFunction::NthValue => write!(f, "NTH_VALUE"),
+        }
     }
 }
 
@@ -108,18 +119,18 @@ pub enum BuiltInWindowFunction {
 impl FromStr for BuiltInWindowFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltInWindowFunction> {
-        Ok(match name.to_lowercase().as_str() {
-            "row_number" => BuiltInWindowFunction::RowNumber,
-            "rank" => BuiltInWindowFunction::Rank,
-            "dense_rank" => BuiltInWindowFunction::DenseRank,
-            "percent_rank" => BuiltInWindowFunction::PercentRank,
-            "cume_dist" => BuiltInWindowFunction::CumeDist,
-            "ntile" => BuiltInWindowFunction::Ntile,
-            "lag" => BuiltInWindowFunction::Lag,
-            "lead" => BuiltInWindowFunction::Lead,
-            "first_value" => BuiltInWindowFunction::FirstValue,
-            "last_value" => BuiltInWindowFunction::LastValue,
-            "nth_value" => BuiltInWindowFunction::NthValue,
+        Ok(match name.to_uppercase().as_str() {
+            "ROW_NUMBER" => BuiltInWindowFunction::RowNumber,
+            "RANK" => BuiltInWindowFunction::Rank,
+            "DENSE_RANK" => BuiltInWindowFunction::DenseRank,
+            "PERCENT_RANK" => BuiltInWindowFunction::PercentRank,
+            "CUME_DIST" => BuiltInWindowFunction::CumeDist,
+            "NTILE" => BuiltInWindowFunction::Ntile,
+            "LAG" => BuiltInWindowFunction::Lag,
+            "LEAD" => BuiltInWindowFunction::Lead,
+            "FIRST_VALUE" => BuiltInWindowFunction::FirstValue,
+            "LAST_VALUE" => BuiltInWindowFunction::LastValue,
+            "NTH_VALUE" => BuiltInWindowFunction::NthValue,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in window function named {}",
@@ -206,6 +217,7 @@ mod tests {
             let fun = WindowFunction::from_str(name)?;
             let fun2 = WindowFunction::from_str(name.to_uppercase().as_str())?;
             assert_eq!(fun, fun2);
+            assert_eq!(fun.to_string(), name.to_uppercase());
         }
         Ok(())
     }
