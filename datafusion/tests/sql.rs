@@ -804,7 +804,11 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
     let sql = "SELECT count(c12) over () FROM aggregate_test_100";
     // FIXME: so far the WindowAggExec is not implemented
     // and the current behavior is to throw not implemented exception
-    let result = execute(&mut ctx, sql);
+
+    let plan = ctx.create_logical_plan(&sql)?;
+    let plan = ctx.optimize(&plan)?;
+    let plan = ctx.create_physical_plan(&plan)?;
+    let result = collect(plan).await;
     assert!(result.is_err());
     Ok(())
 }
