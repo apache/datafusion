@@ -27,12 +27,12 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{DFSchemaRef, Expr, ExprRewriter, LogicalPlan, Operator};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
+use crate::physical_plan::datetime_expressions::to_timestamp;
 use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
-use crate::physical_plan::datetime_expressions::to_timestamp;
+use crate::scalar::ScalarValue::Utf8;
 use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use std::convert::TryInto;
-use crate::scalar::ScalarValue::Utf8;
 
 /// Optimizer that simplifies comparison expressions involving boolean literals.
 ///
@@ -146,23 +146,23 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
                         _ => Expr::Literal(ScalarValue::Boolean(None)),
                     },
                     (Expr::Literal(ScalarValue::Boolean(b)), _)
-                    if self.is_boolean_type(&right) =>
-                        {
-                            match b {
-                                Some(true) => *right,
-                                Some(false) => Expr::Not(right),
-                                None => Expr::Literal(ScalarValue::Boolean(None)),
-                            }
+                        if self.is_boolean_type(&right) =>
+                    {
+                        match b {
+                            Some(true) => *right,
+                            Some(false) => Expr::Not(right),
+                            None => Expr::Literal(ScalarValue::Boolean(None)),
                         }
+                    }
                     (_, Expr::Literal(ScalarValue::Boolean(b)))
-                    if self.is_boolean_type(&left) =>
-                        {
-                            match b {
-                                Some(true) => *left,
-                                Some(false) => Expr::Not(left),
-                                None => Expr::Literal(ScalarValue::Boolean(None)),
-                            }
+                        if self.is_boolean_type(&left) =>
+                    {
+                        match b {
+                            Some(true) => *left,
+                            Some(false) => Expr::Not(left),
+                            None => Expr::Literal(ScalarValue::Boolean(None)),
                         }
+                    }
                     _ => Expr::BinaryExpr {
                         left,
                         op: Operator::Eq,
@@ -180,23 +180,23 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
                         _ => Expr::Literal(ScalarValue::Boolean(None)),
                     },
                     (Expr::Literal(ScalarValue::Boolean(b)), _)
-                    if self.is_boolean_type(&right) =>
-                        {
-                            match b {
-                                Some(true) => Expr::Not(right),
-                                Some(false) => *right,
-                                None => Expr::Literal(ScalarValue::Boolean(None)),
-                            }
+                        if self.is_boolean_type(&right) =>
+                    {
+                        match b {
+                            Some(true) => Expr::Not(right),
+                            Some(false) => *right,
+                            None => Expr::Literal(ScalarValue::Boolean(None)),
                         }
+                    }
                     (_, Expr::Literal(ScalarValue::Boolean(b)))
-                    if self.is_boolean_type(&left) =>
-                        {
-                            match b {
-                                Some(true) => Expr::Not(left),
-                                Some(false) => *left,
-                                None => Expr::Literal(ScalarValue::Boolean(None)),
-                            }
+                        if self.is_boolean_type(&left) =>
+                    {
+                        match b {
+                            Some(true) => Expr::Not(left),
+                            Some(false) => *left,
+                            None => Expr::Literal(ScalarValue::Boolean(None)),
                         }
+                    }
                     _ => Expr::BinaryExpr {
                         left,
                         op: Operator::NotEq,
@@ -229,13 +229,19 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
                     match &args[0] {
                         Expr::Literal(ScalarValue::Utf8(Some(val))) => {
                             Expr::Literal(ScalarValue::TimestampNanosecond(
-                                string_to_timestamp_nanos(val).ok()
+                                string_to_timestamp_nanos(val).ok(),
                             ))
                         }
-                        _ => Expr::ScalarFunction { fun: BuiltinScalarFunction::ToTimestamp, args }
+                        _ => Expr::ScalarFunction {
+                            fun: BuiltinScalarFunction::ToTimestamp,
+                            args,
+                        },
                     }
                 } else {
-                    Expr::ScalarFunction { fun: BuiltinScalarFunction::ToTimestamp, args }
+                    Expr::ScalarFunction {
+                        fun: BuiltinScalarFunction::ToTimestamp,
+                        args,
+                    }
                 }
             }
             expr => {
@@ -273,7 +279,7 @@ mod tests {
                 DFField::new(None, "c1", DataType::Utf8, true),
                 DFField::new(None, "c2", DataType::Boolean, true),
             ])
-                .unwrap(),
+            .unwrap(),
         )
     }
 
@@ -340,7 +346,7 @@ mod tests {
         assert_eq!(col("c2").get_type(&schema)?, DataType::Boolean);
 
         // true = ture -> true
-        assert_eq!((lit(true).eq(lit(true))).rewrite(&mut rewriter)?, lit(true), );
+        assert_eq!((lit(true).eq(lit(true))).rewrite(&mut rewriter)?, lit(true),);
 
         // true = false -> false
         assert_eq!(
@@ -349,7 +355,7 @@ mod tests {
         );
 
         // c2 = true -> c2
-        assert_eq!((col("c2").eq(lit(true))).rewrite(&mut rewriter)?, col("c2"), );
+        assert_eq!((col("c2").eq(lit(true))).rewrite(&mut rewriter)?, col("c2"),);
 
         // c2 = false => !c2
         assert_eq!(
@@ -489,7 +495,7 @@ mod tests {
                 )],
                 else_expr: Some(Box::new(col("c2").eq(lit(true)))),
             }))
-                .rewrite(&mut rewriter)?,
+            .rewrite(&mut rewriter)?,
             Expr::Case {
                 expr: None,
                 when_then_expr: vec![(
