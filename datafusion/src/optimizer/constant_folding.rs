@@ -27,12 +27,9 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{DFSchemaRef, Expr, ExprRewriter, LogicalPlan, Operator};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use crate::physical_plan::datetime_expressions::to_timestamp;
 use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
-use crate::scalar::ScalarValue::Utf8;
 use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use std::convert::TryInto;
 
 /// Optimizer that simplifies comparison expressions involving boolean literals.
 ///
@@ -225,7 +222,7 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
                 fun: BuiltinScalarFunction::ToTimestamp,
                 args,
             } => {
-                if args.len() > 0 {
+                if !args.is_empty() {
                     match &args[0] {
                         Expr::Literal(ScalarValue::Utf8(Some(val))) => {
                             Expr::Literal(ScalarValue::TimestampNanosecond(
