@@ -108,7 +108,7 @@ To run the executor from source:
 
 ```bash
 cd $ARROW_HOME/ballista/rust/executor
-RUST_LOG=info cargo run --release
+RUST_LOG=info cargo run --release -- --concurrency 4
 ```
 
 By default the executor will bind to `0.0.0.0` and listen on port 50051.
