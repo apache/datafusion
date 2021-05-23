@@ -41,6 +41,17 @@ use datafusion::physical_plan::csv::CsvReadOptions;
 use datafusion::{dataframe::DataFrame, physical_plan::RecordBatchStream};
 use log::{error, info, trace};
 
+macro_rules! info_or_trace_if {
+    ($first:ident, $($arg:tt)+) => (
+        if $first {
+            info!($($arg)+);
+        } else {
+            trace!($($arg)+);
+        }
+        $first = false;
+    )
+}
+
 #[allow(dead_code)]
 struct BallistaContextState {
     /// Scheduler host
@@ -186,6 +197,10 @@ impl BallistaContext {
             .into_inner()
             .job_id;
 
+        // first time we info/trace this job as queued or running
+        let mut first_q_it: bool = true;
+        let mut first_r_it: bool = true;
+
         loop {
             let GetJobStatusResult { status } = scheduler
                 .get_job_status(GetJobStatusParams {
@@ -200,11 +215,11 @@ impl BallistaContext {
             let wait_future = tokio::time::sleep(Duration::from_millis(100));
             match status {
                 job_status::Status::Queued(_) => {
-                    trace!("Job {} still queued...", job_id);
+                    info_or_trace_if!(first_q_it, "Job {} still queued...", job_id);
                     wait_future.await;
                 }
                 job_status::Status::Running(_) => {
-                    trace!("Job {} is running...", job_id);
+                    info_or_trace_if!(first_r_it, "Job {} is running...", job_id);
                     wait_future.await;
                 }
                 job_status::Status::Failed(err) => {
