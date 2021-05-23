@@ -19,19 +19,7 @@
 
 use crate::error::{DataFusionError, Result};
 use arrow::{
-    array::{
-        new_null_array, Array, ArrayRef, BinaryArray, BooleanArray, BooleanBuilder,
-        Date32Array, Date64Array, DictionaryArray, Float32Array, Float32Builder,
-        Float64Array, Float64Builder, Int16Array, Int16Builder, Int32Array, Int32Builder,
-        Int64Array, Int64Builder, Int8Array, Int8Builder, IntervalDayTimeArray,
-        IntervalYearMonthArray, LargeBinaryArray, LargeStringArray, LargeStringBuilder,
-        ListArray, ListBuilder, StringArray, StringBuilder, TimestampMicrosecondArray,
-        TimestampMicrosecondBuilder, TimestampMillisecondArray,
-        TimestampMillisecondBuilder, TimestampNanosecondArray,
-        TimestampNanosecondBuilder, TimestampSecondArray, TimestampSecondBuilder,
-        UInt16Array, UInt16Builder, UInt32Array, UInt32Builder, UInt64Array,
-        UInt64Builder, UInt8Array, UInt8Builder,
-    },
+    array::*,
     datatypes::{
         ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type, Int16Type,
         Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit, TimestampMicrosecondType,
