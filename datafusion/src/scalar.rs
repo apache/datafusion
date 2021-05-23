@@ -333,7 +333,7 @@ impl ScalarValue {
         let data_type = match scalars.peek() {
             None => {
                 return Err(DataFusionError::Internal(
-                    "empty iterator passed to ScalarValue::iter_to_array".to_string(),
+                    "Empty iterator passed to ScalarValue::iter_to_array".to_string(),
                 ))
             }
             Some(sv) => sv.get_datatype(),
@@ -1214,7 +1214,7 @@ mod tests {
         assert!(
             result
                 .to_string()
-                .contains("empty iterator passed to ScalarValue::iter_to_array"),
+                .contains("Empty iterator passed to ScalarValue::iter_to_array"),
             "{}",
             result
         );
