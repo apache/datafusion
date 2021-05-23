@@ -995,7 +995,7 @@ mod tests {
             let expected = df.collect().await?;
 
             // run the query to compute actual results of the query
-            let opt = BenchmarkOpt {
+            let opt = DatafusionBenchmarkOpt {
                 query: n,
                 debug: false,
                 iterations: 1,
@@ -1005,8 +1005,6 @@ mod tests {
                 file_format: "tbl".to_string(),
                 mem_table: false,
                 partitions: 16,
-                host: None,
-                port: None,
             };
             let actual = benchmark_datafusion(opt).await?;
 
