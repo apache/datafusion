@@ -53,7 +53,6 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-
 #[derive(Debug, StructOpt, Clone)]
 struct BallistaBenchmarkOpt {
     /// Query number
@@ -191,10 +190,10 @@ async fn main() -> Result<()> {
     match TpchOpt::from_args() {
         TpchOpt::Benchmark(BallistaBenchmark(opt)) => {
             benchmark_ballista(opt).await.map(|_| ())
-        },
+        }
         TpchOpt::Benchmark(DatafusionBenchmark(opt)) => {
             benchmark_datafusion(opt).await.map(|_| ())
-        },
+        }
         TpchOpt::Convert(opt) => convert_tbl(opt).await,
     }
 }
