@@ -21,10 +21,11 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{any::Any, collections::HashMap, vec};
+use std::time::Instant;
+use std::{any::Any, vec};
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, SQLMetric};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
@@ -40,6 +41,7 @@ use tokio::sync::{
     Mutex,
 };
 use tokio::task::JoinHandle;
+use hashbrown::HashMap;
 
 type MaybeBatch = Option<ArrowResult<RecordBatch>>;
 
@@ -58,6 +60,10 @@ pub struct RepartitionExec {
             HashMap<usize, (UnboundedSender<MaybeBatch>, UnboundedReceiver<MaybeBatch>)>,
         >,
     >,
+    /// Time in nanos to execute child operator and fetch batches
+    fetch_time_nanos: Arc<SQLMetric>,
+    /// Time in nanos to perform repartitioning
+    repart_time_nanos: Arc<SQLMetric>
 }
 
 impl RepartitionExec {
@@ -136,17 +142,34 @@ impl ExecutionPlan for RepartitionExec {
             for i in 0..num_input_partitions {
                 let random_state = random.clone();
                 let input = self.input.clone();
+                let fetch_time = self.fetch_time_nanos.clone();
+                let repart_time = self.repart_time_nanos.clone();
                 let mut txs: HashMap<_, _> = channels
                     .iter()
                     .map(|(partition, (tx, _rx))| (*partition, tx.clone()))
                     .collect();
                 let partitioning = self.partitioning.clone();
                 let _: JoinHandle<Result<()>> = tokio::spawn(async move {
+                    // execute the child operator
+                    let now = Instant::now();
                     let mut stream = input.execute(i).await?;
+                    fetch_time.add(now.elapsed().as_nanos() as usize);
+
                     let mut counter = 0;
                     let hashes_buf = &mut vec![];
 
-                    while let Some(result) = stream.next().await {
+                    loop {
+
+                        // fetch the next batch
+                        let now = Instant::now();
+                        let result = stream.next().await;
+                        fetch_time.add(now.elapsed().as_nanos() as usize);
+
+                        if result.is_none() {
+                            break;
+                        }
+                        let result = result.unwrap();
+
                         match &partitioning {
                             Partitioning::RoundRobinBatch(_) => {
                                 let output_partition = counter % num_output_partitions;
@@ -156,6 +179,7 @@ impl ExecutionPlan for RepartitionExec {
                                 })?;
                             }
                             Partitioning::Hash(exprs, _) => {
+                                let now = Instant::now();
                                 let input_batch = result?;
                                 let arrays = exprs
                                     .iter()
@@ -176,9 +200,11 @@ impl ExecutionPlan for RepartitionExec {
                                         [(*hash % num_output_partitions as u64) as usize]
                                         .push(index as u64)
                                 }
+                                repart_time.add(now.elapsed().as_nanos() as usize);
                                 for (num_output_partition, partition_indices) in
                                     indices.into_iter().enumerate()
                                 {
+                                    let now = Instant::now();
                                     let indices = partition_indices.into();
                                     // Produce batches based on indices
                                     let columns = input_batch
@@ -198,6 +224,7 @@ impl ExecutionPlan for RepartitionExec {
                                         input_batch.schema(),
                                         columns,
                                     );
+                                    repart_time.add(now.elapsed().as_nanos() as usize);
                                     let tx = txs.get_mut(&num_output_partition).unwrap();
                                     tx.send(Some(output_batch)).map_err(|e| {
                                         DataFusionError::Execution(e.to_string())
@@ -236,6 +263,13 @@ impl ExecutionPlan for RepartitionExec {
         }))
     }
 
+    fn metrics(&self) -> HashMap<String, SQLMetric> {
+        let mut metrics = HashMap::new();
+        metrics.insert("fetchTime".to_owned(), (*self.fetch_time_nanos).clone());
+        metrics.insert("repartitionTime".to_owned(), (*self.repart_time_nanos).clone());
+        metrics
+    }
+
     fn fmt_as(
         &self,
         t: DisplayFormatType,
@@ -259,6 +293,8 @@ impl RepartitionExec {
             input,
             partitioning,
             channels: Arc::new(Mutex::new(HashMap::new())),
+            fetch_time_nanos: SQLMetric::time_nanos(),
+            repart_time_nanos: SQLMetric::time_nanos(),
         })
     }
 }
