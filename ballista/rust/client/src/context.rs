@@ -39,7 +39,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::csv::CsvReadOptions;
 use datafusion::{dataframe::DataFrame, physical_plan::RecordBatchStream};
-use log::{error, info};
+use log::{error, info, trace};
 
 #[allow(dead_code)]
 struct BallistaContextState {
@@ -200,11 +200,11 @@ impl BallistaContext {
             let wait_future = tokio::time::sleep(Duration::from_millis(100));
             match status {
                 job_status::Status::Queued(_) => {
-                    info!("Job {} still queued...", job_id);
+                    trace!("Job {} still queued...", job_id);
                     wait_future.await;
                 }
                 job_status::Status::Running(_) => {
-                    info!("Job {} is running...", job_id);
+                    trace!("Job {} is running...", job_id);
                     wait_future.await;
                 }
                 job_status::Status::Failed(err) => {
