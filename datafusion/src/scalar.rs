@@ -17,28 +17,29 @@
 
 //! This module provides ScalarValue, an enum that can be used for storage of single elements
 
-use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
-
-use arrow::datatypes::{ArrowDictionaryKeyType, DataType, Field, IntervalUnit, TimeUnit};
-use arrow::{
-    array::*,
-    datatypes::{
-        ArrowNativeType, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
-        TimestampNanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    },
-};
+use crate::error::{DataFusionError, Result};
 use arrow::{
     array::{
-        ArrayRef, Int16Builder, Int32Builder, Int64Builder, Int8Builder, ListBuilder,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
+        new_null_array, Array, ArrayRef, BinaryArray, BooleanArray, BooleanBuilder,
+        Date32Array, Date64Array, DictionaryArray, Float32Array, Float32Builder,
+        Float64Array, Float64Builder, Int16Array, Int16Builder, Int32Array, Int32Builder,
+        Int64Array, Int64Builder, Int8Array, Int8Builder, IntervalDayTimeArray,
+        IntervalYearMonthArray, LargeBinaryArray, LargeStringArray, LargeStringBuilder,
+        ListArray, ListBuilder, StringArray, StringBuilder, TimestampMicrosecondArray,
+        TimestampMicrosecondBuilder, TimestampMillisecondArray,
+        TimestampMillisecondBuilder, TimestampNanosecondArray,
+        TimestampNanosecondBuilder, TimestampSecondArray, TimestampSecondBuilder,
+        UInt16Array, UInt16Builder, UInt32Array, UInt32Builder, UInt64Array,
+        UInt64Builder, UInt8Array, UInt8Builder,
     },
     datatypes::{
-        TimestampMicrosecondType, TimestampMillisecondType, TimestampSecondType,
+        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type, Int16Type,
+        Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+        UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
-
-use crate::error::{DataFusionError, Result};
+use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow’s `Array`.
