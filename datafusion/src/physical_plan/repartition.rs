@@ -36,12 +36,12 @@ use async_trait::async_trait;
 
 use futures::stream::Stream;
 use futures::StreamExt;
+use hashbrown::HashMap;
 use tokio::sync::{
     mpsc::{UnboundedReceiver, UnboundedSender},
     Mutex,
 };
 use tokio::task::JoinHandle;
-use hashbrown::HashMap;
 
 type MaybeBatch = Option<ArrowResult<RecordBatch>>;
 
@@ -65,7 +65,7 @@ pub struct RepartitionExec {
     /// Time in nanos to perform repartitioning
     repart_time_nanos: Arc<SQLMetric>,
     /// Time in nanos for sending resulting batches to channels
-    send_time_nanos: Arc<SQLMetric>
+    send_time_nanos: Arc<SQLMetric>,
 }
 
 impl RepartitionExec {
@@ -162,7 +162,6 @@ impl ExecutionPlan for RepartitionExec {
                     let hashes_buf = &mut vec![];
 
                     loop {
-
                         // fetch the next batch
                         let now = Instant::now();
                         let result = stream.next().await;
@@ -273,7 +272,10 @@ impl ExecutionPlan for RepartitionExec {
     fn metrics(&self) -> HashMap<String, SQLMetric> {
         let mut metrics = HashMap::new();
         metrics.insert("fetchTime".to_owned(), (*self.fetch_time_nanos).clone());
-        metrics.insert("repartitionTime".to_owned(), (*self.repart_time_nanos).clone());
+        metrics.insert(
+            "repartitionTime".to_owned(),
+            (*self.repart_time_nanos).clone(),
+        );
         metrics.insert("sendTime".to_owned(), (*self.send_time_nanos).clone());
         metrics
     }
