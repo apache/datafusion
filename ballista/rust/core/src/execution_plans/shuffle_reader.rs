@@ -113,7 +113,7 @@ impl ExecutionPlan for ShuffleReaderExec {
         match t {
             DisplayFormatType::Default => {
                 let loc_str = self.partition_location.iter()
-                    .map(|l| format!("executor={} part={}:{}:{} stats={:?}",
+                    .map(|l| format!("[executor={} part={}:{}:{} stats={:?}]",
                                      l.executor_meta.id,
                                      l.partition_id.job_id,
                                      l.partition_id.stage_id,
