@@ -24,7 +24,7 @@ use crate::serde::scheduler::PartitionLocation;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion::physical_plan::{ExecutionPlan, Partitioning, DisplayFormatType};
+use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,
@@ -112,19 +112,23 @@ impl ExecutionPlan for ShuffleReaderExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                let loc_str = self.partition_location.iter()
-                    .map(|l| format!("[executor={} part={}:{}:{} stats={:?}]",
-                                     l.executor_meta.id,
-                                     l.partition_id.job_id,
-                                     l.partition_id.stage_id,
-                                     l.partition_id.partition_id,
-                                     l.partition_stats))
-                    .collect::<Vec<String>>().join(",");
-                write!(f, "ShuffleReaderExec: partition_locations={}",
-                       loc_str)
-
+                let loc_str = self
+                    .partition_location
+                    .iter()
+                    .map(|l| {
+                        format!(
+                            "[executor={} part={}:{}:{} stats={:?}]",
+                            l.executor_meta.id,
+                            l.partition_id.job_id,
+                            l.partition_id.stage_id,
+                            l.partition_id.partition_id,
+                            l.partition_stats
+                        )
+                    })
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "ShuffleReaderExec: partition_locations={}", loc_str)
             }
         }
     }
-
 }
