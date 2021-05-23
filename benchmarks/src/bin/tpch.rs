@@ -165,7 +165,7 @@ struct ConvertOpt {
 
 #[derive(Debug, StructOpt)]
 #[structopt(about = "benchmark command")]
-enum SubCommandOpt {
+enum BenchmarkSubCommandOpt {
     #[structopt(name = "ballista")]
     BallistaBenchmark(BallistaBenchmarkOpt),
     #[structopt(name = "datafusion")]
@@ -175,7 +175,7 @@ enum SubCommandOpt {
 #[derive(Debug, StructOpt)]
 #[structopt(name = "TPC-H", about = "TPC-H Benchmarks.")]
 enum TpchOpt {
-    Benchmark(SubCommandOpt),
+    Benchmark(BenchmarkSubCommandOpt),
     Convert(ConvertOpt),
 }
 
@@ -185,7 +185,7 @@ const TABLES: &[&str] = &[
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    use SubCommandOpt::*;
+    use BenchmarkSubCommandOpt::*;
 
     env_logger::init();
     match TpchOpt::from_args() {
