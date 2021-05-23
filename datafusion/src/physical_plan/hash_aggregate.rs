@@ -1164,7 +1164,7 @@ fn create_group_by_value(col: &ArrayRef, row: usize) -> Result<GroupByScalar> {
         }
         DataType::LargeUtf8 => {
             let array = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
-            Ok(GroupByScalar::Utf8(Box::new(array.value(row).into())))
+            Ok(GroupByScalar::LargeUtf8(Box::new(array.value(row).into())))
         }
         DataType::Boolean => {
             let array = col.as_any().downcast_ref::<BooleanArray>().unwrap();
