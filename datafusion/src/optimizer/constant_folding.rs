@@ -71,6 +71,7 @@ impl OptimizerRule for ConstantFolding {
             }),
             // Rest: recurse into plan, apply optimization where possible
             LogicalPlan::Projection { .. }
+            | LogicalPlan::Window { .. }
             | LogicalPlan::Aggregate { .. }
             | LogicalPlan::Repartition { .. }
             | LogicalPlan::CreateExternalTable { .. }

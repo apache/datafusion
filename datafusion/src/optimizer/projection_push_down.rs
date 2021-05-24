@@ -223,6 +223,62 @@ fn optimize_plan(
                 schema: DFSchemaRef::new(schema),
             })
         }
+        LogicalPlan::Window {
+            schema,
+            window_expr,
+            input,
+            // FIXME implement next
+            // filter_by_expr,
+            // FIXME implement next
+            // partition_by_expr,
+            // FIXME implement next
+            // order_by_expr,
+            // FIXME implement next
+            // window_frame,
+            ..
+        } => {
+            // Gather all columns needed for expressions in this Window
+            let mut new_window_expr = Vec::new();
+            window_expr.iter().try_for_each(|expr| {
+                let name = &expr.name(&schema)?;
+                let column = Column::from_name(name.to_string());
+                if required_columns.contains(&column) {
+                    new_window_expr.push(expr.clone());
+                    new_required_columns.insert(column);
+                    // add to the new set of required columns
+                    utils::expr_to_column_names(expr, &mut new_required_columns)
+                } else {
+                    Ok(())
+                }
+            })?;
+
+            let new_schema = DFSchema::new(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|f| new_required_columns.contains(&f.qualified_column()))
+                    .cloned()
+                    .collect(),
+            )?;
+
+            Ok(LogicalPlan::Window {
+                window_expr: new_window_expr,
+                // FIXME implement next
+                // partition_by_expr: partition_by_expr.clone(),
+                // FIXME implement next
+                // order_by_expr: order_by_expr.clone(),
+                // FIXME implement next
+                // window_frame: window_frame.clone(),
+                input: Arc::new(optimize_plan(
+                    optimizer,
+                    &input,
+                    &new_required_columns,
+                    true,
+                    execution_props,
+                )?),
+                schema: DFSchemaRef::new(new_schema),
+            })
+        }
         LogicalPlan::Aggregate {
             schema,
             input,

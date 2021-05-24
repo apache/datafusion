@@ -75,7 +75,6 @@ pub fn data_types(
     if current_types.is_empty() {
         return Ok(vec![]);
     }
-
     let valid_types = get_valid_types(signature, current_types)?;
 
     if valid_types

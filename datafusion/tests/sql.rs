@@ -797,6 +797,21 @@ async fn csv_query_count() -> Result<()> {
     Ok(())
 }
 
+// FIXME uncomment this when exec is done
+// #[tokio::test]
+// async fn csv_query_window_with_empty_over() -> Result<()> {
+//     let mut ctx = ExecutionContext::new();
+//     register_aggregate_csv(&mut ctx)?;
+//     let sql = "SELECT count(c12) over () FROM aggregate_test_100";
+//     // FIXME: so far the WindowAggExec is not implemented
+//     // and the current behavior is to throw not implemented exception
+
+//     let result = execute(&mut ctx, sql).await;
+//     let expected: Vec<Vec<String>> = vec![];
+//     assert_eq!(result, expected);
+//     Ok(())
+// }
+
 #[tokio::test]
 async fn csv_query_group_by_int_count() -> Result<()> {
     let mut ctx = ExecutionContext::new();
@@ -2915,6 +2930,17 @@ async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_random_expression() -> Result<()> {
+    let mut ctx = create_ctx()?;
+    let sql = "SELECT random() r1";
+    let actual = execute(&mut ctx, sql).await;
+    let r1 = actual[0][0].parse::<f64>().unwrap();
+    assert!(0.0 <= r1);
+    assert!(r1 < 1.0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_cast_expressions_error() -> Result<()> {
     // sin(utf8) should error
     let mut ctx = create_ctx()?;
@@ -2954,16 +2980,67 @@ async fn test_physical_plan_display_indent() {
 
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
     let expected = vec![
-    "GlobalLimitExec: limit=10",
-    "  SortExec: [the_min@2 DESC]",
-    "    ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
-    "      HashAggregateExec: mode=Final, gby=[c1@0 as c1], aggr=[MAX(c12), MIN(c12)]",
-    "        MergeExec",
-    "          HashAggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(c12), MIN(c12)]",
-    "            CoalesceBatchesExec: target_batch_size=4096",
-    "              FilterExec: c12@1 < CAST(10 AS Float64)",
-    "                RepartitionExec: partitioning=RoundRobinBatch(3)",
-    "                  CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+        "GlobalLimitExec: limit=10",
+        "  SortExec: [the_min@2 DESC]",
+        "    MergeExec",
+        "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
+        "        HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(c12), MIN(c12)]",
+        "          CoalesceBatchesExec: target_batch_size=4096",
+        "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 3)",
+        "              HashAggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(c12), MIN(c12)]",
+        "                CoalesceBatchesExec: target_batch_size=4096",
+        "                  FilterExec: c12@1 < CAST(10 AS Float64)",
+        "                    RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "                      CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+        ];
+
+    let data_path = arrow::util::test_util::arrow_test_data();
+    let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
+        .trim()
+        .lines()
+        // normalize paths
+        .map(|s| s.replace(&data_path, "ARROW_TEST_DATA"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        expected, actual,
+        "expected:\n{:#?}\nactual:\n\n{:#?}\n",
+        expected, actual
+    );
+}
+
+#[tokio::test]
+async fn test_physical_plan_display_indent_multi_children() {
+    // Hard code concurrency as it appears in the RepartitionExec output
+    let config = ExecutionConfig::new().with_concurrency(3);
+    let mut ctx = ExecutionContext::with_config(config);
+    // ensure indenting works for nodes with multiple children
+    register_aggregate_csv(&mut ctx).unwrap();
+    let sql = "SELECT c1 \
+               FROM (select c1 from aggregate_test_100)\
+                 JOIN\
+                    (select c1 as c2 from aggregate_test_100)\
+                 ON c1=c2\
+                 ";
+
+    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
+
+    let physical_plan = ctx.create_physical_plan(&plan).unwrap();
+    let expected = vec![
+        "ProjectionExec: expr=[c1@0 as c1]",
+        "  CoalesceBatchesExec: target_batch_size=4096",
+        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c2\", index: 0 })]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 3)",
+        "          ProjectionExec: expr=[c1@0 as c1]",
+        "            RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "              CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 3)",
+        "          ProjectionExec: expr=[c1@0 as c2]",
+        "            RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "              CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
     ];
 
     let data_path = arrow::util::test_util::arrow_test_data();

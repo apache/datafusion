@@ -17,20 +17,17 @@
 //! This module contains the  `LogicalPlan` enum that describes queries
 //! via a logical query plan.
 
+use super::display::{GraphvizVisitor, IndentVisitor};
+use super::expr::{Column, Expr};
+use super::extension::UserDefinedLogicalNode;
+use crate::datasource::TableProvider;
+use crate::logical_plan::dfschema::DFSchemaRef;
+use crate::sql::parser::FileType;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use std::{
     fmt::{self, Display},
     sync::Arc,
 };
-
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-
-use crate::datasource::TableProvider;
-use crate::sql::parser::FileType;
-
-use super::display::{GraphvizVisitor, IndentVisitor};
-use super::expr::{Column, Expr};
-use super::extension::UserDefinedLogicalNode;
-use crate::logical_plan::dfschema::DFSchemaRef;
 
 /// Join type
 #[derive(Debug, Clone, Copy)]
@@ -87,6 +84,23 @@ pub enum LogicalPlan {
         predicate: Expr,
         /// The incoming logical plan
         input: Arc<LogicalPlan>,
+    },
+    /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
+    Window {
+        /// The incoming logical plan
+        input: Arc<LogicalPlan>,
+        /// The window function expression
+        window_expr: Vec<Expr>,
+        /// Filter by expressions
+        // filter_by_expr: Vec<Expr>,
+        /// Partition by expressions
+        // partition_by_expr: Vec<Expr>,
+        /// Order by expressions
+        // order_by_expr: Vec<Expr>,
+        /// Window Frame
+        // window_frame: Option<WindowFrame>,
+        /// The schema description of the window output
+        schema: DFSchemaRef,
     },
     /// Aggregates its input based on a set of grouping and aggregate
     /// expressions (e.g. SUM).
@@ -218,6 +232,7 @@ impl LogicalPlan {
             } => &projected_schema,
             LogicalPlan::Projection { schema, .. } => &schema,
             LogicalPlan::Filter { input, .. } => input.schema(),
+            LogicalPlan::Window { schema, .. } => &schema,
             LogicalPlan::Aggregate { schema, .. } => &schema,
             LogicalPlan::Sort { input, .. } => input.schema(),
             LogicalPlan::Join { schema, .. } => &schema,
@@ -237,7 +252,8 @@ impl LogicalPlan {
             LogicalPlan::TableScan {
                 projected_schema, ..
             } => vec![&projected_schema],
-            LogicalPlan::Aggregate { input, schema, .. }
+            LogicalPlan::Window { input, schema, .. }
+            | LogicalPlan::Aggregate { input, schema, .. }
             | LogicalPlan::Projection { input, schema, .. } => {
                 let mut schemas = input.all_schemas();
                 schemas.insert(0, &schema);
@@ -295,6 +311,16 @@ impl LogicalPlan {
                 Partitioning::Hash(expr, _) => expr.clone(),
                 _ => vec![],
             },
+            LogicalPlan::Window {
+                window_expr,
+                // FIXME implement next
+                // filter_by_expr,
+                // FIXME implement next
+                // partition_by_expr,
+                // FIXME implement next
+                // order_by_expr,
+                ..
+            } => window_expr.clone(),
             LogicalPlan::Aggregate {
                 group_expr,
                 aggr_expr,
@@ -330,6 +356,7 @@ impl LogicalPlan {
             LogicalPlan::Projection { input, .. } => vec![input],
             LogicalPlan::Filter { input, .. } => vec![input],
             LogicalPlan::Repartition { input, .. } => vec![input],
+            LogicalPlan::Window { input, .. } => vec![input],
             LogicalPlan::Aggregate { input, .. } => vec![input],
             LogicalPlan::Sort { input, .. } => vec![input],
             LogicalPlan::Join { left, right, .. } => vec![left, right],
@@ -423,6 +450,7 @@ impl LogicalPlan {
             LogicalPlan::Projection { input, .. } => input.accept(visitor)?,
             LogicalPlan::Filter { input, .. } => input.accept(visitor)?,
             LogicalPlan::Repartition { input, .. } => input.accept(visitor)?,
+            LogicalPlan::Window { input, .. } => input.accept(visitor)?,
             LogicalPlan::Aggregate { input, .. } => input.accept(visitor)?,
             LogicalPlan::Sort { input, .. } => input.accept(visitor)?,
             LogicalPlan::Join { left, right, .. }
@@ -674,6 +702,20 @@ impl LogicalPlan {
                         predicate: ref expr,
                         ..
                     } => write!(f, "Filter: {:?}", expr),
+                    LogicalPlan::Window {
+                        ref window_expr,
+                        // FIXME implement next
+                        // ref partition_by_expr,
+                        // FIXME implement next
+                        // ref order_by_expr,
+                        ..
+                    } => {
+                        write!(
+                            f,
+                            "WindowAggr: windowExpr=[{:?}] partitionBy=[], orderBy=[]",
+                            window_expr
+                        )
+                    }
                     LogicalPlan::Aggregate {
                         ref group_expr,
                         ref aggr_expr,

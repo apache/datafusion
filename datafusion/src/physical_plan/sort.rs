@@ -135,6 +135,7 @@ impl ExecutionPlan for SortExec {
                 "SortExec requires a single input partition".to_owned(),
             ));
         }
+
         let input = self.input.execute(0).await?;
 
         Ok(Box::pin(SortStream::new(

@@ -52,6 +52,7 @@ impl PhysicalOptimizerRule for AddMergeExec {
                 .collect::<Result<Vec<_>>>()?;
             match plan.required_child_distribution() {
                 Distribution::UnspecifiedDistribution => plan.with_new_children(children),
+                Distribution::HashPartitioned(_) => plan.with_new_children(children),
                 Distribution::SinglePartition => plan.with_new_children(
                     children
                         .iter()

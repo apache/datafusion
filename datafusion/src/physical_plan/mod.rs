@@ -359,12 +359,15 @@ impl Partitioning {
 }
 
 /// Distribution schemes
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Distribution {
     /// Unspecified distribution
     UnspecifiedDistribution,
     /// A single partition is required
     SinglePartition,
+    /// Requires children to be distributed in such a way that the same
+    /// values of the keys end up in the same partition
+    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
 /// Represents the result from an expression
@@ -436,6 +439,23 @@ pub trait AggregateExpr: Send + Sync + Debug {
     /// implementation returns placeholder text.
     fn name(&self) -> &str {
         "AggregateExpr: default name"
+    }
+}
+
+/// A window expression that:
+/// * knows its resulting field
+pub trait WindowExpr: Send + Sync + Debug {
+    /// Returns the window expression as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+
+    /// the field of the final result of this window function.
+    fn field(&self) -> Result<Field>;
+
+    /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
+    /// implementation returns placeholder text.
+    fn name(&self) -> &str {
+        "WindowExpr: default name"
     }
 }
 
@@ -527,3 +547,5 @@ pub mod udf;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
 pub mod union;
+pub mod window_functions;
+pub mod windows;

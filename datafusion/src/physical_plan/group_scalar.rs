@@ -24,7 +24,7 @@ use crate::error::{DataFusionError, Result};
 use crate::scalar::ScalarValue;
 
 /// Enumeration of types that can be used in a GROUP BY expression
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub(crate) enum GroupByScalar {
     Float32(OrderedFloat<f32>),
     Float64(OrderedFloat<f64>),

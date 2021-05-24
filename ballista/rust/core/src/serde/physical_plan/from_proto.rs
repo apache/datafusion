@@ -40,6 +40,11 @@ use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec
 use datafusion::physical_plan::hash_join::PartitionMode;
 use datafusion::physical_plan::merge::MergeExec;
 use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
+use datafusion::physical_plan::window_functions::{
+    BuiltInWindowFunction, WindowFunction,
+};
+use datafusion::physical_plan::windows::create_window_expr;
+use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::{
     coalesce_batches::CoalesceBatchesExec,
     csv::CsvExec,
@@ -60,7 +65,7 @@ use datafusion::physical_plan::{
     sort::{SortExec, SortOptions},
     Partitioning,
 };
-use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
+use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use datafusion::prelude::CsvReadOptions;
 use log::debug;
 use protobuf::physical_expr_node::ExprType;
@@ -191,6 +196,51 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let input: Arc<dyn ExecutionPlan> = convert_box_required!(limit.input)?;
                 Ok(Arc::new(LocalLimitExec::new(input, limit.limit as usize)))
             }
+            PhysicalPlanType::Window(window_agg) => {
+                let input: Arc<dyn ExecutionPlan> =
+                    convert_box_required!(window_agg.input)?;
+                let input_schema = window_agg
+                    .input_schema
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BallistaError::General(
+                            "input_schema in WindowAggrNode is missing.".to_owned(),
+                        )
+                    })?
+                    .clone();
+
+                let physical_schema: SchemaRef =
+                    SchemaRef::new((&input_schema).try_into()?);
+
+                let physical_window_expr: Vec<Arc<dyn WindowExpr>> = window_agg
+                    .window_expr
+                    .iter()
+                    .zip(window_agg.window_expr_name.iter())
+                    .map(|(expr, name)| {
+                        let expr_type = expr.expr_type.as_ref().ok_or_else(|| {
+                            proto_error("Unexpected empty window physical expression")
+                        })?;
+
+                        match expr_type {
+                            ExprType::WindowExpr(window_node) => Ok(create_window_expr(
+                                &convert_required!(window_node.window_function)?,
+                                &[convert_box_required!(window_node.expr)?],
+                                &physical_schema,
+                                name.to_owned(),
+                            )?),
+                            _ => Err(BallistaError::General(
+                                "Invalid expression for WindowAggrExec".to_string(),
+                            )),
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Ok(Arc::new(WindowAggExec::try_new(
+                    physical_window_expr,
+                    input,
+                    Arc::new((&input_schema).try_into()?),
+                )?))
+            }
             PhysicalPlanType::HashAggregate(hash_agg) => {
                 let input: Arc<dyn ExecutionPlan> =
                     convert_box_required!(hash_agg.input)?;
@@ -203,6 +253,9 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let agg_mode: AggregateMode = match mode {
                     protobuf::AggregateMode::Partial => AggregateMode::Partial,
                     protobuf::AggregateMode::Final => AggregateMode::Final,
+                    protobuf::AggregateMode::FinalPartitioned => {
+                        AggregateMode::FinalPartitioned
+                    }
                 };
 
                 let group = hash_agg
@@ -456,6 +509,11 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                         .to_owned(),
                 ));
             }
+            ExprType::WindowExpr(_) => {
+                return Err(BallistaError::General(
+                    "Cannot convert window expr node to physical expression".to_owned(),
+                ));
+            }
             ExprType::Sort(_) => {
                 return Err(BallistaError::General(
                     "Cannot convert sort expr node to physical expression".to_owned(),
@@ -548,5 +606,37 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
         };
 
         Ok(pexpr)
+    }
+}
+
+impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFunction {
+    type Error = BallistaError;
+
+    fn try_from(
+        expr: &protobuf::physical_window_expr_node::WindowFunction,
+    ) -> Result<Self, Self::Error> {
+        match expr {
+            protobuf::physical_window_expr_node::WindowFunction::AggrFunction(n) => {
+                let f = protobuf::AggregateFunction::from_i32(*n).ok_or_else(|| {
+                    proto_error(format!(
+                        "Received an unknown window aggregate function: {}",
+                        n
+                    ))
+                })?;
+
+                Ok(WindowFunction::AggregateFunction(f.into()))
+            }
+            protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
+                let f =
+                    protobuf::BuiltInWindowFunction::from_i32(*n).ok_or_else(|| {
+                        proto_error(format!(
+                            "Received an unknown window builtin function: {}",
+                            n
+                        ))
+                    })?;
+
+                Ok(WindowFunction::BuiltInWindowFunction(f.into()))
+            }
+        }
     }
 }

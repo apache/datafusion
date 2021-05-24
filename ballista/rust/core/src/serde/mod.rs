@@ -22,6 +22,7 @@ use std::{convert::TryInto, io::Cursor};
 
 use datafusion::logical_plan::Operator;
 use datafusion::physical_plan::aggregates::AggregateFunction;
+use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
@@ -112,6 +113,34 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Sum => AggregateFunction::Sum,
             protobuf::AggregateFunction::Avg => AggregateFunction::Avg,
             protobuf::AggregateFunction::Count => AggregateFunction::Count,
+        }
+    }
+}
+
+impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
+    fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
+        match built_in_function {
+            protobuf::BuiltInWindowFunction::RowNumber => {
+                BuiltInWindowFunction::RowNumber
+            }
+            protobuf::BuiltInWindowFunction::Rank => BuiltInWindowFunction::Rank,
+            protobuf::BuiltInWindowFunction::PercentRank => {
+                BuiltInWindowFunction::PercentRank
+            }
+            protobuf::BuiltInWindowFunction::DenseRank => {
+                BuiltInWindowFunction::DenseRank
+            }
+            protobuf::BuiltInWindowFunction::Lag => BuiltInWindowFunction::Lag,
+            protobuf::BuiltInWindowFunction::Lead => BuiltInWindowFunction::Lead,
+            protobuf::BuiltInWindowFunction::FirstValue => {
+                BuiltInWindowFunction::FirstValue
+            }
+            protobuf::BuiltInWindowFunction::CumeDist => BuiltInWindowFunction::CumeDist,
+            protobuf::BuiltInWindowFunction::Ntile => BuiltInWindowFunction::Ntile,
+            protobuf::BuiltInWindowFunction::NthValue => BuiltInWindowFunction::NthValue,
+            protobuf::BuiltInWindowFunction::LastValue => {
+                BuiltInWindowFunction::LastValue
+            }
         }
     }
 }

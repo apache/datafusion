@@ -17,15 +17,15 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
+use crate::error::BallistaError;
+use crate::serde::{from_proto_binary_op, proto_error, protobuf};
+use crate::{convert_box_required, convert_required};
+use sqlparser::ast::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::{
     convert::{From, TryInto},
     sync::Arc,
     unimplemented,
 };
-
-use crate::error::BallistaError;
-use crate::serde::{from_proto_binary_op, proto_error, protobuf};
-use crate::{convert_box_required, convert_required};
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::logical_plan::{
@@ -35,6 +35,7 @@ use datafusion::logical_plan::{
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::csv::CsvReadOptions;
+use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 use datafusion::scalar::ScalarValue;
 use protobuf::logical_plan_node::LogicalPlanType;
 use protobuf::{logical_expr_node::ExprType, scalar_type};
@@ -73,6 +74,34 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                             .as_ref()
                             .expect("expression required")
                             .try_into()?,
+                    )?
+                    .build()
+                    .map_err(|e| e.into())
+            }
+            LogicalPlanType::Window(window) => {
+                let input: LogicalPlan = convert_box_required!(window.input)?;
+                let window_expr = window
+                    .window_expr
+                    .iter()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                // let partition_by_expr = window
+                //     .partition_by_expr
+                //     .iter()
+                //     .map(|expr| expr.try_into())
+                //     .collect::<Result<Vec<_>, _>>()?;
+                // let order_by_expr = window
+                //     .order_by_expr
+                //     .iter()
+                //     .map(|expr| expr.try_into())
+                //     .collect::<Result<Vec<_>, _>>()?;
+                // // FIXME: add filter by expr
+                // // FIXME: parse the window_frame data
+                // let window_frame = None;
+                LogicalPlanBuilder::from(&input)
+                    .window(
+                        window_expr, /* filter_by_expr, partition_by_expr, order_by_expr, window_frame*/
                     )?
                     .build()
                     .map_err(|e| e.into())
@@ -754,7 +783,10 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
     type Error = BallistaError;
 
     fn try_into(self) -> Result<Expr, Self::Error> {
+        use datafusion::physical_plan::window_functions;
         use protobuf::logical_expr_node::ExprType;
+        use protobuf::window_expr_node;
+        use protobuf::WindowExprNode;
 
         let expr_type = self
             .expr_type
@@ -772,6 +804,48 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                 let scalar_value: datafusion::scalar::ScalarValue = literal.try_into()?;
                 Ok(Expr::Literal(scalar_value))
             }
+            ExprType::WindowExpr(expr) => {
+                let window_function = expr
+                    .window_function
+                    .as_ref()
+                    .ok_or_else(|| proto_error("Received empty window function"))?;
+                match window_function {
+                    window_expr_node::WindowFunction::AggrFunction(i) => {
+                        let aggr_function = protobuf::AggregateFunction::from_i32(*i)
+                            .ok_or_else(|| {
+                                proto_error(format!(
+                                    "Received an unknown aggregate window function: {}",
+                                    i
+                                ))
+                            })?;
+
+                        Ok(Expr::WindowFunction {
+                            fun: window_functions::WindowFunction::AggregateFunction(
+                                AggregateFunction::from(aggr_function),
+                            ),
+                            args: vec![parse_required_expr(&expr.expr)?],
+                        })
+                    }
+                    window_expr_node::WindowFunction::BuiltInFunction(i) => {
+                        let built_in_function =
+                            protobuf::BuiltInWindowFunction::from_i32(*i).ok_or_else(
+                                || {
+                                    proto_error(format!(
+                                        "Received an unknown built-in window function: {}",
+                                        i
+                                    ))
+                                },
+                            )?;
+
+                        Ok(Expr::WindowFunction {
+                            fun: window_functions::WindowFunction::BuiltInWindowFunction(
+                                BuiltInWindowFunction::from(built_in_function),
+                            ),
+                            args: vec![parse_required_expr(&expr.expr)?],
+                        })
+                    }
+                }
+            }
             ExprType::AggregateExpr(expr) => {
                 let aggr_function =
                     protobuf::AggregateFunction::from_i32(expr.aggr_function)
@@ -781,9 +855,10 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                                 expr.aggr_function
                             ))
                         })?;
+                let fun = AggregateFunction::from(aggr_function);
 
                 Ok(Expr::AggregateFunction {
-                    fun: aggr_function.into(),
+                    fun,
                     args: vec![parse_required_expr(&expr.expr)?],
                     distinct: false, //TODO
                 })
@@ -1006,6 +1081,7 @@ impl TryInto<arrow::datatypes::Field> for &protobuf::Field {
 }
 
 use datafusion::physical_plan::datetime_expressions::{date_trunc, to_timestamp};
+use datafusion::physical_plan::{aggregates, windows};
 use datafusion::prelude::{
     array, length, lower, ltrim, md5, rtrim, sha224, sha256, sha384, sha512, trim, upper,
 };
@@ -1054,5 +1130,71 @@ fn parse_optional_expr(
     match p {
         Some(expr) => expr.as_ref().try_into().map(Some),
         None => Ok(None),
+    }
+}
+
+impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
+    fn from(units: protobuf::WindowFrameUnits) -> Self {
+        match units {
+            protobuf::WindowFrameUnits::Rows => WindowFrameUnits::Rows,
+            protobuf::WindowFrameUnits::Range => WindowFrameUnits::Range,
+            protobuf::WindowFrameUnits::Groups => WindowFrameUnits::Groups,
+        }
+    }
+}
+
+impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
+    type Error = BallistaError;
+
+    fn try_from(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
+        let bound_type = protobuf::WindowFrameBoundType::from_i32(bound.window_frame_bound_type).ok_or_else(|| {
+            proto_error(format!(
+                "Received a WindowFrameBound message with unknown WindowFrameBoundType {}",
+                bound.window_frame_bound_type
+            ))
+        })?;
+        match bound_type {
+            protobuf::WindowFrameBoundType::CurrentRow => {
+                Ok(WindowFrameBound::CurrentRow)
+            }
+            protobuf::WindowFrameBoundType::Preceding => {
+                // FIXME implement bound value parsing
+                Ok(WindowFrameBound::Preceding(Some(1)))
+            }
+            protobuf::WindowFrameBoundType::Following => {
+                // FIXME implement bound value parsing
+                Ok(WindowFrameBound::Following(Some(1)))
+            }
+        }
+    }
+}
+
+impl TryFrom<protobuf::WindowFrame> for WindowFrame {
+    type Error = BallistaError;
+
+    fn try_from(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
+        let units = protobuf::WindowFrameUnits::from_i32(window.window_frame_units)
+            .ok_or_else(|| {
+                proto_error(format!(
+                    "Received a WindowFrame message with unknown WindowFrameUnits {}",
+                    window.window_frame_units
+                ))
+            })?
+            .into();
+        let start_bound = window
+            .start_bound
+            .ok_or_else(|| {
+                proto_error(
+                    "Received a WindowFrame message with no start_bound".to_owned(),
+                )
+            })?
+            .try_into()?;
+        // FIXME parse end bound
+        let end_bound = None;
+        Ok(WindowFrame {
+            units,
+            start_bound,
+            end_bound,
+        })
     }
 }

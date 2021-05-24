@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use super::{
     aggregates, cross_join::CrossJoinExec, empty::EmptyExec, expressions::binary,
-    functions, hash_join::PartitionMode, udaf, union::UnionExec,
+    functions, hash_join::PartitionMode, udaf, union::UnionExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::{
@@ -39,8 +39,11 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sort::SortExec;
 use crate::physical_plan::udf;
+use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{hash_utils, Partitioning};
-use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, PhysicalPlanner};
+use crate::physical_plan::{
+    AggregateExpr, ExecutionPlan, PhysicalExpr, PhysicalPlanner, WindowExpr,
+};
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::variable::VarType;
@@ -48,10 +51,9 @@ use crate::{
     error::{DataFusionError, Result},
     physical_plan::displayable,
 };
-use arrow::compute::can_cast_types;
-
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
+use arrow::{compute::can_cast_types, datatypes::DataType};
 use expressions::col;
 use log::debug;
 
@@ -250,6 +252,32 @@ impl DefaultPhysicalPlanner {
                 limit,
                 ..
             } => source.scan(projection, batch_size, filters, *limit),
+            LogicalPlan::Window {
+                input, window_expr, ..
+            } => {
+                // Initially need to perform the aggregate and then merge the partitions
+                let input_exec = self.create_initial_plan(input, ctx_state)?;
+                let input_schema = input_exec.schema();
+                let physical_input_schema = input_exec.as_ref().schema();
+                let logical_input_schema = input.as_ref().schema();
+                let window_expr = window_expr
+                    .iter()
+                    .map(|e| {
+                        self.create_window_expr(
+                            e,
+                            &logical_input_schema,
+                            &physical_input_schema,
+                            ctx_state,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(Arc::new(WindowAggExec::try_new(
+                    window_expr,
+                    input_exec.clone(),
+                    input_schema,
+                )?))
+            }
             LogicalPlan::Aggregate {
                 input,
                 group_expr,
@@ -300,19 +328,54 @@ impl DefaultPhysicalPlanner {
                     .map(|i| col(&groups[i].1, &initial_aggr.schema()))
                     .collect::<Result<_>>()?;
 
-                // construct a second aggregation, keeping the final column name equal to the first aggregation
-                // and the expressions corresponding to the respective aggregate
-                Ok(Arc::new(HashAggregateExec::try_new(
-                    AggregateMode::Final,
-                    final_group
-                        .iter()
-                        .enumerate()
-                        .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
-                        .collect(),
-                    aggregates,
-                    initial_aggr,
-                    physical_input_schema,
-                )?))
+                // TODO: dictionary type not yet supported in Hash Repartition
+                let contains_dict = groups
+                    .iter()
+                    .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
+                    .any(|x| matches!(x, DataType::Dictionary(_, _)));
+
+                if !groups.is_empty()
+                    && ctx_state.config.concurrency > 1
+                    && ctx_state.config.repartition_aggregations
+                    && !contains_dict
+                {
+                    // Divide partial hash aggregates into multiple partitions by hash key
+                    let hash_repartition = Arc::new(RepartitionExec::try_new(
+                        initial_aggr,
+                        Partitioning::Hash(
+                            final_group.clone(),
+                            ctx_state.config.concurrency,
+                        ),
+                    )?);
+
+                    // Combine hashaggregates within the partition
+                    Ok(Arc::new(HashAggregateExec::try_new(
+                        AggregateMode::FinalPartitioned,
+                        final_group
+                            .iter()
+                            .enumerate()
+                            .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
+                            .collect(),
+                        aggregates,
+                        hash_repartition,
+                        physical_input_schema.clone(),
+                    )?))
+                } else {
+                    // construct a second aggregation, keeping the final column name equal to the first aggregation
+                    // and the expressions corresponding to the respective aggregate
+
+                    Ok(Arc::new(HashAggregateExec::try_new(
+                        AggregateMode::Final,
+                        final_group
+                            .iter()
+                            .enumerate()
+                            .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
+                            .collect(),
+                        aggregates,
+                        initial_aggr,
+                        physical_input_schema.clone(),
+                    )?))
+                }
             }
             LogicalPlan::Projection { input, expr, .. } => {
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
@@ -868,6 +931,42 @@ impl DefaultPhysicalPlanner {
         }
     }
 
+    /// Create a window expression from a logical expression
+    pub fn create_window_expr(
+        &self,
+        e: &Expr,
+        logical_input_schema: &DFSchema,
+        physical_input_schema: &Schema,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn WindowExpr>> {
+        // unpack aliased logical expressions, e.g. "sum(col) over () as total"
+        let (name, e) = match e {
+            Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
+            _ => (e.name(logical_input_schema)?, e),
+        };
+
+        match e {
+            Expr::WindowFunction { fun, args } => {
+                let args = args
+                    .iter()
+                    .map(|e| {
+                        self.create_physical_expr(
+                            e,
+                            physical_input_schema,
+                            logical_input_schema,
+                            ctx_state,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                windows::create_window_expr(fun, &args, physical_input_schema, name)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Invalid window expression '{:?}'",
+                other
+            ))),
+        }
+    }
+
     /// Create an aggregate expression from a logical expression
     pub fn create_aggregate_expr(
         &self,
@@ -981,7 +1080,8 @@ mod tests {
     }
 
     fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
-        let ctx_state = make_ctx_state();
+        let mut ctx_state = make_ctx_state();
+        ctx_state.config.concurrency = 4;
         let planner = DefaultPhysicalPlanner::default();
         planner.create_physical_plan(logical_plan, &ctx_state)
     }
@@ -1218,6 +1318,26 @@ mod tests {
         // we need access to the input to the partial aggregate so that other projects can
         // implement serde
         assert_eq!("c2", final_hash_agg.input_schema().field(1).name());
+
+        Ok(())
+    }
+
+    #[test]
+    fn hash_agg_group_by_partitioned() -> Result<()> {
+        let testdata = arrow::util::test_util::arrow_test_data();
+        let path = format!("{}/csv/aggregate_test_100.csv", testdata);
+
+        let options = CsvReadOptions::new().schema_infer_max_records(100);
+        let logical_plan = LogicalPlanBuilder::scan_csv(&path, options, None)?
+            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+            .build()?;
+
+        let execution_plan = plan(&logical_plan)?;
+        let formatted = format!("{:?}", execution_plan);
+
+        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
+        // mode in HashAggregate (which is slower)
+        assert!(formatted.contains("FinalPartitioned"));
 
         Ok(())
     }

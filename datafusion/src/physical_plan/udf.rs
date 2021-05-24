@@ -43,6 +43,13 @@ pub struct ScalarUDF {
     /// Return type
     pub return_type: ReturnTypeFunction,
     /// actual implementation
+    ///
+    /// The fn param is the wrapped function but be aware that the function will
+    /// be passed with the slice / vec of columnar values (either scalar or array)
+    /// with the exception of zero param function, where a singular element vec
+    /// will be passed. In that case the single element is a null array to indicate
+    /// the batch's row count (so that the generative zero-argument function can know
+    /// the result array size).
     pub fun: ScalarFunctionImplementation,
 }
 

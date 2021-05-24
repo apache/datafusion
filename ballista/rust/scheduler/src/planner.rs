@@ -35,6 +35,7 @@ use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::HashJoinExec;
 use datafusion::physical_plan::merge::MergeExec;
+use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::ExecutionPlan;
 use log::info;
 
@@ -128,7 +129,7 @@ impl DistributedPlanner {
             //TODO should insert query stages in more generic way based on partitioning metadata
             // and not specifically for this operator
             match agg.mode() {
-                AggregateMode::Final => {
+                AggregateMode::Final | AggregateMode::FinalPartitioned => {
                     let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
                     for child in &children {
                         let new_stage = create_query_stage(
@@ -150,6 +151,13 @@ impl DistributedPlanner {
         } else if let Some(join) = execution_plan.as_any().downcast_ref::<HashJoinExec>()
         {
             Ok((join.with_new_children(children)?, stages))
+        } else if let Some(window) =
+            execution_plan.as_any().downcast_ref::<WindowAggExec>()
+        {
+            Err(BallistaError::NotImplemented(format!(
+                "WindowAggExec with window {:?}",
+                window
+            )))
         } else {
             // TODO check for compatible partitioning schema, not just count
             if execution_plan.output_partitioning().partition_count()
@@ -235,12 +243,10 @@ mod test {
     use ballista_core::error::BallistaError;
     use ballista_core::execution_plans::UnresolvedShuffleExec;
     use ballista_core::serde::protobuf;
-    use ballista_core::utils::format_plan;
     use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
-    use datafusion::physical_plan::merge::MergeExec;
-    use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::physical_plan::sort::SortExec;
-    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::physical_plan::{displayable, ExecutionPlan};
+    use datafusion::physical_plan::{merge::MergeExec, projection::ProjectionExec};
     use std::convert::TryInto;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -271,18 +277,16 @@ mod test {
         let job_uuid = Uuid::new_v4();
         let stages = planner.plan_query_stages(&job_uuid.to_string(), plan)?;
         for stage in &stages {
-            println!("{}", format_plan(stage.as_ref(), 0)?);
+            println!("{}", displayable(stage.as_ref()).indent().to_string());
         }
 
         /* Expected result:
         QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=1
          HashAggregateExec: groupBy=["l_returnflag"], aggrExpr=["SUM(l_extendedprice Multiply Int64(1)) [\"l_extendedprice * CAST(1 AS Float64)\"]"]
           CsvExec: testdata/lineitem; partitions=2
-
         QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=2
          MergeExec
           UnresolvedShuffleExec: stages=[1]
-
         QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=3
          SortExec { input: ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_ext
           ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_extendedprice Multip
