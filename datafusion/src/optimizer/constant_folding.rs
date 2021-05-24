@@ -686,6 +686,50 @@ mod tests {
     }
 
     #[test]
+    fn to_timestamp_expr_wrong_arg() {
+        let table_scan = test_table_scan().unwrap();
+        let proj = vec![Expr::ScalarFunction {
+            args: vec![Expr::Literal(ScalarValue::Utf8(Some(
+                "I'M NOT A TIMESTAMP".to_string(),
+            )))],
+            fun: BuiltinScalarFunction::ToTimestamp,
+        }];
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .project(proj)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = format!(
+            "Projection: totimestamp(Utf8(\"I\'M NOT A TIMESTAMP\"))\
+            \n  TableScan: test projection=None",
+        );
+        let actual = get_optimized_plan_formatted(&plan, &chrono::Utc::now());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn to_timestamp_expr_no_arg() {
+        let table_scan = test_table_scan().unwrap();
+        let proj = vec![Expr::ScalarFunction {
+            args: vec![],
+            fun: BuiltinScalarFunction::ToTimestamp,
+        }];
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .project(proj)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = format!(
+            "Projection: totimestamp()\
+            \n  TableScan: test projection=None",
+        );
+        let actual = get_optimized_plan_formatted(&plan, &chrono::Utc::now());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn single_now_expr() {
         let table_scan = test_table_scan().unwrap();
         let proj = vec![Expr::ScalarFunction {
