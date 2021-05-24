@@ -21,6 +21,7 @@ use arrow::json::ArrayWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};
+use std::fmt;
 use std::str::FromStr;
 
 /// Allow records to be printed in different formats
@@ -32,6 +33,16 @@ pub enum PrintFormat {
     Json,
 }
 
+/// returns all print formats
+pub fn all_print_formats() -> Vec<PrintFormat> {
+    vec![
+        PrintFormat::Csv,
+        PrintFormat::Tsv,
+        PrintFormat::Table,
+        PrintFormat::Json,
+    ]
+}
+
 impl FromStr for PrintFormat {
     type Err = ();
     fn from_str(s: &str) -> std::result::Result<Self, ()> {
@@ -41,6 +52,17 @@ impl FromStr for PrintFormat {
             "table" => Ok(Self::Table),
             "json" => Ok(Self::Json),
             _ => Err(()),
+        }
+    }
+}
+
+impl fmt::Display for PrintFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Csv => write!(f, "csv"),
+            Self::Tsv => write!(f, "tsv"),
+            Self::Table => write!(f, "table"),
+            Self::Json => write!(f, "json"),
         }
     }
 }
@@ -106,6 +128,14 @@ mod tests {
 
         let format = "table".parse::<PrintFormat>().unwrap();
         assert_eq!(PrintFormat::Table, format);
+    }
+
+    #[test]
+    fn test_to_str() {
+        assert_eq!("csv", PrintFormat::Csv.to_string());
+        assert_eq!("table", PrintFormat::Table.to_string());
+        assert_eq!("tsv", PrintFormat::Tsv.to_string());
+        assert_eq!("json", PrintFormat::Json.to_string());
     }
 
     #[test]
