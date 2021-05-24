@@ -21,7 +21,7 @@
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
-    Column, DFField, DFSchema, DFSchemaRef, LogicalPlan, ToDFSchema,
+    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan, ToDFSchema,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -182,31 +182,45 @@ fn optimize_plan(
             right,
             on,
             join_type,
-            schema,
+            join_constraint,
+            ..
         } => {
             for (l, r) in on {
                 new_required_columns.insert(l.clone());
                 new_required_columns.insert(r.clone());
             }
-            Ok(LogicalPlan::Join {
-                left: Arc::new(optimize_plan(
-                    optimizer,
-                    &left,
-                    &new_required_columns,
-                    true,
-                    execution_props,
-                )?),
-                right: Arc::new(optimize_plan(
-                    optimizer,
-                    &right,
-                    &new_required_columns,
-                    true,
-                    execution_props,
-                )?),
 
+            let optimized_left = Arc::new(optimize_plan(
+                optimizer,
+                &left,
+                &new_required_columns,
+                true,
+                execution_props,
+            )?);
+
+            let optimized_right = Arc::new(optimize_plan(
+                optimizer,
+                &right,
+                &new_required_columns,
+                true,
+                execution_props,
+            )?);
+
+            let schema = build_join_schema(
+                &optimized_left.schema(),
+                &optimized_right.schema(),
+                on,
+                join_type,
+                join_constraint,
+            )?;
+
+            Ok(LogicalPlan::Join {
+                left: optimized_left,
+                right: optimized_right,
                 join_type: *join_type,
+                join_constraint: *join_constraint,
                 on: on.clone(),
-                schema: schema.clone(),
+                schema: DFSchemaRef::new(schema),
             })
         }
         LogicalPlan::Aggregate {
@@ -382,8 +396,7 @@ fn optimize_plan(
 mod tests {
 
     use super::*;
-    use crate::logical_plan::{col, lit};
-    use crate::logical_plan::{max, min, Expr, LogicalPlanBuilder};
+    use crate::logical_plan::{col, lit, max, min, Expr, JoinType, LogicalPlanBuilder};
     use crate::test::*;
     use arrow::datatypes::DataType;
 
@@ -433,6 +446,43 @@ mod tests {
         \n    TableScan: test projection=Some([1, 2])";
 
         assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn join_schema_trim() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
+        let table2_scan =
+            LogicalPlanBuilder::scan_empty(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .join(&table2_scan, JoinType::Left, vec!["a"], vec!["c1"])?
+            .project(vec![col("a"), col("b"), col("c1")])?
+            .build()?;
+
+        // make sure projections are pushed down to table scan
+        let expected = "Projection: #test.a, #test.b, #test2.c1\
+        \n  Join: #test.a = #test2.c1\
+        \n    TableScan: test projection=Some([0, 1])\
+        \n    TableScan: test2 projection=Some([0])";
+
+        let optimized_plan = optimize(&plan)?;
+        let formatted_plan = format!("{:?}", optimized_plan);
+        assert_eq!(formatted_plan, expected);
+
+        // make sure schema for join node doesn't include c1 column
+        let optimized_join = optimized_plan.inputs()[0];
+        assert_eq!(
+            **optimized_join.schema(),
+            DFSchema::new(vec![
+                DFField::new(Some("test"), "a", DataType::UInt32, false),
+                DFField::new(Some("test"), "b", DataType::UInt32, false),
+                DFField::new(Some("test2"), "c1", DataType::UInt32, false),
+            ])?,
+        );
 
         Ok(())
     }

@@ -120,6 +120,7 @@ impl OptimizerRule for HashBuildProbeOrder {
                 right,
                 on,
                 join_type,
+                join_constraint,
                 schema,
             } => {
                 let left = self.optimize(left, execution_props)?;
@@ -131,6 +132,7 @@ impl OptimizerRule for HashBuildProbeOrder {
                         right: Arc::new(left),
                         on: on.iter().map(|(l, r)| (r.clone(), l.clone())).collect(),
                         join_type: swap_join_type(*join_type),
+                        join_constraint: *join_constraint,
                         schema: schema.clone(),
                     })
                 } else {
@@ -140,6 +142,7 @@ impl OptimizerRule for HashBuildProbeOrder {
                         right: Arc::new(right),
                         on: on.clone(),
                         join_type: *join_type,
+                        join_constraint: *join_constraint,
                         schema: schema.clone(),
                     })
                 }

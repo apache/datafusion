@@ -32,7 +32,10 @@ use crate::{
 };
 
 use super::dfschema::ToDFSchema;
-use super::{exprlist_to_fields, Expr, JoinType, LogicalPlan, PlanType, StringifiedPlan};
+use super::{
+    exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType,
+    StringifiedPlan,
+};
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
     DFSchemaRef, Partitioning,
@@ -41,11 +44,6 @@ use std::collections::HashSet;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
-
-pub enum JoinConstraint {
-    On,
-    Using,
-}
 
 /// Builder for logical plans
 ///
@@ -284,7 +282,7 @@ impl LogicalPlanBuilder {
             right.schema(),
             &on,
             &join_type,
-            JoinConstraint::On,
+            &JoinConstraint::On,
         )?;
 
         Ok(Self::from(&LogicalPlan::Join {
@@ -292,6 +290,7 @@ impl LogicalPlanBuilder {
             right: Arc::new(right.clone()),
             on,
             join_type,
+            join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
         }))
     }
@@ -319,7 +318,7 @@ impl LogicalPlanBuilder {
             right.schema(),
             &on,
             &join_type,
-            JoinConstraint::Using,
+            &JoinConstraint::Using,
         )?;
 
         Ok(Self::from(&LogicalPlan::Join {
@@ -327,6 +326,7 @@ impl LogicalPlanBuilder {
             right: Arc::new(right.clone()),
             on,
             join_type,
+            join_constraint: JoinConstraint::Using,
             schema: DFSchemaRef::new(join_schema),
         }))
     }
@@ -400,12 +400,12 @@ impl LogicalPlanBuilder {
 
 /// Creates a schema for a join operation.
 /// The fields from the left side are first
-fn build_join_schema(
+pub fn build_join_schema(
     left: &DFSchema,
     right: &DFSchema,
     on: &[(Column, Column)],
     join_type: &JoinType,
-    join_constraint: JoinConstraint,
+    join_constraint: &JoinConstraint,
 ) -> Result<DFSchema> {
     let fields: Vec<DFField> = match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full => {

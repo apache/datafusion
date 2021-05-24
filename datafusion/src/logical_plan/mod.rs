@@ -29,7 +29,9 @@ mod extension;
 mod operators;
 mod plan;
 mod registry;
-pub use builder::{union_with_alias, LogicalPlanBuilder, UNNAMED_TABLE};
+pub use builder::{
+    build_join_schema, union_with_alias, LogicalPlanBuilder, UNNAMED_TABLE,
+};
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
 pub use display::display_schema;
 pub use expr::{
@@ -46,6 +48,7 @@ pub use expr::{
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
 pub use plan::{
-    JoinType, LogicalPlan, Partitioning, PlanType, PlanVisitor, StringifiedPlan,
+    JoinConstraint, JoinType, LogicalPlan, Partitioning, PlanType, PlanVisitor,
+    StringifiedPlan,
 };
 pub use registry::FunctionRegistry;

@@ -45,6 +45,15 @@ pub enum JoinType {
     Full,
 }
 
+/// Join constraint
+#[derive(Debug, Clone, Copy)]
+pub enum JoinConstraint {
+    /// Join ON
+    On,
+    /// Join USING
+    Using,
+}
+
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -108,6 +117,8 @@ pub enum LogicalPlan {
         on: Vec<(Column, Column)>,
         /// Join type
         join_type: JoinType,
+        /// Join constraint
+        join_constraint: JoinConstraint,
         /// The output schema, containing fields from the left and right inputs
         schema: DFSchemaRef,
     },

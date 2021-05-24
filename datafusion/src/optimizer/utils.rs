@@ -24,8 +24,8 @@ use arrow::datatypes::Schema;
 use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
-    Column, Expr, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, PlanType,
-    Recursion, StringifiedPlan, ToDFSchema,
+    build_join_schema, Column, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder,
+    Operator, Partitioning, PlanType, Recursion, StringifiedPlan, ToDFSchema,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
@@ -202,16 +202,26 @@ pub fn from_plan(
         }),
         LogicalPlan::Join {
             join_type,
+            join_constraint,
             on,
-            schema,
             ..
-        } => Ok(LogicalPlan::Join {
-            left: Arc::new(inputs[0].clone()),
-            right: Arc::new(inputs[1].clone()),
-            join_type: *join_type,
-            on: on.clone(),
-            schema: schema.clone(),
-        }),
+        } => {
+            let schema = build_join_schema(
+                inputs[0].schema(),
+                inputs[1].schema(),
+                on,
+                join_type,
+                join_constraint,
+            )?;
+            Ok(LogicalPlan::Join {
+                left: Arc::new(inputs[0].clone()),
+                right: Arc::new(inputs[1].clone()),
+                join_type: *join_type,
+                join_constraint: *join_constraint,
+                on: on.clone(),
+                schema: DFSchemaRef::new(schema),
+            })
+        }
         LogicalPlan::CrossJoin { .. } => {
             let left = &inputs[0];
             let right = &inputs[1];
