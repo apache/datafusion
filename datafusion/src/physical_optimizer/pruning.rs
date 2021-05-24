@@ -190,7 +190,7 @@ impl PruningPredicate {
 /// ```text
 /// s1_min | s2_maxx
 /// -------+--------
-///   5    | 10
+///   5    | 1000
 /// ```
 fn build_statistics_record_batch<S: PruningStatistics>(
     statistics: &[S],
