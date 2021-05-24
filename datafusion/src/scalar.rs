@@ -17,28 +17,17 @@
 
 //! This module provides ScalarValue, an enum that can be used for storage of single elements
 
-use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
-
-use arrow::datatypes::{ArrowDictionaryKeyType, DataType, Field, IntervalUnit, TimeUnit};
+use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
     datatypes::{
-        ArrowNativeType, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
-        TimestampNanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type, Int16Type,
+        Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+        UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
-use arrow::{
-    array::{
-        ArrayRef, Int16Builder, Int32Builder, Int64Builder, Int8Builder, ListBuilder,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
-    },
-    datatypes::{
-        TimestampMicrosecondType, TimestampMillisecondType, TimestampSecondType,
-    },
-};
-
-use crate::error::{DataFusionError, Result};
+use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow’s `Array`.
@@ -192,6 +181,27 @@ macro_rules! build_values_list {
     }};
 }
 
+macro_rules! build_array_from_option {
+    ($DATA_TYPE:ident, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
+        match $EXPR {
+            Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
+            None => new_null_array(&DataType::$DATA_TYPE, $SIZE),
+        }
+    }};
+    ($DATA_TYPE:ident, $ENUM:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
+        match $EXPR {
+            Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
+            None => new_null_array(&DataType::$DATA_TYPE($ENUM), $SIZE),
+        }
+    }};
+    ($DATA_TYPE:ident, $ENUM:expr, $ENUM2:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
+        match $EXPR {
+            Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
+            None => new_null_array(&DataType::$DATA_TYPE($ENUM, $ENUM2), $SIZE),
+        }
+    }};
+}
+
 impl ScalarValue {
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {
@@ -289,80 +299,59 @@ impl ScalarValue {
             ScalarValue::Boolean(e) => {
                 Arc::new(BooleanArray::from(vec![*e; size])) as ArrayRef
             }
-            ScalarValue::Float64(e) => match e {
-                Some(value) => Arc::new(Float64Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Float64, size),
-            },
-            ScalarValue::Float32(e) => match e {
-                Some(value) => Arc::new(Float32Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Float32, size),
-            },
-            ScalarValue::Int8(e) => match e {
-                Some(value) => Arc::new(Int8Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Int8, size),
-            },
-            ScalarValue::Int16(e) => match e {
-                Some(value) => Arc::new(Int16Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Int16, size),
-            },
-            ScalarValue::Int32(e) => match e {
-                Some(value) => Arc::new(Int32Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Int32, size),
-            },
-            ScalarValue::Int64(e) => match e {
-                Some(value) => Arc::new(Int64Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Int64, size),
-            },
-            ScalarValue::UInt8(e) => match e {
-                Some(value) => Arc::new(UInt8Array::from_value(*value, size)),
-                None => new_null_array(&DataType::UInt8, size),
-            },
-            ScalarValue::UInt16(e) => match e {
-                Some(value) => Arc::new(UInt16Array::from_value(*value, size)),
-                None => new_null_array(&DataType::UInt16, size),
-            },
-            ScalarValue::UInt32(e) => match e {
-                Some(value) => Arc::new(UInt32Array::from_value(*value, size)),
-                None => new_null_array(&DataType::UInt32, size),
-            },
-            ScalarValue::UInt64(e) => match e {
-                Some(value) => Arc::new(UInt64Array::from_value(*value, size)),
-                None => new_null_array(&DataType::UInt64, size),
-            },
-            ScalarValue::TimestampSecond(e) => match e {
-                Some(value) => Arc::new(TimestampSecondArray::from_iter_values(
-                    repeat(*value).take(size),
-                )),
-                None => {
-                    new_null_array(&DataType::Timestamp(TimeUnit::Second, None), size)
-                }
-            },
-            ScalarValue::TimestampMillisecond(e) => match e {
-                Some(value) => Arc::new(TimestampMillisecondArray::from_iter_values(
-                    repeat(*value).take(size),
-                )),
-                None => new_null_array(
-                    &DataType::Timestamp(TimeUnit::Millisecond, None),
-                    size,
-                ),
-            },
-            ScalarValue::TimestampMicrosecond(e) => match e {
-                Some(value) => {
-                    Arc::new(TimestampMicrosecondArray::from_value(*value, size))
-                }
-                None => new_null_array(
-                    &DataType::Timestamp(TimeUnit::Microsecond, None),
-                    size,
-                ),
-            },
-            ScalarValue::TimestampNanosecond(e) => match e {
-                Some(value) => {
-                    Arc::new(TimestampNanosecondArray::from_value(*value, size))
-                }
-                None => {
-                    new_null_array(&DataType::Timestamp(TimeUnit::Nanosecond, None), size)
-                }
-            },
+            ScalarValue::Float64(e) => {
+                build_array_from_option!(Float64, Float64Array, e, size)
+            }
+            ScalarValue::Float32(e) => {
+                build_array_from_option!(Float32, Float32Array, e, size)
+            }
+            ScalarValue::Int8(e) => build_array_from_option!(Int8, Int8Array, e, size),
+            ScalarValue::Int16(e) => build_array_from_option!(Int16, Int16Array, e, size),
+            ScalarValue::Int32(e) => build_array_from_option!(Int32, Int32Array, e, size),
+            ScalarValue::Int64(e) => build_array_from_option!(Int64, Int64Array, e, size),
+            ScalarValue::UInt8(e) => build_array_from_option!(UInt8, UInt8Array, e, size),
+            ScalarValue::UInt16(e) => {
+                build_array_from_option!(UInt16, UInt16Array, e, size)
+            }
+            ScalarValue::UInt32(e) => {
+                build_array_from_option!(UInt32, UInt32Array, e, size)
+            }
+            ScalarValue::UInt64(e) => {
+                build_array_from_option!(UInt64, UInt64Array, e, size)
+            }
+            ScalarValue::TimestampSecond(e) => build_array_from_option!(
+                Timestamp,
+                TimeUnit::Second,
+                None,
+                TimestampSecondArray,
+                e,
+                size
+            ),
+            ScalarValue::TimestampMillisecond(e) => build_array_from_option!(
+                Timestamp,
+                TimeUnit::Millisecond,
+                None,
+                TimestampMillisecondArray,
+                e,
+                size
+            ),
+
+            ScalarValue::TimestampMicrosecond(e) => build_array_from_option!(
+                Timestamp,
+                TimeUnit::Microsecond,
+                None,
+                TimestampMicrosecondArray,
+                e,
+                size
+            ),
+            ScalarValue::TimestampNanosecond(e) => build_array_from_option!(
+                Timestamp,
+                TimeUnit::Nanosecond,
+                None,
+                TimestampNanosecondArray,
+                e,
+                size
+            ),
             ScalarValue::Utf8(e) => match e {
                 Some(value) => {
                     Arc::new(StringArray::from_iter_values(repeat(value).take(size)))
@@ -418,24 +407,27 @@ impl ScalarValue {
                 }
                 dt => panic!("Unexpected DataType for list {:?}", dt),
             }),
-            ScalarValue::Date32(e) => match e {
-                Some(value) => Arc::new(Date32Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Date32, size),
-            },
-            ScalarValue::Date64(e) => match e {
-                Some(value) => Arc::new(Date64Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Date64, size),
-            },
-            ScalarValue::IntervalDayTime(e) => match e {
-                Some(value) => Arc::new(IntervalDayTimeArray::from_value(*value, size)),
-                None => new_null_array(&DataType::Interval(IntervalUnit::DayTime), size),
-            },
-            ScalarValue::IntervalYearMonth(e) => match e {
-                Some(value) => Arc::new(IntervalYearMonthArray::from_value(*value, size)),
-                None => {
-                    new_null_array(&DataType::Interval(IntervalUnit::YearMonth), size)
-                }
-            },
+            ScalarValue::Date32(e) => {
+                build_array_from_option!(Date32, Date32Array, e, size)
+            }
+            ScalarValue::Date64(e) => {
+                build_array_from_option!(Date64, Date64Array, e, size)
+            }
+            ScalarValue::IntervalDayTime(e) => build_array_from_option!(
+                Interval,
+                IntervalUnit::DayTime,
+                IntervalDayTimeArray,
+                e,
+                size
+            ),
+
+            ScalarValue::IntervalYearMonth(e) => build_array_from_option!(
+                Interval,
+                IntervalUnit::YearMonth,
+                IntervalYearMonthArray,
+                e,
+                size
+            ),
         }
     }
 
@@ -879,6 +871,38 @@ impl ScalarType<i64> for TimestampNanosecondType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_value_to_array_u64() {
+        let value = ScalarValue::UInt64(Some(13u64));
+        let array = value.to_array();
+        let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+        assert_eq!(array.len(), 1);
+        assert_eq!(false, array.is_null(0));
+        assert_eq!(array.value(0), 13);
+
+        let value = ScalarValue::UInt64(None);
+        let array = value.to_array();
+        let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+        assert_eq!(array.len(), 1);
+        assert!(array.is_null(0));
+    }
+
+    #[test]
+    fn scalar_value_to_array_u32() {
+        let value = ScalarValue::UInt32(Some(13u32));
+        let array = value.to_array();
+        let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+        assert_eq!(array.len(), 1);
+        assert_eq!(false, array.is_null(0));
+        assert_eq!(array.value(0), 13);
+
+        let value = ScalarValue::UInt32(None);
+        let array = value.to_array();
+        let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+        assert_eq!(array.len(), 1);
+        assert!(array.is_null(0));
+    }
 
     #[test]
     fn scalar_list_null_to_array() {
