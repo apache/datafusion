@@ -709,13 +709,18 @@ mod roundtrip_tests {
             Field::new("salary", DataType::Int32, false),
         ]);
 
-        let scan_plan = LogicalPlanBuilder::empty(false)
-            .build()
-            .map_err(BallistaError::DataFusionError)?;
-        let plan = LogicalPlanBuilder::scan_csv(
-            "employee.csv",
+        let scan_plan = LogicalPlanBuilder::scan_csv(
+            "employee1",
             CsvReadOptions::new().schema(&schema).has_header(true),
-            Some(vec![3, 4]),
+            Some(vec![0, 3, 4]),
+        )?
+        .build()
+        .map_err(BallistaError::DataFusionError)?;
+
+        let plan = LogicalPlanBuilder::scan_csv(
+            "employee2",
+            CsvReadOptions::new().schema(&schema).has_header(true),
+            Some(vec![0, 3, 4]),
         )
         .and_then(|plan| plan.join(&scan_plan, JoinType::Inner, vec!["id"], vec!["id"]))
         .and_then(|plan| plan.build())
