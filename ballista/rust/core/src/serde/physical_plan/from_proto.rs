@@ -18,15 +18,14 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use std::collections::HashMap;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
 use crate::error::BallistaError;
 use crate::execution_plans::{ShuffleReaderExec, UnresolvedShuffleExec};
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
-use crate::serde::protobuf::LogicalExprNode;
 use crate::serde::scheduler::PartitionLocation;
-use crate::serde::{proto_error, protobuf};
+use crate::serde::{from_proto_binary_op, proto_error, protobuf};
 use crate::{convert_box_required, convert_required, into_required};
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
@@ -36,9 +35,7 @@ use datafusion::catalog::catalog::{
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
-use datafusion::logical_plan::{DFSchema, Expr};
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
-use datafusion::physical_plan::expressions::col;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::PartitionMode;
 use datafusion::physical_plan::merge::MergeExec;
@@ -47,8 +44,13 @@ use datafusion::physical_plan::{
     coalesce_batches::CoalesceBatchesExec,
     csv::CsvExec,
     empty::EmptyExec,
-    expressions::{Avg, Column, PhysicalSortExpr},
+    expressions::{
+        col, Avg, BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr,
+        IsNullExpr, Literal, NegativeExpr, NotExpr, PhysicalSortExpr, TryCastExpr,
+        DEFAULT_DATAFUSION_CAST_OPTIONS,
+    },
     filter::FilterExec,
+    functions::{self, BuiltinScalarFunction, ScalarFunctionExpr},
     hash_join::HashJoinExec,
     hash_utils::JoinType,
     limit::{GlobalLimitExec, LocalLimitExec},
@@ -61,7 +63,7 @@ use datafusion::physical_plan::{
 use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
 use datafusion::prelude::CsvReadOptions;
 use log::debug;
-use protobuf::logical_expr_node::ExprType;
+use protobuf::physical_expr_node::ExprType;
 use protobuf::physical_plan_node::PhysicalPlanType;
 
 impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
@@ -82,23 +84,23 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     .expr
                     .iter()
                     .zip(projection.expr_name.iter())
-                    .map(|(expr, name)| {
-                        compile_expr(expr, &input.schema()).map(|e| (e, name.to_string()))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .map(|(expr, name)| Ok((expr.try_into()?, name.to_string())))
+                    .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>, Self::Error>>(
+                    )?;
                 Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
             }
             PhysicalPlanType::Filter(filter) => {
                 let input: Arc<dyn ExecutionPlan> = convert_box_required!(filter.input)?;
-                let predicate = compile_expr(
-                    filter.expr.as_ref().ok_or_else(|| {
+                let predicate = filter
+                    .expr
+                    .as_ref()
+                    .ok_or_else(|| {
                         BallistaError::General(
                             "filter (FilterExecNode) in PhysicalPlanNode is missing."
                                 .to_owned(),
                         )
-                    })?,
-                    &input.schema(),
-                )?;
+                    })?
+                    .try_into()?;
                 Ok(Arc::new(FilterExec::try_new(predicate, input)?))
             }
             PhysicalPlanType::CsvScan(scan) => {
@@ -149,7 +151,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         let expr = hash_part
                             .hash_expr
                             .iter()
-                            .map(|e| compile_expr(e, &input.schema()))
+                            .map(|e| e.try_into())
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()?;
 
                         Ok(Arc::new(RepartitionExec::try_new(
@@ -208,28 +210,9 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     .iter()
                     .zip(hash_agg.group_expr_name.iter())
                     .map(|(expr, name)| {
-                        compile_expr(expr, &input.schema()).map(|e| (e, name.to_string()))
+                        expr.try_into().map(|expr| (expr, name.to_string()))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-
-                let logical_agg_expr: Vec<(Expr, String)> = hash_agg
-                    .aggr_expr
-                    .iter()
-                    .zip(hash_agg.aggr_expr_name.iter())
-                    .map(|(expr, name)| expr.try_into().map(|expr| (expr, name.clone())))
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let df_planner = DefaultPhysicalPlanner::default();
-                let catalog_list =
-                    Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
-                let ctx_state = ExecutionContextState {
-                    catalog_list,
-                    scalar_functions: Default::default(),
-                    var_provider: Default::default(),
-                    aggregate_functions: Default::default(),
-                    config: ExecutionConfig::new(),
-                    execution_props: ExecutionProps::new(),
-                };
 
                 let input_schema = hash_agg
                     .input_schema
@@ -243,35 +226,46 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let physical_schema: SchemaRef =
                     SchemaRef::new((&input_schema).try_into()?);
 
-                let mut physical_aggr_expr = vec![];
+                let physical_aggr_expr: Vec<Arc<dyn AggregateExpr>> = hash_agg
+                    .aggr_expr
+                    .iter()
+                    .zip(hash_agg.aggr_expr_name.iter())
+                    .map(|(expr, name)| {
+                        let expr_type = expr.expr_type.as_ref().ok_or_else(|| {
+                            proto_error("Unexpected empty aggregate physical expression")
+                        })?;
 
-                for (expr, name) in &logical_agg_expr {
-                    match expr {
-                        Expr::AggregateFunction { fun, args, .. } => {
-                            let arg = df_planner
-                                .create_physical_expr(
-                                    &args[0],
+                        match expr_type {
+                            ExprType::AggregateExpr(agg_node) => {
+                                let aggr_function =
+                                    protobuf::AggregateFunction::from_i32(
+                                        agg_node.aggr_function,
+                                    )
+                                    .ok_or_else(
+                                        || {
+                                            proto_error(format!(
+                                                "Received an unknown aggregate function: {}",
+                                                agg_node.aggr_function
+                                            ))
+                                        },
+                                    )?;
+
+                                Ok(create_aggregate_expr(
+                                    &aggr_function.into(),
+                                    false,
+                                    &[convert_box_required!(agg_node.expr)?],
                                     &physical_schema,
-                                    &ctx_state,
-                                )
-                                .map_err(|e| {
-                                    BallistaError::General(format!("{:?}", e))
-                                })?;
-                            physical_aggr_expr.push(create_aggregate_expr(
-                                &fun,
-                                false,
-                                &[arg],
-                                &physical_schema,
-                                name.to_string(),
-                            )?);
+                                    name.to_string(),
+                                )?)
+                            }
+                            _ => Err(BallistaError::General(
+                                "Invalid aggregate  expression for HashAggregateExec"
+                                    .to_string(),
+                            )),
                         }
-                        _ => {
-                            return Err(BallistaError::General(
-                                "Invalid expression for HashAggregateExec".to_string(),
-                            ))
-                        }
-                    }
-                }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 Ok(Arc::new(HashAggregateExec::try_new(
                     agg_mode,
                     group,
@@ -292,7 +286,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         let right = into_required!(col.right)?;
                         Ok((left, right))
                     })
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<_, Self::Error>>()?;
                 let join_type = protobuf::JoinType::from_i32(hashjoin.join_type)
                     .ok_or_else(|| {
                         proto_error(format!(
@@ -341,7 +335,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                                 self
                             ))
                         })?;
-                        if let protobuf::logical_expr_node::ExprType::Sort(sort_expr) = expr {
+                        if let protobuf::physical_expr_node::ExprType::Sort(sort_expr) = expr {
                             let expr = sort_expr
                                 .expr
                                 .as_ref()
@@ -353,7 +347,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                                 })?
                                 .as_ref();
                             Ok(PhysicalSortExpr {
-                                expr: compile_expr(expr, &input.schema())?,
+                                expr: expr.try_into()?,
                                 options: SortOptions {
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
@@ -388,29 +382,171 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
-        Column {
-            index: c.index as usize,
-            name: c.name,
+        Column::new(&c.name, c.index as usize)
+    }
+}
+
+impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
+    fn from(f: &protobuf::ScalarFunction) -> BuiltinScalarFunction {
+        use protobuf::ScalarFunction;
+        match f {
+            ScalarFunction::Sqrt => BuiltinScalarFunction::Sqrt,
+            ScalarFunction::Sin => BuiltinScalarFunction::Sin,
+            ScalarFunction::Cos => BuiltinScalarFunction::Cos,
+            ScalarFunction::Tan => BuiltinScalarFunction::Tan,
+            ScalarFunction::Asin => BuiltinScalarFunction::Asin,
+            ScalarFunction::Acos => BuiltinScalarFunction::Acos,
+            ScalarFunction::Atan => BuiltinScalarFunction::Atan,
+            ScalarFunction::Exp => BuiltinScalarFunction::Exp,
+            ScalarFunction::Log => BuiltinScalarFunction::Log,
+            ScalarFunction::Log2 => BuiltinScalarFunction::Log2,
+            ScalarFunction::Log10 => BuiltinScalarFunction::Log10,
+            ScalarFunction::Floor => BuiltinScalarFunction::Floor,
+            ScalarFunction::Ceil => BuiltinScalarFunction::Ceil,
+            ScalarFunction::Round => BuiltinScalarFunction::Round,
+            ScalarFunction::Trunc => BuiltinScalarFunction::Trunc,
+            ScalarFunction::Abs => BuiltinScalarFunction::Abs,
+            ScalarFunction::Signum => BuiltinScalarFunction::Signum,
+            ScalarFunction::Octetlength => BuiltinScalarFunction::OctetLength,
+            ScalarFunction::Concat => BuiltinScalarFunction::Concat,
+            ScalarFunction::Lower => BuiltinScalarFunction::Lower,
+            ScalarFunction::Upper => BuiltinScalarFunction::Upper,
+            ScalarFunction::Trim => BuiltinScalarFunction::Trim,
+            ScalarFunction::Ltrim => BuiltinScalarFunction::Ltrim,
+            ScalarFunction::Rtrim => BuiltinScalarFunction::Rtrim,
+            ScalarFunction::Totimestamp => BuiltinScalarFunction::ToTimestamp,
+            ScalarFunction::Array => BuiltinScalarFunction::Array,
+            ScalarFunction::Nullif => BuiltinScalarFunction::NullIf,
+            ScalarFunction::Datetrunc => BuiltinScalarFunction::DateTrunc,
+            ScalarFunction::Md5 => BuiltinScalarFunction::MD5,
+            ScalarFunction::Sha224 => BuiltinScalarFunction::SHA224,
+            ScalarFunction::Sha256 => BuiltinScalarFunction::SHA256,
+            ScalarFunction::Sha384 => BuiltinScalarFunction::SHA384,
+            ScalarFunction::Sha512 => BuiltinScalarFunction::SHA512,
+            ScalarFunction::Ln => BuiltinScalarFunction::Ln,
         }
     }
 }
 
-fn compile_expr(
-    expr: &protobuf::LogicalExprNode,
-    schema: &Schema,
-) -> Result<Arc<dyn PhysicalExpr>, BallistaError> {
-    let df_planner = DefaultPhysicalPlanner::default();
-    let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
-    let state = ExecutionContextState {
-        catalog_list,
-        scalar_functions: HashMap::new(),
-        var_provider: HashMap::new(),
-        aggregate_functions: HashMap::new(),
-        config: ExecutionConfig::new(),
-        execution_props: ExecutionProps::new(),
-    };
-    let expr: Expr = expr.try_into()?;
-    df_planner
-        .create_physical_expr(&expr, schema, &state)
-        .map_err(|e| BallistaError::General(format!("{:?}", e)))
+impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
+    type Error = BallistaError;
+
+    fn try_from(expr: &protobuf::PhysicalExprNode) -> Result<Self, Self::Error> {
+        let expr_type = expr
+            .expr_type
+            .as_ref()
+            .ok_or_else(|| proto_error("Unexpected empty physical expression"))?;
+
+        let pexpr: Arc<dyn PhysicalExpr> = match expr_type {
+            ExprType::Column(c) => {
+                let pcol: Column = c.into();
+                Arc::new(pcol)
+            }
+            ExprType::Literal(scalar) => {
+                Arc::new(Literal::new(convert_required!(scalar.value)?))
+            }
+            ExprType::BinaryExpr(binary_expr) => Arc::new(BinaryExpr::new(
+                convert_box_required!(&binary_expr.l)?,
+                from_proto_binary_op(&binary_expr.op)?,
+                convert_box_required!(&binary_expr.r)?,
+            )),
+            ExprType::AggregateExpr(_) => {
+                return Err(BallistaError::General(
+                    "Cannot convert aggregate expr node to physical expression"
+                        .to_owned(),
+                ));
+            }
+            ExprType::Sort(_) => {
+                return Err(BallistaError::General(
+                    "Cannot convert sort expr node to physical expression".to_owned(),
+                ));
+            }
+            ExprType::IsNullExpr(e) => {
+                Arc::new(IsNullExpr::new(convert_box_required!(e.expr)?))
+            }
+            ExprType::IsNotNullExpr(e) => {
+                Arc::new(IsNotNullExpr::new(convert_box_required!(e.expr)?))
+            }
+            ExprType::NotExpr(e) => {
+                Arc::new(NotExpr::new(convert_box_required!(e.expr)?))
+            }
+            ExprType::Negative(e) => {
+                Arc::new(NegativeExpr::new(convert_box_required!(e.expr)?))
+            }
+            ExprType::InList(e) => Arc::new(InListExpr::new(
+                convert_box_required!(e.expr)?,
+                e.list
+                    .iter()
+                    .map(|x| x.try_into())
+                    .collect::<Result<Vec<_>, _>>()?,
+                e.negated,
+            )),
+            ExprType::Case(e) => Arc::new(CaseExpr::try_new(
+                e.expr.as_ref().map(|e| e.as_ref().try_into()).transpose()?,
+                e.when_then_expr
+                    .iter()
+                    .map(|e| {
+                        Ok((
+                            convert_required!(e.when_expr)?,
+                            convert_required!(e.then_expr)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, BallistaError>>()?
+                    .as_slice(),
+                e.else_expr
+                    .as_ref()
+                    .map(|e| e.as_ref().try_into())
+                    .transpose()?,
+            )?),
+            ExprType::Cast(e) => Arc::new(CastExpr::new(
+                convert_box_required!(e.expr)?,
+                convert_required!(e.arrow_type)?,
+                DEFAULT_DATAFUSION_CAST_OPTIONS,
+            )),
+            ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
+                convert_box_required!(e.expr)?,
+                convert_required!(e.arrow_type)?,
+            )),
+            ExprType::ScalarFunction(e) => {
+                let scalar_function = protobuf::ScalarFunction::from_i32(e.fun)
+                    .ok_or_else(|| {
+                        proto_error(format!(
+                            "Received an unknown scalar function: {}",
+                            e.fun,
+                        ))
+                    })?;
+
+                let args = e
+                    .args
+                    .iter()
+                    .map(|x| x.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let catalog_list =
+                    Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+                let ctx_state = ExecutionContextState {
+                    catalog_list,
+                    scalar_functions: Default::default(),
+                    var_provider: Default::default(),
+                    aggregate_functions: Default::default(),
+                    config: ExecutionConfig::new(),
+                    execution_props: ExecutionProps::new(),
+                };
+
+                let fun_expr = functions::create_physical_fun(
+                    &(&scalar_function).into(),
+                    &ctx_state,
+                )?;
+
+                Arc::new(ScalarFunctionExpr::new(
+                    &e.name,
+                    fun_expr,
+                    args,
+                    &convert_required!(e.return_type)?,
+                ))
+            }
+        };
+
+        Ok(pexpr)
+    }
 }

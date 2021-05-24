@@ -350,6 +350,107 @@ message PhysicalPlanNode {
   }
 }
 
+// physical expressions
+message PhysicalExprNode {
+  oneof ExprType {
+    // column references
+    PhysicalColumn column = 1;
+
+    ScalarValue literal = 2;
+
+    // binary expressions
+    PhysicalBinaryExprNode binary_expr = 3;
+
+    // aggregate expressions
+    PhysicalAggregateExprNode aggregate_expr = 4;
+
+    // null checks
+    PhysicalIsNull is_null_expr = 5;
+    PhysicalIsNotNull is_not_null_expr = 6;
+    PhysicalNot not_expr = 7;
+
+    PhysicalCaseNode case_ = 8;
+    PhysicalCastNode cast = 9;
+    PhysicalSortExprNode sort = 10;
+    PhysicalNegativeNode negative = 11;
+    PhysicalInListNode in_list = 12;
+    PhysicalScalarFunctionNode scalar_function = 13;
+    PhysicalTryCastNode try_cast = 14;
+  }
+}
+
+message PhysicalAggregateExprNode {
+  AggregateFunction aggr_function = 1;
+  PhysicalExprNode expr = 2;
+}
+
+message PhysicalIsNull {
+  PhysicalExprNode expr = 1;
+}
+
+message PhysicalIsNotNull {
+  PhysicalExprNode expr = 1;
+}
+
+message PhysicalNot {
+  PhysicalExprNode expr = 1;
+}
+
+message PhysicalAliasNode {
+  PhysicalExprNode expr = 1;
+  string alias = 2;
+}
+
+message PhysicalBinaryExprNode {
+  PhysicalExprNode l = 1;
+  PhysicalExprNode r = 2;
+  string op = 3;
+}
+
+message PhysicalSortExprNode {
+  PhysicalExprNode expr = 1;
+  bool asc = 2;
+  bool nulls_first = 3;
+}
+
+message PhysicalWhenThen {
+  PhysicalExprNode when_expr = 1;
+  PhysicalExprNode then_expr = 2;
+}
+
+message PhysicalInListNode {
+  PhysicalExprNode expr = 1;
+  repeated PhysicalExprNode list = 2;
+  bool negated = 3;
+}
+
+message PhysicalCaseNode {
+  PhysicalExprNode expr = 1;
+  repeated PhysicalWhenThen when_then_expr = 2;
+  PhysicalExprNode else_expr = 3;
+}
+
+message PhysicalScalarFunctionNode {
+  string name = 1;
+  ScalarFunction fun = 2;
+  repeated PhysicalExprNode args = 3;
+  ArrowType return_type = 4;
+}
+
+message PhysicalTryCastNode {
+  PhysicalExprNode expr = 1;
+  ArrowType arrow_type = 2;
+}
+
+message PhysicalCastNode {
+  PhysicalExprNode expr = 1;
+  ArrowType arrow_type = 2;
+}
+
+message PhysicalNegativeNode {
+  PhysicalExprNode expr = 1;
+}
+
 message UnresolvedShuffleExecNode {
   repeated uint32 query_stage_ids = 1;
   Schema schema = 2;
@@ -358,7 +459,7 @@ message UnresolvedShuffleExecNode {
 
 message FilterExecNode {
   PhysicalPlanNode input = 1;
-  LogicalExprNode expr = 2;
+  PhysicalExprNode expr = 2;
 }
 
 message ParquetScanExecNode {
@@ -406,7 +507,7 @@ message EmptyExecNode {
 
 message ProjectionExecNode {
   PhysicalPlanNode input = 1;
-  repeated LogicalExprNode expr = 2;
+  repeated PhysicalExprNode expr = 2;
   repeated string expr_name = 3;
 }
 
@@ -416,8 +517,8 @@ enum AggregateMode {
 }
 
 message HashAggregateExecNode {
-  repeated LogicalExprNode group_expr = 1;
-  repeated LogicalExprNode aggr_expr = 2;
+  repeated PhysicalExprNode group_expr = 1;
+  repeated PhysicalExprNode aggr_expr = 2;
   AggregateMode mode = 3;
   PhysicalPlanNode input = 4;
   repeated string group_expr_name = 5;
@@ -443,7 +544,7 @@ message LocalLimitExecNode {
 
 message SortExecNode {
   PhysicalPlanNode input = 1;
-  repeated LogicalExprNode expr = 2;
+  repeated PhysicalExprNode expr = 2;
 }
 
 message CoalesceBatchesExecNode {
@@ -455,11 +556,16 @@ message MergeExecNode {
   PhysicalPlanNode input = 1;
 }
 
+message PhysicalHashRepartition {
+  repeated PhysicalExprNode hash_expr = 1;
+  uint64 partition_count = 2;
+}
+
 message RepartitionExecNode{
   PhysicalPlanNode input = 1;
   oneof partition_method {
     uint64 round_robin = 2;
-    HashRepartition hash = 3;
+    PhysicalHashRepartition hash = 3;
     uint64 unknown = 4;
   }
 }
@@ -736,7 +842,7 @@ message ScalarListValue{
 
 
 message ScalarValue{
-    oneof value{
+    oneof value {
         bool   bool_value = 1;
         string utf8_value = 2;
         string large_utf8_value = 3;

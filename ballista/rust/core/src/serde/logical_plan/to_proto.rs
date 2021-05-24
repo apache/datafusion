@@ -810,8 +810,8 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     JoinType::Right => protobuf::JoinType::Right,
                     JoinType::Full => protobuf::JoinType::Full,
                 };
-                let left_join_column = on.iter().map(|on| on.0.into()).collect();
-                let right_join_column = on.iter().map(|on| on.1.into()).collect();
+                let (left_join_column, right_join_column) =
+                    on.iter().map(|(l, r)| (l.into(), r.into())).unzip();
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Join(Box::new(
                         protobuf::JoinNode {

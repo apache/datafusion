@@ -47,7 +47,7 @@ mod try_cast;
 pub use average::{avg_return_type, Avg, AvgAccumulator};
 pub use binary::{binary, binary_operator_data_type, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{cast, cast_with_options, CastExpr};
+pub use cast::{cast, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS};
 pub use column::{col, Column};
 pub use count::Count;
 pub use in_list::{in_list, InListExpr};
