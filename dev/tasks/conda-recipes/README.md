@@ -54,13 +54,11 @@ related parts (the cloning of arrow and the jinja templated variables) and
 moving the matrix definitions like [this][matrix-definition] to the crossbow
 [tasks.yml][../tasks.yml] config file.
 
-
 ### Porting recipes from crossbow to the upstream feedstocks
 
 Theoretically these recipes should be up to date with the actual version of
 Arrow, so during the release procedure the content of these recipes should be
 copied to the upstream feedstocks.
-
 
 [arrow-cpp-feedstock]: https://github.com/conda-forge/arrow-cpp-feedstock
 [parquet-cpp-feedstock]: https://github.com/conda-forge/parquet-cpp-feedstock
