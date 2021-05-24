@@ -19,14 +19,14 @@
 
 # Ballista: Distributed Compute with Apache Arrow
 
-Ballista is a distributed compute platform primarily implemented in Rust, and powered by Apache Arrow. It is built 
-on an architecture that allows other programming languages (such as Python, C++, and Java) to be supported as 
+Ballista is a distributed compute platform primarily implemented in Rust, and powered by Apache Arrow. It is built
+on an architecture that allows other programming languages (such as Python, C++, and Java) to be supported as
 first-class citizens without paying a penalty for serialization costs.
 
 The foundational technologies in Ballista are:
 
 - [Apache Arrow](https://arrow.apache.org/) memory model and compute kernels for efficient processing of data.
-- [Apache Arrow Flight Protocol](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for efficient 
+- [Apache Arrow Flight Protocol](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for efficient
   data transfer between processes.
 - [Google Protocol Buffers](https://developers.google.com/protocol-buffers) for serializing query plans.
 - [Docker](https://www.docker.com/) for packaging up executors along with user-defined code.
@@ -57,7 +57,6 @@ April 2021 and should be considered experimental.
 
 ## Getting Started
 
-The [Ballista Developer Documentation](docs/README.md) and the 
-[DataFusion User Guide](https://github.com/apache/arrow-datafusion/tree/master/docs/user-guide) are currently the 
+The [Ballista Developer Documentation](docs/README.md) and the
+[DataFusion User Guide](https://github.com/apache/arrow-datafusion/tree/master/docs/user-guide) are currently the
 best sources of information for getting started with Ballista.
-

@@ -45,16 +45,23 @@ docker run -it -v $(your_data_location):/data datafusion-cli
 ## Usage
 
 ```
+DataFusion 4.0.0-SNAPSHOT
+DataFusion is an in-memory query engine that uses Apache Arrow as the memory model. It supports executing SQL queries
+against CSV and Parquet files as well as querying directly against in-memory data.
+
 USAGE:
-    datafusion-cli [OPTIONS]
+    datafusion-cli [FLAGS] [OPTIONS]
 
 FLAGS:
     -h, --help       Prints help information
+    -q, --quiet      Reduce printing other than the results and work quietly
     -V, --version    Prints version information
 
 OPTIONS:
-    -c, --batch-size <batch-size>    The batch size of each query, default value is 1048576
+    -c, --batch-size <batch-size>    The batch size of each query, or use DataFusion default
     -p, --data-path <data-path>      Path to your data, default to current directory
+    -f, --file <file>                Execute commands from file, then exit
+        --format <format>            Output format (possible values: table, csv, tsv, json) [default: table]
 ```
 
 Type `exit` or `quit` to exit the CLI.
@@ -64,7 +71,7 @@ Type `exit` or `quit` to exit the CLI.
 Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary to provide schema information for Parquet files.
 
 ```sql
-CREATE EXTERNAL TABLE taxi 
+CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/tripdata.parquet';
 ```

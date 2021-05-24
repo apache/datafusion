@@ -16,6 +16,7 @@
   specific language governing permissions and limitations
   under the License.
 -->
+
 # Deploying Ballista with Kubernetes
 
 Ballista can be deployed to any Kubernetes cluster using the following instructions. These instructions assume that
@@ -32,15 +33,15 @@ The k8s deployment consists of:
 
 Ballista is at an early stage of development and therefore has some significant limitations:
 
-- There is no support for shared object stores such as S3. All data must exist locally on each node in the 
+- There is no support for shared object stores such as S3. All data must exist locally on each node in the
   cluster, including where any client process runs.
-- Only a single scheduler instance is currently supported unless the scheduler is configured to use `etcd` as a 
+- Only a single scheduler instance is currently supported unless the scheduler is configured to use `etcd` as a
   backing store.
 
-## Create Persistent Volume and Persistent Volume Claim 
+## Create Persistent Volume and Persistent Volume Claim
 
-Copy the following yaml to a `pv.yaml` file and apply to the cluster to create a persistent volume and a persistent 
-volume claim so that the specified host directory is available to the containers. This is where any data should be 
+Copy the following yaml to a `pv.yaml` file and apply to the cluster to create a persistent volume and a persistent
+volume claim so that the specified host directory is available to the containers. This is where any data should be
 located so that Ballista can execute queries against it.
 
 ```yaml
@@ -121,20 +122,20 @@ spec:
         ballista-cluster: ballista
     spec:
       containers:
-      - name: ballista-scheduler
-        image: ballistacompute/ballista-rust:0.4.2-SNAPSHOT
-        command: ["/scheduler"]
-        args: ["--port=50050"]
-        ports:
-          - containerPort: 50050
-            name: flight
-        volumeMounts:
-          - mountPath: /mnt
-            name: data
+        - name: ballista-scheduler
+          image: ballistacompute/ballista-rust:0.4.2-SNAPSHOT
+          command: ["/scheduler"]
+          args: ["--port=50050"]
+          ports:
+            - containerPort: 50050
+              name: flight
+          volumeMounts:
+            - mountPath: /mnt
+              name: data
       volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: data-pv-claim
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-pv-claim
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -156,12 +157,18 @@ spec:
         - name: ballista-executor
           image: ballistacompute/ballista-rust:0.4.2-SNAPSHOT
           command: ["/executor"]
-          args: ["--port=50051", "--scheduler-host=ballista-scheduler", "--scheduler-port=50050", "--external-host=$(MY_POD_IP)"]
+          args:
+            [
+              "--port=50051",
+              "--scheduler-host=ballista-scheduler",
+              "--scheduler-port=50050",
+              "--external-host=$(MY_POD_IP)",
+            ]
           env:
             - name: MY_POD_IP
               valueFrom:
                 fieldRef:
-                  fieldPath: status.podIP            
+                  fieldPath: status.podIP
           ports:
             - containerPort: 50051
               name: flight

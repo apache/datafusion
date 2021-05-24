@@ -22,7 +22,9 @@
 ## Start project from source
 
 ### Run scheduler/executor
+
 First, run scheduler from project:
+
 ```shell
 $ cd rust/scheduler
 $ RUST_LOG=info cargo run --release
@@ -34,6 +36,7 @@ $ RUST_LOG=info cargo run --release
 ```
 
 and run executor in new terminal:
+
 ```shell
 $ cd rust/executor
 $ RUST_LOG=info cargo run --release
@@ -44,6 +47,7 @@ $ RUST_LOG=info cargo run --release
 ```
 
 ### Run Client project
+
 ```shell
 $ cd ui/scheduler
 $ yarn

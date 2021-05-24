@@ -37,8 +37,7 @@ the convenience of an SQL interface or a DataFrame API.
 
 ## Why DataFusion?
 
-* *High Performance*: Leveraging Rust and Arrow's memory model, DataFusion achieves very high performance
-* *Easy to Connect*: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem
-* *Easy to Embed*: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific usecase
-* *High Quality*:  Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.
-
+- _High Performance_: Leveraging Rust and Arrow's memory model, DataFusion achieves very high performance
+- _Easy to Connect_: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem
+- _Easy to Embed_: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific usecase
+- _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.

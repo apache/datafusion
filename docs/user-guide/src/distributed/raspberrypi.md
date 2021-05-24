@@ -16,31 +16,32 @@
   specific language governing permissions and limitations
   under the License.
 -->
+
 # Running Ballista on Raspberry Pi
 
 The Raspberry Pi single-board computer provides a fun and relatively inexpensive way to get started with distributed
 computing.
 
-These instructions have been tested using an Ubuntu Linux desktop as the host, and a 
+These instructions have been tested using an Ubuntu Linux desktop as the host, and a
 [Raspberry Pi 4 Model B](https://www.raspberrypi.org/products/raspberry-pi-4-model-b/) with 4 GB RAM as the target.
 
 ## Preparing the Raspberry Pi
 
 We recommend installing the 64-bit version of [Ubuntu for Raspberry Pi](https://ubuntu.com/raspberry-pi).
 
-The Rust implementation of Arrow does not work correctly on 32-bit ARM architectures 
+The Rust implementation of Arrow does not work correctly on 32-bit ARM architectures
 ([issue](https://github.com/apache/arrow-rs/issues/109)).
 
 ## Cross Compiling DataFusion for the Raspberry Pi
 
-We do not yet publish official Docker images as part of the release process, although we do plan to do this in the 
-future ([issue #228](https://github.com/apache/arrow-datafusion/issues/228)). 
+We do not yet publish official Docker images as part of the release process, although we do plan to do this in the
+future ([issue #228](https://github.com/apache/arrow-datafusion/issues/228)).
 
-Although it is technically possible to build DataFusion directly on a Raspberry Pi, it really isn't very practical. 
-It is much faster to use [cross](https://github.com/rust-embedded/cross) to cross-compile from a more powerful 
+Although it is technically possible to build DataFusion directly on a Raspberry Pi, it really isn't very practical.
+It is much faster to use [cross](https://github.com/rust-embedded/cross) to cross-compile from a more powerful
 desktop computer.
 
-Docker must be installed and the Docker daemon must be running before cross-compiling with cross. See the 
+Docker must be installed and the Docker daemon must be running before cross-compiling with cross. See the
 [cross](https://github.com/rust-embedded/cross) project for more detailed instructions.
 
 Run the following command to install cross.
@@ -63,9 +64,9 @@ cross test --target aarch64-unknown-linux-gnu
 
 ## Deploying the binaries to Raspberry Pi
 
-You should now be able to copy the executable to the Raspberry Pi using scp on Linux. You will need to change the IP 
-address in these commands to be the IP address for your Raspberry Pi. The easiest way to find this is to connect a 
-keyboard and monitor to the Pi and run `ifconfig`. 
+You should now be able to copy the executable to the Raspberry Pi using scp on Linux. You will need to change the IP
+address in these commands to be the IP address for your Raspberry Pi. The easiest way to find this is to connect a
+keyboard and monitor to the Pi and run `ifconfig`.
 
 ```bash
 scp ./target/aarch64-unknown-linux-gnu/release/ballista-scheduler ubuntu@10.0.0.186:
@@ -83,9 +84,9 @@ It is now possible to run the Ballista scheduler and executor natively on the Pi
 
 ## Docker
 
-Using Docker's `buildx` cross-platform functionality, we can also build a docker image targeting ARM64 
-from any desktop environment. This will require write access to a Docker repository 
-on [Docker Hub](https://hub.docker.com/) because the resulting Docker image will be pushed directly 
+Using Docker's `buildx` cross-platform functionality, we can also build a docker image targeting ARM64
+from any desktop environment. This will require write access to a Docker repository
+on [Docker Hub](https://hub.docker.com/) because the resulting Docker image will be pushed directly
 to the repo.
 
 ```bash
@@ -118,7 +119,7 @@ docker run -it myrepo/ballista-arm64 \
   --concurrency=24 --iterations=1 --debug --host=ballista-scheduler --port=50050
 ```
 
-Note that it will be necessary to mount appropriate volumes into the containers and also configure networking 
+Note that it will be necessary to mount appropriate volumes into the containers and also configure networking
 so that the Docker containers can communicate with each other. This can be achieved using Docker compose or Kubernetes.
 
 ## Kubernetes
