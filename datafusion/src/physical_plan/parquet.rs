@@ -38,7 +38,10 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::file::{
+    metadata::RowGroupMetaData,
+    reader::{FileReader, SerializedFileReader},
+};
 
 use fmt::Debug;
 use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
@@ -454,6 +457,22 @@ fn send_result(
     Ok(())
 }
 
+fn build_row_group_predicate(
+    predicate_builder: &PruningPredicateBuilder,
+    row_group_metadata: &[RowGroupMetaData],
+) -> Box<dyn Fn(&RowGroupMetaData, usize) -> bool> {
+    let predicate_values = predicate_builder.build_pruning_predicate(row_group_metadata);
+
+    let predicate_values = match predicate_values {
+        Ok(values) => values,
+        // stats filter array could not be built
+        // return a closure which will not filter out any row groups
+        _ => return Box::new(|_r, _i| true),
+    };
+
+    Box::new(move |_, i| predicate_values[i])
+}
+
 fn read_files(
     filenames: &[String],
     projection: &[usize],
@@ -467,8 +486,10 @@ fn read_files(
         let file = File::open(&filename)?;
         let mut file_reader = SerializedFileReader::new(file)?;
         if let Some(predicate_builder) = predicate_builder {
-            let row_group_predicate = predicate_builder
-                .build_pruning_predicate(file_reader.metadata().row_groups());
+            let row_group_predicate = build_row_group_predicate(
+                predicate_builder,
+                file_reader.metadata().row_groups(),
+            );
             file_reader.filter_row_groups(&row_group_predicate);
         }
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
@@ -643,7 +664,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_pruning_predicate(&row_group_metadata);
+            build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -673,7 +694,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_pruning_predicate(&row_group_metadata);
+            build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -718,7 +739,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_pruning_predicate(&row_group_metadata);
+            build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -733,7 +754,7 @@ mod tests {
         let expr = col("c1").gt(lit(15)).or(col("c2").modulus(lit(2)));
         let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
         let row_group_predicate =
-            predicate_builder.build_pruning_predicate(&row_group_metadata);
+            build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -777,7 +798,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_pruning_predicate(&row_group_metadata);
+            build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()

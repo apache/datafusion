@@ -15,9 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains code to rule out row groups / partitions /
-//! etc based on statistics prior in order to skip evaluating entire
-//! swaths of rows.
+//! This module contains code to prune "containers" of row groups
+//! based on statistics prior to execution. This can lead to
+//! significant performance improvements by avoiding the need
+//! to evaluate a plan on entire containers (e.g. an entire file)
+//!
+//! For example, it is used to prune (skip) row groups while reading
+//! parquet files if it can be determined from the predicate that
+//! nothing in the row group can match.
 //!
 //! This code is currently specific to Parquet, but soon (TM), via
 //! https://github.com/apache/arrow-datafusion/issues/363 it will
@@ -85,24 +90,24 @@ impl PruningPredicateBuilder {
         })
     }
 
-    /// Generate a predicate function used to filter based on
-    /// statistics
+    /// For each set of statistics, evalates the predicate in this
+    /// builder and returns a `bool` with the following meaning for a
+    /// container with those statistics:
     ///
-    /// This function takes a slice of statistics as parameter, so
-    /// that DataFusion's physical expressions can be executed once
-    /// against a single RecordBatch, containing statistics arrays, on
-    /// which the physical predicate expression is executed to
-    /// generate a row group filter array.
+    /// `true`: The container MAY contain rows that match the predicate
     ///
-    /// The generated filter function is then used in the returned
-    /// closure to filter row groups. NOTE this is parquet specific at the moment
+    /// `false`: The container MUST NOT contain rows that match the predicate
+    ///
+    /// Note this function takes a slice of statistics as a parameter
+    /// to amortize the cost of the evaluation of the predicate
+    /// against a single record batch.
     pub fn build_pruning_predicate(
         &self,
-        row_group_metadata: &[RowGroupMetaData],
-    ) -> Box<dyn Fn(&RowGroupMetaData, usize) -> bool> {
+        statistics: &[RowGroupMetaData],
+    ) -> Result<Vec<bool>> {
         // build statistics record batch
-        let predicate_result = build_statistics_record_batch(
-            row_group_metadata,
+        let predicate_array = build_statistics_record_batch(
+            statistics,
             &self.schema,
             &self.stat_column_req,
         )
@@ -112,33 +117,29 @@ impl PruningPredicateBuilder {
         })
         .and_then(|v| match v {
             ColumnarValue::Array(array) => Ok(array),
-            ColumnarValue::Scalar(_) => Err(DataFusionError::Plan(
+            ColumnarValue::Scalar(_) => Err(DataFusionError::Internal(
                 "predicate expression didn't return an array".to_string(),
             )),
-        });
+        })?;
 
-        let predicate_array = match predicate_result {
-            Ok(array) => array,
-            // row group filter array could not be built
-            // return a closure which will not filter out any row groups
-            _ => return Box::new(|_r, _i| true),
-        };
+        let predicate_array = predicate_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Expected pruning predicate evaluation to be BooleanArray, \
+                     but was {:?}",
+                    predicate_array
+                ))
+            })?;
 
-        let predicate_array = predicate_array.as_any().downcast_ref::<BooleanArray>();
-        match predicate_array {
-            // return row group predicate function
-            Some(array) => {
-                // when the result of the predicate expression for a row group is null / undefined,
-                // e.g. due to missing statistics, this row group can't be filtered out,
-                // so replace with true
-                let predicate_values =
-                    array.iter().map(|x| x.unwrap_or(true)).collect::<Vec<_>>();
-                Box::new(move |_, i| predicate_values[i])
-            }
-            // predicate result is not a BooleanArray
-            // return a closure which will not filter out any row groups
-            _ => Box::new(|_r, _i| true),
-        }
+        // when the result of the predicate expression for a row group is null / undefined,
+        // e.g. due to missing statistics, this row group can't be filtered out,
+        // so replace with true
+        Ok(predicate_array
+            .into_iter()
+            .map(|x| x.unwrap_or(true))
+            .collect::<Vec<_>>())
     }
 }
 
@@ -146,7 +147,7 @@ impl PruningPredicateBuilder {
 /// [`RowGroupMetadata`] structs), creating arrays, one for each
 /// statistics column, as requested in the stat_column_req parameter.
 fn build_statistics_record_batch(
-    row_groups: &[RowGroupMetaData],
+    statistics: &[RowGroupMetaData],
     schema: &Schema,
     stat_column_req: &[(String, StatisticsType, Field)],
 ) -> Result<RecordBatch> {
@@ -154,7 +155,7 @@ fn build_statistics_record_batch(
     let mut arrays = Vec::<ArrayRef>::new();
     for (column_name, statistics_type, stat_field) in stat_column_req {
         if let Some((column_index, _)) = schema.column_with_name(column_name) {
-            let statistics = row_groups
+            let statistics = statistics
                 .iter()
                 .map(|g| g.column(column_index).statistics())
                 .collect::<Vec<_>>();
