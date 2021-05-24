@@ -393,7 +393,7 @@ impl SortPreservingMergeStream {
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them
     ///
     /// Will then drop any cursors for which all rows have been yielded to the output
-    fn build_record_batch(&mut self) -> RecordBatch {
+    fn build_record_batch(&mut self) -> ArrowResult<RecordBatch> {
         // Mapping from stream index to the index of the first buffer from that stream
         let mut buffer_idx = 0;
         let mut stream_to_buffer_idx = Vec::with_capacity(self.cursors.len());
@@ -459,7 +459,6 @@ impl SortPreservingMergeStream {
         }
 
         RecordBatch::try_new(self.schema.clone(), columns)
-            .expect("SortPreservingMergeStream: merged record batch was invalid")
     }
 }
 
@@ -490,7 +489,7 @@ impl Stream for SortPreservingMergeStream {
             let stream_idx = match self.next_stream_idx() {
                 Ok(Some(idx)) => idx,
                 Ok(None) if self.in_progress.is_empty() => return Poll::Ready(None),
-                Ok(None) => return Poll::Ready(Some(Ok(self.build_record_batch()))),
+                Ok(None) => return Poll::Ready(Some(self.build_record_batch())),
                 Err(e) => {
                     self.aborted = true;
                     return Poll::Ready(Some(Err(ArrowError::ExternalError(Box::new(
@@ -512,7 +511,7 @@ impl Stream for SortPreservingMergeStream {
             });
 
             if self.in_progress.len() == self.target_batch_size {
-                return Poll::Ready(Some(Ok(self.build_record_batch())));
+                return Poll::Ready(Some(self.build_record_batch()));
             }
 
             // If removed the last row from the cursor, need to fetch a new record
