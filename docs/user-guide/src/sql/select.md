@@ -20,7 +20,7 @@
 # SELECT syntax
 
 The queries in DataFusion scan data from tables and return 0 or more rows.
-In this documentation we describe the SQL syntax in DataFusion. 
+In this documentation we describe the SQL syntax in DataFusion.
 
 DataFusion supports the following syntax for queries:
 <code class="language-sql hljs">
@@ -32,7 +32,7 @@ DataFusion supports the following syntax for queries:
 [ [GROUP BY](#group-by-clause) grouping_element [, ...] ] <br/>
 [ [HAVING](#having-clause) condition] <br/>
 [ [UNION](#union-clause) [ ALL | select ] <br/>
-[ [ORDER BY](#order-by-clause) expression [ ASC | DESC ] [, ...] ] <br/>
+[ [ORDER BY](#order-by-clause) expression [ ASC | DESC ][, ...] ] <br/>
 [ [LIMIT](#limit-clause) count ] <br/>
 
 </code>
@@ -48,11 +48,10 @@ SELECT a, b FROM x;
 
 # SELECT clause
 
-
 Example:
 
 ```sql
-SELECT a, b, a + b FROM table 
+SELECT a, b, a + b FROM table
 ```
 
 The `DISTINCT` quantifier can be added to make the query return all distinct rows.
@@ -65,10 +64,10 @@ SELECT DISTINCT person, age FROM employees
 # FROM clause
 
 Example:
+
 ```sql
 SELECT t.a FROM table AS t
 ```
-
 
 # WHERE clause
 
@@ -85,7 +84,6 @@ Example:
 ```sql
 SELECT a, b, MAX(c) FROM table GROUP BY a, b
 ```
-
 
 # HAVING clause
 
@@ -125,7 +123,6 @@ SELECT age, person FROM table ORDER BY age;
 SELECT age, person FROM table ORDER BY age DESC;
 SELECT age, person FROM table ORDER BY age, person DESC;
 ```
-
 
 # LIMIT clause
 

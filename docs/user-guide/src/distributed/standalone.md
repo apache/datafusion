@@ -16,6 +16,7 @@
   specific language governing permissions and limitations
   under the License.
 -->
+
 ## Deploying a standalone Ballista cluster
 
 ### Start a Scheduler
@@ -50,7 +51,7 @@ Start one or more executor processes. Each executor process will need to listen 
 ```bash
 docker run --network=host \
   -d ballistacompute/ballista-rust:0.4.2-SNAPSHOT \
-  /executor --external-host localhost --port 50051 
+  /executor --external-host localhost --port 50051
 ```
 
 Use `docker ps` to check that both the scheduer and executor(s) are now running:
@@ -71,14 +72,14 @@ $ docker logs 0746ce262a19
 [2021-02-14T18:36:25Z INFO  executor] Starting registration with scheduler
 ```
 
-The external host and port will be registered with the scheduler. The executors will discover other executors by 
+The external host and port will be registered with the scheduler. The executors will discover other executors by
 requesting a list of executors from the scheduler.
 
 ### Using etcd as backing store
 
 _NOTE: This functionality is currently experimental_
 
-Ballista can optionally use [etcd](https://etcd.io/) as a backing store for the scheduler. 
+Ballista can optionally use [etcd](https://etcd.io/) as a backing store for the scheduler.
 
 ```bash
 docker run --network=host \
@@ -88,5 +89,5 @@ docker run --network=host \
   --etcd-urls etcd:2379
 ```
 
-Please refer to the [etcd](https://etcd.io/) web site for installation instructions. Etcd version 3.4.9 or later is 
+Please refer to the [etcd](https://etcd.io/) web site for installation instructions. Etcd version 3.4.9 or later is
 recommended.

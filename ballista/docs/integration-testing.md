@@ -16,10 +16,11 @@
   specific language governing permissions and limitations
   under the License.
 -->
+
 # Integration Testing
 
-We use the [DataFusion Benchmarks](https://github.com/apache/arrow-datafusion/tree/master/benchmarks) for integration 
-testing. 
+We use the [DataFusion Benchmarks](https://github.com/apache/arrow-datafusion/tree/master/benchmarks) for integration
+testing.
 
 The integration tests can be executed by running the following command from the root of the DataFusion repository.
 
