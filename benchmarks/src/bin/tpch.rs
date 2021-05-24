@@ -97,7 +97,7 @@ struct BallistaBenchmarkOpt {
 }
 
 #[derive(Debug, StructOpt, Clone)]
-struct DatafusionBenchmarkOpt {
+struct DataFusionBenchmarkOpt {
     /// Query number
     #[structopt(short, long)]
     query: usize,
@@ -168,7 +168,7 @@ enum BenchmarkSubCommandOpt {
     #[structopt(name = "ballista")]
     BallistaBenchmark(BallistaBenchmarkOpt),
     #[structopt(name = "datafusion")]
-    DatafusionBenchmark(DatafusionBenchmarkOpt),
+    DataFusionBenchmark(DataFusionBenchmarkOpt),
 }
 
 #[derive(Debug, StructOpt)]
@@ -191,14 +191,14 @@ async fn main() -> Result<()> {
         TpchOpt::Benchmark(BallistaBenchmark(opt)) => {
             benchmark_ballista(opt).await.map(|_| ())
         }
-        TpchOpt::Benchmark(DatafusionBenchmark(opt)) => {
+        TpchOpt::Benchmark(DataFusionBenchmark(opt)) => {
             benchmark_datafusion(opt).await.map(|_| ())
         }
         TpchOpt::Convert(opt) => convert_tbl(opt).await,
     }
 }
 
-async fn benchmark_datafusion(opt: DatafusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
+async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let config = ExecutionConfig::new()
         .with_concurrency(opt.concurrency)
@@ -995,7 +995,7 @@ mod tests {
             let expected = df.collect().await?;
 
             // run the query to compute actual results of the query
-            let opt = DatafusionBenchmarkOpt {
+            let opt = DataFusionBenchmarkOpt {
                 query: n,
                 debug: false,
                 iterations: 1,
