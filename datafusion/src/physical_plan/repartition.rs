@@ -214,10 +214,11 @@ impl ExecutionPlan for RepartitionExec {
                                     partition_indices.into_iter().enumerate()
                                 {
                                     let now = Instant::now();
-                                    let indices: UInt64Array =
-                                        UInt64Array::from_iter_values(
-                                            indices.iter().cloned(),
-                                        );
+                                    let indices: UInt64Array = unsafe {
+                                        UInt64Array::from_trusted_len_iter(
+                                            indices.iter().map(|x| Some(*x)),
+                                        )
+                                    };
 
                                     // Produce batches based on indices
                                     let columns = input_batch
