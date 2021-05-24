@@ -38,7 +38,7 @@ use datafusion::datasource::parquet::ParquetTable;
 use datafusion::datasource::{CsvFile, MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
-use datafusion::physical_plan::collect;
+use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 
 use datafusion::parquet::basic::Compression;
@@ -310,6 +310,12 @@ async fn execute_query(
         println!("Optimized logical plan:\n{:?}", plan);
     }
     let physical_plan = ctx.create_physical_plan(&plan)?;
+    if debug {
+        println!(
+            "Physical plan:\n{}",
+            displayable(physical_plan.as_ref()).indent().to_string()
+        );
+    }
     let result = collect(physical_plan).await?;
     if debug {
         pretty::print_batches(&result)?;
