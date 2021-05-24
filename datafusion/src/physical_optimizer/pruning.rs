@@ -571,7 +571,7 @@ mod tests {
         let batch = build_statistics_record_batch(&statistics, &stat_column_req).unwrap();
         let expected = vec![
             "+--------+--------+--------+--------+",
-            "| s1_min | s2_min | s3_max | s3_min |",
+            "| s1_min | s2_max | s3_max | s3_min |",
             "+--------+--------+--------+--------+",
             "|        | 20     | q      | a      |",
             "|        |        |        |        |",
