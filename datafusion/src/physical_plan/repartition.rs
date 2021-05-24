@@ -26,8 +26,8 @@ use std::{any::Any, vec};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, SQLMetric};
-use arrow::record_batch::RecordBatch;
 use arrow::{array::Array, error::Result as ArrowResult};
+use arrow::{array::UInt64Array, record_batch::RecordBatch};
 use arrow::{compute::take, datatypes::SchemaRef};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
@@ -160,6 +160,7 @@ impl ExecutionPlan for RepartitionExec {
 
                     let mut counter = 0;
                     let hashes_buf = &mut vec![];
+                    let partition_indices = &mut vec![vec![]; num_output_partitions];
 
                     loop {
                         // fetch the next batch
@@ -198,18 +199,26 @@ impl ExecutionPlan for RepartitionExec {
                                 // Hash arrays and compute buckets based on number of partitions
                                 let hashes =
                                     create_hashes(&arrays, &random_state, hashes_buf)?;
-                                let mut indices = vec![vec![]; num_output_partitions];
+
+                                for indices in partition_indices.iter_mut() {
+                                    indices.clear();
+                                }
+
                                 for (index, hash) in hashes.iter().enumerate() {
-                                    indices
+                                    partition_indices
                                         [(*hash % num_output_partitions as u64) as usize]
                                         .push(index as u64)
                                 }
                                 repart_time.add(now.elapsed().as_nanos() as usize);
-                                for (num_output_partition, partition_indices) in
-                                    indices.into_iter().enumerate()
+                                for (num_output_partition, indices) in
+                                    partition_indices.into_iter().enumerate()
                                 {
                                     let now = Instant::now();
-                                    let indices = partition_indices.into();
+                                    let indices: UInt64Array =
+                                        UInt64Array::from_iter_values(
+                                            indices.iter().cloned(),
+                                        );
+
                                     // Produce batches based on indices
                                     let columns = input_batch
                                         .columns()
