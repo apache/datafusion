@@ -225,9 +225,15 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
                 if !args.is_empty() {
                     match &args[0] {
                         Expr::Literal(ScalarValue::Utf8(Some(val))) => {
-                            Expr::Literal(ScalarValue::TimestampNanosecond(
-                                string_to_timestamp_nanos(val).ok(),
-                            ))
+                            match string_to_timestamp_nanos(val) {
+                                Ok(timestamp) => Expr::Literal(
+                                    ScalarValue::TimestampNanosecond(Some(timestamp)),
+                                ),
+                                _ => Expr::ScalarFunction {
+                                    fun: BuiltinScalarFunction::ToTimestamp,
+                                    args,
+                                },
+                            }
                         }
                         _ => Expr::ScalarFunction {
                             fun: BuiltinScalarFunction::ToTimestamp,
@@ -654,6 +660,29 @@ mod tests {
             .optimize(plan, &execution_props)
             .expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
+    }
+
+    #[test]
+    fn to_timestamp_expr() {
+        let table_scan = test_table_scan().unwrap();
+        let proj = vec![Expr::ScalarFunction {
+            args: vec![Expr::Literal(ScalarValue::Utf8(Some(
+                "2020-09-08T12:00:00+00:00".to_string(),
+            )))],
+            fun: BuiltinScalarFunction::ToTimestamp,
+        }];
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .project(proj)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = format!(
+            "Projection: TimestampNanosecond(1599566400000000000)\
+            \n  TableScan: test projection=None",
+        );
+        let actual = get_optimized_plan_formatted(&plan, &chrono::Utc::now());
+        assert_eq!(expected, actual);
     }
 
     #[test]
