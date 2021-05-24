@@ -86,7 +86,7 @@ impl PruningPredicate {
     ///
     /// The pruning predicate evaluates to TRUE or NULL
     /// if the filter predicate *might* evaluate to TRUE for at least
-    /// one row whose vaules fell within the min/max ranges (in other
+    /// one row whose values fell within the min/max ranges (in other
     /// words they might pass the predicate)
     ///
     /// For example, the filter expression `(column / 2) = 4` becomes
