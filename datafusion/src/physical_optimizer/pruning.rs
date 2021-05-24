@@ -66,7 +66,7 @@ pub struct PruningPredicate {
     predicate_expr: Arc<dyn PhysicalExpr>,
     /// The statistics required to evaluate this predicate:
     /// * The column name in the input schema
-    /// * Statstics type (e.g. Min or Ma)
+    /// * Statstics type (e.g. Min or Max)
     /// * The field the statistics value should be placed in for
     ///   pruning predicate evaluation
     stat_column_req: Vec<(String, StatisticsType, Field)>,
@@ -174,7 +174,7 @@ impl PruningPredicate {
 /// For example, if the requested columns are
 /// ```text
 /// ("s1", Min, Field:s1_min)
-/// ("s2", Max, field:s2_maxx)
+/// ("s2", Max, field:s2_max)
 ///```
 ///
 /// And the input statistics had
@@ -188,7 +188,7 @@ impl PruningPredicate {
 /// one row s1_min and s2_maxx as follows (s3 is not requested):
 ///
 /// ```text
-/// s1_min | s2_maxx
+/// s1_min | s2_max
 /// -------+--------
 ///   5    | 10
 /// ```
@@ -523,7 +523,7 @@ mod tests {
             (
                 "s2".to_string(),
                 StatisticsType::Max,
-                Field::new("s2_min", DataType::Int32, true),
+                Field::new("s2_max", DataType::Int32, true),
             ),
             // max of original column s3, named s3_max
             (
@@ -541,7 +541,7 @@ mod tests {
 
         // s1: [None, 10]
         // s2: [2, 20]
-        // s2: ["a", "q"]
+        // s3: ["a", "q"]
         let stats1 = TestStatistics::new()
             .with("s1", MinMax::new(None, Some(10i32.into())))
             .with("s2", MinMax::new(Some(2i32.into()), Some(20i32.into())))
@@ -549,7 +549,7 @@ mod tests {
 
         // s1: [None, None]
         // s2: [None, None]
-        // s2: [None, None]
+        // s3: [None, None]
         let stats2 = TestStatistics::new()
             .with("s1", MinMax::new(None, None))
             .with("s2", MinMax::new(None, None))
@@ -557,7 +557,7 @@ mod tests {
 
         // s1: [9, None]
         // s2: None
-        // s2: [None, "r"]
+        // s3: [None, "r"]
         let stats3 = TestStatistics::new()
             .with("s1", MinMax::new(Some(9i32.into()), None))
             .with("s3", MinMax::new(None, Some("r".into())));
