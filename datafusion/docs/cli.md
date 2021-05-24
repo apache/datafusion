@@ -25,7 +25,7 @@ The DataFusion CLI is a command-line interactive SQL utility that allows queries
 
 Use the following commands to clone this repository and run the CLI. This will require the Rust toolchain to be installed. Rust can be installed from [https://rustup.rs/](https://rustup.rs/).
 
-```sh
+```bash
 git clone https://github.com/apache/arrow-datafusion
 cd arrow-datafusion/datafusion-cli
 cargo run --release
@@ -35,7 +35,7 @@ cargo run --release
 
 Use the following commands to clone this repository and build a Docker image containing the CLI tool. Note that there is `.dockerignore` file in the root of the repository that may need to be deleted in order for this to work.
 
-```sh
+```bash
 git clone https://github.com/apache/arrow-datafusion
 cd arrow-datafusion
 docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
