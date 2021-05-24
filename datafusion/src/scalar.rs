@@ -395,40 +395,40 @@ impl ScalarValue {
         }
 
         let array: ArrayRef = match &data_type {
-            DataType::Boolean => build_array_primative!(BooleanArray, Boolean),
-            DataType::Float32 => build_array_primative!(Float32Array, Float32),
-            DataType::Float64 => build_array_primative!(Float64Array, Float64),
-            DataType::Int8 => build_array_primative!(Int8Array, Int8),
-            DataType::Int16 => build_array_primative!(Int16Array, Int16),
-            DataType::Int32 => build_array_primative!(Int32Array, Int32),
-            DataType::Int64 => build_array_primative!(Int64Array, Int64),
-            DataType::UInt8 => build_array_primative!(UInt8Array, UInt8),
-            DataType::UInt16 => build_array_primative!(UInt16Array, UInt16),
-            DataType::UInt32 => build_array_primative!(UInt32Array, UInt32),
-            DataType::UInt64 => build_array_primative!(UInt64Array, UInt64),
+            DataType::Boolean => build_array_primitive!(BooleanArray, Boolean),
+            DataType::Float32 => build_array_primitive!(Float32Array, Float32),
+            DataType::Float64 => build_array_primitive!(Float64Array, Float64),
+            DataType::Int8 => build_array_primitive!(Int8Array, Int8),
+            DataType::Int16 => build_array_primitive!(Int16Array, Int16),
+            DataType::Int32 => build_array_primitive!(Int32Array, Int32),
+            DataType::Int64 => build_array_primitive!(Int64Array, Int64),
+            DataType::UInt8 => build_array_primitive!(UInt8Array, UInt8),
+            DataType::UInt16 => build_array_primitive!(UInt16Array, UInt16),
+            DataType::UInt32 => build_array_primitive!(UInt32Array, UInt32),
+            DataType::UInt64 => build_array_primitive!(UInt64Array, UInt64),
             DataType::Utf8 => build_array_string!(StringArray, Utf8),
             DataType::LargeUtf8 => build_array_string!(LargeStringArray, LargeUtf8),
             DataType::Binary => build_array_string!(BinaryArray, Binary),
             DataType::LargeBinary => build_array_string!(LargeBinaryArray, LargeBinary),
-            DataType::Date32 => build_array_primative!(Date32Array, Date32),
-            DataType::Date64 => build_array_primative!(Date64Array, Date64),
+            DataType::Date32 => build_array_primitive!(Date32Array, Date32),
+            DataType::Date64 => build_array_primitive!(Date64Array, Date64),
             DataType::Timestamp(TimeUnit::Second, None) => {
-                build_array_primative!(TimestampSecondArray, TimestampSecond)
+                build_array_primitive!(TimestampSecondArray, TimestampSecond)
             }
             DataType::Timestamp(TimeUnit::Millisecond, None) => {
-                build_array_primative!(TimestampMillisecondArray, TimestampMillisecond)
+                build_array_primitive!(TimestampMillisecondArray, TimestampMillisecond)
             }
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                build_array_primative!(TimestampMicrosecondArray, TimestampMicrosecond)
+                build_array_primitive!(TimestampMicrosecondArray, TimestampMicrosecond)
             }
             DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                build_array_primative!(TimestampNanosecondArray, TimestampNanosecond)
+                build_array_primitive!(TimestampNanosecondArray, TimestampNanosecond)
             }
             DataType::Interval(IntervalUnit::DayTime) => {
-                build_array_primative!(IntervalDayTimeArray, IntervalDayTime)
+                build_array_primitive!(IntervalDayTimeArray, IntervalDayTime)
             }
             DataType::Interval(IntervalUnit::YearMonth) => {
-                build_array_primative!(IntervalYearMonthArray, IntervalYearMonth)
+                build_array_primitive!(IntervalYearMonthArray, IntervalYearMonth)
             }
             _ => {
                 return Err(DataFusionError::Internal(format!(
