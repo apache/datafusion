@@ -341,7 +341,7 @@ impl ScalarValue {
 
         /// Creates an array of $ARRAY_TY by unpacking values of
         /// SCALAR_TY for primitive types
-        macro_rules! build_array_primative {
+        macro_rules! build_array_primitive {
             ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 {
                     let values = scalars
