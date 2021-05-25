@@ -677,10 +677,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = format!(
-            "Projection: TimestampNanosecond(1599566400000000000)\
-            \n  TableScan: test projection=None",
-        );
+        let expected = "Projection: TimestampNanosecond(1599566400000000000)\
+            \n  TableScan: test projection=None"
+            .to_string();
         let actual = get_optimized_plan_formatted(&plan, &chrono::Utc::now());
         assert_eq!(expected, actual);
     }
