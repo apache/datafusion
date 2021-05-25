@@ -402,12 +402,14 @@ impl ScalarValue {
                             x.iter()
                                 .map(|x| match x {
                                     ScalarValue::$SCALAR_TY(i) => *i,
-                                    _ => panic!("xxx"),
+                                    sv => panic!("Inconsistent types in ScalarValue::iter_to_array. \
+                                    Expected {:?}, got {:?}", data_type, sv),
                                 })
                                 .collect::<Vec<Option<$NATIVE_TYPE>>>()
                         }),
-                        _ => panic!("xxx"),
-                    }),
+                        sv => panic!("Inconsistent types in ScalarValue::iter_to_array. \
+                        Expected {:?}, got {:?}", data_type, sv),
+        }),
                 ))
             }};
         }
@@ -472,12 +474,88 @@ impl ScalarValue {
             DataType::List(fields) if fields.data_type() == &DataType::UInt64 => {
                 build_array_list!(UInt64Type, UInt64, u64)
             }
+            DataType::List(fields) if fields.data_type() == &DataType::Utf8 => {
+                let mut builder = ListBuilder::new(StringBuilder::new(0));
+
+                for scalar in scalars.into_iter() {
+                    match scalar {
+                        ScalarValue::List(Some(xs), _) => {
+                            for s in xs {
+                                match s {
+                                    ScalarValue::Utf8(Some(val)) => {
+                                        builder.values().append_value(val)?;
+                                    }
+                                    ScalarValue::Utf8(None) => {
+                                        builder.values().append_null()?;
+                                    }
+                                    sv => return Err(DataFusionError::Internal(format!(
+                                        "Inconsistent types in ScalarValue::iter_to_array. \
+                                         Expected Utf8, got {:?}",
+                                        sv
+                                    ))),
+                                }
+                            }
+                            builder.append(true)?;
+                        }
+                        ScalarValue::List(None, _) => {
+                            builder.append(false)?;
+                        }
+                        sv => {
+                            return Err(DataFusionError::Internal(format!(
+                                "Inconsistent types in ScalarValue::iter_to_array. \
+                             Expected List, got {:?}",
+                                sv
+                            )))
+                        }
+                    }
+                }
+
+                Arc::new(builder.finish())
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::LargeUtf8 => {
+                let mut builder = ListBuilder::new(LargeStringBuilder::new(0));
+
+                for scalar in scalars.into_iter() {
+                    match scalar {
+                        ScalarValue::List(Some(xs), _) => {
+                            for s in xs {
+                                match s {
+                                    ScalarValue::Utf8(Some(val)) => {
+                                        builder.values().append_value(val)?;
+                                    }
+                                    ScalarValue::Utf8(None) => {
+                                        builder.values().append_null()?;
+                                    }
+                                    sv => return Err(DataFusionError::Internal(format!(
+                                        "Inconsistent types in ScalarValue::iter_to_array. \
+                                         Expected Utf8, got {:?}",
+                                        sv
+                                    ))),
+                                }
+                            }
+                            builder.append(true)?;
+                        }
+                        ScalarValue::List(None, _) => {
+                            builder.append(false)?;
+                        }
+                        sv => {
+                            return Err(DataFusionError::Internal(format!(
+                                "Inconsistent types in ScalarValue::iter_to_array. \
+                             Expected List, got {:?}",
+                                sv
+                            )))
+                        }
+                    }
+                }
+
+                Arc::new(builder.finish())
+            }
             _ => {
                 return Err(DataFusionError::Internal(format!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,
                     scalars.peek()
-                )))
+                )));
             }
         };
 
