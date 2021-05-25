@@ -20,6 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::vec;
 
 use ahash::RandomState;
 use futures::{
@@ -969,7 +970,7 @@ fn create_batch_from_map(
     if accumulators.is_empty() {
         return Ok(RecordBatch::new_empty(Arc::new(output_schema.to_owned())));
     }
-    let (_, (_, accs, _)) = accumulators.iter().nth(0).unwrap();
+    let (_, (_, accs, _)) = accumulators.iter().next().unwrap();
     let mut acc_data_types: Vec<usize> = vec![];
 
     // Calculate number/shape of state arrays
@@ -983,9 +984,7 @@ fn create_batch_from_map(
             }
         }
         AggregateMode::Final | AggregateMode::FinalPartitioned => {
-            for _ in accs {
-                acc_data_types.push(1);
-            }
+            acc_data_types = vec![1; accs.len()];
         }
     }
 
