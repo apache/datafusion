@@ -311,7 +311,7 @@ impl ScalarValue {
     /// ];
     ///
     /// // Build an Array from the list of ScalarValues
-    /// let array = ScalarValue::iter_to_array(scalars.iter())
+    /// let array = ScalarValue::iter_to_array(scalars.into_iter())
     ///   .unwrap();
     ///
     /// let expected: ArrayRef = std::sync::Arc::new(
@@ -324,8 +324,8 @@ impl ScalarValue {
     ///
     /// assert_eq!(&array, &expected);
     /// ```
-    pub fn iter_to_array<'a>(
-        scalars: impl IntoIterator<Item = &'a ScalarValue>,
+    pub fn iter_to_array(
+        scalars: impl IntoIterator<Item = ScalarValue>,
     ) -> Result<ArrayRef> {
         let mut scalars = scalars.into_iter().peekable();
 
@@ -347,7 +347,7 @@ impl ScalarValue {
                     let values = scalars
                         .map(|sv| {
                             if let ScalarValue::$SCALAR_TY(v) = sv {
-                                Ok(*v)
+                                Ok(v)
                             } else {
                                 Err(DataFusionError::Internal(format!(
                                     "Inconsistent types in ScalarValue::iter_to_array. \
@@ -394,6 +394,24 @@ impl ScalarValue {
             }};
         }
 
+        macro_rules! build_array_list {
+            ($ARRAY_TY:ident, $SCALAR_TY:ident, $NATIVE_TYPE:ident) => {{
+                Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(
+                    scalars.into_iter().map(|x| match x {
+                        ScalarValue::List(xs, _) => xs.map(|x| {
+                            x.iter()
+                                .map(|x| match x {
+                                    ScalarValue::$SCALAR_TY(i) => *i,
+                                    _ => panic!("xxx"),
+                                })
+                                .collect::<Vec<Option<$NATIVE_TYPE>>>()
+                        }),
+                        _ => panic!("xxx"),
+                    }),
+                ))
+            }};
+        }
+
         let array: ArrayRef = match &data_type {
             DataType::Boolean => build_array_primitive!(BooleanArray, Boolean),
             DataType::Float32 => build_array_primitive!(Float32Array, Float32),
@@ -429,6 +447,30 @@ impl ScalarValue {
             }
             DataType::Interval(IntervalUnit::YearMonth) => {
                 build_array_primitive!(IntervalYearMonthArray, IntervalYearMonth)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Int8 => {
+                build_array_list!(Int8Type, Int8, i8)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Int16 => {
+                build_array_list!(Int16Type, Int16, i16)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Int32 => {
+                build_array_list!(Int32Type, Int32, i32)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Int64 => {
+                build_array_list!(Int64Type, Int64, i64)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::UInt8 => {
+                build_array_list!(UInt8Type, UInt8, u8)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::UInt16 => {
+                build_array_list!(UInt16Type, UInt16, u16)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::UInt32 => {
+                build_array_list!(UInt32Type, UInt32, u32)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::UInt64 => {
+                build_array_list!(UInt64Type, UInt64, u64)
             }
             _ => {
                 return Err(DataFusionError::Internal(format!(
@@ -1102,7 +1144,7 @@ mod tests {
             let scalars: Vec<_> =
                 $INPUT.iter().map(|v| ScalarValue::$SCALAR_T(*v)).collect();
 
-            let array = ScalarValue::iter_to_array(scalars.iter()).unwrap();
+            let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
 
             let expected: ArrayRef = Arc::new($ARRAYTYPE::from($INPUT));
 
@@ -1119,7 +1161,7 @@ mod tests {
                 .map(|v| ScalarValue::$SCALAR_T(v.map(|v| v.to_string())))
                 .collect();
 
-            let array = ScalarValue::iter_to_array(scalars.iter()).unwrap();
+            let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
 
             let expected: ArrayRef = Arc::new($ARRAYTYPE::from($INPUT));
 
@@ -1136,7 +1178,7 @@ mod tests {
                 .map(|v| ScalarValue::$SCALAR_T(v.map(|v| v.to_vec())))
                 .collect();
 
-            let array = ScalarValue::iter_to_array(scalars.iter()).unwrap();
+            let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
 
             let expected: $ARRAYTYPE =
                 $INPUT.iter().map(|v| v.map(|v| v.to_vec())).collect();
@@ -1210,7 +1252,7 @@ mod tests {
     fn scalar_iter_to_array_empty() {
         let scalars = vec![] as Vec<ScalarValue>;
 
-        let result = ScalarValue::iter_to_array(scalars.iter()).unwrap_err();
+        let result = ScalarValue::iter_to_array(scalars.into_iter()).unwrap_err();
         assert!(
             result
                 .to_string()
@@ -1226,7 +1268,7 @@ mod tests {
         // If the scalar values are not all the correct type, error here
         let scalars: Vec<ScalarValue> = vec![Boolean(Some(true)), Int32(Some(5))];
 
-        let result = ScalarValue::iter_to_array(scalars.iter()).unwrap_err();
+        let result = ScalarValue::iter_to_array(scalars.into_iter()).unwrap_err();
         assert!(result.to_string().contains("Inconsistent types in ScalarValue::iter_to_array. Expected Boolean, got Int32(5)"),
                 "{}", result);
     }
