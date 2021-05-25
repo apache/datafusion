@@ -344,7 +344,7 @@ impl ScalarValue {
         macro_rules! build_array_primitive {
             ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 {
-                    let values = scalars
+                    let array = scalars
                         .map(|sv| {
                             if let ScalarValue::$SCALAR_TY(v) = sv {
                                 Ok(v)
@@ -356,9 +356,8 @@ impl ScalarValue {
                                 )))
                             }
                         })
-                        .collect::<Result<Vec<_>>>()?;
+                        .collect::<Result<$ARRAY_TY>>()?;
 
-                    let array: $ARRAY_TY = values.iter().collect();
                     Arc::new(array)
                 }
             }};
@@ -369,7 +368,7 @@ impl ScalarValue {
         macro_rules! build_array_string {
             ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 {
-                    let values = scalars
+                    let array = scalars
                         .map(|sv| {
                             if let ScalarValue::$SCALAR_TY(v) = sv {
                                 Ok(v)
@@ -381,14 +380,7 @@ impl ScalarValue {
                                 )))
                             }
                         })
-                        .collect::<Result<Vec<_>>>()?;
-
-                    // it is annoying that one can not create
-                    // StringArray et al directly from iter of &String,
-                    // requiring this map to &str
-                    let values = values.iter().map(|s| s.as_ref());
-
-                    let array: $ARRAY_TY = values.collect();
+                        .collect::<Result<$ARRAY_TY>>()?;
                     Arc::new(array)
                 }
             }};
