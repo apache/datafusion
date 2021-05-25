@@ -700,10 +700,8 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = format!(
-            "Projection: totimestamp(Utf8(\"I\'M NOT A TIMESTAMP\"))\
-            \n  TableScan: test projection=None",
-        );
+        let expected = "Projection: totimestamp(Utf8(\"I\'M NOT A TIMESTAMP\"))\
+            \n  TableScan: test projection=None";
         let actual = get_optimized_plan_formatted(&plan, &chrono::Utc::now());
         assert_eq!(expected, actual);
     }
@@ -721,10 +719,8 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = format!(
-            "Projection: totimestamp()\
-            \n  TableScan: test projection=None",
-        );
+        let expected = "Projection: totimestamp()\
+            \n  TableScan: test projection=None";
         let actual = get_optimized_plan_formatted(&plan, &chrono::Utc::now());
         assert_eq!(expected, actual);
     }
