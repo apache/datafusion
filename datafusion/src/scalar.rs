@@ -21,10 +21,10 @@ use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
     datatypes::{
-        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type, Int16Type,
-        Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit, TimestampMicrosecondType,
-        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-        UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
+        Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit,
+        TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+        TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
@@ -515,6 +515,12 @@ impl ScalarValue {
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt64 => {
                 build_array_list_primitive!(UInt64Type, UInt64, u64)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Float32 => {
+                build_array_list_primitive!(Float32Type, Float32, f32)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Float64 => {
+                build_array_list_primitive!(Float64Type, Float64, f64)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Utf8 => {
                 build_array_list_string!(StringBuilder, Utf8)
