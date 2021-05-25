@@ -115,7 +115,7 @@ Run the benchmarks:
 
 ```bash
 docker run -it myrepo/ballista-arm64 \
-  /tpch benchmark --query=1 --path=/path/to/data --format=parquet \
+  /tpch benchmark datafusion --query=1 --path=/path/to/data --format=parquet \
   --concurrency=24 --iterations=1 --debug --host=ballista-scheduler --port=50050
 ```
 

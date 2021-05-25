@@ -54,7 +54,50 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Debug, StructOpt, Clone)]
-struct BenchmarkOpt {
+struct BallistaBenchmarkOpt {
+    /// Query number
+    #[structopt(short, long)]
+    query: usize,
+
+    /// Activate debug mode to see query results
+    #[structopt(short, long)]
+    debug: bool,
+
+    /// Number of iterations of each test run
+    #[structopt(short = "i", long = "iterations", default_value = "3")]
+    iterations: usize,
+
+    /// Batch size when reading CSV or Parquet files
+    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
+    batch_size: usize,
+
+    /// Path to data files
+    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
+    path: PathBuf,
+
+    /// File format: `csv` or `parquet`
+    #[structopt(short = "f", long = "format", default_value = "csv")]
+    file_format: String,
+
+    /// Load the data into a MemTable before executing the query
+    #[structopt(short = "m", long = "mem-table")]
+    mem_table: bool,
+
+    /// Number of partitions to create when using MemTable as input
+    #[structopt(short = "n", long = "partitions", default_value = "8")]
+    partitions: usize,
+
+    /// Ballista executor host
+    #[structopt(long = "host")]
+    host: Option<String>,
+
+    /// Ballista executor port
+    #[structopt(long = "port")]
+    port: Option<u16>,
+}
+
+#[derive(Debug, StructOpt, Clone)]
+struct DataFusionBenchmarkOpt {
     /// Query number
     #[structopt(short, long)]
     query: usize,
@@ -90,14 +133,6 @@ struct BenchmarkOpt {
     /// Number of partitions to create when using MemTable as input
     #[structopt(short = "n", long = "partitions", default_value = "8")]
     partitions: usize,
-
-    /// Ballista executor host
-    #[structopt(long = "host")]
-    host: Option<String>,
-
-    /// Ballista executor port
-    #[structopt(long = "port")]
-    port: Option<u16>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -128,9 +163,18 @@ struct ConvertOpt {
 }
 
 #[derive(Debug, StructOpt)]
+#[structopt(about = "benchmark command")]
+enum BenchmarkSubCommandOpt {
+    #[structopt(name = "ballista")]
+    BallistaBenchmark(BallistaBenchmarkOpt),
+    #[structopt(name = "datafusion")]
+    DataFusionBenchmark(DataFusionBenchmarkOpt),
+}
+
+#[derive(Debug, StructOpt)]
 #[structopt(name = "TPC-H", about = "TPC-H Benchmarks.")]
 enum TpchOpt {
-    Benchmark(BenchmarkOpt),
+    Benchmark(BenchmarkSubCommandOpt),
     Convert(ConvertOpt),
 }
 
@@ -140,20 +184,21 @@ const TABLES: &[&str] = &[
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    use BenchmarkSubCommandOpt::*;
+
     env_logger::init();
     match TpchOpt::from_args() {
-        TpchOpt::Benchmark(opt) => {
-            if opt.host.is_some() && opt.port.is_some() {
-                benchmark_ballista(opt).await.map(|_| ())
-            } else {
-                benchmark_datafusion(opt).await.map(|_| ())
-            }
+        TpchOpt::Benchmark(BallistaBenchmark(opt)) => {
+            benchmark_ballista(opt).await.map(|_| ())
+        }
+        TpchOpt::Benchmark(DataFusionBenchmark(opt)) => {
+            benchmark_datafusion(opt).await.map(|_| ())
         }
         TpchOpt::Convert(opt) => convert_tbl(opt).await,
     }
 }
 
-async fn benchmark_datafusion(opt: BenchmarkOpt) -> Result<Vec<RecordBatch>> {
+async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let config = ExecutionConfig::new()
         .with_concurrency(opt.concurrency)
@@ -204,7 +249,7 @@ async fn benchmark_datafusion(opt: BenchmarkOpt) -> Result<Vec<RecordBatch>> {
     Ok(result)
 }
 
-async fn benchmark_ballista(opt: BenchmarkOpt) -> Result<()> {
+async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     println!("Running benchmarks with the following options: {:?}", opt);
 
     let mut settings = HashMap::new();
@@ -956,7 +1001,7 @@ mod tests {
             let expected = df.collect().await?;
 
             // run the query to compute actual results of the query
-            let opt = BenchmarkOpt {
+            let opt = DataFusionBenchmarkOpt {
                 query: n,
                 debug: false,
                 iterations: 1,
@@ -966,8 +1011,6 @@ mod tests {
                 file_format: "tbl".to_string(),
                 mem_table: false,
                 partitions: 16,
-                host: None,
-                port: None,
             };
             let actual = benchmark_datafusion(opt).await?;
 
