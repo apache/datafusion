@@ -394,7 +394,7 @@ impl ScalarValue {
             }};
         }
 
-        macro_rules! build_array_list {
+        macro_rules! build_array_list_primitive {
             ($ARRAY_TY:ident, $SCALAR_TY:ident, $NATIVE_TYPE:ident) => {{
                 Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(
                     scalars.into_iter().map(|x| match x {
@@ -412,6 +412,48 @@ impl ScalarValue {
         }),
                 ))
             }};
+        }
+
+        macro_rules! build_array_list_string {
+            ($BUILDER:ident, $SCALAR_TY:ident) => {{
+                let mut builder = ListBuilder::new($BUILDER::new(0));
+
+                for scalar in scalars.into_iter() {
+                    match scalar {
+                        ScalarValue::List(Some(xs), _) => {
+                            for s in xs {
+                                match s {
+                                    ScalarValue::$SCALAR_TY(Some(val)) => {
+                                        builder.values().append_value(val)?;
+                                    }
+                                    ScalarValue::$SCALAR_TY(None) => {
+                                        builder.values().append_null()?;
+                                    }
+                                    sv => return Err(DataFusionError::Internal(format!(
+                                        "Inconsistent types in ScalarValue::iter_to_array. \
+                                         Expected Utf8, got {:?}",
+                                        sv
+                                    ))),
+                                }
+                            }
+                            builder.append(true)?;
+                        }
+                        ScalarValue::List(None, _) => {
+                            builder.append(false)?;
+                        }
+                        sv => {
+                            return Err(DataFusionError::Internal(format!(
+                                "Inconsistent types in ScalarValue::iter_to_array. \
+                             Expected List, got {:?}",
+                                sv
+                            )))
+                        }
+                    }
+                }
+
+                Arc::new(builder.finish())
+
+            }}
         }
 
         let array: ArrayRef = match &data_type {
@@ -451,111 +493,41 @@ impl ScalarValue {
                 build_array_primitive!(IntervalYearMonthArray, IntervalYearMonth)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int8 => {
-                build_array_list!(Int8Type, Int8, i8)
+                build_array_list_primitive!(Int8Type, Int8, i8)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int16 => {
-                build_array_list!(Int16Type, Int16, i16)
+                build_array_list_primitive!(Int16Type, Int16, i16)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int32 => {
-                build_array_list!(Int32Type, Int32, i32)
+                build_array_list_primitive!(Int32Type, Int32, i32)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int64 => {
-                build_array_list!(Int64Type, Int64, i64)
+                build_array_list_primitive!(Int64Type, Int64, i64)
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt8 => {
-                build_array_list!(UInt8Type, UInt8, u8)
+                build_array_list_primitive!(UInt8Type, UInt8, u8)
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt16 => {
-                build_array_list!(UInt16Type, UInt16, u16)
+                build_array_list_primitive!(UInt16Type, UInt16, u16)
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt32 => {
-                build_array_list!(UInt32Type, UInt32, u32)
+                build_array_list_primitive!(UInt32Type, UInt32, u32)
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt64 => {
-                build_array_list!(UInt64Type, UInt64, u64)
+                build_array_list_primitive!(UInt64Type, UInt64, u64)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Utf8 => {
-                let mut builder = ListBuilder::new(StringBuilder::new(0));
-
-                for scalar in scalars.into_iter() {
-                    match scalar {
-                        ScalarValue::List(Some(xs), _) => {
-                            for s in xs {
-                                match s {
-                                    ScalarValue::Utf8(Some(val)) => {
-                                        builder.values().append_value(val)?;
-                                    }
-                                    ScalarValue::Utf8(None) => {
-                                        builder.values().append_null()?;
-                                    }
-                                    sv => return Err(DataFusionError::Internal(format!(
-                                        "Inconsistent types in ScalarValue::iter_to_array. \
-                                         Expected Utf8, got {:?}",
-                                        sv
-                                    ))),
-                                }
-                            }
-                            builder.append(true)?;
-                        }
-                        ScalarValue::List(None, _) => {
-                            builder.append(false)?;
-                        }
-                        sv => {
-                            return Err(DataFusionError::Internal(format!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
-                             Expected List, got {:?}",
-                                sv
-                            )))
-                        }
-                    }
-                }
-
-                Arc::new(builder.finish())
+                build_array_list_string!(StringBuilder, Utf8)
             }
             DataType::List(fields) if fields.data_type() == &DataType::LargeUtf8 => {
-                let mut builder = ListBuilder::new(LargeStringBuilder::new(0));
-
-                for scalar in scalars.into_iter() {
-                    match scalar {
-                        ScalarValue::List(Some(xs), _) => {
-                            for s in xs {
-                                match s {
-                                    ScalarValue::Utf8(Some(val)) => {
-                                        builder.values().append_value(val)?;
-                                    }
-                                    ScalarValue::Utf8(None) => {
-                                        builder.values().append_null()?;
-                                    }
-                                    sv => return Err(DataFusionError::Internal(format!(
-                                        "Inconsistent types in ScalarValue::iter_to_array. \
-                                         Expected Utf8, got {:?}",
-                                        sv
-                                    ))),
-                                }
-                            }
-                            builder.append(true)?;
-                        }
-                        ScalarValue::List(None, _) => {
-                            builder.append(false)?;
-                        }
-                        sv => {
-                            return Err(DataFusionError::Internal(format!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
-                             Expected List, got {:?}",
-                                sv
-                            )))
-                        }
-                    }
-                }
-
-                Arc::new(builder.finish())
+                build_array_list_string!(LargeStringBuilder, LargeUtf8)
             }
             _ => {
                 return Err(DataFusionError::Internal(format!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,
                     scalars.peek()
-                )));
+                )))
             }
         };
 
