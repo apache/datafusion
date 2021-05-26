@@ -712,7 +712,7 @@ impl GroupedHashAggregateStream {
             tx.send(result)
         });
 
-        GroupedHashAggregateStream {
+        Self {
             schema,
             output: rx,
             finished: false,
@@ -825,7 +825,8 @@ fn aggregate_expressions(
 }
 
 pin_project! {
-    struct HashAggregateStream {
+    /// stream struct for hash aggregation
+    pub struct HashAggregateStream {
         schema: SchemaRef,
         #[pin]
         output: futures::channel::oneshot::Receiver<ArrowResult<RecordBatch>>,
@@ -878,7 +879,7 @@ impl HashAggregateStream {
             tx.send(result)
         });
 
-        HashAggregateStream {
+        Self {
             schema,
             output: rx,
             finished: false,
