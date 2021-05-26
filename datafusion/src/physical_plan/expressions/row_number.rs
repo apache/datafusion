@@ -29,12 +29,14 @@ use std::sync::Arc;
 
 /// row_number expression
 #[derive(Debug)]
-pub struct RowNumber {}
+pub struct RowNumber {
+    name: String,
+}
 
 impl RowNumber {
     /// Create a new ROW_NUMBER function
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(name: String) -> Self {
+        Self { name }
     }
 }
 
@@ -55,7 +57,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
     }
 
     fn name(&self) -> &str {
-        "row_number"
+        self.name.as_str()
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn WindowAccumulator>> {
@@ -116,7 +118,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
 
-        let row_number = Arc::new(RowNumber::new());
+        let row_number = Arc::new(RowNumber::new("row_number".to_owned()));
 
         let mut acc = row_number.create_accumulator()?;
         let expr = row_number.expressions();
@@ -147,7 +149,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
 
-        let row_number = Arc::new(RowNumber::new());
+        let row_number = Arc::new(RowNumber::new("row_number".to_owned()));
 
         let mut acc = row_number.create_accumulator()?;
         let expr = row_number.expressions();

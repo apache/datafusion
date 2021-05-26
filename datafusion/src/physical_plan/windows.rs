@@ -84,10 +84,10 @@ fn create_built_in_window_expr(
     fun: &BuiltInWindowFunction,
     _args: &[Arc<dyn PhysicalExpr>],
     _input_schema: &Schema,
-    _name: String,
+    name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     match fun {
-        BuiltInWindowFunction::RowNumber => Ok(Arc::new(RowNumber::new())),
+        BuiltInWindowFunction::RowNumber => Ok(Arc::new(RowNumber::new(name))),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Window function with {:?} not yet implemented",
             fun
