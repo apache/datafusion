@@ -61,7 +61,7 @@ OPTIONS:
     -c, --batch-size <batch-size>    The batch size of each query, or use DataFusion default
     -p, --data-path <data-path>      Path to your data, default to current directory
     -f, --file <file>                Execute commands from file, then exit
-        --format <format>            Output format (possible values: table, csv, tsv, json) [default: table]
+        --format <format>            Output format [default: table]  [possible values: csv, tsv, table, json, ndjson]
 ```
 
 Type `exit` or `quit` to exit the CLI.
