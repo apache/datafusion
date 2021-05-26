@@ -17,7 +17,6 @@
   ~ under the License.
   -->
 
-
 > NOTE: For those deploying this database, Postgres does not by default use
 > UTF-8, however it is [required for the jsonb][pg-jsonb] format used in
 > some columns to always work. This [stackoverflow post][so-utf8] describes
@@ -81,7 +80,6 @@ database will be set up automatically once the container is running.
 To start the containers, be sure to have [Docker installed][docker],
 and then run the following from this directory (arrow/dev/benchmarking).
 
-
 ```
 docker-compose up
 ```
@@ -111,9 +109,11 @@ The `psql` shell client is bundled with the PostgreSQL core distribution
 available from the [Postgres download page][postgres-downloads].
 Using the `PG_USER` defined in the `.env` file (currently "benchmark"),
 the command to connect to the container is:
+
 ```shell
 psql -h localhost -p 5432 -U benchmark
 ```
+
 There is an example script in [examples/example.sql](examples/example.sql) that
 runs some queries against the database. To run it in the psql client, type
 the following in the psql command-line interface:
@@ -168,7 +168,7 @@ The script [graphql_submit.sh](./graphql_submit.sh) simplifies submission
 to the database via curl. Examples:
 
 ```shell
-./graphql_submit.sh benchmarks examples/benchmark_example.json 
+./graphql_submit.sh benchmarks examples/benchmark_example.json
 ./graphql_submit.sh runs examples/benchmark_run_example.json
 ```
 
@@ -176,6 +176,7 @@ to the database via curl. Examples:
 
 The output of the query is a JSON object that is hard to read on the command line.
 Here is an example query in the shell:
+
 ```shell
 curl -X POST \
   -H "Content-Type: application/json"  \
@@ -190,6 +191,7 @@ which (if you have previously run the "examples.sql" command) yields
 ```
 
 Here is an example query using Python:
+
 ```python
 import json
 import requests
@@ -218,7 +220,6 @@ for row in response.json()['data']['allEnvironmentViews']['edges']:
 > some columns to always work. This [stackoverflow post][so-utf8] describes
 > how to do it for Amazon RDS. This [section of the docs][pg-charset]
 > states how to do it in general, i.e.: `initdb -E UTF8`.
-
 
 ## Quick reference
 
