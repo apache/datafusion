@@ -200,7 +200,7 @@ impl BallistaContext {
                 DataFusionError::Internal("Received empty status message".to_owned())
             })?;
             let wait_future = tokio::time::sleep(Duration::from_millis(100));
-            let has_status_change = prev_status.map(|x| x != status).unwrap_or(false);
+            let has_status_change = prev_status.map(|x| x != status).unwrap_or(true);
             match status {
                 job_status::Status::Queued(_) => {
                     if has_status_change {
