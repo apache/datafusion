@@ -344,7 +344,7 @@ impl ScalarValue {
         macro_rules! build_array_primitive {
             ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 {
-                    let values = scalars
+                    let array = scalars
                         .map(|sv| {
                             if let ScalarValue::$SCALAR_TY(v) = sv {
                                 Ok(*v)
@@ -356,9 +356,7 @@ impl ScalarValue {
                                 )))
                             }
                         })
-                        .collect::<Result<Vec<_>>>()?;
-
-                    let array: $ARRAY_TY = values.iter().collect();
+                        .collect::<Result<$ARRAY_TY>>()?;
                     Arc::new(array)
                 }
             }};
@@ -369,10 +367,10 @@ impl ScalarValue {
         macro_rules! build_array_string {
             ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 {
-                    let values = scalars
+                    let array = scalars
                         .map(|sv| {
                             if let ScalarValue::$SCALAR_TY(v) = sv {
-                                Ok(v)
+                                Ok(v.as_ref())
                             } else {
                                 Err(DataFusionError::Internal(format!(
                                     "Inconsistent types in ScalarValue::iter_to_array. \
@@ -381,14 +379,8 @@ impl ScalarValue {
                                 )))
                             }
                         })
-                        .collect::<Result<Vec<_>>>()?;
+                        .collect::<Result<$ARRAY_TY>>()?;
 
-                    // it is annoying that one can not create
-                    // StringArray et al directly from iter of &String,
-                    // requiring this map to &str
-                    let values = values.iter().map(|s| s.as_ref());
-
-                    let array: $ARRAY_TY = values.collect();
                     Arc::new(array)
                 }
             }};
