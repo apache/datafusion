@@ -42,13 +42,12 @@ use datafusion::{dataframe::DataFrame, physical_plan::RecordBatchStream};
 use log::{error, info, trace};
 
 macro_rules! info_or_trace_if {
-    ($first:ident, $($arg:tt)+) => (
-        if $first {
+    ($info:expr, $($arg:tt)+) => (
+        if $info {
             info!($($arg)+);
         } else {
             trace!($($arg)+);
         }
-        $first = false;
     )
 }
 
@@ -197,9 +196,7 @@ impl BallistaContext {
             .into_inner()
             .job_id;
 
-        // first time we info/trace this job as queued or running
-        let mut first_q_it: bool = true;
-        let mut first_r_it: bool = true;
+        let mut prev_status: Option<job_status::Status> = None;
 
         loop {
             let GetJobStatusResult { status } = scheduler
@@ -213,14 +210,21 @@ impl BallistaContext {
                 DataFusionError::Internal("Received empty status message".to_owned())
             })?;
             let wait_future = tokio::time::sleep(Duration::from_millis(100));
+            let has_status_change = prev_status.map(|x| x != status).unwrap_or(false);
             match status {
                 job_status::Status::Queued(_) => {
-                    info_or_trace_if!(first_q_it, "Job {} still queued...", job_id);
+                    info_or_trace_if!(
+                        has_status_change,
+                        "Job {} still queued...",
+                        job_id
+                    );
                     wait_future.await;
+                    prev_status = Some(status);
                 }
                 job_status::Status::Running(_) => {
-                    info_or_trace_if!(first_r_it, "Job {} is running...", job_id);
+                    info_or_trace_if!(has_status_change, "Job {} is running...", job_id);
                     wait_future.await;
+                    prev_status = Some(status);
                 }
                 job_status::Status::Failed(err) => {
                     let msg = format!("Job {} failed: {}", job_id, err.error);
