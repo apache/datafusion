@@ -39,17 +39,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::csv::CsvReadOptions;
 use datafusion::{dataframe::DataFrame, physical_plan::RecordBatchStream};
-use log::{error, info, trace};
-
-macro_rules! info_or_trace_if {
-    ($info:expr, $($arg:tt)+) => (
-        if $info {
-            info!($($arg)+);
-        } else {
-            trace!($($arg)+);
-        }
-    )
-}
+use log::{error, info};
 
 #[allow(dead_code)]
 struct BallistaContextState {
@@ -213,16 +203,16 @@ impl BallistaContext {
             let has_status_change = prev_status.map(|x| x != status).unwrap_or(false);
             match status {
                 job_status::Status::Queued(_) => {
-                    info_or_trace_if!(
-                        has_status_change,
-                        "Job {} still queued...",
-                        job_id
-                    );
+                    if has_status_change {
+                        info!("Job {} still queued...", job_id);
+                    }
                     wait_future.await;
                     prev_status = Some(status);
                 }
                 job_status::Status::Running(_) => {
-                    info_or_trace_if!(has_status_change, "Job {} is running...", job_id);
+                    if has_status_change {
+                        info!("Job {} is running...", job_id);
+                    }
                     wait_future.await;
                     prev_status = Some(status);
                 }
