@@ -57,6 +57,7 @@ use crate::logical_plan::{
 use crate::optimizer::constant_folding::ConstantFolding;
 use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
+use crate::optimizer::remove_duplicate_filters::RemoveDuplicateFilters;
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::projection_push_down::ProjectionPushDown;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -652,6 +653,7 @@ impl ExecutionConfig {
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
+                Arc::new(RemoveDuplicateFilters::new()),
                 Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(LimitPushDown::new()),
             ],
