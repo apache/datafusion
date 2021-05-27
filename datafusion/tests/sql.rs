@@ -1555,6 +1555,8 @@ fn create_join_context_qualified() -> Result<ExecutionContext> {
 
 #[tokio::test]
 async fn csv_explain() {
+    // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
+    // then execute the physical plan and return the final explain results 
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
@@ -1574,6 +1576,101 @@ async fn csv_explain() {
 }
 
 #[tokio::test]
+async fn csv_explain_plans() {
+    // This test verify the look of each plan in its full cycle plan creation
+
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
+
+    // Logical plan
+    // Create plan
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx.create_logical_plan(&sql).expect(&msg);
+    let logical_schema = plan.schema();
+    // 
+    println!("SQL: {}", sql);
+    // Verify schema
+    let expected = "Explain [plan_type:Utf8, plan:Utf8]";
+    let actual = format!("{}", plan.display_indent_schema());
+    assert_eq!(expected, actual);
+    // Verify the text format of the plan
+    let expected = "Explain";
+    let actual = format!("{}", plan.display_indent());
+    assert_eq!(expected, actual);
+    // verify the grahviz format of the plan
+    let expected = "// Begin DataFusion GraphViz Plan (see https://graphviz.org)\n
+    digraph {\n
+      subgraph cluster_1\n
+      {\n
+        graph[label=\"LogicalPlan\"]\n
+        2[shape=box label=\"Explain\"]\n
+      }\n
+      subgraph cluster_3\n
+      {\n
+        graph[label=\"Detailed LogicalPlan\"]\n
+        4[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]\n
+      }\n
+    }\n
+    // End DataFusion GraphViz Plan";
+    let actual = format!("{}", plan.display_graphviz());
+    assert_eq!(expected.replace("\t","").replace("\n","").replace(" ",""), actual.replace("\t","").replace("\n","").replace(" ",""));
+    // Optimized logical plan
+    //
+    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
+    let plan = ctx.optimize(&plan).expect(&msg);
+    let optimized_logical_schema = plan.schema();
+    // Both schema has to be the same
+    assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+    // Verify schema
+    let expected = "Explain [plan_type:Utf8, plan:Utf8]";
+    let actual = format!("{}", plan.display_indent_schema());
+    assert_eq!(expected, actual);
+    // Verify the text format of the plan
+    let expected = "Explain";
+    let actual = format!("{}", plan.display_indent());
+    assert_eq!(expected, actual);
+    // verify the grahviz format of the plan
+    let expected = "// Begin DataFusion GraphViz Plan (see https://graphviz.org)\n
+    digraph {\n
+      subgraph cluster_1\n
+      {\n
+        graph[label=\"LogicalPlan\"]\n
+        2[shape=box label=\"Explain\"]\n
+      }\n
+      subgraph cluster_3\n
+      {\n
+        graph[label=\"Detailed LogicalPlan\"]\n
+        4[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]\n
+      }\n
+    }\n
+    // End DataFusion GraphViz Plan";
+    let actual = format!("{}", plan.display_graphviz());
+    assert_eq!(expected.replace("\t","").replace("\n","").replace(" ",""), actual.replace("\t","").replace("\n","").replace(" ",""));
+
+    // Physical plan
+    // Create plan
+    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
+    let plan = ctx.create_physical_plan(&plan).expect(&msg);
+    // Verify the text format of the plan
+    let expected = "ExplainExec";
+    let actual = format!("{}", displayable(plan.as_ref()).indent());
+    assert_eq!(expected.replace("\t","").replace("\n","").replace(" ",""), actual.replace("\t","").replace("\n","").replace(" ",""));
+
+    // Execute plan
+    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
+    let results = collect(plan).await.expect(&msg);
+    // Compare final explain result from execution output
+    let expected = vec![
+        vec!["logical_plan",
+             "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=None"]];
+    let actual = result_vec(&results);
+    assert_eq!(expected, actual);
+}
+
+
+
+#[tokio::test]
 async fn csv_explain_verbose() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
@@ -1589,6 +1686,105 @@ async fn csv_explain_verbose() {
     assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
     assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
     assert!(actual.contains("#c2 Gt Int64(10)"), "Actual: '{}'", actual);
+}
+
+#[tokio::test]
+async fn csv_explain_verbose_plans() {
+    // This test verify the look of each plan in its full cycle plan creation
+
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 > 10";
+
+    // Logical plan
+    // Create plan
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx.create_logical_plan(&sql).expect(&msg);
+    let logical_schema = plan.schema();
+    // 
+    println!("SQL: {}", sql);
+    // Verify schema
+    let expected = "Explain [plan_type:Utf8, plan:Utf8]";
+    let actual = format!("{}", plan.display_indent_schema());
+    assert_eq!(expected, actual);
+    // Verify the text format of the plan
+    let expected = "Explain";
+    let actual = format!("{}", plan.display_indent());
+    assert_eq!(expected, actual);
+    // verify the grahviz format of the plan
+    let expected = "// Begin DataFusion GraphViz Plan (see https://graphviz.org)\n
+    digraph {\n
+      subgraph cluster_1\n
+      {\n
+        graph[label=\"LogicalPlan\"]\n
+        2[shape=box label=\"Explain\"]\n
+      }\n
+      subgraph cluster_3\n
+      {\n
+        graph[label=\"Detailed LogicalPlan\"]\n
+        4[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]\n
+      }\n
+    }\n
+    // End DataFusion GraphViz Plan";
+    let actual = format!("{}", plan.display_graphviz());
+    assert_eq!(expected.replace("\t","").replace("\n","").replace(" ",""), actual.replace("\t","").replace("\n","").replace(" ",""));
+    // Optimized logical plan
+    //
+    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
+    let plan = ctx.optimize(&plan).expect(&msg);
+    let optimized_logical_schema = plan.schema();
+    // Both schema has to be the same
+    assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+    // Verify schema
+    let expected = "Explain [plan_type:Utf8, plan:Utf8]";
+    let actual = format!("{}", plan.display_indent_schema());
+    assert_eq!(expected, actual);
+    // Verify the text format of the plan
+    let expected = "Explain";
+    let actual = format!("{}", plan.display_indent());
+    assert_eq!(expected, actual);
+    // verify the grahviz format of the plan
+    let expected = "// Begin DataFusion GraphViz Plan (see https://graphviz.org)\n
+    digraph {\n
+      subgraph cluster_1\n
+      {\n
+        graph[label=\"LogicalPlan\"]\n
+        2[shape=box label=\"Explain\"]\n
+      }\n
+      subgraph cluster_3\n
+      {\n
+        graph[label=\"Detailed LogicalPlan\"]\n
+        4[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]\n
+      }\n
+    }\n
+    // End DataFusion GraphViz Plan";
+    let actual = format!("{}", plan.display_graphviz());
+    assert_eq!(expected.replace("\t","").replace("\n","").replace(" ",""), actual.replace("\t","").replace("\n","").replace(" ",""));
+
+    // Physical plan
+    // Create plan
+    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
+    let plan = ctx.create_physical_plan(&plan).expect(&msg);
+    // Verify the text format of the plan
+    let expected = "ExplainExec";
+    let actual = format!("{}", displayable(plan.as_ref()).indent());
+    assert_eq!(expected.replace("\t","").replace("\n","").replace(" ",""), actual.replace("\t","").replace("\n","").replace(" ",""));
+
+    // Execute plan
+    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
+    let results = collect(plan).await.expect(&msg);
+    // Compare final explain result from execution output
+    let expected = vec![
+        vec!["logical_plan",
+             "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=None"], 
+        vec!["logical_plan after projection_push_down", 
+             "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=Some([0, 1])"],
+        vec!["physical_plan", 
+             "ProjectionExec: expr=[c1]\n  FilterExec: CAST(c2 AS Int64) > 10\n    CsvExec: source=Path(/Users/nga/.cargo/git/checkouts/arrow-rs-3b86e19e889d5acc/4449ee9/arrow/../testing/data/csv/aggregate_test_100.csv: [/Users/nga/.cargo/git/checkouts/arrow-rs-3b86e19e889d5acc/4449ee9/arrow/../testing/data/csv/aggregate_test_100.csv]), has_header=true\n"]
+    
+    ];
+    let actual = result_vec(&results);
+    assert_eq!(expected, actual);
 }
 
 fn aggr_test_schema() -> SchemaRef {
