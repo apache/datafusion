@@ -527,7 +527,7 @@ macro_rules! get_min_max_values {
             .collect();
 
         // ignore errors converting to arrays (e.g. different types)
-        ScalarValue::iter_to_array(scalar_values.iter()).ok()
+        ScalarValue::iter_to_array(scalar_values).ok()
     }}
 }
 
