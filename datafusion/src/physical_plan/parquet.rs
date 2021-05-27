@@ -512,7 +512,7 @@ macro_rules! get_min_max_values {
             return None
         };
 
-        let scalar_values : Vec<ScalarValue> = $self.row_group_metadata
+        let scalar_values = $self.row_group_metadata
             .iter()
             .flat_map(|meta| {
                 meta.column(column_index).statistics()
@@ -523,11 +523,10 @@ macro_rules! get_min_max_values {
             .map(|maybe_scalar| {
                 // column either did't have statistics at all or didn't have min/max values
                 maybe_scalar.unwrap_or_else(|| null_scalar.clone())
-            })
-            .collect();
+            });
 
         // ignore errors converting to arrays (e.g. different types)
-        ScalarValue::iter_to_array(scalar_values.iter()).ok()
+        ScalarValue::iter_to_array(scalar_values).ok()
     }}
 }
 
