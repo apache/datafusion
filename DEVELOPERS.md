@@ -106,3 +106,20 @@ new specifications as you see fit.
 Here is the list current active specifications:
 
 * [Output field name semantic](docs/specification/output-field-name-semantic.md)
+
+## How to format `.md` document
+
+We are using `prettier` to format `.md` files.
+
+You can either use `npm i -g prettier` to install it globally or use `npx` to run it as a standalone binary. Using `npx` required a working node environment. Upgrading to the latest prettier is recommended (by adding `--upgrade` to the `npm` command).
+
+```bash
+$ prettier --version
+2.3.0
+```
+
+After you've confirmed your prettier version, you can format all the `.md` files:
+
+```bash
+prettier -w {ballista,datafusion,datafusion-examples,dev,docs,python}/**/*.md
+```
