@@ -1,29 +1,6 @@
 # Datafusion output field name semantic
 
-Start Date: 2020-05-24
-
-## Summary
-
-Formally specify how Datafusion should construct its output field names based on
-provided user query.
-
-## Motivation
-
-By formalizing the output field name semantic, users will be able to access
-query output using consistent field names.
-
-## Detailed design
-
-The proposed semantic is chosen for the following reasons:
-
-* Ease of implementation, field names can be derived from physical expression
-without having to add extra logic to pass along arbitrary user provided input.
-Users are encouraged to use ALIAS expressions for full field name control.
-* Mostly compatible with Spark’s behavior except literal string handling.
-* Mostly backward compatible with current Datafusion’s behavior other than
-function name cases and parenthesis around operator expressions.
-
-###  Field name rules
+##  Field name rules
 
 * All field names MUST not contain relation qualifier.
   * Both `SELECT t1.id` and `SELECT id` SHOULD result in field name: `id`
@@ -38,6 +15,8 @@ function name cases and parenthesis around operator expressions.
 * Function arguments MUST be separated by a comma `,` and a space.
   * `SELECT f(c1,c2)` SHOULD result in field name: `f(c1, c2)`
 
+
+## Appendices
 
 ### Examples and comparison with other systems
 
@@ -217,20 +196,3 @@ SQLite 3 output:
 | 1 | 2+5 | 'foo_bar' |
 |---|-----|-----------|
 | 1 | 7   | foo_bar   |
-
-
-## Alternatives
-
-Postgres's behavior is too simple. It defaults to `?column?` as the column name
-in many cases, which makes output less readable than other designs.
-
-MySQL and SQLite preserve user query input as the field name. This adds extra
-implementation and runtime overhead with little gain for end uers.
-
-In the long run, we could make output field semantic configurable so users can
-pick their own preferred semantic for full compatibility with system of their
-choice.
-
-## Unresolved questions
-
-None so far.
