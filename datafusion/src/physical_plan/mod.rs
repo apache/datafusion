@@ -558,7 +558,7 @@ pub trait WindowAccumulator: Send + Sync + Debug {
             .collect::<Option<Vec<ScalarValue>>>();
 
         Ok(match result {
-            Some(arr) if num_rows == arr.len() => Some(ScalarValue::iter_to_array(&arr)?),
+            Some(arr) if num_rows == arr.len() => Some(ScalarValue::iter_to_array(arr)?),
             None => None,
             Some(arr) => {
                 return Err(DataFusionError::Internal(format!(
