@@ -186,6 +186,8 @@ impl BallistaContext {
             .into_inner()
             .job_id;
 
+        let mut prev_status: Option<job_status::Status> = None;
+
         loop {
             let GetJobStatusResult { status } = scheduler
                 .get_job_status(GetJobStatusParams {
@@ -198,14 +200,21 @@ impl BallistaContext {
                 DataFusionError::Internal("Received empty status message".to_owned())
             })?;
             let wait_future = tokio::time::sleep(Duration::from_millis(100));
+            let has_status_change = prev_status.map(|x| x != status).unwrap_or(true);
             match status {
                 job_status::Status::Queued(_) => {
-                    info!("Job {} still queued...", job_id);
+                    if has_status_change {
+                        info!("Job {} still queued...", job_id);
+                    }
                     wait_future.await;
+                    prev_status = Some(status);
                 }
                 job_status::Status::Running(_) => {
-                    info!("Job {} is running...", job_id);
+                    if has_status_change {
+                        info!("Job {} is running...", job_id);
+                    }
                     wait_future.await;
+                    prev_status = Some(status);
                 }
                 job_status::Status::Failed(err) => {
                     let msg = format!("Job {} failed: {}", job_id, err.error);
