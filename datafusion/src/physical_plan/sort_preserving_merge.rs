@@ -633,7 +633,8 @@ mod tests {
         input: Arc<dyn ExecutionPlan>,
         sort: Vec<PhysicalSortExpr>,
     ) -> RecordBatch {
-        let sort_exec = Arc::new(SortExec::try_new(sort.clone(), input).unwrap());
+        let sort_exec =
+            Arc::new(SortExec::new_with_partitioning(sort.clone(), input, true));
         sorted_merge(sort_exec, sort).await
     }
 
