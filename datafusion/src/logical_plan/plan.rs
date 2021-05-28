@@ -329,11 +329,12 @@ impl LogicalPlan {
             LogicalPlan::Limit { input, .. } => vec![input],
             LogicalPlan::Extension { node } => node.inputs(),
             LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
+            LogicalPlan::Explain { plan, .. } => vec![plan],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
-            | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::Explain { .. } => vec![],
+            //| LogicalPlan::Explain { .. }
+            | LogicalPlan::CreateExternalTable { .. } => vec![],
         }
     }
 }
@@ -438,11 +439,11 @@ impl LogicalPlan {
                 }
                 true
             }
+            LogicalPlan::Explain { plan, .. } => plan.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
-            | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::Explain { .. } => true,
+            | LogicalPlan::CreateExternalTable { .. } => true,
         };
         if !recurse {
             return Ok(false);
