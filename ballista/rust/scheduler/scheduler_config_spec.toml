@@ -54,7 +54,7 @@ doc = "Local host name or IP address to bind to. Default: 0.0.0.0"
 
 [[param]]
 abbr = "p"
-name = "port"
+name = "bind_port"
 type = "u16"
 default = "50050"
 doc = "bind port. Default: 50050"
