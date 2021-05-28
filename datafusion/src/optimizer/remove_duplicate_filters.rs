@@ -22,8 +22,13 @@ use crate::optimizer::utils;
 use crate::optimizer::utils::optimize_explain;
 use crate::{error::Result, logical_plan::Operator};
 
-/// Remove duplicate filters optimizer
+/// Remove duplicate filters optimizer.
 /// # Introduction
+/// It uses boolean algebra laws to simplify or reduce the number of terms in expressions.
+/// 
+/// Filter: #b Gt Int32(2) And #b Gt Int32(2)
+/// is optimized to
+/// Filter: #b Gt Int32(2)
 pub struct RemoveDuplicateFilters {}
 
 fn expr_contains<'a>(expr: &'a Expr, needle: &'a Expr) -> bool {
@@ -86,7 +91,7 @@ fn simplify<'a>(expr: &'a Expr) -> Expr {
                     left: _,
                     op: Operator::And,
                     right: _,
-                } => x.clone(),
+                } => *left.clone(),
                 _ => expr.clone(),
             })
             .unwrap_or(expr.clone()),
@@ -135,11 +140,6 @@ fn simplify<'a>(expr: &'a Expr) -> Expr {
         },
         _ => expr.clone(),
     }
-}
-
-#[derive(Debug, Clone, Default)]
-struct State {
-    filters: Vec<Expr>,
 }
 
 fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
@@ -203,7 +203,7 @@ impl RemoveDuplicateFilters {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::{and, col, lit, LogicalPlanBuilder};
+    use crate::logical_plan::{and, binary_expr, col, lit, Expr, LogicalPlanBuilder};
     use crate::test::*;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
@@ -216,7 +216,60 @@ mod tests {
     }
 
     #[test]
-    fn remove_duplicate_and() -> Result<()> {
+    fn test_simplify_simple_and() -> Result<()> {
+        // (c > 5) AND (c > 5)
+        let expr = binary_expr(col("c").gt(lit(5)), Operator::And, col("c").gt(lit(5)));
+        let expected = col("c").gt(lit(5));
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_composed_and() -> Result<()> {
+        // ((c > 5) AND (d < 6)) AND (c > 5)
+        let expr = binary_expr(
+            binary_expr(col("c").gt(lit(5)), Operator::And, col("d").lt(lit(6))),
+            Operator::And,
+            col("c").gt(lit(5)),
+        );
+        let expected =
+            binary_expr(col("c").gt(lit(5)), Operator::And, col("d").lt(lit(6)));
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_negated_and() -> Result<()> {
+        // (c > 5) AND !(c > 5) -- can't remove
+        let expr = binary_expr(
+            col("c").gt(lit(5)),
+            Operator::And,
+            Expr::not(col("c").gt(lit(5))),
+        );
+        let expected = expr.clone();
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_or_and() -> Result<()> {
+        // (c > 5) OR ((d < 6) AND (c > 5) -- can't remove
+        let expr = binary_expr(
+            col("c").gt(lit(5)),
+            Operator::Or,
+            binary_expr(col("d").lt(lit(6)), Operator::And, col("c").gt(lit(5))),
+        );
+        let expected = col("c").gt(lit(5));
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_optimized_plan() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(&table_scan)
             .project(vec![col("a")])?
@@ -235,7 +288,7 @@ mod tests {
 
     // ((c > 5) AND (d < 6)) AND (c > 5) --> (c > 5) AND (d < 6)
     #[test]
-    fn remove_composed_and() -> Result<()> {
+    fn test_optimized_plan_with_composed_and() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(&table_scan)
             .project(vec![col("a")])?
