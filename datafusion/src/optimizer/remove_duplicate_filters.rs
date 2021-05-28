@@ -25,7 +25,7 @@ use crate::{error::Result, logical_plan::Operator};
 /// Remove duplicate filters optimizer.
 /// # Introduction
 /// It uses boolean algebra laws to simplify or reduce the number of terms in expressions.
-/// 
+///
 /// Filter: #b Gt Int32(2) And #b Gt Int32(2)
 /// is optimized to
 /// Filter: #b Gt Int32(2)
