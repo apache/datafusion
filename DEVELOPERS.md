@@ -94,6 +94,19 @@ can be displayed. For example, the following command creates a
 dot -Tpdf < /tmp/plan.dot > /tmp/plan.pdf
 ```
 
+## Specification
+
+We formalize Datafusion semantics and behaviors through specification
+documents. These specifications are useful to be used as references to help
+resolve ambiguities during development or code reviews.
+
+You are also welcome to propose changes to existing specifications or create
+new specifications as you see fit.
+
+Here is the list current active specifications:
+
+* [Output field name semantic](docs/specification/output-field-name-semantic.md)
+
 ## How to format `.md` document
 
 We are using `prettier` to format `.md` files.
