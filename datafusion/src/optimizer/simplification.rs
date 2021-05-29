@@ -104,7 +104,7 @@ define_language! {
     }
 }
 
-pub fn to_tokomak_expr(rec_expr: &mut RecExpr<ExprSimplifierExp>, expr: Expr) -> Option<Id> {
+pub fn to_tokomak_expr(rec_expr: &mut RecExpr<TokomakExpr>, expr: Expr) -> Option<Id> {
     match expr {
         Expr::BinaryExpr { left, op, right } => {
             let left = to_tokomak_expr(rec_expr, *left)?;
@@ -401,7 +401,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::prelude::{CsvReadOptions, ExecutionConfig, ExecutionContext};
     use egg::Runner;
 
     #[test]
