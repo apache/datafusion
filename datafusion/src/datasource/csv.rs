@@ -40,20 +40,12 @@ use std::string::String;
 use std::sync::{Arc, Mutex};
 
 use crate::datasource::datasource::Statistics;
-use crate::datasource::TableProvider;
+use crate::datasource::{Source, TableProvider};
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Expr;
 use crate::physical_plan::csv::CsvExec;
 pub use crate::physical_plan::csv::CsvReadOptions;
 use crate::physical_plan::{common, ExecutionPlan};
-
-enum Source {
-    /// Path to a single CSV file or a directory containing one of more CSV files
-    Path(String),
-
-    /// Read CSV data from a reader
-    Reader(Mutex<Option<Box<dyn Read + Send + Sync + 'static>>>),
-}
 
 /// Represents a CSV file with a provided schema
 pub struct CsvFile {

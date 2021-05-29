@@ -17,6 +17,11 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
+use std::fmt;
+use std::fmt::{Debug, Display};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::LogicalPlan;
 use crate::{
@@ -30,9 +35,6 @@ use arrow::{array::ArrayRef, datatypes::Field};
 use async_trait::async_trait;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
-use std::fmt::{self, Debug, Display};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::{any::Any, pin::Pin};
 
 use self::{display::DisplayableExecutionPlan, merge::MergeExec};
@@ -594,6 +596,7 @@ pub mod group_scalar;
 pub mod hash_aggregate;
 pub mod hash_join;
 pub mod hash_utils;
+pub mod json;
 pub mod limit;
 pub mod math_expressions;
 pub mod memory;
@@ -605,6 +608,7 @@ pub mod projection;
 pub mod regex_expressions;
 pub mod repartition;
 pub mod sort;
+pub mod source;
 pub mod string_expressions;
 pub mod type_coercion;
 pub mod udaf;

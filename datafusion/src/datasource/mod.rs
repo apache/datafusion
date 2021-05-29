@@ -20,9 +20,18 @@
 pub mod csv;
 pub mod datasource;
 pub mod empty;
+pub mod json;
 pub mod memory;
 pub mod parquet;
 
 pub use self::csv::{CsvFile, CsvReadOptions};
 pub use self::datasource::{TableProvider, TableType};
 pub use self::memory::MemTable;
+
+pub(crate) enum Source<R = Box<dyn std::io::Read + Send + Sync + 'static>> {
+    /// Path to a single file or a directory containing one of more files
+    Path(String),
+
+    /// Read data from a reader
+    Reader(std::sync::Mutex<Option<R>>),
+}
