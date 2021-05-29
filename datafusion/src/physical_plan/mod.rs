@@ -296,19 +296,18 @@ pub fn visit_execution_plan<V: ExecutionPlanVisitor>(
 }
 
 /// Execute the [ExecutionPlan] and collect the results in memory
-pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
+pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<SendableRecordBatchStream> {
     match plan.output_partitioning().partition_count() {
         0 => Ok(vec![]),
         1 => {
-            let it = plan.execute(0).await?;
-            common::collect(it).await
+            plan.execute(0).await
         }
         _ => {
             // merge into a single partition
             let plan = MergeExec::new(plan.clone());
             // MergeExec must produce a single partition
             assert_eq!(1, plan.output_partitioning().partition_count());
-            common::collect(plan.execute(0).await?).await
+            plan.execute(0).await
         }
     }
 }
