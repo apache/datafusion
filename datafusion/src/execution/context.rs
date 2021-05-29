@@ -22,7 +22,8 @@ use crate::{
         information_schema::CatalogWithInformationSchema,
     },
     optimizer::{
-        eliminate_limit::EliminateLimit, hash_build_probe_order::HashBuildProbeOrder,simplification::Tokomak
+        eliminate_limit::EliminateLimit, hash_build_probe_order::HashBuildProbeOrder,
+        simplification::Tokomak,
     },
     physical_optimizer::optimizer::PhysicalOptimizerRule,
 };

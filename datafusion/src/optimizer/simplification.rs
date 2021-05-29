@@ -25,8 +25,8 @@ use crate::{
 use crate::{logical_plan::Operator, optimizer::utils};
 
 use crate::error::Result as DFResult;
-use crate::logical_plan::Expr;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::Expr;
 use egg::{rewrite as rw, *};
 
 pub struct Tokomak {}
@@ -129,8 +129,12 @@ pub fn to_tokomak_expr(rec_expr: &mut RecExpr<TokomakExpr>, expr: Expr) -> Optio
             Some(rec_expr.add(binary_expr([left, right])))
         }
         Expr::Column(c) => Some(rec_expr.add(TokomakExpr::Column(Symbol::from(c)))),
-        Expr::Literal(ScalarValue::Int64(Some(x))) => Some(rec_expr.add(TokomakExpr::Int64(x))),
-        Expr::Literal(ScalarValue::Utf8(Some(x))) => Some(rec_expr.add(TokomakExpr::Utf8(x))),
+        Expr::Literal(ScalarValue::Int64(Some(x))) => {
+            Some(rec_expr.add(TokomakExpr::Int64(x)))
+        }
+        Expr::Literal(ScalarValue::Utf8(Some(x))) => {
+            Some(rec_expr.add(TokomakExpr::Utf8(x)))
+        }
         Expr::Literal(ScalarValue::LargeUtf8(Some(x))) => {
             Some(rec_expr.add(TokomakExpr::LargeUtf8(x)))
         }
@@ -221,7 +225,7 @@ fn to_exprs(rec_expr: &RecExpr<TokomakExpr>, id: Id) -> Expr {
             let low_expr = to_exprs(&rec_expr, low);
             let high_expr = to_exprs(&rec_expr, high);
 
-            Expr::Between{
+            Expr::Between {
                 expr: Box::new(left),
                 negated: false,
                 low: Box::new(low_expr),
@@ -233,7 +237,7 @@ fn to_exprs(rec_expr: &RecExpr<TokomakExpr>, id: Id) -> Expr {
             let low_expr = to_exprs(&rec_expr, low);
             let high_expr = to_exprs(&rec_expr, high);
 
-            Expr::Between{
+            Expr::Between {
                 expr: Box::new(left),
                 negated: false,
                 low: Box::new(low_expr),
@@ -353,16 +357,20 @@ fn to_exprs(rec_expr: &RecExpr<TokomakExpr>, id: Id) -> Expr {
 
         TokomakExpr::Int64(i) => Expr::Literal(ScalarValue::Int64(Some(i))),
         TokomakExpr::Utf8(ref i) => Expr::Literal(ScalarValue::Utf8(Some(i.clone()))),
-        TokomakExpr::LargeUtf8(ref i) => Expr::Literal(ScalarValue::LargeUtf8(Some(i.clone()))),
-        TokomakExpr::Column(col) => Expr::Column(col.to_string()),
-        TokomakExpr::Bool(b) => {
-            Expr::Literal(ScalarValue::Boolean(Some(b)))
+        TokomakExpr::LargeUtf8(ref i) => {
+            Expr::Literal(ScalarValue::LargeUtf8(Some(i.clone())))
         }
+        TokomakExpr::Column(col) => Expr::Column(col.to_string()),
+        TokomakExpr::Bool(b) => Expr::Literal(ScalarValue::Boolean(Some(b))),
     }
 }
 
 impl OptimizerRule for Tokomak {
-    fn optimize(&self, plan: &LogicalPlan, props: &ExecutionProps) -> DFResult<LogicalPlan> {
+    fn optimize(
+        &self,
+        plan: &LogicalPlan,
+        props: &ExecutionProps,
+    ) -> DFResult<LogicalPlan> {
         let inputs = plan.inputs();
         let new_inputs: Vec<LogicalPlan> = inputs
             .iter()
