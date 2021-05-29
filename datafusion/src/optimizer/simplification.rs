@@ -16,6 +16,7 @@
 // under the License.
 
 //! Expression simplification optimizer.
+//! Rewrites expressions using equivalence rules and the egg optimization library
 use std::vec;
 
 use crate::{
@@ -28,17 +29,17 @@ use crate::logical_plan::Expr;
 use crate::execution::context::ExecutionProps;
 use egg::{rewrite as rw, *};
 
-pub struct Tokomak {}
+pub struct ExprSimplifier {}
 
-impl Tokomak {
+impl ExprSimplifier {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
-pub type EGraph = egg::EGraph<Tokomak, ()>;
+pub type EGraph = egg::EGraph<ExprSimplifier, ()>;
 
-pub fn rules() -> Vec<Rewrite<TokomakExpr, ()>> {
+pub fn rules() -> Vec<Rewrite<ExprSimplifierExpr, ()>> {
     return vec![
         rw!("commute-add"; "(+ ?x ?y)" => "(+ ?y ?x)"),
         rw!("commute-mul"; "(* ?x ?y)" => "(* ?y ?x)"),
@@ -71,8 +72,8 @@ pub fn rules() -> Vec<Rewrite<TokomakExpr, ()>> {
 }
 
 define_language! {
-    /// Supported expressions in Tokomak
-    pub enum TokomakExpr {
+    /// Supported expressions in ExprSimplifier
+    pub enum ExprSimplifierExpr {
         "+" = Plus([Id; 2]),
         "-" = Minus([Id; 2]),
         "*" = Multiply([Id; 2]),
@@ -103,7 +104,7 @@ define_language! {
     }
 }
 
-pub fn to_tokomak_expr(rec_expr: &mut RecExpr<TokomakExpr>, expr: Expr) -> Option<Id> {
+pub fn to_tokomak_expr(rec_expr: &mut RecExpr<ExprSimplifierExp>, expr: Expr) -> Option<Id> {
     match expr {
         Expr::BinaryExpr { left, op, right } => {
             let left = to_tokomak_expr(rec_expr, *left)?;
