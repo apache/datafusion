@@ -16,7 +16,7 @@
 // under the License.
 
 //! Expression simplification optimizer.
-//! Rewrites expressions using equivalence rules and the egg optimization library
+//! Rewrites expressions using equivalence rules and the egg optimization library   
 use std::vec;
 
 use crate::{
@@ -434,53 +434,6 @@ mod tests {
         assert_eq!(
             format!("{}", best_expr),
             "(and (= 1 2) (or boo (or foo bar)))"
-        )
-    }
-
-    #[tokio::test]
-    async fn custom_optimizer() {
-        // register custom tokomak optimizer, verify that optimization took place
-
-        let mut ctx = ExecutionContext::with_config(
-            ExecutionConfig::new().add_optimizer_rule(Arc::new(Tokomak::new())),
-        );
-
-        ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new())
-            .unwrap();
-
-        // create a plan to run a SQL query
-        let lp = ctx
-            .sql("SELECT price*0-price from example")
-            .unwrap()
-            .to_logical_plan();
-
-        assert_eq!(
-            format!("{}", lp.display_indent()),
-            "Projection: (- #price)\
-            \n  TableScan: example projection=Some([0])"
-        )
-    }
-
-    #[tokio::test]
-    async fn custom_optimizer_filter() {
-        // register custom tokomak optimizer, verify that optimization took place
-
-        let mut ctx = ExecutionContext::with_config(
-            ExecutionConfig::new().add_optimizer_rule(Arc::new(Tokomak::new())),
-        );
-        ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new())
-            .unwrap();
-
-        // create a plan to run a SQL query
-        let lp = ctx
-            .sql("SELECT price from example WHERE (price=1 AND price=2) OR (price=1 AND price=3)")
-            .unwrap()
-            .to_logical_plan();
-
-        assert_eq!(
-            format!("{}", lp.display_indent()),
-            "Filter: #price Eq Int64(1) And #price Eq Int64(2) Or #price Eq Int64(3)\
-            \n  TableScan: example projection=Some([0])"
         )
     }
 }
