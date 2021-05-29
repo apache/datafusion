@@ -29,17 +29,17 @@ use crate::logical_plan::Expr;
 use crate::execution::context::ExecutionProps;
 use egg::{rewrite as rw, *};
 
-pub struct ExprSimplifier {}
+pub struct Tokomak {}
 
-impl ExprSimplifier {
+impl Tokomak {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
-pub type EGraph = egg::EGraph<ExprSimplifier, ()>;
+pub type EGraph = egg::EGraph<TokomakExpr, ()>;
 
-pub fn rules() -> Vec<Rewrite<ExprSimplifierExpr, ()>> {
+pub fn rules() -> Vec<Rewrite<TokomakExpr, ()>> {
     return vec![
         rw!("commute-add"; "(+ ?x ?y)" => "(+ ?y ?x)"),
         rw!("commute-mul"; "(* ?x ?y)" => "(* ?y ?x)"),
@@ -73,7 +73,7 @@ pub fn rules() -> Vec<Rewrite<ExprSimplifierExpr, ()>> {
 
 define_language! {
     /// Supported expressions in ExprSimplifier
-    pub enum ExprSimplifierExpr {
+    pub enum TokomakExpr {
         "+" = Plus([Id; 2]),
         "-" = Minus([Id; 2]),
         "*" = Multiply([Id; 2]),
