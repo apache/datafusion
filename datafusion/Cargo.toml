@@ -53,6 +53,7 @@ paste = "^1.0"
 num_cpus = "1.13.0"
 chrono = "0.4"
 async-trait = "0.1.41"
+egg = "0.6.0"
 futures = "0.3"
 pin-project-lite= "^0.2.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
