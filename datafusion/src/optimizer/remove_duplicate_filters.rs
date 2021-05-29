@@ -54,9 +54,17 @@ fn as_binary_expr<'a>(expr: &'a Expr) -> Option<&'a Expr> {
     }
 }
 
+fn operator_is_boolean(op: &Operator) -> bool {
+    op == &Operator::And || op == &Operator::Or
+}
+
 fn simplify<'a>(expr: &'a Expr) -> Expr {
     match expr {
-        Expr::BinaryExpr { left, op: _, right } if left == right => simplify(left),
+        Expr::BinaryExpr { left, op, right }
+            if left == right && operator_is_boolean(op) =>
+        {
+            simplify(left)
+        }
         Expr::BinaryExpr {
             left,
             op: Operator::Or,
@@ -265,6 +273,17 @@ mod tests {
         let expected = col("c").gt(lit(5));
 
         assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_do_not_simplify_arithmetic_expr() -> Result<()> {
+        let expr_plus = binary_expr(lit(1), Operator::Plus, lit(1));
+        let expr_eq = binary_expr(lit(1), Operator::Eq, lit(1));
+
+        assert_eq!(simplify(&expr_plus), expr_plus);
+        assert_eq!(simplify(&expr_eq), expr_eq);
+
         Ok(())
     }
 
