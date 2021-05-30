@@ -20,7 +20,7 @@
 
 use std::task::{Context, Poll};
 
-use arrow::{datatypes::SchemaRef, error::Result, record_batch::RecordBatch};
+use datafusion::arrow::{datatypes::SchemaRef, error::Result, record_batch::RecordBatch};
 use datafusion::physical_plan::RecordBatchStream;
 use futures::Stream;
 
