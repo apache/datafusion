@@ -1271,9 +1271,9 @@ impl fmt::Debug for Expr {
             Expr::AggregateFunction {
                 fun,
                 distinct,
-                arg: ref args,
+                ref arg,
                 ..
-            } => fmt_function(f, &fun.to_string(), *distinct, &[*args.clone()]),
+            } => fmt_function(f, &fun.to_string(), *distinct, &[*arg.clone()]),
             Expr::AggregateUDF { fun, ref args, .. } => {
                 fmt_function(f, &fun.name, false, args)
             }
