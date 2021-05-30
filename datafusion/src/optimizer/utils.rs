@@ -266,7 +266,7 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         Expr::ScalarFunction { args, .. } => Ok(args.clone()),
         Expr::ScalarUDF { args, .. } => Ok(args.clone()),
         Expr::WindowFunction { args, .. } => Ok(args.clone()),
-        Expr::AggregateFunction { arg: args, .. } => Ok(vec![args.as_ref().to_owned()]),
+        Expr::AggregateFunction { arg, .. } => Ok(vec![arg.as_ref().to_owned()]),
         Expr::AggregateUDF { args, .. } => Ok(args.clone()),
         Expr::Case {
             expr,

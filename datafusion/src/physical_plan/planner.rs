@@ -779,10 +779,10 @@ impl DefaultPhysicalPlanner {
             Expr::AggregateFunction {
                 fun,
                 distinct,
-                arg: args,
+                arg,
                 ..
             } => {
-                let args = self.create_physical_expr(args, physical_input_schema, ctx_state)?;
+                let args = self.create_physical_expr(arg, physical_input_schema, ctx_state)?;
                 aggregates::create_aggregate_expr(
                     fun,
                     *distinct,

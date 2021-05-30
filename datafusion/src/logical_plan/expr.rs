@@ -259,8 +259,8 @@ impl Expr {
                     .collect::<Result<Vec<_>>>()?;
                 window_functions::return_type(fun, &data_types)
             }
-            Expr::AggregateFunction { fun, arg: args, .. } => {
-                let data_type = args.get_type(schema)?;
+            Expr::AggregateFunction { fun, arg, .. } => {
+                let data_type = arg.get_type(schema)?;
                 aggregates::return_type(fun, &[data_type])
             }
             Expr::AggregateUDF { fun, args, .. } => {
@@ -587,7 +587,7 @@ impl Expr {
             Expr::WindowFunction { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
-            Expr::AggregateFunction { arg: args, .. } => args.accept(visitor),
+            Expr::AggregateFunction { arg, .. } => arg.accept(visitor),
             Expr::AggregateUDF { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
@@ -723,11 +723,11 @@ impl Expr {
                 fun,
             },
             Expr::AggregateFunction {
-                arg: args,
+                arg,
                 fun,
                 distinct,
             } => Expr::AggregateFunction {
-                arg: rewrite_boxed(args, rewriter)?,
+                arg: rewrite_boxed(arg, rewriter)?,
                 fun,
                 distinct,
             },
@@ -1389,9 +1389,9 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::AggregateFunction {
             fun,
             distinct,
-            arg: args,
+            arg,
             ..
-        } => create_function_name(&fun.to_string(), *distinct, &[*args.clone()], input_schema),
+        } => create_function_name(&fun.to_string(), *distinct, &[*arg.clone()], input_schema),
         Expr::AggregateUDF { fun, args } => {
             let mut names = Vec::with_capacity(args.len());
             for e in args {
