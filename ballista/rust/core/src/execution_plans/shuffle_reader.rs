@@ -22,8 +22,8 @@ use crate::client::BallistaClient;
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionLocation;
 
-use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 use datafusion::{
     error::{DataFusionError, Result},

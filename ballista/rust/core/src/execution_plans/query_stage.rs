@@ -18,8 +18,8 @@
 use std::sync::Arc;
 use std::{any::Any, pin::Pin};
 
-use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::{error::Result, physical_plan::RecordBatchStream};
 use uuid::Uuid;

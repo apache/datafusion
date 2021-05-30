@@ -28,16 +28,18 @@ use ballista_core::serde::decode_protobuf;
 use ballista_core::serde::scheduler::{Action as BallistaAction, PartitionStats};
 use ballista_core::utils;
 
-use arrow::array::{ArrayRef, StringBuilder};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::error::ArrowError;
-use arrow::ipc::reader::FileReader;
-use arrow::ipc::writer::IpcWriteOptions;
-use arrow::record_batch::RecordBatch;
 use arrow_flight::{
     flight_service_server::FlightService, Action, ActionType, Criteria, Empty,
     FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
     PutResult, SchemaResult, Ticket,
+};
+use datafusion::arrow::{
+    array::{ArrayRef, StringBuilder},
+    datatypes::{DataType, Field, Schema},
+    error::ArrowError,
+    ipc::reader::FileReader,
+    ipc::writer::IpcWriteOptions,
+    record_batch::RecordBatch,
 };
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::displayable;

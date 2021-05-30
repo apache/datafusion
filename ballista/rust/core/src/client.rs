@@ -31,15 +31,15 @@ use crate::serde::scheduler::{
     Action, ExecutePartition, ExecutePartitionResult, PartitionId, PartitionStats,
 };
 
-use arrow::record_batch::RecordBatch;
-use arrow::{
-    array::{StringArray, StructArray},
-    error::{ArrowError, Result as ArrowResult},
-};
-use arrow::{datatypes::Schema, datatypes::SchemaRef};
 use arrow_flight::utils::flight_data_to_arrow_batch;
 use arrow_flight::Ticket;
 use arrow_flight::{flight_service_client::FlightServiceClient, FlightData};
+use datafusion::arrow::{
+    array::{StringArray, StructArray},
+    datatypes::{Schema, SchemaRef},
+    error::{ArrowError, Result as ArrowResult},
+    record_batch::RecordBatch,
+};
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion::{logical_plan::LogicalPlan, physical_plan::RecordBatchStream};

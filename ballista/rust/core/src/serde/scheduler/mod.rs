@@ -17,10 +17,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow::array::{
+use datafusion::arrow::array::{
     ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use serde::Serialize;

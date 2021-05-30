@@ -33,7 +33,7 @@ use ballista_core::{
     utils::create_datafusion_context,
 };
 
-use arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::TableReference;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
