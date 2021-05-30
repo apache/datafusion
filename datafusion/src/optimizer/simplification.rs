@@ -151,16 +151,35 @@ fn to_tokomak_expr(rec_expr: &mut RecExpr<TokomakExpr>, expr: Expr) -> Option<Id
             Some(rec_expr.add(TokomakExpr::Date64(x)))
         }
         Expr::Not(expr) => {
-            let left = to_tokomak_expr(rec_expr, *expr)?;
-            Some(rec_expr.add(TokomakExpr::Not(left)))
+            let e = to_tokomak_expr(rec_expr, *expr)?;
+            Some(rec_expr.add(TokomakExpr::Not(e)))
         }
         Expr::IsNull(expr) => {
-            let left = to_tokomak_expr(rec_expr, *expr)?;
-            Some(rec_expr.add(TokomakExpr::IsNull(left)))
+            let e = to_tokomak_expr(rec_expr, *expr)?;
+            Some(rec_expr.add(TokomakExpr::IsNull(e)))
         }
         Expr::IsNotNull(expr) => {
-            let left = to_tokomak_expr(rec_expr, *expr)?;
-            Some(rec_expr.add(TokomakExpr::IsNotNull(left)))
+            let e = to_tokomak_expr(rec_expr, *expr)?;
+            Some(rec_expr.add(TokomakExpr::IsNotNull(e)))
+        }
+        Expr::Negative(expr) => {
+            let e = to_tokomak_expr(rec_expr, *expr)?;
+            Some(rec_expr.add(TokomakExpr::Negative(e)))
+        }
+        Expr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => {
+            let e = to_tokomak_expr(rec_expr, *expr)?;
+            let low = to_tokomak_expr(rec_expr, *low)?;
+            let high = to_tokomak_expr(rec_expr, *high)?;
+            if negated {
+                Some(rec_expr.add(TokomakExpr::BetweenInverted([e, low, high])))
+            } else {
+                Some(rec_expr.add(TokomakExpr::Between([e, low, high])))
+            }
         }
 
         // not yet supported
