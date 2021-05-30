@@ -25,18 +25,16 @@ use log::{debug, error, info, warn};
 use tonic::transport::Channel;
 
 use ballista_core::serde::protobuf::ExecutorRegistration;
-use ballista_core::{
-    client::BallistaClient,
-    serde::protobuf::{
-        self, scheduler_grpc_client::SchedulerGrpcClient, task_status, FailedTask,
-        PartitionId, PollWorkParams, PollWorkResult, TaskDefinition, TaskStatus,
-    },
+use ballista_core::serde::protobuf::{
+    self, scheduler_grpc_client::SchedulerGrpcClient, task_status, FailedTask,
+    PartitionId, PollWorkParams, PollWorkResult, TaskDefinition, TaskStatus,
 };
+use ballista_executor::executor::Executor;
 use protobuf::CompletedTask;
 
 pub async fn poll_loop(
     mut scheduler: SchedulerGrpcClient<Channel>,
-    executor_client: BallistaClient,
+    executor: Arc<Executor>,
     executor_meta: ExecutorRegistration,
     concurrent_tasks: usize,
 ) {
@@ -67,7 +65,7 @@ pub async fn poll_loop(
             Ok(result) => {
                 if let Some(task) = result.into_inner().task {
                     run_received_tasks(
-                        executor_client.clone(),
+                        executor.clone(),
                         executor_meta.id.clone(),
                         available_tasks_slots.clone(),
                         task_status_sender,
@@ -86,7 +84,7 @@ pub async fn poll_loop(
 }
 
 async fn run_received_tasks(
-    mut executor_client: BallistaClient,
+    executor: Arc<Executor>,
     executor_id: String,
     available_tasks_slots: Arc<AtomicUsize>,
     task_status_sender: Sender<TaskStatus>,
@@ -96,15 +94,13 @@ async fn run_received_tasks(
     available_tasks_slots.fetch_sub(1, Ordering::SeqCst);
     let plan: Arc<dyn ExecutionPlan> = (&task.plan.unwrap()).try_into().unwrap();
     let task_id = task.task_id.unwrap();
-    // TODO: This is a convoluted way of executing the task. We should move the task
-    // execution code outside of the FlightService (data plane) into the control plane.
 
     tokio::spawn(async move {
-        let execution_result = executor_client
+        let execution_result = executor
             .execute_partition(
                 task_id.job_id.clone(),
                 task_id.stage_id as usize,
-                vec![task_id.partition_id as usize],
+                task_id.partition_id as usize,
                 plan,
             )
             .await;
