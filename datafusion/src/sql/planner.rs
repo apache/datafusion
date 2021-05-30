@@ -1136,7 +1136,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Ok(Expr::AggregateFunction {
                         fun,
                         distinct: function.distinct,
-                        args,
+                        arg: Box::new(args[0].clone()),
                     });
                 };
 

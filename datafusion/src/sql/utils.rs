@@ -215,14 +215,11 @@ where
         None => match expr {
             Expr::AggregateFunction {
                 fun,
-                args,
+                arg: args,
                 distinct,
             } => Ok(Expr::AggregateFunction {
                 fun: fun.clone(),
-                args: args
-                    .iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<Expr>>>()?,
+                arg: Box::new(clone_with_replacement(args, replacement_fn)?),
                 distinct: *distinct,
             }),
             Expr::WindowFunction { fun, args } => Ok(Expr::WindowFunction {

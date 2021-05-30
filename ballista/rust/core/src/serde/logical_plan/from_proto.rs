@@ -976,7 +976,7 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
 
                 Ok(Expr::AggregateFunction {
                     fun,
-                    args: vec![parse_required_expr(&expr.expr)?],
+                    arg: Box::new(parse_required_expr(&expr.expr)?),
                     distinct: false, //TODO
                 })
             }

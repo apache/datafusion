@@ -325,10 +325,10 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let df_planner = DefaultPhysicalPlanner::default();
                 for (expr, name) in &logical_agg_expr {
                     match expr {
-                        Expr::AggregateFunction { fun, args, .. } => {
+                        Expr::AggregateFunction { fun, arg, .. } => {
                             let arg = df_planner
                                 .create_physical_expr(
-                                    &args[0],
+                                    &**arg,
                                     &physical_schema,
                                     &ctx_state,
                                 )

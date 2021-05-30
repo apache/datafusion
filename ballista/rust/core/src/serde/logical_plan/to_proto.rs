@@ -1062,7 +1062,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                 })
             }
             Expr::AggregateFunction {
-                ref fun, ref args, ..
+                ref fun, arg: ref args, ..
             } => {
                 let aggr_function = match fun {
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
@@ -1072,7 +1072,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::Count => protobuf::AggregateFunction::Count,
                 };
 
-                let arg = &args[0];
+                let arg = &**args;
                 let aggregate_expr = Box::new(protobuf::AggregateExprNode {
                     aggr_function: aggr_function.into(),
                     expr: Some(Box::new(arg.try_into()?)),

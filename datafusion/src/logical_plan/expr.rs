@@ -187,7 +187,7 @@ pub enum Expr {
         /// Name of the function
         fun: aggregates::AggregateFunction,
         /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
+        arg: Box<Expr>,
         /// Whether this is a DISTINCT aggregation or not
         distinct: bool,
     },
@@ -259,12 +259,9 @@ impl Expr {
                     .collect::<Result<Vec<_>>>()?;
                 window_functions::return_type(fun, &data_types)
             }
-            Expr::AggregateFunction { fun, args, .. } => {
-                let data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                aggregates::return_type(fun, &data_types)
+            Expr::AggregateFunction { fun, arg: args, .. } => {
+                let data_type = args.get_type(schema)?;
+                aggregates::return_type(fun, &[data_type])
             }
             Expr::AggregateUDF { fun, args, .. } => {
                 let data_types = args
@@ -590,9 +587,7 @@ impl Expr {
             Expr::WindowFunction { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
-            Expr::AggregateFunction { args, .. } => args
-                .iter()
-                .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
+            Expr::AggregateFunction { arg: args, .. } => args.accept(visitor),
             Expr::AggregateUDF { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
@@ -728,11 +723,11 @@ impl Expr {
                 fun,
             },
             Expr::AggregateFunction {
-                args,
+                arg: args,
                 fun,
                 distinct,
             } => Expr::AggregateFunction {
-                args: rewrite_vec(args, rewriter)?,
+                arg: rewrite_boxed(args, rewriter)?,
                 fun,
                 distinct,
             },
@@ -969,7 +964,7 @@ pub fn min(expr: Expr) -> Expr {
     Expr::AggregateFunction {
         fun: aggregates::AggregateFunction::Min,
         distinct: false,
-        args: vec![expr],
+        arg: Box::new(expr),
     }
 }
 
@@ -978,7 +973,7 @@ pub fn max(expr: Expr) -> Expr {
     Expr::AggregateFunction {
         fun: aggregates::AggregateFunction::Max,
         distinct: false,
-        args: vec![expr],
+        arg: Box::new(expr),
     }
 }
 
@@ -987,7 +982,7 @@ pub fn sum(expr: Expr) -> Expr {
     Expr::AggregateFunction {
         fun: aggregates::AggregateFunction::Sum,
         distinct: false,
-        args: vec![expr],
+        arg: Box::new(expr),
     }
 }
 
@@ -996,7 +991,7 @@ pub fn avg(expr: Expr) -> Expr {
     Expr::AggregateFunction {
         fun: aggregates::AggregateFunction::Avg,
         distinct: false,
-        args: vec![expr],
+        arg: Box::new(expr),
     }
 }
 
@@ -1005,7 +1000,7 @@ pub fn count(expr: Expr) -> Expr {
     Expr::AggregateFunction {
         fun: aggregates::AggregateFunction::Count,
         distinct: false,
-        args: vec![expr],
+        arg: Box::new(expr),
     }
 }
 
@@ -1014,7 +1009,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
     Expr::AggregateFunction {
         fun: aggregates::AggregateFunction::Count,
         distinct: true,
-        args: vec![expr],
+        arg: Box::new(expr),
     }
 }
 
@@ -1276,9 +1271,9 @@ impl fmt::Debug for Expr {
             Expr::AggregateFunction {
                 fun,
                 distinct,
-                ref args,
+                arg: ref args,
                 ..
-            } => fmt_function(f, &fun.to_string(), *distinct, args),
+            } => fmt_function(f, &fun.to_string(), *distinct, &[*args.clone()]),
             Expr::AggregateUDF { fun, ref args, .. } => {
                 fmt_function(f, &fun.name, false, args)
             }
@@ -1394,9 +1389,9 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::AggregateFunction {
             fun,
             distinct,
-            args,
+            arg: args,
             ..
-        } => create_function_name(&fun.to_string(), *distinct, args, input_schema),
+        } => create_function_name(&fun.to_string(), *distinct, &[*args.clone()], input_schema),
         Expr::AggregateUDF { fun, args } => {
             let mut names = Vec::with_capacity(args.len());
             for e in args {
