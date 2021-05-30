@@ -51,7 +51,7 @@ fn rules() -> Vec<Rewrite<TokomakExpr, ()>> {
         rw!("converse-gt"; "(> ?x ?y)" => "(< ?y ?x)"),
         rw!("converse-gte"; "(>= ?x ?y)" => "(<= ?y ?x)"),
         rw!("converse-lt"; "(< ?x ?y)" => "(> ?y ?x)"),
-        rw!("converse-lte"; "(<= ?x ?y)" => "(>= ?x ?y)"),
+        rw!("converse-lte"; "(<= ?x ?y)" => "(>= ?y ?x)"),
         rw!("add-0"; "(+ ?x 0)" => "?x"),
         rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
         rw!("minus-0"; "(- ?x 0)" => "?x"),
