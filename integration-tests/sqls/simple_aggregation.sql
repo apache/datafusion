@@ -15,7 +15,7 @@
 -- limitations under the License.
 
 SELECT
-  count(*) AS count,
+  count(*) AS count_all,
   count(c3) AS count_c3,
   avg(c3) AS avg,
   sum(c3) AS sum,
