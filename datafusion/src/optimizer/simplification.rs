@@ -100,6 +100,8 @@ define_language! {
         Bool(bool),
         Int64(i64),
         Utf8(String),
+        Date32(i32),
+        Date64(i64),
         LargeUtf8(String),
         Column(Symbol),
     }
@@ -141,6 +143,12 @@ fn to_tokomak_expr(rec_expr: &mut RecExpr<TokomakExpr>, expr: Expr) -> Option<Id
         }
         Expr::Literal(ScalarValue::Boolean(Some(x))) => {
             Some(rec_expr.add(TokomakExpr::Bool(x)))
+        }
+        Expr::Literal(ScalarValue::Date32(Some(x))) => {
+            Some(rec_expr.add(TokomakExpr::Date32(x)))
+        }
+        Expr::Literal(ScalarValue::Date64(Some(x))) => {
+            Some(rec_expr.add(TokomakExpr::Date64(x)))
         }
         Expr::Not(expr) => {
             let left = to_tokomak_expr(rec_expr, *expr)?;
@@ -363,6 +371,8 @@ fn to_exprs(rec_expr: &RecExpr<TokomakExpr>, id: Id) -> Expr {
         }
         TokomakExpr::Column(col) => Expr::Column(col.to_string()),
         TokomakExpr::Bool(b) => Expr::Literal(ScalarValue::Boolean(Some(b))),
+        TokomakExpr::Date32(b) => Expr::Literal(ScalarValue::Date32(Some(b))),
+        TokomakExpr::Date64(b) => Expr::Literal(ScalarValue::Date64(Some(b))),
     }
 }
 
