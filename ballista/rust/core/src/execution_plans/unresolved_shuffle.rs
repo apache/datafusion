@@ -21,8 +21,8 @@ use std::{any::Any, pin::Pin};
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionLocation;
 
-use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::{
     error::{DataFusionError, Result},

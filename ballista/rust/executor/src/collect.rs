@@ -22,10 +22,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
 
-use arrow::datatypes::SchemaRef;
-use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion::arrow::{
+    datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
+};
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use datafusion::{error::Result, physical_plan::RecordBatchStream};
