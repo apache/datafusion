@@ -29,6 +29,7 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::Expr;
 use egg::{rewrite as rw, *};
 
+/// Tokomak optimization rule
 pub struct Tokomak {}
 
 impl Tokomak {
@@ -37,20 +38,20 @@ impl Tokomak {
         Self {}
     }
 }
-pub type EGraph = egg::EGraph<TokomakExpr, ()>;
 
-pub fn rules() -> Vec<Rewrite<TokomakExpr, ()>> {
+fn rules() -> Vec<Rewrite<TokomakExpr, ()>> {
     return vec![
         rw!("commute-add"; "(+ ?x ?y)" => "(+ ?y ?x)"),
         rw!("commute-mul"; "(* ?x ?y)" => "(* ?y ?x)"),
+        rw!("commute-eq"; "(= ?x ?y)" => "(= ?y ?x)"),
         rw!("commute-and"; "(and ?x ?y)" => "(and ?y ?x)"),
         rw!("commute-or"; "(or ?x ?y)" => "(or ?y ?x)"),
         rw!("commute-eq"; "(= ?x ?y)" => "(= ?y ?x)"),
         rw!("commute-neq"; "(<> ?x ?y)" => "(<> ?y ?x)"),
-        rw!("converse-gt"; "(> ?x ?y)"=> "(< ?y ?x)"),
-        rw!("converse-gte"; "(>= ?x ?y)"=> "(<= ?y ?x)"),
-        rw!("converse-lt"; "(< ?x ?y)"=> "(> ?y ?x)"),
-        rw!("converse-lte"; "(<= ?x ?y)"=> "(>= ?x ?y)"),
+        rw!("converse-gt"; "(> ?x ?y)" => "(< ?y ?x)"),
+        rw!("converse-gte"; "(>= ?x ?y)" => "(<= ?y ?x)"),
+        rw!("converse-lt"; "(< ?x ?y)" => "(> ?y ?x)"),
+        rw!("converse-lte"; "(<= ?x ?y)" => "(>= ?x ?y)"),
         rw!("add-0"; "(+ ?x 0)" => "?x"),
         rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
         rw!("minus-0"; "(- ?x 0)" => "?x"),
@@ -73,7 +74,7 @@ pub fn rules() -> Vec<Rewrite<TokomakExpr, ()>> {
 
 define_language! {
     /// Supported expressions in ExprSimplifier
-    pub enum TokomakExpr {
+    enum TokomakExpr {
         "+" = Plus([Id; 2]),
         "-" = Minus([Id; 2]),
         "*" = Multiply([Id; 2]),
@@ -104,7 +105,7 @@ define_language! {
     }
 }
 
-pub fn to_tokomak_expr(rec_expr: &mut RecExpr<TokomakExpr>, expr: Expr) -> Option<Id> {
+fn to_tokomak_expr(rec_expr: &mut RecExpr<TokomakExpr>, expr: Expr) -> Option<Id> {
     match expr {
         Expr::BinaryExpr { left, op, right } => {
             let left = to_tokomak_expr(rec_expr, *left)?;
@@ -406,7 +407,6 @@ impl OptimizerRule for Tokomak {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use egg::Runner;
