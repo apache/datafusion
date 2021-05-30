@@ -41,6 +41,7 @@ use ballista_core::{
     print_version, serde::protobuf::scheduler_grpc_server::SchedulerGrpcServer,
     BALLISTA_VERSION,
 };
+use ballista_executor::executor::Executor;
 use ballista_executor::flight_service::BallistaFlightService;
 use ballista_scheduler::{state::StandaloneClient, SchedulerServer};
 use config::prelude::*;
@@ -166,7 +167,10 @@ async fn main() -> Result<()> {
     let scheduler = SchedulerGrpcClient::connect(scheduler_url)
         .await
         .context("Could not connect to scheduler")?;
-    let service = BallistaFlightService::new(work_dir);
+
+    let executor = Arc::new(Executor::new(&work_dir));
+
+    let service = BallistaFlightService::new(executor);
 
     let server = FlightServiceServer::new(service);
     info!(

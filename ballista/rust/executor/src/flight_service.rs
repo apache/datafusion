@@ -21,12 +21,11 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Instant;
 
+use crate::executor::Executor;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::decode_protobuf;
 use ballista_core::serde::scheduler::{Action as BallistaAction, PartitionStats};
-use ballista_core::utils;
 
 use arrow_flight::{
     flight_service_server::FlightService, Action, ActionType, Criteria, Empty,
@@ -34,14 +33,12 @@ use arrow_flight::{
     PutResult, SchemaResult, Ticket,
 };
 use datafusion::arrow::{
-    array::{ArrayRef, StringBuilder},
     datatypes::{DataType, Field, Schema},
     error::ArrowError,
     ipc::reader::FileReader,
     ipc::writer::IpcWriteOptions,
     record_batch::RecordBatch,
 };
-use datafusion::error::DataFusionError;
 use datafusion::physical_plan::displayable;
 use futures::{Stream, StreamExt};
 use log::{info, warn};
@@ -61,12 +58,13 @@ type FlightDataReceiver = Receiver<Result<FlightData, Status>>;
 /// Service implementing the Apache Arrow Flight Protocol
 #[derive(Clone)]
 pub struct BallistaFlightService {
-    work_dir: String,
+    /// Executor
+    executor: Arc<Executor>,
 }
 
 impl BallistaFlightService {
-    pub fn new(work_dir: String) -> Self {
-        Self { work_dir }
+    pub fn new(executor: Arc<Executor>) -> Self {
+        Self { executor }
     }
 }
 
@@ -105,58 +103,21 @@ impl FlightService for BallistaFlightService {
 
                 let mut tasks: Vec<JoinHandle<Result<_, BallistaError>>> = vec![];
                 for &part in &partition.partition_id {
-                    let mut path = PathBuf::from(&self.work_dir);
                     let partition = partition.clone();
+                    let executor = self.executor.clone();
                     tasks.push(tokio::spawn(async move {
-                        path.push(partition.job_id);
-                        path.push(&format!("{}", partition.stage_id));
-                        path.push(&format!("{}", part));
-                        std::fs::create_dir_all(&path)?;
-
-                        path.push("data.arrow");
-                        let path = path.to_str().unwrap();
-                        info!("Writing results to {}", path);
-
-                        let now = Instant::now();
-
-                        // execute the query partition
-                        let mut stream = partition
-                            .plan
-                            .execute(part)
-                            .await
-                            .map_err(|e| from_datafusion_err(&e))?;
-
-                        // stream results to disk
-                        let stats = utils::write_stream_to_disk(&mut stream, &path)
-                            .await
-                            .map_err(|e| from_ballista_err(&e))?;
-
-                        info!(
-                            "Executed partition {} in {} seconds. Statistics: {:?}",
-                            part,
-                            now.elapsed().as_secs(),
-                            stats
-                        );
+                        let results = executor
+                            .execute_partition(
+                                partition.job_id.clone(),
+                                partition.stage_id,
+                                part,
+                                partition.plan.clone(),
+                            )
+                            .await?;
+                        let results = vec![results];
 
                         let mut flights: Vec<Result<FlightData, Status>> = vec![];
                         let options = arrow::ipc::writer::IpcWriteOptions::default();
-
-                        let schema = Arc::new(Schema::new(vec![
-                            Field::new("path", DataType::Utf8, false),
-                            stats.arrow_struct_repr(),
-                        ]));
-
-                        // build result set with summary of the partition execution status
-                        let mut c0 = StringBuilder::new(1);
-                        c0.append_value(&path).unwrap();
-                        let path: ArrayRef = Arc::new(c0.finish());
-
-                        let stats: ArrayRef = stats.to_arrow_arrayref()?;
-                        let results = vec![RecordBatch::try_new(
-                            schema,
-                            vec![path, stats],
-                        )
-                        .unwrap()];
 
                         let mut batches: Vec<Result<FlightData, Status>> = results
                             .iter()
@@ -208,7 +169,7 @@ impl FlightService for BallistaFlightService {
                 // fetch a partition that was previously executed by this executor
                 info!("FetchPartition {:?}", partition_id);
 
-                let mut path = PathBuf::from(&self.work_dir);
+                let mut path = PathBuf::from(self.executor.work_dir());
                 path.push(&partition_id.job_id);
                 path.push(&format!("{}", partition_id.stage_id));
                 path.push(&format!("{}", partition_id.partition_id));
@@ -367,8 +328,4 @@ fn from_arrow_err(e: &ArrowError) -> Status {
 
 fn from_ballista_err(e: &ballista_core::error::BallistaError) -> Status {
     Status::internal(format!("Ballista Error: {:?}", e))
-}
-
-fn from_datafusion_err(e: &DataFusionError) -> Status {
-    Status::internal(format!("DataFusion Error: {:?}", e))
 }
