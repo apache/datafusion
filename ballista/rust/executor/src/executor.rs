@@ -91,8 +91,8 @@ impl Executor {
         let path: ArrayRef = Arc::new(c0.finish());
 
         let stats: ArrayRef = stats.to_arrow_arrayref()?;
-        let results = RecordBatch::try_new(schema, vec![path, stats])?;
-        Ok(results)
+        RecordBatch::try_new(schema, vec![path, stats])
+            .map_err(|e| BallistaError::ArrowError(e))
     }
 
     pub fn work_dir(&self) -> &str {
