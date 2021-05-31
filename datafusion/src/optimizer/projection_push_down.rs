@@ -23,6 +23,7 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{DFField, DFSchema, DFSchemaRef, LogicalPlan, ToDFSchema};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
+use crate::sql::utils::find_sort_exprs;
 use arrow::datatypes::Schema;
 use arrow::error::Result as ArrowResult;
 use std::{collections::HashSet, sync::Arc};
@@ -197,29 +198,29 @@ fn optimize_plan(
             schema,
             window_expr,
             input,
-            // FIXME implement next
-            // filter_by_expr,
-            // FIXME implement next
-            // partition_by_expr,
-            // FIXME implement next
-            // order_by_expr,
-            // FIXME implement next
-            // window_frame,
             ..
         } => {
             // Gather all columns needed for expressions in this Window
             let mut new_window_expr = Vec::new();
-            window_expr.iter().try_for_each(|expr| {
-                let name = &expr.name(&schema)?;
-                if required_columns.contains(name) {
-                    new_window_expr.push(expr.clone());
-                    new_required_columns.insert(name.clone());
-                    // add to the new set of required columns
-                    utils::expr_to_column_names(expr, &mut new_required_columns)
-                } else {
-                    Ok(())
-                }
-            })?;
+            {
+                window_expr.iter().try_for_each(|expr| {
+                    let name = &expr.name(&schema)?;
+                    if required_columns.contains(name) {
+                        new_window_expr.push(expr.clone());
+                        new_required_columns.insert(name.clone());
+                        // add to the new set of required columns
+                        utils::expr_to_column_names(expr, &mut new_required_columns)
+                    } else {
+                        Ok(())
+                    }
+                })?;
+            }
+
+            // for all the retained window expr, find their sort expressions if any, and retain these
+            utils::exprlist_to_column_names(
+                &find_sort_exprs(&new_window_expr),
+                &mut new_required_columns,
+            )?;
 
             let new_schema = DFSchema::new(
                 schema
@@ -232,12 +233,6 @@ fn optimize_plan(
 
             Ok(LogicalPlan::Window {
                 window_expr: new_window_expr,
-                // FIXME implement next
-                // partition_by_expr: partition_by_expr.clone(),
-                // FIXME implement next
-                // order_by_expr: order_by_expr.clone(),
-                // FIXME implement next
-                // window_frame: window_frame.clone(),
                 input: Arc::new(optimize_plan(
                     optimizer,
                     &input,

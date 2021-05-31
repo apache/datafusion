@@ -761,27 +761,9 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 })
             }
             LogicalPlan::Window {
-                input,
-                window_expr,
-                // FIXME implement next
-                // filter_by_expr,
-                // FIXME implement next
-                // partition_by_expr,
-                // FIXME implement next
-                // order_by_expr,
-                // FIXME implement next
-                // window_frame,
-                ..
+                input, window_expr, ..
             } => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
-                // FIXME: implement
-                // let filter_by_expr = vec![];
-                // FIXME: implement
-                let partition_by_expr = vec![];
-                // FIXME: implement
-                let order_by_expr = vec![];
-                // FIXME: implement
-                let window_frame = None;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Window(Box::new(
                         protobuf::WindowNode {
@@ -789,10 +771,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                             window_expr: window_expr
                                 .iter()
                                 .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, BallistaError>>()?,
-                            partition_by_expr,
-                            order_by_expr,
-                            window_frame,
+                                .collect::<Result<Vec<_>, _>>()?,
                         },
                     ))),
                 })
@@ -811,11 +790,11 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                             group_expr: group_expr
                                 .iter()
                                 .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, BallistaError>>()?,
+                                .collect::<Result<Vec<_>, _>>()?,
                             aggr_expr: aggr_expr
                                 .iter()
                                 .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, BallistaError>>()?,
+                                .collect::<Result<Vec<_>, _>>()?,
                         },
                     ))),
                 })
@@ -1024,7 +1003,10 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                 })
             }
             Expr::WindowFunction {
-                ref fun, ref args, ..
+                ref fun,
+                ref args,
+                ref order_by,
+                ..
             } => {
                 let window_function = match fun {
                     WindowFunction::AggregateFunction(fun) => {
@@ -1039,9 +1021,14 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     }
                 };
                 let arg = &args[0];
+                let order_by = order_by
+                    .iter()
+                    .map(|e| e.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: Some(Box::new(arg.try_into()?)),
                     window_function: Some(window_function),
+                    order_by,
                 });
                 Ok(protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::WindowExpr(window_expr)),

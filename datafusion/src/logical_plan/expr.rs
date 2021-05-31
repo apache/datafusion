@@ -197,6 +197,8 @@ pub enum Expr {
         fun: window_functions::WindowFunction,
         /// List of expressions to feed to the functions as arguments
         args: Vec<Expr>,
+        /// List of order by expressions
+        order_by: Vec<Expr>,
     },
     /// aggregate function
     AggregateUDF {
@@ -587,9 +589,15 @@ impl Expr {
             Expr::ScalarUDF { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
-            Expr::WindowFunction { args, .. } => args
-                .iter()
-                .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
+            Expr::WindowFunction { args, order_by, .. } => {
+                let visitor = args
+                    .iter()
+                    .try_fold(visitor, |visitor, arg| arg.accept(visitor))?;
+                let visitor = order_by
+                    .iter()
+                    .try_fold(visitor, |visitor, arg| arg.accept(visitor))?;
+                Ok(visitor)
+            }
             Expr::AggregateFunction { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
@@ -723,9 +731,14 @@ impl Expr {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
             },
-            Expr::WindowFunction { args, fun } => Expr::WindowFunction {
+            Expr::WindowFunction {
+                args,
+                fun,
+                order_by,
+            } => Expr::WindowFunction {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
+                order_by: rewrite_vec(order_by, rewriter)?,
             },
             Expr::AggregateFunction {
                 args,
@@ -1388,7 +1401,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::ScalarUDF { fun, args, .. } => {
             create_function_name(&fun.name, false, args, input_schema)
         }
-        Expr::WindowFunction { fun, args } => {
+        Expr::WindowFunction { fun, args, .. } => {
             create_function_name(&fun.to_string(), false, args, input_schema)
         }
         Expr::AggregateFunction {

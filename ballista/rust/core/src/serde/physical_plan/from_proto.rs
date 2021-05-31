@@ -233,7 +233,11 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
 
                 for (expr, name) in &window_agg_expr {
                     match expr {
-                        Expr::WindowFunction { fun, args } => {
+                        Expr::WindowFunction {
+                            fun,
+                            args,
+                            order_by,
+                        } => {
                             let arg = df_planner
                                 .create_physical_expr(
                                     &args[0],
@@ -243,12 +247,16 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                                 .map_err(|e| {
                                     BallistaError::General(format!("{:?}", e))
                                 })?;
-                            physical_window_expr.push(create_window_expr(
+                            if !order_by.is_empty() {
+                                return Err(BallistaError::NotImplemented("Window function with order by is not yet implemented".to_owned()));
+                            }
+                            let window_expr = create_window_expr(
                                 &fun,
                                 &[arg],
                                 &physical_schema,
                                 name.to_owned(),
-                            )?);
+                            )?;
+                            physical_window_expr.push(window_expr);
                         }
                         _ => {
                             return Err(BallistaError::General(

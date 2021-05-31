@@ -92,8 +92,6 @@ pub enum LogicalPlan {
         // filter_by_expr: Vec<Expr>,
         /// Partition by expressions
         // partition_by_expr: Vec<Expr>,
-        /// Order by expressions
-        // order_by_expr: Vec<Expr>,
         /// Window Frame
         // window_frame: Option<WindowFrame>,
         /// The schema description of the window output
@@ -306,25 +304,12 @@ impl LogicalPlan {
                 Partitioning::Hash(expr, _) => expr.clone(),
                 _ => vec![],
             },
-            LogicalPlan::Window {
-                window_expr,
-                // FIXME implement next
-                // filter_by_expr,
-                // FIXME implement next
-                // partition_by_expr,
-                // FIXME implement next
-                // order_by_expr,
-                ..
-            } => window_expr.clone(),
+            LogicalPlan::Window { window_expr, .. } => window_expr.clone(),
             LogicalPlan::Aggregate {
                 group_expr,
                 aggr_expr,
                 ..
-            } => {
-                let mut result = group_expr.clone();
-                result.extend(aggr_expr.clone());
-                result
-            }
+            } => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
             LogicalPlan::Join { on, .. } => {
                 on.iter().flat_map(|(l, r)| vec![col(l), col(r)]).collect()
             }
@@ -698,16 +683,11 @@ impl LogicalPlan {
                         ..
                     } => write!(f, "Filter: {:?}", expr),
                     LogicalPlan::Window {
-                        ref window_expr,
-                        // FIXME implement next
-                        // ref partition_by_expr,
-                        // FIXME implement next
-                        // ref order_by_expr,
-                        ..
+                        ref window_expr, ..
                     } => {
                         write!(
                             f,
-                            "WindowAggr: windowExpr=[{:?}] partitionBy=[], orderBy=[]",
+                            "WindowAggr: windowExpr=[{:?}] partitionBy=[]",
                             window_expr
                         )
                     }
