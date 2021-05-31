@@ -20,7 +20,9 @@
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates,
-    expressions::RowNumber,
+    expressions::{FirstValue, LastValue, Literal, NthValue, RowNumber},
+    type_coercion::coerce,
+    window_functions::signature_for_built_in,
     window_functions::BuiltInWindowFunctionExpr,
     window_functions::{BuiltInWindowFunction, WindowFunction},
     Accumulator, AggregateExpr, Distribution, ExecutionPlan, Partitioning, PhysicalExpr,
@@ -39,6 +41,7 @@ use futures::stream::{Stream, StreamExt};
 use futures::Future;
 use pin_project_lite::pin_project;
 use std::any::Any;
+use std::convert::TryInto;
 use std::iter;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -82,12 +85,40 @@ pub fn create_window_expr(
 
 fn create_built_in_window_expr(
     fun: &BuiltInWindowFunction,
-    _args: &[Arc<dyn PhysicalExpr>],
-    _input_schema: &Schema,
+    args: &[Arc<dyn PhysicalExpr>],
+    input_schema: &Schema,
     name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     match fun {
         BuiltInWindowFunction::RowNumber => Ok(Arc::new(RowNumber::new(name))),
+        BuiltInWindowFunction::NthValue => {
+            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
+            let arg = coerced_args[0].clone();
+            let n = coerced_args[1]
+                .as_any()
+                .downcast_ref::<Literal>()
+                .unwrap()
+                .value();
+            let n: i64 = n
+                .clone()
+                .try_into()
+                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+            let n: u32 = n as u32;
+            let data_type = args[0].data_type(input_schema)?;
+            Ok(Arc::new(NthValue::try_new(arg, name, n, data_type)?))
+        }
+        BuiltInWindowFunction::FirstValue => {
+            let arg =
+                coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
+            let data_type = args[0].data_type(input_schema)?;
+            Ok(Arc::new(FirstValue::new(arg, name, data_type)))
+        }
+        BuiltInWindowFunction::LastValue => {
+            let arg =
+                coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
+            let data_type = args[0].data_type(input_schema)?;
+            Ok(Arc::new(LastValue::new(arg, name, data_type)))
+        }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Window function with {:?} not yet implemented",
             fun
@@ -484,45 +515,106 @@ impl RecordBatchStream for WindowAggStream {
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
+    use super::*;
+    use crate::physical_plan::aggregates::AggregateFunction;
+    use crate::physical_plan::collect;
+    use crate::physical_plan::csv::{CsvExec, CsvReadOptions};
+    use crate::physical_plan::expressions::col;
+    use crate::test;
+    use arrow::array::*;
 
-    // /// some mock data to test windows
-    // fn some_data() -> (Arc<Schema>, Vec<RecordBatch>) {
-    //     // define a schema.
-    //     let schema = Arc::new(Schema::new(vec![
-    //         Field::new("a", DataType::UInt32, false),
-    //         Field::new("b", DataType::Float64, false),
-    //     ]));
+    fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
+        let schema = test::aggr_test_schema();
+        let path = test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
+        let csv = CsvExec::try_new(
+            &path,
+            CsvReadOptions::new().schema(&schema),
+            None,
+            1024,
+            None,
+        )?;
 
-    //     // define data.
-    //     (
-    //         schema.clone(),
-    //         vec![
-    //             RecordBatch::try_new(
-    //                 schema.clone(),
-    //                 vec![
-    //                     Arc::new(UInt32Array::from(vec![2, 3, 4, 4])),
-    //                     Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
-    //                 ],
-    //             )
-    //             .unwrap(),
-    //             RecordBatch::try_new(
-    //                 schema,
-    //                 vec![
-    //                     Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
-    //                     Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
-    //                 ],
-    //             )
-    //             .unwrap(),
-    //         ],
-    //     )
-    // }
+        let input = Arc::new(csv);
+        Ok((input, schema))
+    }
 
-    // #[tokio::test]
-    // async fn window_function() -> Result<()> {
-    //     let input: Arc<dyn ExecutionPlan> = unimplemented!();
-    //     let input_schema = input.schema();
-    //     let window_expr = vec![];
-    //     WindowAggExec::try_new(window_expr, input, input_schema);
-    // }
+    #[tokio::test]
+    async fn window_function_input_partition() -> Result<()> {
+        let (input, schema) = create_test_schema(4)?;
+
+        let window_exec = Arc::new(WindowAggExec::try_new(
+            vec![create_window_expr(
+                &WindowFunction::AggregateFunction(AggregateFunction::Count),
+                &[col("c3")],
+                schema.as_ref(),
+                "count".to_owned(),
+            )?],
+            input,
+            schema.clone(),
+        )?);
+
+        let result = collect(window_exec).await;
+
+        assert!(result.is_err());
+        if let Some(DataFusionError::Internal(msg)) = result.err() {
+            assert_eq!(
+                msg,
+                "WindowAggExec requires a single input partition".to_owned()
+            );
+        } else {
+            unreachable!("Expect an internal error to happen");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_function() -> Result<()> {
+        let (input, schema) = create_test_schema(1)?;
+
+        let window_exec = Arc::new(WindowAggExec::try_new(
+            vec![
+                create_window_expr(
+                    &WindowFunction::AggregateFunction(AggregateFunction::Count),
+                    &[col("c3")],
+                    schema.as_ref(),
+                    "count".to_owned(),
+                )?,
+                create_window_expr(
+                    &WindowFunction::AggregateFunction(AggregateFunction::Max),
+                    &[col("c3")],
+                    schema.as_ref(),
+                    "max".to_owned(),
+                )?,
+                create_window_expr(
+                    &WindowFunction::AggregateFunction(AggregateFunction::Min),
+                    &[col("c3")],
+                    schema.as_ref(),
+                    "min".to_owned(),
+                )?,
+            ],
+            input,
+            schema.clone(),
+        )?);
+
+        let result: Vec<RecordBatch> = collect(window_exec).await?;
+        assert_eq!(result.len(), 1);
+
+        let columns = result[0].columns();
+
+        // c3 is small int
+
+        let count: &UInt64Array = as_primitive_array(&columns[0]);
+        assert_eq!(count.value(0), 100);
+        assert_eq!(count.value(99), 100);
+
+        let max: &Int8Array = as_primitive_array(&columns[1]);
+        assert_eq!(max.value(0), 125);
+        assert_eq!(max.value(99), 125);
+
+        let min: &Int8Array = as_primitive_array(&columns[2]);
+        assert_eq!(min.value(0), -117);
+        assert_eq!(min.value(99), -117);
+
+        Ok(())
+    }
 }
