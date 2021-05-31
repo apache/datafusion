@@ -15,11 +15,12 @@
 //! Remove duplicate filters optimizer rule
 
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::Expr;
 use crate::logical_plan::LogicalPlan;
+use crate::logical_plan::{lit, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::optimizer::utils::optimize_explain;
+use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
 
 /// Remove duplicate filters optimizer.
@@ -58,8 +59,144 @@ fn operator_is_boolean(op: &Operator) -> bool {
     op == &Operator::And || op == &Operator::Or
 }
 
+fn is_one<'a>(s: &'a Expr) -> bool {
+    match s {
+        Expr::Literal(ScalarValue::Int8(Some(1))) => true,
+        Expr::Literal(ScalarValue::Int16(Some(1))) => true,
+        Expr::Literal(ScalarValue::Int32(Some(1))) => true,
+        Expr::Literal(ScalarValue::Int64(Some(1))) => true,
+        Expr::Literal(ScalarValue::UInt8(Some(1))) => true,
+        Expr::Literal(ScalarValue::UInt16(Some(1))) => true,
+        Expr::Literal(ScalarValue::UInt32(Some(1))) => true,
+        Expr::Literal(ScalarValue::UInt64(Some(1))) => true,
+        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 1. => true,
+        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 1. => true,
+        _ => false
+    }
+}
+
+fn is_zero<'a>(s: &'a Expr) -> bool {
+    match s {
+        Expr::Literal(ScalarValue::Int8(Some(0))) => true,
+        Expr::Literal(ScalarValue::Int16(Some(0))) => true,
+        Expr::Literal(ScalarValue::Int32(Some(0))) => true,
+        Expr::Literal(ScalarValue::Int64(Some(0))) => true,
+        Expr::Literal(ScalarValue::UInt8(Some(0))) => true,
+        Expr::Literal(ScalarValue::UInt16(Some(0))) => true,
+        Expr::Literal(ScalarValue::UInt32(Some(0))) => true,
+        Expr::Literal(ScalarValue::UInt64(Some(0))) => true,
+        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 0. => true,
+        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 0. => true,
+        _ => false
+    }
+}
+
+fn is_true<'a>(expr: &'a Expr) -> bool {
+    match expr {
+        Expr::Literal(ScalarValue::Boolean(Some(v))) => *v,
+        _ => false,
+    }
+}
+
+fn is_false<'a>(expr: &'a Expr) -> bool {
+    match expr {
+        Expr::Literal(ScalarValue::Boolean(Some(v))) => *v == false,
+        _ => false,
+    }
+}
+
 fn simplify<'a>(expr: &'a Expr) -> Expr {
     match expr {
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Or,
+            right,
+        } if is_true(left) || is_true(right) => lit(true),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Or,
+            right,
+        } if is_false(left) => simplify(right),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Or,
+            right,
+        } if is_false(right) => simplify(left),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Or,
+            right,
+        } if left == right => simplify(left),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::And,
+            right,
+        } if is_false(left) || is_false(right) => lit(false),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::And,
+            right,
+        } if is_true(right) => simplify(left),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::And,
+            right,
+        } if is_true(left) => simplify(right),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::And,
+            right,
+        } if left == right => simplify(right),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Minus,
+            right
+        } if is_zero(left) => Expr::Negative(Box::new(simplify(right))),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Minus,
+            right
+        } if is_zero(right) => simplify(left),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Minus,
+            right
+        } if left == right => lit(0),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Multiply,
+            right
+        } if is_zero(left) || is_zero(right) => lit(0),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Multiply,
+            right
+        } if is_one(left) => simplify(right),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Multiply,
+            right
+        } if is_one(right) => simplify(left),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Divide,
+            right
+        } if is_one(right) => simplify(left),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Divide,
+            right
+        } if left == right => lit(1),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Plus,
+            right
+        } if is_zero(left) => simplify(right),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Plus,
+            right
+        } if is_zero(right) => simplify(left),
         Expr::BinaryExpr { left, op, right }
             if left == right && operator_is_boolean(op) =>
         {
@@ -156,6 +293,11 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
             input: input.clone(),
             predicate: simplify(predicate),
         }),
+        LogicalPlan::Projection { expr, input, schema } => Ok(LogicalPlan::Projection {
+            expr: expr.into_iter().map(|x| simplify(x)).collect::<Vec<_>>(),
+            input: input.clone(),
+            schema: schema.clone(),
+        }),
         _ => {
             let new_inputs = plan
                 .inputs()
@@ -221,6 +363,146 @@ mod tests {
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
+    }
+
+    #[test]
+    fn test_simplify_or_true() -> Result<()> {
+        let expr_a = binary_expr(col("c"), Operator::Or, lit(true));
+        let expr_b = binary_expr(lit(true), Operator::Or, col("c"));
+        let expected = lit(true);
+
+        assert_eq!(simplify(&expr_a), expected);
+        assert_eq!(simplify(&expr_b), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_or_false() -> Result<()> {
+        let expr_a = binary_expr(lit(false), Operator::Or, col("c"));
+        let expr_b = binary_expr(col("c"), Operator::Or, lit(false));
+        let expected = col("c");
+
+        assert_eq!(simplify(&expr_a), expected);
+        assert_eq!(simplify(&expr_b), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_or_same() -> Result<()> {
+        let expr = binary_expr(col("c"), Operator::Or, col("c"));
+        let expected = col("c");
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_and_false() -> Result<()> {
+        let expr_a = binary_expr(lit(false), Operator::And, col("c"));
+        let expr_b = binary_expr(col("c"), Operator::And, lit(false));
+        let expected = lit(false);
+
+        assert_eq!(simplify(&expr_a), expected);
+        assert_eq!(simplify(&expr_b), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_and_same() -> Result<()> {
+        let expr = binary_expr(col("c"), Operator::And, col("c"));
+        let expected = col("c");
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_and_true() -> Result<()> {
+        let expr_a = binary_expr(lit(true), Operator::And, col("c"));
+        let expr_b = binary_expr(col("c"), Operator::And, lit(true));
+        let expected = col("c");
+
+        assert_eq!(simplify(&expr_a), expected);
+        assert_eq!(simplify(&expr_b), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_minus_zero() -> Result<()> {
+        let expr = binary_expr(lit(0), Operator::Minus, col("c"));
+        let expected = Expr::Negative(Box::new(col("c")));
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_minus_same() -> Result<()> {
+        let expr = binary_expr(col("c"), Operator::Minus, col("c"));
+        let expected = lit(0);
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_multiply_by_zero() -> Result<()> {
+        let expr_a = binary_expr(col("c"), Operator::Multiply, lit(0));
+        let expr_b = binary_expr(lit(0), Operator::Multiply, col("c"));
+        let expected = lit(0);
+
+        assert_eq!(simplify(&expr_a), expected);
+        assert_eq!(simplify(&expr_b), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_multiply_by_one() -> Result<()> {
+        let expr_a = binary_expr(col("c"), Operator::Multiply, lit(1));
+        let expr_b = binary_expr(lit(1), Operator::Multiply, col("c"));
+        let expected = col("c");
+
+        assert_eq!(simplify(&expr_a), expected);
+        assert_eq!(simplify(&expr_b), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_divide_by_one() -> Result<()> {
+        let expr = binary_expr(col("c"), Operator::Divide, lit(1));
+        let expected = col("c");
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_divide_by_same() -> Result<()> {
+        let expr = binary_expr(col("c"), Operator::Divide, col("c"));
+        let expected = lit(1);
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_cancel_sub() -> Result<()> {
+        let expr = binary_expr(col("c"), Operator::Minus, col("c"));
+        let expected = lit(0);
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_plus_zero() -> Result<()> {
+        let expr_a = binary_expr(col("c"), Operator::Plus, lit(0));
+        let expr_b = binary_expr(lit(0), Operator::Plus, col("c"));
+        let expected = col("c");
+
+        assert_eq!(simplify(&expr_a), expected);
+        assert_eq!(simplify(&expr_b), expected);
+        Ok(())
     }
 
     #[test]
