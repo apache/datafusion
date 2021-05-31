@@ -188,11 +188,19 @@ mod tests {
     use super::*;
     use datafusion::arrow::array::{StringArray, StructArray, UInt32Array, UInt64Array};
     use datafusion::physical_plan::memory::MemoryExec;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test() -> Result<()> {
         let input_plan = create_input_plan()?;
-        let query_stage = QueryStageExec::try_new("jobOne", 1, input_plan, "", None)?;
+        let work_dir = TempDir::new()?;
+        let query_stage = QueryStageExec::try_new(
+            "jobOne",
+            1,
+            input_plan,
+            work_dir.into_path().to_str().unwrap(),
+            None,
+        )?;
         let mut stream = query_stage.execute(0).await?;
         let batches = utils::collect_stream(&mut stream)
             .await
