@@ -233,7 +233,13 @@ fn create_query_stage(
     stage_id: usize,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<QueryStageExec>> {
-    Ok(Arc::new(QueryStageExec::try_new(job_id, stage_id, plan)?))
+    Ok(Arc::new(QueryStageExec::try_new(
+        job_id,
+        stage_id,
+        plan,
+        "TBD".to_owned(),
+        None,
+    )?))
 }
 
 #[cfg(test)]
