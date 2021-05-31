@@ -59,17 +59,17 @@ pub struct QueryStageExec {
 impl QueryStageExec {
     /// Create a new query stage
     pub fn try_new(
-        job_id: String,
+        job_id: &str,
         stage_id: usize,
         plan: Arc<dyn ExecutionPlan>,
-        work_dir: String,
+        work_dir: &str,
         shuffle_output_partitioning: Option<Partitioning>,
     ) -> Result<Self> {
         Ok(Self {
-            job_id,
+            job_id: job_id.to_owned(),
             stage_id,
             plan,
-            work_dir,
+            work_dir: work_dir.to_owned(),
             shuffle_output_partitioning,
         })
     }
@@ -109,10 +109,10 @@ impl ExecutionPlan for QueryStageExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert!(children.len() == 1);
         Ok(Arc::new(QueryStageExec::try_new(
-            self.job_id.clone(),
+            &self.job_id,
             self.stage_id,
             children[0].clone(),
-            self.work_dir.clone(),
+            &self.work_dir,
             None,
         )?))
     }
@@ -180,5 +180,63 @@ impl ExecutionPlan for QueryStageExec {
                 "Invalid shuffle partitioning scheme".to_owned(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::arrow::array::{StringArray, StructArray, UInt32Array, UInt64Array};
+    use datafusion::physical_plan::memory::MemoryExec;
+
+    #[tokio::test]
+    async fn test() -> Result<()> {
+        let input_plan = create_input_plan()?;
+        let query_stage = QueryStageExec::try_new("jobOne", 1, input_plan, "", None)?;
+        let mut stream = query_stage.execute(0).await?;
+        let batches = utils::collect_stream(&mut stream)
+            .await
+            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+        assert!(batches.len() == 1);
+        let batch = &batches[0];
+        assert_eq!(2, batch.num_columns());
+        assert_eq!(1, batch.num_rows());
+        let path = batch.columns()[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let file = path.value(0);
+        assert!(file.ends_with("/data.arrow"));
+        let stats = batch.columns()[1]
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let num_rows = stats
+            .column_by_name("num_rows")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        assert_eq!(4, num_rows.value(0));
+        Ok(())
+    }
+
+    fn create_input_plan() -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+
+        // define data.
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt32Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("hello"), Some("world")])),
+            ],
+        )?;
+        let partition = vec![batch.clone(), batch];
+        let partitions = vec![partition.clone(), partition];
+        Ok(Arc::new(MemoryExec::try_new(&partitions, schema, None)?))
     }
 }

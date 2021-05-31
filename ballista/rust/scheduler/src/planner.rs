@@ -71,11 +71,7 @@ impl DistributedPlanner {
         info!("planning query stages");
         let (new_plan, mut stages) =
             self.plan_query_stages_internal(job_id, execution_plan)?;
-        stages.push(create_query_stage(
-            job_id.to_string(),
-            self.next_stage_id(),
-            new_plan,
-        )?);
+        stages.push(create_query_stage(job_id, self.next_stage_id(), new_plan)?);
         Ok(stages)
     }
 
@@ -112,7 +108,7 @@ impl DistributedPlanner {
             Ok((ctx.create_physical_plan(&adapter.logical_plan)?, stages))
         } else if let Some(merge) = execution_plan.as_any().downcast_ref::<MergeExec>() {
             let query_stage = create_query_stage(
-                job_id.to_string(),
+                job_id,
                 self.next_stage_id(),
                 merge.children()[0].clone(),
             )?;
@@ -133,7 +129,7 @@ impl DistributedPlanner {
                     let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
                     for child in &children {
                         let new_stage = create_query_stage(
-                            job_id.to_string(),
+                            job_id,
                             self.next_stage_id(),
                             child.clone(),
                         )?;
@@ -165,11 +161,8 @@ impl DistributedPlanner {
             {
                 let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
                 for child in &children {
-                    let new_stage = create_query_stage(
-                        job_id.to_string(),
-                        self.next_stage_id(),
-                        child.clone(),
-                    )?;
+                    let new_stage =
+                        create_query_stage(job_id, self.next_stage_id(), child.clone())?;
                     new_children.push(Arc::new(UnresolvedShuffleExec::new(
                         vec![new_stage.stage_id()],
                         new_stage.schema().clone(),
@@ -229,15 +222,12 @@ pub fn remove_unresolved_shuffles(
 }
 
 fn create_query_stage(
-    job_id: String,
+    job_id: &str,
     stage_id: usize,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<QueryStageExec>> {
     Ok(Arc::new(QueryStageExec::try_new(
-        job_id,
-        stage_id,
-        plan,
-        "TBD".to_owned(),
+        job_id, stage_id, plan, "", // executor will decide on the work_dir path
         None,
     )?))
 }
