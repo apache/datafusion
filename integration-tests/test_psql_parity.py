@@ -32,11 +32,15 @@ pg_db, pg_user, pg_host, pg_port = [
     )
 ]
 
+CREATE_TABLE_SQL_FILE = "integration-tests/create_test_table.sql"
+
 
 def generate_csv_from_datafusion(fname: str):
     return subprocess.check_output(
         [
             "./target/debug/datafusion-cli",
+            "-f",
+            CREATE_TABLE_SQL_FILE,
             "-f",
             fname,
             "--format",
@@ -70,7 +74,7 @@ class PsqlParityTest(unittest.TestCase):
     def test_parity(self):
         root = Path(os.path.dirname(__file__)) / "sqls"
         files = set(root.glob("*.sql"))
-        self.assertEqual(len(files), 2, msg="tests are missed")
+        self.assertEqual(len(files), 4, msg="tests are missed")
         for fname in files:
             with self.subTest(fname=fname):
                 datafusion_output = pd.read_csv(
