@@ -231,7 +231,7 @@ mod tests {
             "nth_value".to_owned(),
             col("arr"),
             DataType::Int32,
-            1,
+            2,
         )?);
         test_i32_result(nth_value, -2)?;
         Ok(())
