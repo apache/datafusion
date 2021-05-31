@@ -17,8 +17,12 @@
 
 //! Expression simplification optimizer.
 //! Rewrites expressions using equivalence rules and the egg optimization library   
+use std::fmt::Display;
+use std::str::FromStr;
 use std::vec;
-
+use arrow::datatypes::DataType;
+use log::debug;
+use crate::error::DataFusionError;
 use crate::{
     logical_plan::LogicalPlan, optimizer::optimizer::OptimizerRule, scalar::ScalarValue,
 };
@@ -43,7 +47,6 @@ fn rules() -> Vec<Rewrite<TokomakExpr, ()>> {
     return vec![
         rw!("commute-add"; "(+ ?x ?y)" => "(+ ?y ?x)"),
         rw!("commute-mul"; "(* ?x ?y)" => "(* ?y ?x)"),
-        rw!("commute-eq"; "(= ?x ?y)" => "(= ?y ?x)"),
         rw!("commute-and"; "(and ?x ?y)" => "(and ?y ?x)"),
         rw!("commute-or"; "(or ?x ?y)" => "(or ?y ?x)"),
         rw!("commute-eq"; "(= ?x ?y)" => "(= ?y ?x)"),
@@ -68,6 +71,32 @@ fn rules() -> Vec<Rewrite<TokomakExpr, ()>> {
         rw!("or-false"; "(or false ?x)"=> "?x"),
         rw!("or-true"; "(or true ?x)"=> "true"),
     ];
+}
+
+define_language! {
+    enum TokomakDataType {
+        "date32" = Date32,
+        "date64" = Date64,
+    }
+}
+
+impl Display for TokomakDataType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{:?}", self))
+    }
+}
+
+
+impl FromStr for TokomakDataType {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "date32" => Ok(TokomakDataType::Date32),
+            "date64" => Ok(TokomakDataType::Date64),
+            _ => Err(DataFusionError::Internal("Parsing string as TokomakDataType failed".to_string()))
+        }
+    }
 }
 
 define_language! {
@@ -102,6 +131,9 @@ define_language! {
         Date64(i64),
         LargeUtf8(String),
         Column(Symbol),
+        // cast id as expr. Type is encoded as symbol
+        "cast" = Cast([Id; 2]),
+        Type(TokomakDataType),
     }
 }
 
@@ -180,8 +212,30 @@ fn to_tokomak_expr(rec_expr: &mut RecExpr<TokomakExpr>, expr: Expr) -> Option<Id
             }
         }
 
+        Expr::Cast {
+            expr,
+            data_type
+        } => {
+            let ty = match data_type {
+                DataType::Date32 => TokomakDataType::Date32,
+                DataType::Date64 => TokomakDataType::Date64,
+                _ => {
+                    debug!("Datetype not yet supported for Cast in tokomak optimizer {:?}", data_type);
+
+                    return None;
+                }
+            };
+            let e = to_tokomak_expr(rec_expr, *expr)?;
+            let t = rec_expr.add(TokomakExpr::Type(ty));
+
+            Some(rec_expr.add(TokomakExpr::Cast([e, t])))
+        }
+
         // not yet supported
-        _ => None,
+        e => {
+            debug!("Expression not yet supported in tokomak optimizer {:?}", e);
+            None
+        },
     }
 }
 
@@ -390,6 +444,23 @@ fn to_exprs(rec_expr: &RecExpr<TokomakExpr>, id: Id) -> Expr {
         TokomakExpr::Bool(b) => Expr::Literal(ScalarValue::Boolean(Some(b))),
         TokomakExpr::Date32(b) => Expr::Literal(ScalarValue::Date32(Some(b))),
         TokomakExpr::Date64(b) => Expr::Literal(ScalarValue::Date64(Some(b))),
+        TokomakExpr::Cast([e, ty]) => {
+            let l = to_exprs(&rec_expr, e);
+            let index:usize = ty.into();
+            let dt = match &refs[index] {
+                TokomakExpr::Type(s) => s,
+                _ => panic!("Second argument of cast should be type")
+            };
+            let dt = match dt {
+                TokomakDataType::Date32 => DataType::Date32,
+                TokomakDataType::Date64 => DataType::Date64,
+            };
+
+            Expr::Cast { expr: Box::new(l), data_type: dt}
+        }
+        TokomakExpr::Type(_) => {
+            panic!("Type should only be part of expression")
+        }
     }
 }
 
