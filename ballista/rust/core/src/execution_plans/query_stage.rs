@@ -45,11 +45,11 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct QueryStageExec {
     /// Unique ID for the job (query) that this stage is a part of
-    pub job_id: String,
+    job_id: String,
     /// Unique query stage ID within the job
-    pub stage_id: usize,
+    stage_id: usize,
     /// Physical execution plan for this query stage
-    pub child: Arc<dyn ExecutionPlan>,
+    plan: Arc<dyn ExecutionPlan>,
     /// Path to write output streams to
     work_dir: String,
     /// Optional shuffle output partitioning
@@ -61,17 +61,27 @@ impl QueryStageExec {
     pub fn try_new(
         job_id: String,
         stage_id: usize,
-        child: Arc<dyn ExecutionPlan>,
+        plan: Arc<dyn ExecutionPlan>,
         work_dir: String,
         shuffle_output_partitioning: Option<Partitioning>,
     ) -> Result<Self> {
         Ok(Self {
             job_id,
             stage_id,
-            child,
+            plan,
             work_dir,
             shuffle_output_partitioning,
         })
+    }
+
+    /// Get the Job ID for this query stage
+    pub fn job_id(&self) -> &str {
+        &self.job_id
+    }
+
+    /// Get the Stage ID for this query stage
+    pub fn stage_id(&self) -> usize {
+        self.stage_id
     }
 }
 
@@ -82,15 +92,15 @@ impl ExecutionPlan for QueryStageExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.child.schema()
+        self.plan.schema()
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        self.child.output_partitioning()
+        self.plan.output_partitioning()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.child.clone()]
+        vec![self.plan.clone()]
     }
 
     fn with_new_children(
@@ -113,7 +123,7 @@ impl ExecutionPlan for QueryStageExec {
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
         let now = Instant::now();
 
-        let mut stream = self.child.execute(partition).await?;
+        let mut stream = self.plan.execute(partition).await?;
 
         let mut path = PathBuf::from(&self.work_dir);
         path.push(&self.job_id);

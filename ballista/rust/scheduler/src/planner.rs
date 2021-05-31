@@ -117,7 +117,7 @@ impl DistributedPlanner {
                 merge.children()[0].clone(),
             )?;
             let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
-                vec![query_stage.stage_id],
+                vec![query_stage.stage_id()],
                 query_stage.schema(),
                 query_stage.output_partitioning().partition_count(),
             ));
@@ -138,7 +138,7 @@ impl DistributedPlanner {
                             child.clone(),
                         )?;
                         new_children.push(Arc::new(UnresolvedShuffleExec::new(
-                            vec![new_stage.stage_id],
+                            vec![new_stage.stage_id()],
                             new_stage.schema().clone(),
                             new_stage.output_partitioning().partition_count(),
                         )));
@@ -171,7 +171,7 @@ impl DistributedPlanner {
                         child.clone(),
                     )?;
                     new_children.push(Arc::new(UnresolvedShuffleExec::new(
-                        vec![new_stage.stage_id],
+                        vec![new_stage.stage_id()],
                         new_stage.schema().clone(),
                         new_stage.output_partitioning().partition_count(),
                     )));

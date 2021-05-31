@@ -55,6 +55,7 @@ impl Executor {
             QueryStageExec::try_new(job_id, stage_id, plan, self.work_dir.clone(), None)?;
         let mut stream = exec.execute(part).await?;
         let batches = utils::collect_stream(&mut stream).await?;
+        // the output should be a single batch containing metadata (path and statistics)
         assert!(batches.len() == 1);
         Ok(batches[0].clone())
     }
