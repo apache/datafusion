@@ -227,7 +227,10 @@ fn create_query_stage(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<QueryStageExec>> {
     Ok(Arc::new(QueryStageExec::try_new(
-        job_id, stage_id, plan, "", // executor will decide on the work_dir path
+        job_id.to_owned(),
+        stage_id,
+        plan,
+        "".to_owned(), // executor will decide on the work_dir path
         None,
     )?))
 }

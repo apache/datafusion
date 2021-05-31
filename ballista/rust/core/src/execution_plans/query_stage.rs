@@ -59,17 +59,17 @@ pub struct QueryStageExec {
 impl QueryStageExec {
     /// Create a new query stage
     pub fn try_new(
-        job_id: &str,
+        job_id: String,
         stage_id: usize,
         plan: Arc<dyn ExecutionPlan>,
-        work_dir: &str,
+        work_dir: String,
         shuffle_output_partitioning: Option<Partitioning>,
     ) -> Result<Self> {
         Ok(Self {
-            job_id: job_id.to_owned(),
+            job_id,
             stage_id,
             plan,
-            work_dir: work_dir.to_owned(),
+            work_dir,
             shuffle_output_partitioning,
         })
     }
@@ -109,10 +109,10 @@ impl ExecutionPlan for QueryStageExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert!(children.len() == 1);
         Ok(Arc::new(QueryStageExec::try_new(
-            &self.job_id,
+            self.job_id.clone(),
             self.stage_id,
             children[0].clone(),
-            &self.work_dir,
+            self.work_dir.clone(),
             None,
         )?))
     }
@@ -173,7 +173,9 @@ impl ExecutionPlan for QueryStageExec {
                 //TODO re-use code from RepartitionExec to split each batch into
                 // partitions and write to one IPC file per partition
                 // See https://github.com/apache/arrow-datafusion/issues/456
-                unimplemented!()
+                Err(DataFusionError::NotImplemented(
+                    "Shuffle partitioning not implemented yet".to_owned(),
+                ))
             }
 
             _ => Err(DataFusionError::Execution(
@@ -195,10 +197,10 @@ mod tests {
         let input_plan = create_input_plan()?;
         let work_dir = TempDir::new()?;
         let query_stage = QueryStageExec::try_new(
-            "jobOne",
+            "jobOne".to_owned(),
             1,
             input_plan,
-            work_dir.into_path().to_str().unwrap(),
+            work_dir.into_path().to_str().unwrap().to_owned(),
             None,
         )?;
         let mut stream = query_stage.execute(0).await?;
