@@ -410,6 +410,10 @@ fn build_join_schema(
             // left then right
             left_fields.chain(right_fields).cloned().collect()
         }
+        JoinType::Semi => {
+            // Only use the left side for the schema
+            left.fields().clone()
+        }
         JoinType::Right => {
             // remove left-side join keys if they have the same names as the right-side
             let duplicate_keys = &on

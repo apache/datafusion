@@ -34,7 +34,7 @@ use std::{
 };
 
 /// Join type
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinType {
     /// Inner Join
     Inner,
@@ -44,6 +44,8 @@ pub enum JoinType {
     Right,
     /// Full Join
     Full,
+    /// Semi Join
+    Semi,
 }
 
 /// A LogicalPlan represents the different types of relational

@@ -125,7 +125,7 @@ impl OptimizerRule for HashBuildProbeOrder {
                 on,
                 join_type,
                 schema,
-            } => {
+            } if *join_type != JoinType::Semi => {
                 let left = self.optimize(left, execution_props)?;
                 let right = self.optimize(right, execution_props)?;
                 if should_swap_join_order(&left, &right) {
@@ -187,6 +187,7 @@ impl OptimizerRule for HashBuildProbeOrder {
             | LogicalPlan::CreateExternalTable { .. }
             | LogicalPlan::Explain { .. }
             | LogicalPlan::Union { .. }
+            | LogicalPlan::Join { .. }
             | LogicalPlan::Extension { .. } => {
                 let expr = plan.expressions();
 
@@ -216,6 +217,7 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::Full => JoinType::Full,
         JoinType::Left => JoinType::Right,
         JoinType::Right => JoinType::Left,
+        _ => unreachable!()
     }
 }
 
