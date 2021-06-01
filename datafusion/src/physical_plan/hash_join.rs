@@ -545,7 +545,10 @@ fn build_batch(
     .unwrap();
 
     if join_type == JoinType::Semi {
-        return Ok((RecordBatch::new_empty(Arc::new(schema.clone())), left_indices));
+        return Ok((
+            RecordBatch::new_empty(Arc::new(schema.clone())),
+            left_indices,
+        ));
     }
 
     build_batch_from_indices(
@@ -1118,24 +1121,24 @@ fn produce_from_matched(
     schema: &SchemaRef,
     column_indices: &[ColumnIndex],
     left_data: &JoinLeftData,
-    unmatched: bool
+    unmatched: bool,
 ) -> ArrowResult<RecordBatch> {
     // Find indices which didn't match any right row (are false)
     let unmatched_indices: Vec<u64> = if unmatched {
-         visited_left_side
-        .iter()
-        .enumerate()
-        .filter(|&(_, &value)| !value)
-        .map(|(index, _)| index as u64)
-        .collect()
+        visited_left_side
+            .iter()
+            .enumerate()
+            .filter(|&(_, &value)| !value)
+            .map(|(index, _)| index as u64)
+            .collect()
     } else {
         // produce those that did match
         visited_left_side
-        .iter()
-        .enumerate()
-        .filter(|&(_, &value)| value)
-        .map(|(index, _)| index as u64)
-        .collect()
+            .iter()
+            .enumerate()
+            .filter(|&(_, &value)| value)
+            .map(|(index, _)| index as u64)
+            .collect()
     };
 
     // generate batches by taking values from the left side and generating columns filled with null on the right side
@@ -1200,13 +1203,15 @@ impl Stream for HashJoinStream {
                     let start = Instant::now();
                     // For the left join, produce rows for unmatched rows
                     match self.join_type {
-                        JoinType::Left | JoinType::Full | JoinType::Semi if !self.is_exhausted => {
+                        JoinType::Left | JoinType::Full | JoinType::Semi
+                            if !self.is_exhausted =>
+                        {
                             let result = produce_from_matched(
                                 &self.visited_left_side,
                                 &self.schema,
                                 &self.column_indices,
                                 &self.left_data,
-                                self.join_type != JoinType::Semi
+                                self.join_type != JoinType::Semi,
                             );
                             if let Ok(ref batch) = result {
                                 self.num_input_batches += 1;
