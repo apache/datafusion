@@ -28,7 +28,7 @@ use crate::serde::protobuf::LogicalExprNode;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{proto_error, protobuf};
 use crate::{convert_box_required, convert_required};
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
     CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
 };

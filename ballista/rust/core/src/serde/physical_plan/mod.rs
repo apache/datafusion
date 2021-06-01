@@ -20,27 +20,32 @@ pub mod to_proto;
 
 #[cfg(test)]
 mod roundtrip_tests {
-    use datafusion::physical_plan::hash_utils::JoinType;
     use std::{convert::TryInto, sync::Arc};
 
-    use arrow::datatypes::{DataType, Schema};
-    use datafusion::physical_plan::ColumnarValue;
-    use datafusion::physical_plan::{
-        empty::EmptyExec,
-        expressions::{Avg, Column, PhysicalSortExpr},
-        hash_aggregate::{AggregateMode, HashAggregateExec},
-        hash_join::HashJoinExec,
-        limit::{GlobalLimitExec, LocalLimitExec},
-        sort::SortExec,
-        ExecutionPlan,
-    };
-    use datafusion::physical_plan::{
-        AggregateExpr, Distribution, Partitioning, PhysicalExpr,
+    use datafusion::{
+        arrow::{
+            compute::kernels::sort::SortOptions,
+            datatypes::{DataType, Field, Schema},
+        },
+        logical_plan::Operator,
+        physical_plan::{
+            empty::EmptyExec,
+            expressions::{binary, lit, InListExpr, NotExpr},
+            expressions::{Avg, Column, PhysicalSortExpr},
+            filter::FilterExec,
+            hash_aggregate::{AggregateMode, HashAggregateExec},
+            hash_join::{HashJoinExec, PartitionMode},
+            hash_utils::JoinType,
+            limit::{GlobalLimitExec, LocalLimitExec},
+            sort::SortExec,
+            AggregateExpr, ColumnarValue, Distribution, ExecutionPlan, Partitioning,
+            PhysicalExpr,
+        },
+        scalar::ScalarValue,
     };
 
     use super::super::super::error::Result;
     use super::super::protobuf;
-    use datafusion::physical_plan::hash_join::PartitionMode;
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let proto: protobuf::PhysicalPlanNode = exec_plan.clone().try_into()?;
@@ -75,7 +80,6 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_hash_join() -> Result<()> {
-        use arrow::datatypes::{DataType, Field, Schema};
         let field_a = Field::new("col", DataType::Int64, false);
         let schema_left = Schema::new(vec![field_a.clone()]);
         let schema_right = Schema::new(vec![field_a]);
@@ -95,7 +99,6 @@ mod roundtrip_tests {
 
     #[test]
     fn rountrip_hash_aggregate() -> Result<()> {
-        use arrow::datatypes::{DataType, Field, Schema};
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(col("a"), "unused".to_string())];
 
@@ -120,13 +123,6 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_filter_with_not_and_in_list() -> Result<()> {
-        use arrow::datatypes::{DataType, Field, Schema};
-        use datafusion::logical_plan::Operator;
-        use datafusion::physical_plan::{
-            expressions::{binary, lit, InListExpr, NotExpr},
-            filter::FilterExec,
-        };
-        use datafusion::scalar::ScalarValue;
         let field_a = Field::new("a", DataType::Boolean, false);
         let field_b = Field::new("b", DataType::Int64, false);
         let field_c = Field::new("c", DataType::Int64, false);
@@ -149,8 +145,6 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_sort() -> Result<()> {
-        use arrow::compute::kernels::sort::SortOptions;
-        use arrow::datatypes::{DataType, Field, Schema};
         let field_a = Field::new("a", DataType::Boolean, false);
         let field_b = Field::new("b", DataType::Int64, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));

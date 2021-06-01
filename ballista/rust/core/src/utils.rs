@@ -26,13 +26,16 @@ use crate::error::{BallistaError, Result};
 use crate::execution_plans::{QueryStageExec, UnresolvedShuffleExec};
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
-use arrow::array::{
-    ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
+
+use datafusion::arrow::{
+    array::{
+        ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
+    },
+    datatypes::{DataType, Field},
+    ipc::reader::FileReader,
+    ipc::writer::FileWriter,
+    record_batch::RecordBatch,
 };
-use arrow::datatypes::{DataType, Field};
-use arrow::ipc::reader::FileReader;
-use arrow::ipc::writer::FileWriter;
-use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 use datafusion::logical_plan::Operator;
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -109,13 +112,13 @@ pub fn produce_diagram(filename: &str, stages: &[Arc<QueryStageExec>]) -> Result
 
     // draw stages and entities
     for stage in stages {
-        writeln!(w, "\tsubgraph cluster{} {{", stage.stage_id)?;
-        writeln!(w, "\t\tlabel = \"Stage {}\";", stage.stage_id)?;
+        writeln!(w, "\tsubgraph cluster{} {{", stage.stage_id())?;
+        writeln!(w, "\t\tlabel = \"Stage {}\";", stage.stage_id())?;
         let mut id = AtomicUsize::new(0);
         build_exec_plan_diagram(
             &mut w,
-            stage.child.as_ref(),
-            stage.stage_id,
+            stage.children()[0].as_ref(),
+            stage.stage_id(),
             &mut id,
             true,
         )?;
@@ -127,8 +130,8 @@ pub fn produce_diagram(filename: &str, stages: &[Arc<QueryStageExec>]) -> Result
         let mut id = AtomicUsize::new(0);
         build_exec_plan_diagram(
             &mut w,
-            stage.child.as_ref(),
-            stage.stage_id,
+            stage.children()[0].as_ref(),
+            stage.stage_id(),
             &mut id,
             false,
         )?;

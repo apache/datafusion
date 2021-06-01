@@ -31,5 +31,4 @@ futures = "0.3"
 log = "0.4"
 tokio = "1.0"
 
-arrow = { version = "4.0"  }
 datafusion = { path = "../../../datafusion" }

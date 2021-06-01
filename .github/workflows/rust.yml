@@ -155,6 +155,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v2
+        with:
+          submodules: true
       - uses: actions/setup-python@v2
         with:
           python-version: "3.8"
@@ -167,7 +169,22 @@ jobs:
           # make sure psql can access the server
           echo "$POSTGRES_HOST:$POSTGRES_PORT:$POSTGRES_DB:$POSTGRES_USER:$POSTGRES_PASSWORD" | tee ~/.pgpass
           chmod 0600 ~/.pgpass
-          psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -c 'select now() as now'
+          psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -c 'CREATE TABLE IF NOT EXISTS test (
+            c1 character varying NOT NULL,
+            c2 integer NOT NULL,
+            c3 smallint NOT NULL,
+            c4 smallint NOT NULL,
+            c5 integer NOT NULL,
+            c6 bigint NOT NULL,
+            c7 smallint NOT NULL,
+            c8 integer NOT NULL,
+            c9 bigint NOT NULL,
+            c10 character varying NOT NULL,
+            c11 double precision NOT NULL,
+            c12 double precision NOT NULL,
+            c13 character varying NOT NULL
+          );'
+          psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -c "\copy test FROM '$(pwd)/testing/data/csv/aggregate_test_100.csv' WITH (FORMAT csv, HEADER true);"
         env:
           POSTGRES_HOST: localhost
           POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}

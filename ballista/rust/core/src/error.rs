@@ -23,7 +23,7 @@ use std::{
     io, result,
 };
 
-use arrow::error::ArrowError;
+use datafusion::arrow::error::ArrowError;
 use datafusion::error::DataFusionError;
 use sqlparser::parser;
 

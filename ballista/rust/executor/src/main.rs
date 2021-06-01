@@ -30,17 +30,15 @@ use tempfile::TempDir;
 use tonic::transport::Server;
 use uuid::Uuid;
 
-use ballista_core::{
-    client::BallistaClient,
-    serde::protobuf::{
-        executor_registration, scheduler_grpc_client::SchedulerGrpcClient,
-        ExecutorRegistration,
-    },
+use ballista_core::serde::protobuf::{
+    executor_registration, scheduler_grpc_client::SchedulerGrpcClient,
+    ExecutorRegistration,
 };
 use ballista_core::{
     print_version, serde::protobuf::scheduler_grpc_server::SchedulerGrpcServer,
     BALLISTA_VERSION,
 };
+use ballista_executor::executor::Executor;
 use ballista_executor::flight_service::BallistaFlightService;
 use ballista_scheduler::{state::StandaloneClient, SchedulerServer};
 use config::prelude::*;
@@ -166,7 +164,10 @@ async fn main() -> Result<()> {
     let scheduler = SchedulerGrpcClient::connect(scheduler_url)
         .await
         .context("Could not connect to scheduler")?;
-    let service = BallistaFlightService::new(work_dir);
+
+    let executor = Arc::new(Executor::new(&work_dir));
+
+    let service = BallistaFlightService::new(executor.clone());
 
     let server = FlightServiceServer::new(service);
     info!(
@@ -174,19 +175,9 @@ async fn main() -> Result<()> {
         BALLISTA_VERSION, addr
     );
     let server_future = tokio::spawn(Server::builder().add_service(server).serve(addr));
-    let client_host = external_host.as_deref().unwrap_or_else(|| {
-        if bind_host == "0.0.0.0" {
-            // If the executor is being bound to "0.0.0.0" (which means use all ips in all eth devices)
-            // then use "localhost" to connect to itself through the BallistaClient
-            "localhost"
-        } else {
-            &bind_host
-        }
-    });
-    let client = BallistaClient::try_new(client_host, port).await?;
     tokio::spawn(execution_loop::poll_loop(
         scheduler,
-        client,
+        executor,
         executor_meta,
         opt.concurrent_tasks,
     ));
