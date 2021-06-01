@@ -22,23 +22,19 @@ use std::any::Any;
 use std::sync::Arc;
 
 use futures::channel::mpsc;
-use futures::sink::SinkExt;
-use futures::stream::StreamExt;
 use futures::Stream;
 
 use async_trait::async_trait;
 
 use arrow::record_batch::RecordBatch;
-use arrow::{
-    datatypes::SchemaRef,
-    error::{ArrowError, Result as ArrowResult},
-};
+use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 
 use super::RecordBatchStream;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use super::SendableRecordBatchStream;
+use crate::physical_plan::common::spawn_execution;
 use pin_project_lite::pin_project;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
@@ -121,26 +117,7 @@ impl ExecutionPlan for MergeExec {
                 // spawn independent tasks whose resulting streams (of batches)
                 // are sent to the channel for consumption.
                 for part_i in 0..input_partitions {
-                    let input = self.input.clone();
-                    let mut sender = sender.clone();
-                    tokio::spawn(async move {
-                        let mut stream = match input.execute(part_i).await {
-                            Err(e) => {
-                                // If send fails, plan being torn
-                                // down, no place to send the error
-                                let arrow_error = ArrowError::ExternalError(Box::new(e));
-                                sender.send(Err(arrow_error)).await.ok();
-                                return;
-                            }
-                            Ok(stream) => stream,
-                        };
-
-                        while let Some(item) = stream.next().await {
-                            // If send fails, plan being torn down,
-                            // there is no place to send the error
-                            sender.send(item).await.ok();
-                        }
-                    });
+                    spawn_execution(self.input.clone(), sender.clone(), part_i);
                 }
 
                 Ok(Box::pin(MergeStream {
