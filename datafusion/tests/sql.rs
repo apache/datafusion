@@ -1592,66 +1592,70 @@ async fn csv_explain_plans() {
     println!("SQL: {}", sql);
     //
     // Verify schema
-    let expected = "Explain [plan_type:Utf8, plan:Utf8]\n
-      Projection: #c1 [c1:Utf8]\n
-          Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\n
-                TableScan: aggregate_test_100 projection=None [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]";
-    let actual = format!("{}", plan.display_indent_schema());
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #c1 [c1:Utf8]",
+        "    Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]",
+        "      TableScan: aggregate_test_100 projection=None [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
     //
     // Verify the text format of the plan
-    let expected = "Explain\n  Projection: #c1\n
-        Filter: #c2 Gt Int64(10)\n
-              TableScan: aggregate_test_100 projection=None";
-    let actual = format!("{}", plan.display_indent());
+    let expected = vec![
+        "Explain",
+        "  Projection: #c1",
+        "    Filter: #c2 Gt Int64(10)",
+        "      TableScan: aggregate_test_100 projection=None",
+    ];
+    let formatted = plan.display_indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
     //
     // verify the grahviz format of the plan
-    let expected = "// Begin DataFusion GraphViz Plan (see https://graphviz.org)\n
-    digraph {\n
-          subgraph cluster_1\n
-            {\n
-                graph[label=\"LogicalPlan\"]\n
-                    2[shape=box label=\"Explain\"]\n
-                    3[shape=box label=\"Projection: #c1\"]\n
-                    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]\n
-                    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    5[shape=box label=\"TableScan: aggregate_test_100 projection=None\"]\n
-                    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]\n
-            }\n
-         subgraph cluster_6\n
-            {\n
-                graph[label=\"Detailed LogicalPlan\"]\n
-                    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]\n
-                    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]\n
-                    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]\n
-                    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    10[shape=box label=\"TableScan: aggregate_test_100 projection=None\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]\n
-                    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]\n
-            }\n
-    }\n
-    // End DataFusion GraphViz Plan\n";
-    let actual = format!("{}", plan.display_graphviz());
+    let expected = vec![
+        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "digraph {",
+        "  subgraph cluster_1",
+        "  {",
+        "    graph[label=\"LogicalPlan\"]",
+        "    2[shape=box label=\"Explain\"]",
+        "    3[shape=box label=\"Projection: #c1\"]",
+        "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]",
+        "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=None\"]",
+        "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
+        "  }",
+        "  subgraph cluster_6",
+        "  {",
+        "    graph[label=\"Detailed LogicalPlan\"]",
+        "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
+        "    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]",
+        "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]",
+        "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=None\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]",
+        "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
+        "  }",
+        "}",
+        "// End DataFusion GraphViz Plan",
+    ];
+    let formatted = plan.display_graphviz().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
 
     // Optimized logical plan
@@ -1663,67 +1667,70 @@ async fn csv_explain_plans() {
     assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
     //
     // Verify schema
-    let expected = "Explain [plan_type:Utf8, plan:Utf8]\n
-      Projection: #c1 [c1:Utf8]\n
-          Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32]\n
-                TableScan: aggregate_test_100 projection=Some([0, 1]) [c1:Utf8, c2:Int32]";
-    let actual = format!("{}", plan.display_indent_schema());
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #c1 [c1:Utf8]",
+        "    Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32]",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1]) [c1:Utf8, c2:Int32]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
     //
     // Verify the text format of the plan
-    let expected = "Explain\n
-      Projection: #c1\n
-          Filter: #c2 Gt Int64(10)\n
-                TableScan: aggregate_test_100 projection=Some([0, 1])";
-    let actual = format!("{}", plan.display_indent());
+    let expected = vec![
+        "Explain",
+        "  Projection: #c1",
+        "    Filter: #c2 Gt Int64(10)",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1])",
+    ];
+    let formatted = plan.display_indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
     //
     // verify the grahviz format of the plan
-    let expected = "// Begin DataFusion GraphViz Plan (see https://graphviz.org)\n
-    digraph {\n
-        subgraph cluster_1\n
-            {\n
-                graph[label=\"LogicalPlan\"]\n
-                    2[shape=box label=\"Explain\"]\n
-                    3[shape=box label=\"Projection: #c1\"]\n
-                    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]\n
-                    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\"]\n
-                    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]\n
-            }\n
-        subgraph cluster_6\n
-            {\n
-                graph[label=\"Detailed LogicalPlan\"]\n
-                    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]\n
-                    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]\n
-                    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]\n
-                    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\\nSchema: [c1:Utf8, c2:Int32]\"]\n
-                    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]\n
-            }\n
-        }\n
-    // End DataFusion GraphViz Plan\n";
-    let actual = format!("{}", plan.display_graphviz());
+    let expected = vec![
+        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "digraph {",
+        "  subgraph cluster_1",
+        "  {",
+        "    graph[label=\"LogicalPlan\"]",
+        "    2[shape=box label=\"Explain\"]",
+        "    3[shape=box label=\"Projection: #c1\"]",
+        "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]",
+        "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\"]",
+        "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
+        "  }",
+        "  subgraph cluster_6",
+        "  {",
+        "    graph[label=\"Detailed LogicalPlan\"]",
+        "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
+        "    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]",
+        "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]",
+        "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\\nSchema: [c1:Utf8, c2:Int32]\"]",
+        "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
+        "  }",
+        "}",
+        "// End DataFusion GraphViz Plan",
+    ];
+    let formatted = plan.display_graphviz().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
 
     // Physical plan
@@ -1739,7 +1746,11 @@ async fn csv_explain_plans() {
         vec!["logical_plan",
              "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=None"]];
     let actual = result_vec(&results);
-    assert_eq!(expected, actual);
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
 }
 
 #[tokio::test]
@@ -1775,141 +1786,148 @@ async fn csv_explain_verbose_plans() {
     let logical_schema = plan.schema();
     //
     println!("SQL: {}", sql);
+
     //
     // Verify schema
-    let expected = "Explain [plan_type:Utf8, plan:Utf8]\n
-      Projection: #c1 [c1:Utf8]\n
-          Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\n
-                TableScan: aggregate_test_100 projection=None [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]";
-    let actual = format!("{}", plan.display_indent_schema());
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #c1 [c1:Utf8]",
+        "    Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]",
+        "      TableScan: aggregate_test_100 projection=None [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
     //
     // Verify the text format of the plan
-    let expected = "Explain\n
-      Projection: #c1\n
-          Filter: #c2 Gt Int64(10)\n
-                TableScan: aggregate_test_100 projection=None";
-    let actual = format!("{}", plan.display_indent());
+    let expected = vec![
+        "Explain",
+        "  Projection: #c1",
+        "    Filter: #c2 Gt Int64(10)",
+        "      TableScan: aggregate_test_100 projection=None",
+    ];
+    let formatted = plan.display_indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
     //
     // verify the grahviz format of the plan
-    let expected = "// Begin DataFusion GraphViz Plan (see https://graphviz.org)\n
-    digraph {\n
-          subgraph cluster_1\n
-            {\n
-                graph[label=\"LogicalPlan\"]\n
-                    2[shape=box label=\"Explain\"]\n
-                    3[shape=box label=\"Projection: #c1\"]\n
-                    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]\n
-                    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    5[shape=box label=\"TableScan: aggregate_test_100 projection=None\"]\n
-                    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]\n
-            }\n
-         subgraph cluster_6\n
-            {\n
-                graph[label=\"Detailed LogicalPlan\"]\n
-                    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]\n
-                    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]\n
-                    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]\n
-                    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    10[shape=box label=\"TableScan: aggregate_test_100 projection=None\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]\n
-                    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]\n
-            }\n
-    }\n
-    // End DataFusion GraphViz Plan\n";
-    let actual = format!("{}", plan.display_graphviz());
+    let expected = vec![
+        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "digraph {",
+        "  subgraph cluster_1",
+        "  {",
+        "    graph[label=\"LogicalPlan\"]",
+        "    2[shape=box label=\"Explain\"]",
+        "    3[shape=box label=\"Projection: #c1\"]",
+        "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]",
+        "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=None\"]",
+        "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
+        "  }",
+        "  subgraph cluster_6",
+        "  {",
+        "    graph[label=\"Detailed LogicalPlan\"]",
+        "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
+        "    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]",
+        "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]",
+        "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=None\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]",
+        "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
+        "  }",
+        "}",
+        "// End DataFusion GraphViz Plan",
+    ];
+    let formatted = plan.display_graphviz().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
-    //
+
     // Optimized logical plan
+    //
     let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
     let plan = ctx.optimize(&plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
-    //
     // Both schema has to be the same
     assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
     //
     // Verify schema
-    let expected = "Explain [plan_type:Utf8, plan:Utf8]\n
-      Projection: #c1 [c1:Utf8]\n
-          Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32]\n
-                TableScan: aggregate_test_100 projection=Some([0, 1]) [c1:Utf8, c2:Int32]";
-    let actual = format!("{}", plan.display_indent_schema());
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: #c1 [c1:Utf8]",
+        "    Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32]",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1]) [c1:Utf8, c2:Int32]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
     //
     // Verify the text format of the plan
-    let expected = "Explain\n
-      Projection: #c1\n
-          Filter: #c2 Gt Int64(10)\n
-                TableScan: aggregate_test_100 projection=Some([0, 1])";
-    let actual = format!("{}", plan.display_indent());
+    let expected = vec![
+        "Explain",
+        "  Projection: #c1",
+        "    Filter: #c2 Gt Int64(10)",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1])",
+    ];
+    let formatted = plan.display_indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
     //
     // verify the grahviz format of the plan
-    let expected = "// Begin DataFusion GraphViz Plan (see https://graphviz.org)\n
-    digraph {\n
-        subgraph cluster_1\n
-            {\n
-                graph[label=\"LogicalPlan\"]\n
-                    2[shape=box label=\"Explain\"]\n
-                    3[shape=box label=\"Projection: #c1\"]\n
-                    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]\n
-                    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\"]\n
-                    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]\n
-            }\n
-        subgraph cluster_6\n
-            {\n
-                graph[label=\"Detailed LogicalPlan\"]\n
-                    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]\n
-                    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]\n
-                    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]\n
-                    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]\n
-                    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\\nSchema: [c1:Utf8, c2:Int32]\"]\n
-                    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]\n
-            }\n
-        }\n
-    // End DataFusion GraphViz Plan\n";
-    let actual = format!("{}", plan.display_graphviz());
+    let expected = vec![
+        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "digraph {",
+        "  subgraph cluster_1",
+        "  {",
+        "    graph[label=\"LogicalPlan\"]",
+        "    2[shape=box label=\"Explain\"]",
+        "    3[shape=box label=\"Projection: #c1\"]",
+        "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]",
+        "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\"]",
+        "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
+        "  }",
+        "  subgraph cluster_6",
+        "  {",
+        "    graph[label=\"Detailed LogicalPlan\"]",
+        "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
+        "    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]",
+        "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]",
+        "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\\nSchema: [c1:Utf8, c2:Int32]\"]",
+        "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
+        "  }",
+        "}",
+        "// End DataFusion GraphViz Plan",
+    ];
+    let formatted = plan.display_graphviz().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
-        expected
-            .replace("\t", "")
-            .replace("\n", "")
-            .replace(" ", ""),
-        actual.replace("\t", "").replace("\n", "").replace(" ", "")
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
     );
 
     // Physical plan
@@ -1922,15 +1940,25 @@ async fn csv_explain_verbose_plans() {
     let results = collect(plan).await.expect(&msg);
     // Compare final explain result from execution output
     let expected = vec![
-        vec!["logical_plan",
-             "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=None"], 
-        vec!["logical_plan after projection_push_down", 
-             "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=Some([0, 1])"],
-        vec!["physical_plan", 
-             "ProjectionExec: expr=[c1]\n  FilterExec: CAST(c2 AS Int64) > 10\n    CsvExec: source=Path(/Users/nga/.cargo/git/checkouts/arrow-rs-3b86e19e889d5acc/4449ee9/arrow/../testing/data/csv/aggregate_test_100.csv: [/Users/nga/.cargo/git/checkouts/arrow-rs-3b86e19e889d5acc/4449ee9/arrow/../testing/data/csv/aggregate_test_100.csv]), has_header=true\n"]
+       vec![
+            "logical_plan",
+            "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=None",
+        ],
+        vec![
+            "logical_plan after projection_push_down",
+            "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=Some([0, 1])",
+        ],
+        vec![
+            "physical_plan",
+            "ProjectionExec: expr=[c1]\n  FilterExec: CAST(c2 AS Int64) > 10\n    CsvExec: source=Path(/Users/nga/.cargo/git/checkouts/arrow-rs-3b86e19e889d5acc/4449ee9/arrow/../testing/data/csv/aggregate_test_100.csv: [/Users/nga/.cargo/git/checkouts/arrow-rs-3b86e19e889d5acc/4449ee9/arrow/../testing/data/csv/aggregate_test_100.csv]), has_header=true\n",
+        ],
     ];
     let actual = result_vec(&results);
-    assert_eq!(expected, actual);
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
 }
 
 fn aggr_test_schema() -> SchemaRef {

@@ -333,7 +333,6 @@ impl LogicalPlan {
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
-            //| LogicalPlan::Explain { .. }
             | LogicalPlan::CreateExternalTable { .. } => vec![],
         }
     }
