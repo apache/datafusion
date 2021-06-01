@@ -23,14 +23,14 @@ use crate::optimizer::utils::optimize_explain;
 use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
 
-/// Remove duplicate filters optimizer.
+/// Simplify expressions optimizer.
 /// # Introduction
 /// It uses boolean algebra laws to simplify or reduce the number of terms in expressions.
 ///
 /// Filter: b > 2 AND b > 2
 /// is optimized to
 /// Filter: b > 2
-pub struct RemoveDuplicateFilters {}
+pub struct SimplifyExpressions {}
 
 fn expr_contains(expr: &Expr, needle: &Expr) -> bool {
     match expr {
@@ -255,9 +255,9 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     utils::from_plan(&plan, &expr, &new_inputs)
 }
 
-impl OptimizerRule for RemoveDuplicateFilters {
+impl OptimizerRule for SimplifyExpressions {
     fn name(&self) -> &str {
-        "remove_duplicate_filters"
+        "simplify_expressions"
     }
 
     fn optimize(
@@ -287,7 +287,7 @@ impl OptimizerRule for RemoveDuplicateFilters {
     }
 }
 
-impl RemoveDuplicateFilters {
+impl SimplifyExpressions {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
@@ -301,7 +301,7 @@ mod tests {
     use crate::test::*;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = RemoveDuplicateFilters::new();
+        let rule = SimplifyExpressions::new();
         let optimized_plan = rule
             .optimize(plan, &ExecutionProps::new())
             .expect("failed to optimize plan");
