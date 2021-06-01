@@ -93,6 +93,18 @@ impl DataFrame {
         })
     }
 
+    /// Sort by specified sorting expressions
+    fn sort(&self, exprs: Vec<expression::Expression>) -> PyResult<Self> {
+        let exprs = exprs.into_iter().map(|e| e.expr);
+        let builder = LogicalPlanBuilder::from(&self.plan);
+        let builder = errors::wrap(builder.sort(exprs))?;
+        let plan = errors::wrap(builder.build())?;
+        Ok(DataFrame {
+            ctx_state: self.ctx_state.clone(),
+            plan,
+        })
+    }
+
     /// Limits the plan to return at most `count` rows
     fn limit(&self, count: usize) -> PyResult<Self> {
         let builder = LogicalPlanBuilder::from(&self.plan);
