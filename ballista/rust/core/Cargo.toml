@@ -45,6 +45,7 @@ arrow-flight = { version = "4.0"  }
 datafusion = { path = "../../../datafusion" }
 
 [dev-dependencies]
+tempfile = "3"
 
 [build-dependencies]
 tonic-build = { version = "0.4" }

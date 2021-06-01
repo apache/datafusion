@@ -17,17 +17,13 @@
 
 //! Ballista executor logic
 
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
 use ballista_core::error::BallistaError;
+use ballista_core::execution_plans::QueryStageExec;
 use ballista_core::utils;
-use datafusion::arrow::array::{ArrayRef, StringBuilder};
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::ExecutionPlan;
-use log::info;
 
 /// Ballista executor
 pub struct Executor {
@@ -55,43 +51,13 @@ impl Executor {
         part: usize,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<RecordBatch, BallistaError> {
-        let mut path = PathBuf::from(&self.work_dir);
-        path.push(&job_id);
-        path.push(&format!("{}", stage_id));
-        path.push(&format!("{}", part));
-        std::fs::create_dir_all(&path)?;
-
-        path.push("data.arrow");
-        let path = path.to_str().unwrap();
-        info!("Writing results to {}", path);
-
-        let now = Instant::now();
-
-        // execute the query partition
-        let mut stream = plan.execute(part).await?;
-
-        // stream results to disk
-        let stats = utils::write_stream_to_disk(&mut stream, &path).await?;
-
-        info!(
-            "Executed partition {} in {} seconds. Statistics: {:?}",
-            part,
-            now.elapsed().as_secs(),
-            stats
-        );
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("path", DataType::Utf8, false),
-            stats.arrow_struct_repr(),
-        ]));
-
-        // build result set with summary of the partition execution status
-        let mut c0 = StringBuilder::new(1);
-        c0.append_value(&path).unwrap();
-        let path: ArrayRef = Arc::new(c0.finish());
-
-        let stats: ArrayRef = stats.to_arrow_arrayref()?;
-        RecordBatch::try_new(schema, vec![path, stats]).map_err(BallistaError::ArrowError)
+        let exec =
+            QueryStageExec::try_new(job_id, stage_id, plan, self.work_dir.clone(), None)?;
+        let mut stream = exec.execute(part).await?;
+        let batches = utils::collect_stream(&mut stream).await?;
+        // the output should be a single batch containing metadata (path and statistics)
+        assert!(batches.len() == 1);
+        Ok(batches[0].clone())
     }
 
     pub fn work_dir(&self) -> &str {
