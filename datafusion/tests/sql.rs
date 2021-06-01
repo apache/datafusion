@@ -1741,15 +1741,16 @@ async fn csv_explain_plans() {
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
     let results = collect(plan).await.expect(&msg);
-    // Compare final explain result from execution output
-    let expected = vec![
-        vec!["logical_plan",
-             "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=None"]];
     let actual = result_vec(&results);
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+    // flatten to a single string
+    let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
+    // Since the plan contains path that are environmentally dependant (e.g. full path of the test file), only verify important content
+    assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
+    assert!(actual.contains("Projection: #c1"), "Actual: '{}'", actual);
+    assert!(
+        actual.contains("Filter: #c2 Gt Int64(10)"),
+        "Actual: '{}'",
+        actual
     );
 }
 
@@ -1938,26 +1939,25 @@ async fn csv_explain_verbose_plans() {
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
     let results = collect(plan).await.expect(&msg);
-    // Compare final explain result from execution output
-    let expected = vec![
-       vec![
-            "logical_plan",
-            "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=None",
-        ],
-        vec![
-            "logical_plan after projection_push_down",
-            "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=Some([0, 1])",
-        ],
-        vec![
-            "physical_plan",
-            "ProjectionExec: expr=[c1]\n  FilterExec: CAST(c2 AS Int64) > 10\n    CsvExec: source=Path(/Users/nga/.cargo/git/checkouts/arrow-rs-3b86e19e889d5acc/4449ee9/arrow/../testing/data/csv/aggregate_test_100.csv: [/Users/nga/.cargo/git/checkouts/arrow-rs-3b86e19e889d5acc/4449ee9/arrow/../testing/data/csv/aggregate_test_100.csv]), has_header=true\n",
-        ],
-    ];
     let actual = result_vec(&results);
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+    // flatten to a single string
+    let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
+    // Since the plan contains path that are environmentally dependant(e.g. full path of the test file), only verify important content
+    assert!(
+        actual.contains("logical_plan after projection_push_down"),
+        "Actual: '{}'",
+        actual
+    );
+    assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
+    assert!(
+        actual.contains("FilterExec: CAST(c2 AS Int64) > 10"),
+        "Actual: '{}'",
+        actual
+    );
+    assert!(
+        actual.contains("ProjectionExec: expr=[c1]"),
+        "Actual: '{}'",
+        actual
     );
 }
 
