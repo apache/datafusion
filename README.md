@@ -221,6 +221,12 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
   - [x] FULL JOIN
   - [x] CROSS JOIN
 - [ ] Window
+  - [x] [Empty window](https://github.com/apache/arrow-datafusion/issues/298)
+  - [x] Common window functions
+  - [ ] [Window with ORDER BY clause](https://github.com/apache/arrow-datafusion/issues/360)
+  - [ ] [Window with PARTITION BY clause](https://github.com/apache/arrow-datafusion/issues/299)
+  - [ ] [Window with custom WINDOW FRAME](https://github.com/apache/arrow-datafusion/issues/361)
+  - [ ] UDF and UDAF for window functions
 
 ## Data Sources
 
