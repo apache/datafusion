@@ -1124,25 +1124,23 @@ fn produce_from_matched(
     unmatched: bool,
 ) -> ArrowResult<RecordBatch> {
     // Find indices which didn't match any right row (are false)
-    let unmatched_indices: Vec<u64> = if unmatched {
-        visited_left_side
+    let indices = if unmatched {
+        UInt64Array::from_iter_values(visited_left_side
             .iter()
             .enumerate()
             .filter(|&(_, &value)| !value)
             .map(|(index, _)| index as u64)
-            .collect()
+        )
     } else {
         // produce those that did match
-        visited_left_side
+        UInt64Array::from_iter_values(visited_left_side
             .iter()
             .enumerate()
             .filter(|&(_, &value)| value)
-            .map(|(index, _)| index as u64)
-            .collect()
+            .map(|(index, _)| index as u64))
     };
 
     // generate batches by taking values from the left side and generating columns filled with null on the right side
-    let indices = UInt64Array::from_iter_values(unmatched_indices);
     let num_rows = indices.len();
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
     for (idx, column_index) in column_indices.iter().enumerate() {
