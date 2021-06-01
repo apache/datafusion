@@ -234,6 +234,10 @@ fn split_members<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>) {
 
 fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
     match plan {
+        LogicalPlan::Explain { .. } => {
+            // push the optimization to the plan of this explain
+            push_down(&state, plan)
+        }
         LogicalPlan::Filter { input, predicate } => {
             let mut predicates = vec![];
             split_members(predicate, &mut predicates);
