@@ -1255,6 +1255,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn window() -> Result<()> {
+        let results = execute(
+            "SELECT c1, c2, SUM(c2) OVER (), COUNT(c2) OVER (), MAX(c2) OVER (), MIN(c2) OVER (), AVG(c2) OVER () FROM test ORDER BY c1, c2 LIMIT 5",
+            4,
+        )
+        .await?;
+        // result in one batch, although e.g. having 2 batches do not change
+        // result semantics, having a len=1 assertion upfront keeps surprises
+        // at bay
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+--------------+----------------+--------------+--------------+--------------+",
+            "| c1 | c2 | SUM(test.c2) | COUNT(test.c2) | MAX(test.c2) | MIN(test.c2) | AVG(test.c2) |",
+            "+----+----+--------------+----------------+--------------+--------------+--------------+",
+            "| 0  | 1  | 220          | 40             | 10           | 1            | 5.5          |",
+            "| 0  | 2  | 220          | 40             | 10           | 1            | 5.5          |",
+            "| 0  | 3  | 220          | 40             | 10           | 1            | 5.5          |",
+            "| 0  | 4  | 220          | 40             | 10           | 1            | 5.5          |",
+            "| 0  | 5  | 220          | 40             | 10           | 1            | 5.5          |",
+            "+----+----+--------------+----------------+--------------+--------------+--------------+",
+        ];
+
+        // window function shall respect ordering
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn aggregate() -> Result<()> {
         let results = execute("SELECT SUM(c1), SUM(c2) FROM test", 4).await?;
         assert_eq!(results.len(), 1);

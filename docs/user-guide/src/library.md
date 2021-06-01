@@ -16,6 +16,7 @@
   specific language governing permissions and limitations
   under the License.
 -->
+
 # Using DataFusion as a library
 
 DataFusion is [published on crates.io](https://crates.io/crates/datafusion), and is [well documented on docs.rs](https://docs.rs/datafusion/).

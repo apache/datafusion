@@ -34,11 +34,11 @@ GLib, Java and JavaScript builds on Linux and macOS. Read the comments in
 
 You need the followings to verify C GLib build:
 
-  * GLib
-  * GObject Introspection
-  * Ruby (not EOL-ed version is required)
-  * gobject-introspection gem
-  * test-unit gem
+- GLib
+- GObject Introspection
+- Ruby (not EOL-ed version is required)
+- gobject-introspection gem
+- test-unit gem
 
 You can install them by the followings on Debian GNU/Linux and Ubuntu:
 

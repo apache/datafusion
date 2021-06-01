@@ -26,13 +26,16 @@ use crate::error::{BallistaError, Result};
 use crate::execution_plans::{QueryStageExec, UnresolvedShuffleExec};
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
-use arrow::array::{
-    ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
+
+use datafusion::arrow::{
+    array::{
+        ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
+    },
+    datatypes::{DataType, Field},
+    ipc::reader::FileReader,
+    ipc::writer::FileWriter,
+    record_batch::RecordBatch,
 };
-use arrow::datatypes::{DataType, Field};
-use arrow::ipc::reader::FileReader;
-use arrow::ipc::writer::FileWriter;
-use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 use datafusion::logical_plan::Operator;
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;

@@ -17,7 +17,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::Result as DFResult;
 use datafusion::{
     datasource::{datasource::Statistics, TableProvider},

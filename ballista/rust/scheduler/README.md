@@ -18,6 +18,7 @@
 -->
 
 # Ballista Scheduler
+
 This crate contains the Ballista Scheduler. It can be used both as a library or as a binary.
 
 ## Run
@@ -32,8 +33,9 @@ $ RUST_LOG=info cargo run --release
 By default, the scheduler will bind to `localhost` and listen on port `50051`.
 
 ## Connecting to Scheduler
-Scheduler supports REST model also using content negotiation. 
-For e.x if you want to get list of executors connected to the scheduler, 
+
+Scheduler supports REST model also using content negotiation.
+For e.x if you want to get list of executors connected to the scheduler,
 you can do (assuming you use default config)
 
 ```bash
@@ -43,7 +45,8 @@ curl --request GET \
 ```
 
 ## Scheduler UI
-A basic ui for the scheduler is in `ui/scheduler` of the ballista repo. 
+
+A basic ui for the scheduler is in `ui/scheduler` of the ballista repo.
 It can be started using the following [yarn](https://yarnpkg.com/) command
 
 ```bash

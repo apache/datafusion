@@ -20,7 +20,10 @@
 use clap::{crate_version, App, Arg};
 use datafusion::error::Result;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
-use datafusion_cli::{print_format::PrintFormat, PrintOptions};
+use datafusion_cli::{
+    print_format::{all_print_formats, PrintFormat},
+    PrintOptions,
+};
 use rustyline::Editor;
 use std::env;
 use std::fs::File;
@@ -55,22 +58,31 @@ pub async fn main() {
         )
         .arg(
             Arg::with_name("file")
-                .help("Execute commands from file, then exit")
+                .help("Execute commands from file(s), then exit")
                 .short("f")
                 .long("file")
+                .multiple(true)
                 .validator(is_valid_file)
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("format")
-                .help("Output format (possible values: table, csv, tsv, json)")
+                .help("Output format")
                 .long("format")
                 .default_value("table")
-                .validator(is_valid_format)
+                .possible_values(
+                    &all_print_formats()
+                        .iter()
+                        .map(|format| format.to_string())
+                        .collect::<Vec<_>>()
+                        .iter()
+                        .map(|i| i.as_str())
+                        .collect::<Vec<_>>(),
+                )
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("quite")
+            Arg::with_name("quiet")
                 .help("Reduce printing other than the results and work quietly")
                 .short("q")
                 .long("quiet")
@@ -101,22 +113,25 @@ pub async fn main() {
     let quiet = matches.is_present("quiet");
     let print_options = PrintOptions { format, quiet };
 
-    if let Some(file_path) = matches.value_of("file") {
-        let file = File::open(file_path)
-            .unwrap_or_else(|err| panic!("cannot open file '{}': {}", file_path, err));
-        let mut reader = BufReader::new(file);
-        exec_from_lines(&mut reader, execution_config, print_options).await;
+    if let Some(file_paths) = matches.values_of("file") {
+        let files = file_paths
+            .map(|file_path| File::open(file_path).unwrap())
+            .collect::<Vec<_>>();
+        let mut ctx = ExecutionContext::with_config(execution_config);
+        for file in files {
+            let mut reader = BufReader::new(file);
+            exec_from_lines(&mut ctx, &mut reader, print_options.clone()).await;
+        }
     } else {
         exec_from_repl(execution_config, print_options).await;
     }
 }
 
 async fn exec_from_lines(
+    ctx: &mut ExecutionContext,
     reader: &mut BufReader<File>,
-    execution_config: ExecutionConfig,
     print_options: PrintOptions,
 ) {
-    let mut ctx = ExecutionContext::with_config(execution_config);
     let mut query = "".to_owned();
 
     for line in reader.lines() {
@@ -128,7 +143,7 @@ async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match exec_and_print(&mut ctx, print_options.clone(), query).await {
+                    match exec_and_print(ctx, print_options.clone(), query).await {
                         Ok(_) => {}
                         Err(err) => println!("{:?}", err),
                     }
@@ -145,7 +160,7 @@ async fn exec_from_lines(
 
     // run the left over query if the last statement doesn't contain ‘;’
     if !query.is_empty() {
-        match exec_and_print(&mut ctx, print_options, query).await {
+        match exec_and_print(ctx, print_options, query).await {
             Ok(_) => {}
             Err(err) => println!("{:?}", err),
         }
@@ -187,14 +202,6 @@ async fn exec_from_repl(execution_config: ExecutionConfig, print_options: PrintO
     }
 
     rl.save_history(".history").ok();
-}
-
-fn is_valid_format(format: String) -> std::result::Result<(), String> {
-    if format.parse::<PrintFormat>().is_ok() {
-        Ok(())
-    } else {
-        Err(format!("Format '{}' not supported", format))
-    }
 }
 
 fn is_valid_file(dir: String) -> std::result::Result<(), String> {

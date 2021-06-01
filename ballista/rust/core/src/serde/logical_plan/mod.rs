@@ -19,19 +19,20 @@ pub mod from_proto;
 pub mod to_proto;
 
 #[cfg(test)]
-
 mod roundtrip_tests {
 
     use super::super::{super::error::Result, protobuf};
     use crate::error::BallistaError;
-    use arrow::datatypes::{DataType, Field, Schema};
     use core::panic;
-    use datafusion::physical_plan::functions::BuiltinScalarFunction::Sqrt;
     use datafusion::{
-        logical_plan::{col, Expr, LogicalPlan, LogicalPlanBuilder},
-        physical_plan::csv::CsvReadOptions,
+        arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit},
+        logical_plan::{
+            col, Expr, LogicalPlan, LogicalPlanBuilder, Partitioning, ToDFSchema,
+        },
+        physical_plan::{csv::CsvReadOptions, functions::BuiltinScalarFunction::Sqrt},
         prelude::*,
         scalar::ScalarValue,
+        sql::parser::FileType,
     };
     use protobuf::arrow_type;
     use std::convert::TryInto;
@@ -57,7 +58,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_repartition() -> Result<()> {
         use datafusion::logical_plan::Partitioning;
 
@@ -117,18 +117,12 @@ mod roundtrip_tests {
         Ok(())
     }
 
-    fn new_box_field(
-        name: &str,
-        dt: DataType,
-        nullable: bool,
-    ) -> Box<arrow::datatypes::Field> {
-        Box::new(arrow::datatypes::Field::new(name, dt, nullable))
+    fn new_box_field(name: &str, dt: DataType, nullable: bool) -> Box<Field> {
+        Box::new(Field::new(name, dt, nullable))
     }
 
     #[test]
     fn scalar_values_error_serialization() -> Result<()> {
-        use arrow::datatypes::DataType;
-        use datafusion::scalar::ScalarValue;
         let should_fail_on_seralize: Vec<ScalarValue> = vec![
             //Should fail due to inconsistent types
             ScalarValue::List(
@@ -192,8 +186,6 @@ mod roundtrip_tests {
 
     #[test]
     fn round_trip_scalar_values() -> Result<()> {
-        use arrow::datatypes::DataType;
-        use datafusion::scalar::ScalarValue;
         let should_pass: Vec<ScalarValue> = vec![
             ScalarValue::Boolean(None),
             ScalarValue::Float32(None),
@@ -300,8 +292,6 @@ mod roundtrip_tests {
 
     #[test]
     fn round_trip_scalar_types() -> Result<()> {
-        use arrow::datatypes::DataType;
-        use arrow::datatypes::{IntervalUnit, TimeUnit};
         let should_pass: Vec<DataType> = vec![
             DataType::Boolean,
             DataType::Int8,
@@ -457,8 +447,6 @@ mod roundtrip_tests {
 
     #[test]
     fn round_trip_datatype() -> Result<()> {
-        use arrow::datatypes::DataType;
-        use arrow::datatypes::{IntervalUnit, TimeUnit};
         let test_cases: Vec<DataType> = vec![
             DataType::Null,
             DataType::Boolean,
@@ -590,9 +578,6 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_null_scalar_values() -> Result<()> {
-        use arrow::datatypes::DataType;
-        use arrow::datatypes::Field;
-        use datafusion::scalar::ScalarValue;
         let test_types = vec![
             ScalarValue::Boolean(None),
             ScalarValue::Float32(None),
@@ -627,7 +612,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_create_external_table() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -637,11 +621,7 @@ mod roundtrip_tests {
             Field::new("salary", DataType::Int32, false),
         ]);
 
-        use datafusion::logical_plan::ToDFSchema;
-
         let df_schema_ref = schema.to_dfschema_ref()?;
-
-        use datafusion::sql::parser::FileType;
 
         let filetypes: [FileType; 3] =
             [FileType::NdJson, FileType::Parquet, FileType::CSV];
@@ -662,7 +642,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_explain() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -754,7 +733,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_empty_relation() -> Result<()> {
         let plan_false = LogicalPlanBuilder::empty(false)
             .build()
@@ -772,7 +750,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_logical_plan() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -797,7 +774,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_not() -> Result<()> {
         let test_expr = Expr::Not(Box::new(Expr::Literal((1.0).into())));
 
@@ -807,7 +783,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_is_null() -> Result<()> {
         let test_expr = Expr::IsNull(Box::new(col("id")));
 
@@ -817,7 +792,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_is_not_null() -> Result<()> {
         let test_expr = Expr::IsNotNull(Box::new(col("id")));
 
@@ -827,7 +801,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_between() -> Result<()> {
         let test_expr = Expr::Between {
             expr: Box::new(Expr::Literal((1.0).into())),
@@ -842,7 +815,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_case() -> Result<()> {
         let test_expr = Expr::Case {
             expr: Some(Box::new(Expr::Literal((1.0).into()))),
@@ -859,7 +831,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_cast() -> Result<()> {
         let test_expr = Expr::Cast {
             expr: Box::new(Expr::Literal((1.0).into())),
@@ -872,7 +843,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_sort_expr() -> Result<()> {
         let test_expr = Expr::Sort {
             expr: Box::new(Expr::Literal((1.0).into())),
@@ -886,7 +856,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_negative() -> Result<()> {
         let test_expr = Expr::Negative(Box::new(Expr::Literal((1.0).into())));
 
@@ -896,7 +865,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_inlist() -> Result<()> {
         let test_expr = Expr::InList {
             expr: Box::new(Expr::Literal((1.0).into())),
@@ -910,7 +878,6 @@ mod roundtrip_tests {
     }
 
     #[test]
-
     fn roundtrip_wildcard() -> Result<()> {
         let test_expr = Expr::Wildcard;
 

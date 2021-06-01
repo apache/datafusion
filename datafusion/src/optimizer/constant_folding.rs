@@ -29,6 +29,7 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
+use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 
 /// Optimizer that simplifies comparison expressions involving boolean literals.
 ///
@@ -217,6 +218,35 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
                     .query_execution_start_time
                     .timestamp_nanos(),
             ))),
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::ToTimestamp,
+                args,
+            } => {
+                if !args.is_empty() {
+                    match &args[0] {
+                        Expr::Literal(ScalarValue::Utf8(Some(val))) => {
+                            match string_to_timestamp_nanos(val) {
+                                Ok(timestamp) => Expr::Literal(
+                                    ScalarValue::TimestampNanosecond(Some(timestamp)),
+                                ),
+                                _ => Expr::ScalarFunction {
+                                    fun: BuiltinScalarFunction::ToTimestamp,
+                                    args,
+                                },
+                            }
+                        }
+                        _ => Expr::ScalarFunction {
+                            fun: BuiltinScalarFunction::ToTimestamp,
+                            args,
+                        },
+                    }
+                } else {
+                    Expr::ScalarFunction {
+                        fun: BuiltinScalarFunction::ToTimestamp,
+                        args,
+                    }
+                }
+            }
             expr => {
                 // no rewrite possible
                 expr
@@ -630,6 +660,68 @@ mod tests {
             .optimize(plan, &execution_props)
             .expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
+    }
+
+    #[test]
+    fn to_timestamp_expr() {
+        let table_scan = test_table_scan().unwrap();
+        let proj = vec![Expr::ScalarFunction {
+            args: vec![Expr::Literal(ScalarValue::Utf8(Some(
+                "2020-09-08T12:00:00+00:00".to_string(),
+            )))],
+            fun: BuiltinScalarFunction::ToTimestamp,
+        }];
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .project(proj)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Projection: TimestampNanosecond(1599566400000000000)\
+            \n  TableScan: test projection=None"
+            .to_string();
+        let actual = get_optimized_plan_formatted(&plan, &chrono::Utc::now());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn to_timestamp_expr_wrong_arg() {
+        let table_scan = test_table_scan().unwrap();
+        let proj = vec![Expr::ScalarFunction {
+            args: vec![Expr::Literal(ScalarValue::Utf8(Some(
+                "I'M NOT A TIMESTAMP".to_string(),
+            )))],
+            fun: BuiltinScalarFunction::ToTimestamp,
+        }];
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .project(proj)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Projection: totimestamp(Utf8(\"I\'M NOT A TIMESTAMP\"))\
+            \n  TableScan: test projection=None";
+        let actual = get_optimized_plan_formatted(&plan, &chrono::Utc::now());
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn to_timestamp_expr_no_arg() {
+        let table_scan = test_table_scan().unwrap();
+        let proj = vec![Expr::ScalarFunction {
+            args: vec![],
+            fun: BuiltinScalarFunction::ToTimestamp,
+        }];
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .project(proj)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Projection: totimestamp()\
+            \n  TableScan: test projection=None";
+        let actual = get_optimized_plan_formatted(&plan, &chrono::Utc::now());
+        assert_eq!(expected, actual);
     }
 
     #[test]

@@ -23,5 +23,5 @@ If there are user-facing changes then we may require documentation to be updated
 -->
 
 <!--
-If there are any breaking changes to public APIs, please add the `breaking change` label.
+If there are any breaking changes to public APIs, please add the `api change` label.
 -->

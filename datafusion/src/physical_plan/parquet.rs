@@ -17,31 +17,38 @@
 
 //! Execution plan for reading Parquet files
 
-use std::any::Any;
 use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::{any::Any, convert::TryInto};
 
 use crate::{
     error::{DataFusionError, Result},
-    logical_plan::Expr,
-    physical_optimizer::pruning::PruningPredicateBuilder,
+    logical_plan::{Column, Expr},
+    physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
         common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
         SendableRecordBatchStream,
     },
+    scalar::ScalarValue,
 };
 
 use arrow::{
+    array::ArrayRef,
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::file::{
+    metadata::RowGroupMetaData,
+    reader::{FileReader, SerializedFileReader},
+    statistics::Statistics as ParquetStatistics,
+};
 
 use fmt::Debug;
 use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
+
 use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
     task,
@@ -66,7 +73,7 @@ pub struct ParquetExec {
     /// Statistics for the data set (sum of statistics for all partitions)
     statistics: Statistics,
     /// Optional predicate builder
-    predicate_builder: Option<PruningPredicateBuilder>,
+    predicate_builder: Option<PruningPredicate>,
     /// Optional limit of the number of rows
     limit: Option<usize>,
 }
@@ -217,10 +224,9 @@ impl ParquetExec {
                 schemas.len()
             )));
         }
-        // FIXME: what if schemas has size 0?
-        let schema = schemas[0].clone();
+        let schema = Arc::new(schemas.pop().unwrap());
         let predicate_builder = predicate.and_then(|predicate_expr| {
-            PruningPredicateBuilder::try_new(&predicate_expr, schema.clone()).ok()
+            PruningPredicate::try_new(&predicate_expr, schema.clone()).ok()
         });
 
         Ok(Self::new(
@@ -236,9 +242,9 @@ impl ParquetExec {
     /// Create a new Parquet reader execution plan with provided partitions and schema
     pub fn new(
         partitions: Vec<ParquetPartition>,
-        schema: Schema,
+        schema: SchemaRef,
         projection: Option<Vec<usize>>,
-        predicate_builder: Option<PruningPredicateBuilder>,
+        predicate_builder: Option<PruningPredicate>,
         batch_size: usize,
         limit: Option<usize>,
     ) -> Self {
@@ -455,10 +461,118 @@ fn send_result(
     Ok(())
 }
 
+/// Wraps parquet statistics in a way
+/// that implements [`PruningStatistics`]
+struct RowGroupPruningStatistics<'a> {
+    row_group_metadata: &'a [RowGroupMetaData],
+    parquet_schema: &'a Schema,
+}
+
+/// Extract the min/max statistics from a `ParquetStatistics` object
+macro_rules! get_statistic {
+    ($column_statistics:expr, $func:ident, $bytes_func:ident) => {{
+        if !$column_statistics.has_min_max_set() {
+            return None;
+        }
+        match $column_statistics {
+            ParquetStatistics::Boolean(s) => Some(ScalarValue::Boolean(Some(*s.$func()))),
+            ParquetStatistics::Int32(s) => Some(ScalarValue::Int32(Some(*s.$func()))),
+            ParquetStatistics::Int64(s) => Some(ScalarValue::Int64(Some(*s.$func()))),
+            // 96 bit ints not supported
+            ParquetStatistics::Int96(_) => None,
+            ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
+            ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
+            ParquetStatistics::ByteArray(s) => {
+                let s = std::str::from_utf8(s.$bytes_func())
+                    .map(|s| s.to_string())
+                    .ok();
+                Some(ScalarValue::Utf8(s))
+            }
+            // type not supported yet
+            ParquetStatistics::FixedLenByteArray(_) => None,
+        }
+    }};
+}
+
+// Extract the min or max value calling `func` or `bytes_func` on the ParquetStatistics as appropriate
+macro_rules! get_min_max_values {
+    ($self:expr, $column:expr, $func:ident, $bytes_func:ident) => {{
+        // FIXME: change to use physical column?
+        let (column_index, field) = if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.name) {
+            (v, f)
+        } else {
+            // Named column was not present
+            return None
+        };
+
+        let data_type = field.data_type();
+        let null_scalar: ScalarValue = if let Ok(v) = data_type.try_into() {
+            v
+        } else {
+            // DataFusion doesn't have support for ScalarValues of the column type
+            return None
+        };
+
+        let scalar_values : Vec<ScalarValue> = $self.row_group_metadata
+            .iter()
+            .flat_map(|meta| {
+                meta.column(column_index).statistics()
+            })
+            .map(|stats| {
+                get_statistic!(stats, $func, $bytes_func)
+            })
+            .map(|maybe_scalar| {
+                // column either did't have statistics at all or didn't have min/max values
+                maybe_scalar.unwrap_or_else(|| null_scalar.clone())
+            })
+            .collect();
+
+        // ignore errors converting to arrays (e.g. different types)
+        ScalarValue::iter_to_array(scalar_values).ok()
+    }}
+}
+
+impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        get_min_max_values!(self, column, min, min_bytes)
+    }
+
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        get_min_max_values!(self, column, max, max_bytes)
+    }
+
+    fn num_containers(&self) -> usize {
+        self.row_group_metadata.len()
+    }
+}
+
+fn build_row_group_predicate(
+    predicate_builder: &PruningPredicate,
+    row_group_metadata: &[RowGroupMetaData],
+) -> Box<dyn Fn(&RowGroupMetaData, usize) -> bool> {
+    let parquet_schema = predicate_builder.schema().as_ref();
+
+    let pruning_stats = RowGroupPruningStatistics {
+        row_group_metadata,
+        parquet_schema,
+    };
+
+    let predicate_values = predicate_builder.prune(&pruning_stats);
+
+    let predicate_values = match predicate_values {
+        Ok(values) => values,
+        // stats filter array could not be built
+        // return a closure which will not filter out any row groups
+        _ => return Box::new(|_r, _i| true),
+    };
+
+    Box::new(move |_, i| predicate_values[i])
+}
+
 fn read_files(
     filenames: &[String],
     projection: &[usize],
-    predicate_builder: &Option<PruningPredicateBuilder>,
+    predicate_builder: &Option<PruningPredicate>,
     batch_size: usize,
     response_tx: Sender<ArrowResult<RecordBatch>>,
     limit: Option<usize>,
@@ -468,8 +582,10 @@ fn read_files(
         let file = File::open(&filename)?;
         let mut file_reader = SerializedFileReader::new(file)?;
         if let Some(predicate_builder) = predicate_builder {
-            let row_group_predicate = predicate_builder
-                .build_pruning_predicate(file_reader.metadata().row_groups());
+            let row_group_predicate = build_row_group_predicate(
+                predicate_builder,
+                file_reader.metadata().row_groups(),
+            );
             file_reader.filter_row_groups(&row_group_predicate);
         }
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
@@ -630,7 +746,7 @@ mod tests {
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
+        let predicate_builder = PruningPredicate::try_new(&expr, Arc::new(schema))?;
 
         let schema_descr = get_test_schema_descr(vec![("c1", PhysicalType::INT32)]);
         let rgm1 = get_row_group_meta_data(
@@ -643,7 +759,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_pruning_predicate(&row_group_metadata);
+            build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -660,7 +776,7 @@ mod tests {
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
+        let predicate_builder = PruningPredicate::try_new(&expr, Arc::new(schema))?;
 
         let schema_descr = get_test_schema_descr(vec![("c1", PhysicalType::INT32)]);
         let rgm1 = get_row_group_meta_data(
@@ -673,7 +789,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_pruning_predicate(&row_group_metadata);
+            build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -692,11 +808,11 @@ mod tests {
         // test row group predicate with partially supported expression
         // int > 1 and int % 2 => c1_max > 1 and true
         let expr = col("c1").gt(lit(15)).and(col("c2").modulus(lit(2)));
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
-        ]);
-        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema.clone())?;
+        ]));
+        let predicate_builder = PruningPredicate::try_new(&expr, schema.clone())?;
 
         let schema_descr = get_test_schema_descr(vec![
             ("c1", PhysicalType::INT32),
@@ -718,7 +834,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_pruning_predicate(&row_group_metadata);
+            build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -731,9 +847,9 @@ mod tests {
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
         let expr = col("c1").gt(lit(15)).or(col("c2").modulus(lit(2)));
-        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
+        let predicate_builder = PruningPredicate::try_new(&expr, schema)?;
         let row_group_predicate =
-            predicate_builder.build_pruning_predicate(&row_group_metadata);
+            build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -751,11 +867,11 @@ mod tests {
         // where a null array is generated for some statistics columns
         // int > 1 and bool = true => c1_max > 1 and null
         let expr = col("c1").gt(lit(15)).and(col("c2").eq(lit(true)));
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
-        ]);
-        let predicate_builder = PruningPredicateBuilder::try_new(&expr, schema)?;
+        ]));
+        let predicate_builder = PruningPredicate::try_new(&expr, schema)?;
 
         let schema_descr = get_test_schema_descr(vec![
             ("c1", PhysicalType::INT32),
@@ -777,7 +893,7 @@ mod tests {
         );
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate =
-            predicate_builder.build_pruning_predicate(&row_group_metadata);
+            build_row_group_predicate(&predicate_builder, &row_group_metadata);
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()

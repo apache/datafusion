@@ -33,14 +33,16 @@ committer.
 
 ## How to merge a Pull request
 
-Please don't merge PRs using the Github Web interface.  Instead, set up
-your git clone such as to have a remote named ``apache`` pointing to the
+Please don't merge PRs using the Github Web interface. Instead, set up
+your git clone such as to have a remote named `apache` pointing to the
 official Arrow repository:
+
 ```
 git remote add apache git@github.com:apache/arrow.git
 ```
 
 and then run the following command:
+
 ```
 ./dev/merge_arrow_pr.sh
 ```
@@ -64,10 +66,13 @@ If these aren't supplied, the script will ask you the values of them.
 Note that the directory name of your Arrow git clone must be called `arrow`.
 
 example output:
+
 ```
 Which pull request would you like to merge? (e.g. 34):
 ```
+
 Type the pull request number (from https://github.com/apache/arrow/pulls) and hit enter.
+
 ```
 === Pull Request #X ===
 title	Blah Blah Blah
@@ -77,7 +82,9 @@ url	https://api.github.com/repos/apache/arrow/pulls/X
 
 Proceed with merging pull request #3? (y/n):
 ```
+
 If this looks good, type y and hit enter.
+
 ```
 From git-wip-us.apache.org:/repos/asf/arrow.git
  * [new branch]      master     -> PR_TOOL_MERGE_PR_3_MASTER
@@ -85,8 +92,10 @@ Switched to branch 'PR_TOOL_MERGE_PR_3_MASTER'
 
 Merge complete (local ref PR_TOOL_MERGE_PR_3_MASTER). Push to apache? (y/n):
 ```
+
 A local branch with the merge has been created.
 type y and hit enter to push it to apache master
+
 ```
 Counting objects: 67, done.
 Delta compression using up to 4 threads.
@@ -115,6 +124,7 @@ Merge hash: 485658a5
 
 Would you like to pick 485658a5 into another branch? (y/n):
 ```
+
 For now just say n as we have 1 branch
 
 ## Verifying Release Candidates

@@ -145,10 +145,12 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     }
 }
 
-impl TryInto<arrow::datatypes::DataType> for &protobuf::arrow_type::ArrowTypeEnum {
+impl TryInto<datafusion::arrow::datatypes::DataType>
+    for &protobuf::arrow_type::ArrowTypeEnum
+{
     type Error = BallistaError;
-    fn try_into(self) -> Result<arrow::datatypes::DataType, Self::Error> {
-        use arrow::datatypes::DataType;
+    fn try_into(self) -> Result<datafusion::arrow::datatypes::DataType, Self::Error> {
+        use datafusion::arrow::datatypes::DataType;
         use protobuf::arrow_type;
         Ok(match self {
             arrow_type::ArrowTypeEnum::None(_) => DataType::Null,
@@ -261,9 +263,9 @@ impl TryInto<arrow::datatypes::DataType> for &protobuf::arrow_type::ArrowTypeEnu
 }
 
 #[allow(clippy::from_over_into)]
-impl Into<arrow::datatypes::DataType> for protobuf::PrimitiveScalarType {
-    fn into(self) -> arrow::datatypes::DataType {
-        use arrow::datatypes::DataType;
+impl Into<datafusion::arrow::datatypes::DataType> for protobuf::PrimitiveScalarType {
+    fn into(self) -> datafusion::arrow::datatypes::DataType {
+        use datafusion::arrow::datatypes::{DataType, TimeUnit};
         match self {
             protobuf::PrimitiveScalarType::Bool => DataType::Boolean,
             protobuf::PrimitiveScalarType::Uint8 => DataType::UInt8,
@@ -280,10 +282,10 @@ impl Into<arrow::datatypes::DataType> for protobuf::PrimitiveScalarType {
             protobuf::PrimitiveScalarType::LargeUtf8 => DataType::LargeUtf8,
             protobuf::PrimitiveScalarType::Date32 => DataType::Date32,
             protobuf::PrimitiveScalarType::TimeMicrosecond => {
-                DataType::Time64(arrow::datatypes::TimeUnit::Microsecond)
+                DataType::Time64(TimeUnit::Microsecond)
             }
             protobuf::PrimitiveScalarType::TimeNanosecond => {
-                DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond)
+                DataType::Time64(TimeUnit::Nanosecond)
             }
             protobuf::PrimitiveScalarType::Null => DataType::Null,
         }

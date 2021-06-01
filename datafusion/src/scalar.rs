@@ -17,28 +17,17 @@
 
 //! This module provides ScalarValue, an enum that can be used for storage of single elements
 
-use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
-
-use arrow::datatypes::{ArrowDictionaryKeyType, DataType, Field, IntervalUnit, TimeUnit};
+use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
     datatypes::{
-        ArrowNativeType, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
-        TimestampNanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
+        Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit,
+        TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+        TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
-use arrow::{
-    array::{
-        ArrayRef, Int16Builder, Int32Builder, Int64Builder, Int8Builder, ListBuilder,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        UInt16Builder, UInt32Builder, UInt64Builder, UInt8Builder,
-    },
-    datatypes::{
-        TimestampMicrosecondType, TimestampMillisecondType, TimestampSecondType,
-    },
-};
-
-use crate::error::{DataFusionError, Result};
+use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow’s `Array`.
@@ -192,6 +181,27 @@ macro_rules! build_values_list {
     }};
 }
 
+macro_rules! build_array_from_option {
+    ($DATA_TYPE:ident, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
+        match $EXPR {
+            Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
+            None => new_null_array(&DataType::$DATA_TYPE, $SIZE),
+        }
+    }};
+    ($DATA_TYPE:ident, $ENUM:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
+        match $EXPR {
+            Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
+            None => new_null_array(&DataType::$DATA_TYPE($ENUM), $SIZE),
+        }
+    }};
+    ($DATA_TYPE:ident, $ENUM:expr, $ENUM2:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
+        match $EXPR {
+            Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
+            None => new_null_array(&DataType::$DATA_TYPE($ENUM, $ENUM2), $SIZE),
+        }
+    }};
+}
+
 impl ScalarValue {
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {
@@ -283,86 +293,304 @@ impl ScalarValue {
         self.to_array_of_size(1)
     }
 
+    /// Converts an iterator of references [`ScalarValue`] into an [`ArrayRef`]
+    /// corresponding to those values. For example,
+    ///
+    /// Returns an error if the iterator is empty or if the
+    /// [`ScalarValue`]s are not all the same type
+    ///
+    /// Example
+    /// ```
+    /// use datafusion::scalar::ScalarValue;
+    /// use arrow::array::{ArrayRef, BooleanArray};
+    ///
+    /// let scalars = vec![
+    ///   ScalarValue::Boolean(Some(true)),
+    ///   ScalarValue::Boolean(None),
+    ///   ScalarValue::Boolean(Some(false)),
+    /// ];
+    ///
+    /// // Build an Array from the list of ScalarValues
+    /// let array = ScalarValue::iter_to_array(scalars.into_iter())
+    ///   .unwrap();
+    ///
+    /// let expected: ArrayRef = std::sync::Arc::new(
+    ///   BooleanArray::from(vec![
+    ///     Some(true),
+    ///     None,
+    ///     Some(false)
+    ///   ]
+    /// ));
+    ///
+    /// assert_eq!(&array, &expected);
+    /// ```
+    pub fn iter_to_array(
+        scalars: impl IntoIterator<Item = ScalarValue>,
+    ) -> Result<ArrayRef> {
+        let mut scalars = scalars.into_iter().peekable();
+
+        // figure out the type based on the first element
+        let data_type = match scalars.peek() {
+            None => {
+                return Err(DataFusionError::Internal(
+                    "Empty iterator passed to ScalarValue::iter_to_array".to_string(),
+                ))
+            }
+            Some(sv) => sv.get_datatype(),
+        };
+
+        /// Creates an array of $ARRAY_TY by unpacking values of
+        /// SCALAR_TY for primitive types
+        macro_rules! build_array_primitive {
+            ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
+                {
+                    let array = scalars
+                        .map(|sv| {
+                            if let ScalarValue::$SCALAR_TY(v) = sv {
+                                Ok(v)
+                            } else {
+                                Err(DataFusionError::Internal(format!(
+                                    "Inconsistent types in ScalarValue::iter_to_array. \
+                                     Expected {:?}, got {:?}",
+                                    data_type, sv
+                                )))
+                            }
+                        })
+                        .collect::<Result<$ARRAY_TY>>()?;
+
+                    Arc::new(array)
+                }
+            }};
+        }
+
+        /// Creates an array of $ARRAY_TY by unpacking values of
+        /// SCALAR_TY for "string-like" types.
+        macro_rules! build_array_string {
+            ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
+                {
+                    let array = scalars
+                        .map(|sv| {
+                            if let ScalarValue::$SCALAR_TY(v) = sv {
+                                Ok(v)
+                            } else {
+                                Err(DataFusionError::Internal(format!(
+                                    "Inconsistent types in ScalarValue::iter_to_array. \
+                                     Expected {:?}, got {:?}",
+                                    data_type, sv
+                                )))
+                            }
+                        })
+                        .collect::<Result<$ARRAY_TY>>()?;
+                    Arc::new(array)
+                }
+            }};
+        }
+
+        macro_rules! build_array_list_primitive {
+            ($ARRAY_TY:ident, $SCALAR_TY:ident, $NATIVE_TYPE:ident) => {{
+                Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(
+                    scalars.into_iter().map(|x| match x {
+                        ScalarValue::List(xs, _) => xs.map(|x| {
+                            x.iter()
+                                .map(|x| match x {
+                                    ScalarValue::$SCALAR_TY(i) => *i,
+                                    sv => panic!("Inconsistent types in ScalarValue::iter_to_array. \
+                                    Expected {:?}, got {:?}", data_type, sv),
+                                })
+                                .collect::<Vec<Option<$NATIVE_TYPE>>>()
+                        }),
+                        sv => panic!("Inconsistent types in ScalarValue::iter_to_array. \
+                        Expected {:?}, got {:?}", data_type, sv),
+        }),
+                ))
+            }};
+        }
+
+        macro_rules! build_array_list_string {
+            ($BUILDER:ident, $SCALAR_TY:ident) => {{
+                let mut builder = ListBuilder::new($BUILDER::new(0));
+
+                for scalar in scalars.into_iter() {
+                    match scalar {
+                        ScalarValue::List(Some(xs), _) => {
+                            for s in xs {
+                                match s {
+                                    ScalarValue::$SCALAR_TY(Some(val)) => {
+                                        builder.values().append_value(val)?;
+                                    }
+                                    ScalarValue::$SCALAR_TY(None) => {
+                                        builder.values().append_null()?;
+                                    }
+                                    sv => return Err(DataFusionError::Internal(format!(
+                                        "Inconsistent types in ScalarValue::iter_to_array. \
+                                         Expected Utf8, got {:?}",
+                                        sv
+                                    ))),
+                                }
+                            }
+                            builder.append(true)?;
+                        }
+                        ScalarValue::List(None, _) => {
+                            builder.append(false)?;
+                        }
+                        sv => {
+                            return Err(DataFusionError::Internal(format!(
+                                "Inconsistent types in ScalarValue::iter_to_array. \
+                             Expected List, got {:?}",
+                                sv
+                            )))
+                        }
+                    }
+                }
+
+                Arc::new(builder.finish())
+
+            }}
+        }
+
+        let array: ArrayRef = match &data_type {
+            DataType::Boolean => build_array_primitive!(BooleanArray, Boolean),
+            DataType::Float32 => build_array_primitive!(Float32Array, Float32),
+            DataType::Float64 => build_array_primitive!(Float64Array, Float64),
+            DataType::Int8 => build_array_primitive!(Int8Array, Int8),
+            DataType::Int16 => build_array_primitive!(Int16Array, Int16),
+            DataType::Int32 => build_array_primitive!(Int32Array, Int32),
+            DataType::Int64 => build_array_primitive!(Int64Array, Int64),
+            DataType::UInt8 => build_array_primitive!(UInt8Array, UInt8),
+            DataType::UInt16 => build_array_primitive!(UInt16Array, UInt16),
+            DataType::UInt32 => build_array_primitive!(UInt32Array, UInt32),
+            DataType::UInt64 => build_array_primitive!(UInt64Array, UInt64),
+            DataType::Utf8 => build_array_string!(StringArray, Utf8),
+            DataType::LargeUtf8 => build_array_string!(LargeStringArray, LargeUtf8),
+            DataType::Binary => build_array_string!(BinaryArray, Binary),
+            DataType::LargeBinary => build_array_string!(LargeBinaryArray, LargeBinary),
+            DataType::Date32 => build_array_primitive!(Date32Array, Date32),
+            DataType::Date64 => build_array_primitive!(Date64Array, Date64),
+            DataType::Timestamp(TimeUnit::Second, None) => {
+                build_array_primitive!(TimestampSecondArray, TimestampSecond)
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+                build_array_primitive!(TimestampMillisecondArray, TimestampMillisecond)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+                build_array_primitive!(TimestampMicrosecondArray, TimestampMicrosecond)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+                build_array_primitive!(TimestampNanosecondArray, TimestampNanosecond)
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                build_array_primitive!(IntervalDayTimeArray, IntervalDayTime)
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                build_array_primitive!(IntervalYearMonthArray, IntervalYearMonth)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Int8 => {
+                build_array_list_primitive!(Int8Type, Int8, i8)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Int16 => {
+                build_array_list_primitive!(Int16Type, Int16, i16)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Int32 => {
+                build_array_list_primitive!(Int32Type, Int32, i32)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Int64 => {
+                build_array_list_primitive!(Int64Type, Int64, i64)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::UInt8 => {
+                build_array_list_primitive!(UInt8Type, UInt8, u8)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::UInt16 => {
+                build_array_list_primitive!(UInt16Type, UInt16, u16)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::UInt32 => {
+                build_array_list_primitive!(UInt32Type, UInt32, u32)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::UInt64 => {
+                build_array_list_primitive!(UInt64Type, UInt64, u64)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Float32 => {
+                build_array_list_primitive!(Float32Type, Float32, f32)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Float64 => {
+                build_array_list_primitive!(Float64Type, Float64, f64)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::Utf8 => {
+                build_array_list_string!(StringBuilder, Utf8)
+            }
+            DataType::List(fields) if fields.data_type() == &DataType::LargeUtf8 => {
+                build_array_list_string!(LargeStringBuilder, LargeUtf8)
+            }
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported creation of {:?} array from ScalarValue {:?}",
+                    data_type,
+                    scalars.peek()
+                )))
+            }
+        };
+
+        Ok(array)
+    }
+
     /// Converts a scalar value into an array of `size` rows.
     pub fn to_array_of_size(&self, size: usize) -> ArrayRef {
         match self {
             ScalarValue::Boolean(e) => {
                 Arc::new(BooleanArray::from(vec![*e; size])) as ArrayRef
             }
-            ScalarValue::Float64(e) => match e {
-                Some(value) => Arc::new(Float64Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Float64, size),
-            },
-            ScalarValue::Float32(e) => match e {
-                Some(value) => Arc::new(Float32Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Float32, size),
-            },
-            ScalarValue::Int8(e) => match e {
-                Some(value) => Arc::new(Int8Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Int8, size),
-            },
-            ScalarValue::Int16(e) => match e {
-                Some(value) => Arc::new(Int16Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Int16, size),
-            },
-            ScalarValue::Int32(e) => match e {
-                Some(value) => Arc::new(Int32Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Int32, size),
-            },
-            ScalarValue::Int64(e) => match e {
-                Some(value) => Arc::new(Int64Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Int64, size),
-            },
-            ScalarValue::UInt8(e) => match e {
-                Some(value) => Arc::new(UInt8Array::from_value(*value, size)),
-                None => new_null_array(&DataType::UInt8, size),
-            },
-            ScalarValue::UInt16(e) => match e {
-                Some(value) => Arc::new(UInt16Array::from_value(*value, size)),
-                None => new_null_array(&DataType::UInt16, size),
-            },
-            ScalarValue::UInt32(e) => match e {
-                Some(value) => Arc::new(UInt32Array::from_value(*value, size)),
-                None => new_null_array(&DataType::UInt32, size),
-            },
-            ScalarValue::UInt64(e) => match e {
-                Some(value) => Arc::new(UInt64Array::from_value(*value, size)),
-                None => new_null_array(&DataType::UInt64, size),
-            },
-            ScalarValue::TimestampSecond(e) => match e {
-                Some(value) => Arc::new(TimestampSecondArray::from_iter_values(
-                    repeat(*value).take(size),
-                )),
-                None => {
-                    new_null_array(&DataType::Timestamp(TimeUnit::Second, None), size)
-                }
-            },
-            ScalarValue::TimestampMillisecond(e) => match e {
-                Some(value) => Arc::new(TimestampMillisecondArray::from_iter_values(
-                    repeat(*value).take(size),
-                )),
-                None => new_null_array(
-                    &DataType::Timestamp(TimeUnit::Millisecond, None),
-                    size,
-                ),
-            },
-            ScalarValue::TimestampMicrosecond(e) => match e {
-                Some(value) => {
-                    Arc::new(TimestampMicrosecondArray::from_value(*value, size))
-                }
-                None => new_null_array(
-                    &DataType::Timestamp(TimeUnit::Microsecond, None),
-                    size,
-                ),
-            },
-            ScalarValue::TimestampNanosecond(e) => match e {
-                Some(value) => {
-                    Arc::new(TimestampNanosecondArray::from_value(*value, size))
-                }
-                None => {
-                    new_null_array(&DataType::Timestamp(TimeUnit::Nanosecond, None), size)
-                }
-            },
+            ScalarValue::Float64(e) => {
+                build_array_from_option!(Float64, Float64Array, e, size)
+            }
+            ScalarValue::Float32(e) => {
+                build_array_from_option!(Float32, Float32Array, e, size)
+            }
+            ScalarValue::Int8(e) => build_array_from_option!(Int8, Int8Array, e, size),
+            ScalarValue::Int16(e) => build_array_from_option!(Int16, Int16Array, e, size),
+            ScalarValue::Int32(e) => build_array_from_option!(Int32, Int32Array, e, size),
+            ScalarValue::Int64(e) => build_array_from_option!(Int64, Int64Array, e, size),
+            ScalarValue::UInt8(e) => build_array_from_option!(UInt8, UInt8Array, e, size),
+            ScalarValue::UInt16(e) => {
+                build_array_from_option!(UInt16, UInt16Array, e, size)
+            }
+            ScalarValue::UInt32(e) => {
+                build_array_from_option!(UInt32, UInt32Array, e, size)
+            }
+            ScalarValue::UInt64(e) => {
+                build_array_from_option!(UInt64, UInt64Array, e, size)
+            }
+            ScalarValue::TimestampSecond(e) => build_array_from_option!(
+                Timestamp,
+                TimeUnit::Second,
+                None,
+                TimestampSecondArray,
+                e,
+                size
+            ),
+            ScalarValue::TimestampMillisecond(e) => build_array_from_option!(
+                Timestamp,
+                TimeUnit::Millisecond,
+                None,
+                TimestampMillisecondArray,
+                e,
+                size
+            ),
+
+            ScalarValue::TimestampMicrosecond(e) => build_array_from_option!(
+                Timestamp,
+                TimeUnit::Microsecond,
+                None,
+                TimestampMicrosecondArray,
+                e,
+                size
+            ),
+            ScalarValue::TimestampNanosecond(e) => build_array_from_option!(
+                Timestamp,
+                TimeUnit::Nanosecond,
+                None,
+                TimestampNanosecondArray,
+                e,
+                size
+            ),
             ScalarValue::Utf8(e) => match e {
                 Some(value) => {
                     Arc::new(StringArray::from_iter_values(repeat(value).take(size)))
@@ -418,24 +646,27 @@ impl ScalarValue {
                 }
                 dt => panic!("Unexpected DataType for list {:?}", dt),
             }),
-            ScalarValue::Date32(e) => match e {
-                Some(value) => Arc::new(Date32Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Date32, size),
-            },
-            ScalarValue::Date64(e) => match e {
-                Some(value) => Arc::new(Date64Array::from_value(*value, size)),
-                None => new_null_array(&DataType::Date64, size),
-            },
-            ScalarValue::IntervalDayTime(e) => match e {
-                Some(value) => Arc::new(IntervalDayTimeArray::from_value(*value, size)),
-                None => new_null_array(&DataType::Interval(IntervalUnit::DayTime), size),
-            },
-            ScalarValue::IntervalYearMonth(e) => match e {
-                Some(value) => Arc::new(IntervalYearMonthArray::from_value(*value, size)),
-                None => {
-                    new_null_array(&DataType::Interval(IntervalUnit::YearMonth), size)
-                }
-            },
+            ScalarValue::Date32(e) => {
+                build_array_from_option!(Date32, Date32Array, e, size)
+            }
+            ScalarValue::Date64(e) => {
+                build_array_from_option!(Date64, Date64Array, e, size)
+            }
+            ScalarValue::IntervalDayTime(e) => build_array_from_option!(
+                Interval,
+                IntervalUnit::DayTime,
+                IntervalDayTimeArray,
+                e,
+                size
+            ),
+
+            ScalarValue::IntervalYearMonth(e) => build_array_from_option!(
+                Interval,
+                IntervalUnit::YearMonth,
+                IntervalYearMonthArray,
+                e,
+                size
+            ),
         }
     }
 
@@ -614,6 +845,12 @@ impl From<u32> for ScalarValue {
 impl From<u64> for ScalarValue {
     fn from(value: u64) -> Self {
         ScalarValue::UInt64(Some(value))
+    }
+}
+
+impl From<&str> for ScalarValue {
+    fn from(value: &str) -> Self {
+        ScalarValue::Utf8(Some(value.to_string()))
     }
 }
 
@@ -881,6 +1118,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scalar_value_to_array_u64() {
+        let value = ScalarValue::UInt64(Some(13u64));
+        let array = value.to_array();
+        let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+        assert_eq!(array.len(), 1);
+        assert_eq!(false, array.is_null(0));
+        assert_eq!(array.value(0), 13);
+
+        let value = ScalarValue::UInt64(None);
+        let array = value.to_array();
+        let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+        assert_eq!(array.len(), 1);
+        assert!(array.is_null(0));
+    }
+
+    #[test]
+    fn scalar_value_to_array_u32() {
+        let value = ScalarValue::UInt32(Some(13u32));
+        let array = value.to_array();
+        let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+        assert_eq!(array.len(), 1);
+        assert_eq!(false, array.is_null(0));
+        assert_eq!(array.value(0), 13);
+
+        let value = ScalarValue::UInt32(None);
+        let array = value.to_array();
+        let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+        assert_eq!(array.len(), 1);
+        assert!(array.is_null(0));
+    }
+
+    #[test]
     fn scalar_list_null_to_array() {
         let list_array_ref = ScalarValue::List(None, DataType::UInt64).to_array();
         let list_array = list_array_ref.as_any().downcast_ref::<ListArray>().unwrap();
@@ -915,5 +1184,140 @@ mod tests {
         assert_eq!(prim_array.value(0), 100);
         assert!(prim_array.is_null(1));
         assert_eq!(prim_array.value(2), 101);
+    }
+
+    /// Creates array directly and via ScalarValue and ensures they are the same
+    macro_rules! check_scalar_iter {
+        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr) => {{
+            let scalars: Vec<_> =
+                $INPUT.iter().map(|v| ScalarValue::$SCALAR_T(*v)).collect();
+
+            let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
+
+            let expected: ArrayRef = Arc::new($ARRAYTYPE::from($INPUT));
+
+            assert_eq!(&array, &expected);
+        }};
+    }
+
+    /// Creates array directly and via ScalarValue and ensures they
+    /// are the same, for string  arrays
+    macro_rules! check_scalar_iter_string {
+        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr) => {{
+            let scalars: Vec<_> = $INPUT
+                .iter()
+                .map(|v| ScalarValue::$SCALAR_T(v.map(|v| v.to_string())))
+                .collect();
+
+            let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
+
+            let expected: ArrayRef = Arc::new($ARRAYTYPE::from($INPUT));
+
+            assert_eq!(&array, &expected);
+        }};
+    }
+
+    /// Creates array directly and via ScalarValue and ensures they
+    /// are the same, for binary arrays
+    macro_rules! check_scalar_iter_binary {
+        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr) => {{
+            let scalars: Vec<_> = $INPUT
+                .iter()
+                .map(|v| ScalarValue::$SCALAR_T(v.map(|v| v.to_vec())))
+                .collect();
+
+            let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
+
+            let expected: $ARRAYTYPE =
+                $INPUT.iter().map(|v| v.map(|v| v.to_vec())).collect();
+
+            let expected: ArrayRef = Arc::new(expected);
+
+            assert_eq!(&array, &expected);
+        }};
+    }
+
+    #[test]
+    fn scalar_iter_to_array_boolean() {
+        check_scalar_iter!(Boolean, BooleanArray, vec![Some(true), None, Some(false)]);
+        check_scalar_iter!(Float32, Float32Array, vec![Some(1.9), None, Some(-2.1)]);
+        check_scalar_iter!(Float64, Float64Array, vec![Some(1.9), None, Some(-2.1)]);
+
+        check_scalar_iter!(Int8, Int8Array, vec![Some(1), None, Some(3)]);
+        check_scalar_iter!(Int16, Int16Array, vec![Some(1), None, Some(3)]);
+        check_scalar_iter!(Int32, Int32Array, vec![Some(1), None, Some(3)]);
+        check_scalar_iter!(Int64, Int64Array, vec![Some(1), None, Some(3)]);
+
+        check_scalar_iter!(UInt8, UInt8Array, vec![Some(1), None, Some(3)]);
+        check_scalar_iter!(UInt16, UInt16Array, vec![Some(1), None, Some(3)]);
+        check_scalar_iter!(UInt32, UInt32Array, vec![Some(1), None, Some(3)]);
+        check_scalar_iter!(UInt64, UInt64Array, vec![Some(1), None, Some(3)]);
+
+        check_scalar_iter!(
+            TimestampSecond,
+            TimestampSecondArray,
+            vec![Some(1), None, Some(3)]
+        );
+        check_scalar_iter!(
+            TimestampMillisecond,
+            TimestampMillisecondArray,
+            vec![Some(1), None, Some(3)]
+        );
+        check_scalar_iter!(
+            TimestampMicrosecond,
+            TimestampMicrosecondArray,
+            vec![Some(1), None, Some(3)]
+        );
+        check_scalar_iter!(
+            TimestampNanosecond,
+            TimestampNanosecondArray,
+            vec![Some(1), None, Some(3)]
+        );
+
+        check_scalar_iter_string!(
+            Utf8,
+            StringArray,
+            vec![Some("foo"), None, Some("bar")]
+        );
+        check_scalar_iter_string!(
+            LargeUtf8,
+            LargeStringArray,
+            vec![Some("foo"), None, Some("bar")]
+        );
+        check_scalar_iter_binary!(
+            Binary,
+            BinaryArray,
+            vec![Some(b"foo"), None, Some(b"bar")]
+        );
+        check_scalar_iter_binary!(
+            LargeBinary,
+            LargeBinaryArray,
+            vec![Some(b"foo"), None, Some(b"bar")]
+        );
+    }
+
+    #[test]
+    fn scalar_iter_to_array_empty() {
+        let scalars = vec![] as Vec<ScalarValue>;
+
+        let result = ScalarValue::iter_to_array(scalars.into_iter()).unwrap_err();
+        assert!(
+            result
+                .to_string()
+                .contains("Empty iterator passed to ScalarValue::iter_to_array"),
+            "{}",
+            result
+        );
+    }
+
+    #[test]
+    fn scalar_iter_to_array_mismatched_types() {
+        use ScalarValue::*;
+        // If the scalar values are not all the correct type, error here
+        let scalars: Vec<ScalarValue> = vec![Boolean(Some(true)), Int32(Some(5))];
+
+        let result = ScalarValue::iter_to_array(scalars.into_iter()).unwrap_err();
+        assert!(result.to_string().contains("Inconsistent types in ScalarValue::iter_to_array. Expected Boolean, got Int32(5)"),
+                "{}", result);
     }
 }

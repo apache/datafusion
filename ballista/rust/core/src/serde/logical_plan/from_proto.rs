@@ -27,11 +27,11 @@ use std::{
     unimplemented,
 };
 
-use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::logical_plan::{
     abs, acos, asin, atan, ceil, cos, exp, floor, ln, log10, log2, round, signum, sin,
     sqrt, tan, trunc, Column, DFField, DFSchema, Expr, JoinType, LogicalPlan,
-    LogicalPlanBuilder,
+    LogicalPlanBuilder, Operator,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::csv::CsvReadOptions;
@@ -327,9 +327,9 @@ impl TryInto<DFField> for &protobuf::DfField {
     }
 }
 
-impl TryInto<arrow::datatypes::DataType> for &protobuf::scalar_type::Datatype {
+impl TryInto<DataType> for &protobuf::scalar_type::Datatype {
     type Error = BallistaError;
-    fn try_into(self) -> Result<arrow::datatypes::DataType, Self::Error> {
+    fn try_into(self) -> Result<DataType, Self::Error> {
         use protobuf::scalar_type::Datatype;
         Ok(match self {
             Datatype::Scalar(scalar_type) => {
@@ -360,17 +360,18 @@ impl TryInto<arrow::datatypes::DataType> for &protobuf::scalar_type::Datatype {
                     ))
                 })?;
                 //Because length is checked above it is safe to unwrap .last()
-                let mut scalar_type =
-                    arrow::datatypes::DataType::List(Box::new(Field::new(
-                        field_names.last().unwrap().as_str(),
-                        pb_scalar_type.into(),
-                        true,
-                    )));
+                let mut scalar_type = DataType::List(Box::new(Field::new(
+                    field_names.last().unwrap().as_str(),
+                    pb_scalar_type.into(),
+                    true,
+                )));
                 //Iterate over field names in reverse order except for the last item in the vector
                 for name in field_names.iter().rev().skip(1) {
-                    let new_datatype = arrow::datatypes::DataType::List(Box::new(
-                        Field::new(name.as_str(), scalar_type, true),
-                    ));
+                    let new_datatype = DataType::List(Box::new(Field::new(
+                        name.as_str(),
+                        scalar_type,
+                        true,
+                    )));
                     scalar_type = new_datatype;
                 }
                 scalar_type
@@ -629,9 +630,9 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarListValue {
     }
 }
 
-impl TryInto<arrow::datatypes::DataType> for &protobuf::ScalarListType {
+impl TryInto<DataType> for &protobuf::ScalarListType {
     type Error = BallistaError;
-    fn try_into(self) -> Result<arrow::datatypes::DataType, Self::Error> {
+    fn try_into(self) -> Result<DataType, Self::Error> {
         use protobuf::PrimitiveScalarType;
         let protobuf::ScalarListType {
             deepest_type,
@@ -645,7 +646,7 @@ impl TryInto<arrow::datatypes::DataType> for &protobuf::ScalarListType {
             ));
         }
 
-        let mut curr_type = arrow::datatypes::DataType::List(Box::new(Field::new(
+        let mut curr_type = DataType::List(Box::new(Field::new(
             //Since checked vector is not empty above this is safe to unwrap
             field_names.last().unwrap(),
             PrimitiveScalarType::from_i32(*deepest_type)
@@ -657,9 +658,8 @@ impl TryInto<arrow::datatypes::DataType> for &protobuf::ScalarListType {
         )));
         //Iterates over field names in reverse order except for the last item in the vector
         for name in field_names.iter().rev().skip(1) {
-            let temp_curr_type = arrow::datatypes::DataType::List(Box::new(Field::new(
-                name, curr_type, true,
-            )));
+            let temp_curr_type =
+                DataType::List(Box::new(Field::new(name, curr_type, true)));
             curr_type = temp_curr_type;
         }
         Ok(curr_type)
@@ -759,8 +759,7 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarValue {
                     .iter()
                     .map(|val| val.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                let scalar_type: arrow::datatypes::DataType =
-                    pb_scalar_type.try_into()?;
+                let scalar_type: DataType = pb_scalar_type.try_into()?;
                 ScalarValue::List(Some(typechecked_values), scalar_type)
             }
             protobuf::scalar_value::Value::NullListValue(v) => {
@@ -1030,9 +1029,9 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
     }
 }
 
-impl TryInto<arrow::datatypes::DataType> for &protobuf::ScalarType {
+impl TryInto<DataType> for &protobuf::ScalarType {
     type Error = BallistaError;
-    fn try_into(self) -> Result<arrow::datatypes::DataType, Self::Error> {
+    fn try_into(self) -> Result<DataType, Self::Error> {
         let pb_scalartype = self.datatype.as_ref().ok_or_else(|| {
             proto_error("ScalarType message missing required field 'datatype'")
         })?;
@@ -1063,16 +1062,16 @@ impl TryInto<Schema> for &protobuf::Schema {
     }
 }
 
-impl TryInto<arrow::datatypes::Field> for &protobuf::Field {
+impl TryInto<Field> for &protobuf::Field {
     type Error = BallistaError;
-    fn try_into(self) -> Result<arrow::datatypes::Field, Self::Error> {
+    fn try_into(self) -> Result<Field, Self::Error> {
         let pb_datatype = self.arrow_type.as_ref().ok_or_else(|| {
             proto_error(
                 "Protobuf deserialization error: Field message missing required field 'arrow_type'",
             )
         })?;
 
-        Ok(arrow::datatypes::Field::new(
+        Ok(Field::new(
             self.name.as_str(),
             pb_datatype.as_ref().try_into()?,
             self.nullable,

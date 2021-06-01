@@ -40,7 +40,9 @@ mod literal;
 mod min_max;
 mod negative;
 mod not;
+mod nth_value;
 mod nullif;
+mod row_number;
 mod sum;
 mod try_cast;
 
@@ -57,7 +59,9 @@ pub use literal::{lit, Literal};
 pub use min_max::{Max, Min};
 pub use negative::{negative, NegativeExpr};
 pub use not::{not, NotExpr};
+pub use nth_value::{FirstValue, LastValue, NthValue};
 pub use nullif::{nullif_func, SUPPORTED_NULLIF_TYPES};
+pub use row_number::RowNumber;
 pub use sum::{sum_return_type, Sum};
 pub use try_cast::{try_cast, TryCastExpr};
 
