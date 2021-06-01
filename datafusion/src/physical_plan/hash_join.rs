@@ -1125,19 +1125,22 @@ fn produce_from_matched(
 ) -> ArrowResult<RecordBatch> {
     // Find indices which didn't match any right row (are false)
     let indices = if unmatched {
-        UInt64Array::from_iter_values(visited_left_side
-            .iter()
-            .enumerate()
-            .filter(|&(_, &value)| !value)
-            .map(|(index, _)| index as u64)
+        UInt64Array::from_iter_values(
+            visited_left_side
+                .iter()
+                .enumerate()
+                .filter(|&(_, &value)| !value)
+                .map(|(index, _)| index as u64),
         )
     } else {
         // produce those that did match
-        UInt64Array::from_iter_values(visited_left_side
-            .iter()
-            .enumerate()
-            .filter(|&(_, &value)| value)
-            .map(|(index, _)| index as u64))
+        UInt64Array::from_iter_values(
+            visited_left_side
+                .iter()
+                .enumerate()
+                .filter(|&(_, &value)| value)
+                .map(|(index, _)| index as u64),
+        )
     };
 
     // generate batches by taking values from the left side and generating columns filled with null on the right side
