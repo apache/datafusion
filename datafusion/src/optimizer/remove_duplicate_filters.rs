@@ -27,12 +27,12 @@ use crate::{error::Result, logical_plan::Operator};
 /// # Introduction
 /// It uses boolean algebra laws to simplify or reduce the number of terms in expressions.
 ///
-/// Filter: #b Gt Int32(2) And #b Gt Int32(2)
+/// Filter: b > 2 AND b > 2
 /// is optimized to
-/// Filter: #b Gt Int32(2)
+/// Filter: b > 2
 pub struct RemoveDuplicateFilters {}
 
-fn expr_contains<'a>(expr: &'a Expr, needle: &'a Expr) -> bool {
+fn expr_contains(expr: &Expr, needle: &Expr) -> bool {
     match expr {
         Expr::BinaryExpr {
             left,
@@ -48,18 +48,18 @@ fn expr_contains<'a>(expr: &'a Expr, needle: &'a Expr) -> bool {
     }
 }
 
-fn as_binary_expr<'a>(expr: &'a Expr) -> Option<&'a Expr> {
+fn as_binary_expr(expr: &Expr) -> Option<&Expr> {
     match expr {
         Expr::BinaryExpr { .. } => Some(expr),
         _ => None,
     }
 }
 
-fn operator_is_boolean(op: &Operator) -> bool {
-    op == &Operator::And || op == &Operator::Or
+fn operator_is_boolean(op: Operator) -> bool {
+    op == Operator::And || op == Operator::Or
 }
 
-fn is_one<'a>(s: &'a Expr) -> bool {
+fn is_one(s: &Expr) -> bool {
     match s {
         Expr::Literal(ScalarValue::Int8(Some(1))) => true,
         Expr::Literal(ScalarValue::Int16(Some(1))) => true,
@@ -71,41 +71,25 @@ fn is_one<'a>(s: &'a Expr) -> bool {
         Expr::Literal(ScalarValue::UInt64(Some(1))) => true,
         Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 1. => true,
         Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 1. => true,
-        _ => false
+        _ => false,
     }
 }
 
-fn is_zero<'a>(s: &'a Expr) -> bool {
-    match s {
-        Expr::Literal(ScalarValue::Int8(Some(0))) => true,
-        Expr::Literal(ScalarValue::Int16(Some(0))) => true,
-        Expr::Literal(ScalarValue::Int32(Some(0))) => true,
-        Expr::Literal(ScalarValue::Int64(Some(0))) => true,
-        Expr::Literal(ScalarValue::UInt8(Some(0))) => true,
-        Expr::Literal(ScalarValue::UInt16(Some(0))) => true,
-        Expr::Literal(ScalarValue::UInt32(Some(0))) => true,
-        Expr::Literal(ScalarValue::UInt64(Some(0))) => true,
-        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 0. => true,
-        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 0. => true,
-        _ => false
-    }
-}
-
-fn is_true<'a>(expr: &'a Expr) -> bool {
+fn is_true(expr: &Expr) -> bool {
     match expr {
         Expr::Literal(ScalarValue::Boolean(Some(v))) => *v,
         _ => false,
     }
 }
 
-fn is_false<'a>(expr: &'a Expr) -> bool {
+fn is_false(expr: &Expr) -> bool {
     match expr {
         Expr::Literal(ScalarValue::Boolean(Some(v))) => *v == false,
         _ => false,
     }
 }
 
-fn simplify<'a>(expr: &'a Expr) -> Expr {
+fn simplify(expr: &Expr) -> Expr {
     match expr {
         Expr::BinaryExpr {
             left,
@@ -149,56 +133,26 @@ fn simplify<'a>(expr: &'a Expr) -> Expr {
         } if left == right => simplify(right),
         Expr::BinaryExpr {
             left,
-            op: Operator::Minus,
-            right
-        } if is_zero(left) => Expr::Negative(Box::new(simplify(right))),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Minus,
-            right
-        } if is_zero(right) => simplify(left),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Minus,
-            right
-        } if left == right => lit(0),
-        Expr::BinaryExpr {
-            left,
             op: Operator::Multiply,
-            right
-        } if is_zero(left) || is_zero(right) => lit(0),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Multiply,
-            right
+            right,
         } if is_one(left) => simplify(right),
         Expr::BinaryExpr {
             left,
             op: Operator::Multiply,
-            right
+            right,
         } if is_one(right) => simplify(left),
         Expr::BinaryExpr {
             left,
             op: Operator::Divide,
-            right
+            right,
         } if is_one(right) => simplify(left),
         Expr::BinaryExpr {
             left,
             op: Operator::Divide,
-            right
+            right,
         } if left == right => lit(1),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Plus,
-            right
-        } if is_zero(left) => simplify(right),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Plus,
-            right
-        } if is_zero(right) => simplify(left),
         Expr::BinaryExpr { left, op, right }
-            if left == right && operator_is_boolean(op) =>
+            if left == right && operator_is_boolean(*op) =>
         {
             simplify(left)
         }
@@ -288,27 +242,17 @@ fn simplify<'a>(expr: &'a Expr) -> Expr {
 }
 
 fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
-    match plan {
-        LogicalPlan::Filter { input, predicate } => Ok(LogicalPlan::Filter {
-            input: input.clone(),
-            predicate: simplify(predicate),
-        }),
-        LogicalPlan::Projection { expr, input, schema } => Ok(LogicalPlan::Projection {
-            expr: expr.into_iter().map(|x| simplify(x)).collect::<Vec<_>>(),
-            input: input.clone(),
-            schema: schema.clone(),
-        }),
-        _ => {
-            let new_inputs = plan
-                .inputs()
-                .iter()
-                .map(|input| optimize(input))
-                .collect::<Result<Vec<_>>>()?;
-
-            let expr = plan.expressions();
-            utils::from_plan(&plan, &expr, &new_inputs)
-        }
-    }
+    let new_inputs = plan
+        .inputs()
+        .iter()
+        .map(|input| optimize(input))
+        .collect::<Result<Vec<_>>>()?;
+    let expr = plan
+        .expressions()
+        .into_iter()
+        .map(|x| simplify(&x))
+        .collect::<Vec<_>>();
+    utils::from_plan(&plan, &expr, &new_inputs)
 }
 
 impl OptimizerRule for RemoveDuplicateFilters {
@@ -428,35 +372,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_minus_zero() -> Result<()> {
-        let expr = binary_expr(lit(0), Operator::Minus, col("c"));
-        let expected = Expr::Negative(Box::new(col("c")));
-
-        assert_eq!(simplify(&expr), expected);
-        Ok(())
-    }
-
-    #[test]
-    fn test_simplify_minus_same() -> Result<()> {
-        let expr = binary_expr(col("c"), Operator::Minus, col("c"));
-        let expected = lit(0);
-
-        assert_eq!(simplify(&expr), expected);
-        Ok(())
-    }
-
-    #[test]
-    fn test_simplify_multiply_by_zero() -> Result<()> {
-        let expr_a = binary_expr(col("c"), Operator::Multiply, lit(0));
-        let expr_b = binary_expr(lit(0), Operator::Multiply, col("c"));
-        let expected = lit(0);
-
-        assert_eq!(simplify(&expr_a), expected);
-        assert_eq!(simplify(&expr_b), expected);
-        Ok(())
-    }
-
-    #[test]
     fn test_simplify_multiply_by_one() -> Result<()> {
         let expr_a = binary_expr(col("c"), Operator::Multiply, lit(1));
         let expr_b = binary_expr(lit(1), Operator::Multiply, col("c"));
@@ -482,26 +397,6 @@ mod tests {
         let expected = lit(1);
 
         assert_eq!(simplify(&expr), expected);
-        Ok(())
-    }
-
-    #[test]
-    fn test_simplify_cancel_sub() -> Result<()> {
-        let expr = binary_expr(col("c"), Operator::Minus, col("c"));
-        let expected = lit(0);
-
-        assert_eq!(simplify(&expr), expected);
-        Ok(())
-    }
-
-    #[test]
-    fn test_simplify_plus_zero() -> Result<()> {
-        let expr_a = binary_expr(col("c"), Operator::Plus, lit(0));
-        let expr_b = binary_expr(lit(0), Operator::Plus, col("c"));
-        let expected = col("c");
-
-        assert_eq!(simplify(&expr_a), expected);
-        assert_eq!(simplify(&expr_b), expected);
         Ok(())
     }
 
