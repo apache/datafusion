@@ -216,7 +216,7 @@ mod tests {
             .downcast_ref::<StringArray>()
             .unwrap();
         let file = path.value(0);
-        assert!(file.ends_with("/data.arrow"));
+        assert!(file.ends_with("data.arrow"));
         let stats = batch.columns()[1]
             .as_any()
             .downcast_ref::<StructArray>()
