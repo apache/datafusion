@@ -61,14 +61,14 @@ fn operator_is_boolean(op: Operator) -> bool {
 
 fn is_one(s: &Expr) -> bool {
     match s {
-        Expr::Literal(ScalarValue::Int8(Some(1))) => true,
-        Expr::Literal(ScalarValue::Int16(Some(1))) => true,
-        Expr::Literal(ScalarValue::Int32(Some(1))) => true,
-        Expr::Literal(ScalarValue::Int64(Some(1))) => true,
-        Expr::Literal(ScalarValue::UInt8(Some(1))) => true,
-        Expr::Literal(ScalarValue::UInt16(Some(1))) => true,
-        Expr::Literal(ScalarValue::UInt32(Some(1))) => true,
-        Expr::Literal(ScalarValue::UInt64(Some(1))) => true,
+        Expr::Literal(ScalarValue::Int8(Some(1)))
+        | Expr::Literal(ScalarValue::Int16(Some(1)))
+        | Expr::Literal(ScalarValue::Int32(Some(1)))
+        | Expr::Literal(ScalarValue::Int64(Some(1)))
+        | Expr::Literal(ScalarValue::UInt8(Some(1)))
+        | Expr::Literal(ScalarValue::UInt16(Some(1)))
+        | Expr::Literal(ScalarValue::UInt32(Some(1)))
+        | Expr::Literal(ScalarValue::UInt64(Some(1))) => true,
         Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 1. => true,
         Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 1. => true,
         _ => false,
