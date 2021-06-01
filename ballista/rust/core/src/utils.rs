@@ -112,13 +112,13 @@ pub fn produce_diagram(filename: &str, stages: &[Arc<QueryStageExec>]) -> Result
 
     // draw stages and entities
     for stage in stages {
-        writeln!(w, "\tsubgraph cluster{} {{", stage.stage_id)?;
-        writeln!(w, "\t\tlabel = \"Stage {}\";", stage.stage_id)?;
+        writeln!(w, "\tsubgraph cluster{} {{", stage.stage_id())?;
+        writeln!(w, "\t\tlabel = \"Stage {}\";", stage.stage_id())?;
         let mut id = AtomicUsize::new(0);
         build_exec_plan_diagram(
             &mut w,
-            stage.child.as_ref(),
-            stage.stage_id,
+            stage.children()[0].as_ref(),
+            stage.stage_id(),
             &mut id,
             true,
         )?;
@@ -130,8 +130,8 @@ pub fn produce_diagram(filename: &str, stages: &[Arc<QueryStageExec>]) -> Result
         let mut id = AtomicUsize::new(0);
         build_exec_plan_diagram(
             &mut w,
-            stage.child.as_ref(),
-            stage.stage_id,
+            stage.children()[0].as_ref(),
+            stage.stage_id(),
             &mut id,
             false,
         )?;
