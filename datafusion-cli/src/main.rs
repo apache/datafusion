@@ -58,9 +58,10 @@ pub async fn main() {
         )
         .arg(
             Arg::with_name("file")
-                .help("Execute commands from file, then exit")
+                .help("Execute commands from file(s), then exit")
                 .short("f")
                 .long("file")
+                .multiple(true)
                 .validator(is_valid_file)
                 .takes_value(true),
         )
@@ -112,22 +113,25 @@ pub async fn main() {
     let quiet = matches.is_present("quiet");
     let print_options = PrintOptions { format, quiet };
 
-    if let Some(file_path) = matches.value_of("file") {
-        let file = File::open(file_path)
-            .unwrap_or_else(|err| panic!("cannot open file '{}': {}", file_path, err));
-        let mut reader = BufReader::new(file);
-        exec_from_lines(&mut reader, execution_config, print_options).await;
+    if let Some(file_paths) = matches.values_of("file") {
+        let files = file_paths
+            .map(|file_path| File::open(file_path).unwrap())
+            .collect::<Vec<_>>();
+        let mut ctx = ExecutionContext::with_config(execution_config);
+        for file in files {
+            let mut reader = BufReader::new(file);
+            exec_from_lines(&mut ctx, &mut reader, print_options.clone()).await;
+        }
     } else {
         exec_from_repl(execution_config, print_options).await;
     }
 }
 
 async fn exec_from_lines(
+    ctx: &mut ExecutionContext,
     reader: &mut BufReader<File>,
-    execution_config: ExecutionConfig,
     print_options: PrintOptions,
 ) {
-    let mut ctx = ExecutionContext::with_config(execution_config);
     let mut query = "".to_owned();
 
     for line in reader.lines() {
@@ -139,7 +143,7 @@ async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match exec_and_print(&mut ctx, print_options.clone(), query).await {
+                    match exec_and_print(ctx, print_options.clone(), query).await {
                         Ok(_) => {}
                         Err(err) => println!("{:?}", err),
                     }
@@ -156,7 +160,7 @@ async fn exec_from_lines(
 
     // run the left over query if the last statement doesn't contain ‘;’
     if !query.is_empty() {
-        match exec_and_print(&mut ctx, print_options, query).await {
+        match exec_and_print(ctx, print_options, query).await {
             Ok(_) => {}
             Err(err) => println!("{:?}", err),
         }

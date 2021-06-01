@@ -17,7 +17,7 @@
 
 //! Print format variants
 use arrow::csv::writer::WriterBuilder;
-use arrow::json::ArrayWriter;
+use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};
@@ -31,6 +31,7 @@ pub enum PrintFormat {
     Tsv,
     Table,
     Json,
+    NdJson,
 }
 
 /// returns all print formats
@@ -40,17 +41,19 @@ pub fn all_print_formats() -> Vec<PrintFormat> {
         PrintFormat::Tsv,
         PrintFormat::Table,
         PrintFormat::Json,
+        PrintFormat::NdJson,
     ]
 }
 
 impl FromStr for PrintFormat {
     type Err = ();
     fn from_str(s: &str) -> std::result::Result<Self, ()> {
-        match s {
+        match s.to_lowercase().as_str() {
             "csv" => Ok(Self::Csv),
             "tsv" => Ok(Self::Tsv),
             "table" => Ok(Self::Table),
             "json" => Ok(Self::Json),
+            "ndjson" => Ok(Self::NdJson),
             _ => Err(()),
         }
     }
@@ -63,20 +66,21 @@ impl fmt::Display for PrintFormat {
             Self::Tsv => write!(f, "tsv"),
             Self::Table => write!(f, "table"),
             Self::Json => write!(f, "json"),
+            Self::NdJson => write!(f, "ndjson"),
         }
     }
 }
 
-fn print_batches_to_json(batches: &[RecordBatch]) -> Result<String> {
-    let mut bytes = vec![];
-    {
-        let mut writer = ArrayWriter::new(&mut bytes);
-        writer.write_batches(batches)?;
-        writer.finish()?;
-    }
-    let formatted = String::from_utf8(bytes)
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    Ok(formatted)
+macro_rules! batches_to_json {
+    ($WRITER: ident, $batches: expr) => {{
+        let mut bytes = vec![];
+        {
+            let mut writer = $WRITER::new(&mut bytes);
+            writer.write_batches($batches)?;
+            writer.finish()?;
+        }
+        String::from_utf8(bytes).map_err(|e| DataFusionError::Execution(e.to_string()))?
+    }};
 }
 
 fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<String> {
@@ -102,7 +106,10 @@ impl PrintFormat {
             Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
             Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
             Self::Table => pretty::print_batches(batches)?,
-            Self::Json => println!("{}", print_batches_to_json(batches)?),
+            Self::Json => println!("{}", batches_to_json!(ArrayWriter, batches)),
+            Self::NdJson => {
+                println!("{}", batches_to_json!(LineDelimitedWriter, batches))
+            }
         }
         Ok(())
     }
@@ -126,6 +133,9 @@ mod tests {
         let format = "json".parse::<PrintFormat>().unwrap();
         assert_eq!(PrintFormat::Json, format);
 
+        let format = "ndjson".parse::<PrintFormat>().unwrap();
+        assert_eq!(PrintFormat::NdJson, format);
+
         let format = "table".parse::<PrintFormat>().unwrap();
         assert_eq!(PrintFormat::Table, format);
     }
@@ -136,6 +146,7 @@ mod tests {
         assert_eq!("table", PrintFormat::Table.to_string());
         assert_eq!("tsv", PrintFormat::Tsv.to_string());
         assert_eq!("json", PrintFormat::Json.to_string());
+        assert_eq!("ndjson", PrintFormat::NdJson.to_string());
     }
 
     #[test]
@@ -170,9 +181,12 @@ mod tests {
     }
 
     #[test]
-    fn test_print_batches_to_json_empty() {
+    fn test_print_batches_to_json_empty() -> Result<()> {
         let batches = vec![];
-        let r = print_batches_to_json(&batches).unwrap();
+        let r = batches_to_json!(ArrayWriter, &batches);
+        assert_eq!("", r);
+
+        let r = batches_to_json!(LineDelimitedWriter, &batches);
         assert_eq!("", r);
 
         let schema = Arc::new(Schema::new(vec![
@@ -192,7 +206,11 @@ mod tests {
         .unwrap();
 
         let batches = vec![batch];
-        let r = print_batches_to_json(&batches).unwrap();
+        let r = batches_to_json!(ArrayWriter, &batches);
         assert_eq!("[{\"a\":1,\"b\":4,\"c\":7},{\"a\":2,\"b\":5,\"c\":8},{\"a\":3,\"b\":6,\"c\":9}]", r);
+
+        let r = batches_to_json!(LineDelimitedWriter, &batches);
+        assert_eq!("{\"a\":1,\"b\":4,\"c\":7}\n{\"a\":2,\"b\":5,\"c\":8}\n{\"a\":3,\"b\":6,\"c\":9}\n", r);
+        Ok(())
     }
 }

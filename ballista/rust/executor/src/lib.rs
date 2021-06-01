@@ -18,4 +18,5 @@
 //! Core executor logic for executing queries and storing results in memory.
 
 pub mod collect;
+pub mod executor;
 pub mod flight_service;
