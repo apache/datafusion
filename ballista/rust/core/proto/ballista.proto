@@ -363,6 +363,7 @@ enum JoinType {
   LEFT = 1;
   RIGHT = 2;
   FULL = 3;
+  SEMI = 4;
 }
 
 message JoinNode {

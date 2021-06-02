@@ -184,7 +184,7 @@ impl HashJoinExec {
     /// Calculates column indices and left/right placement on input / output schemas and jointype
     fn column_indices_from_schema(&self) -> ArrowResult<Vec<ColumnIndex>> {
         let (primary_is_left, primary_schema, secondary_schema) = match self.join_type {
-            JoinType::Inner | JoinType::Left | JoinType::Full => {
+            JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Semi => {
                 (true, self.left.schema(), self.right.schema())
             }
             JoinType::Right => (false, self.right.schema(), self.left.schema()),
@@ -376,7 +376,7 @@ impl ExecutionPlan for HashJoinExec {
         let column_indices = self.column_indices_from_schema()?;
         let num_rows = left_data.1.num_rows();
         let visited_left_side = match self.join_type {
-            JoinType::Left | JoinType::Full => vec![false; num_rows],
+            JoinType::Left | JoinType::Full | JoinType::Semi => vec![false; num_rows],
             JoinType::Inner | JoinType::Right => vec![],
         };
         Ok(Box::pin(HashJoinStream {
@@ -544,6 +544,13 @@ fn build_batch(
     )
     .unwrap();
 
+    if join_type == JoinType::Semi {
+        return Ok((
+            RecordBatch::new_empty(Arc::new(schema.clone())),
+            left_indices,
+        ));
+    }
+
     build_batch_from_indices(
         schema,
         &left_data.1,
@@ -606,7 +613,7 @@ fn build_join_indexes(
     let left = &left_data.0;
 
     match join_type {
-        JoinType::Inner => {
+        JoinType::Inner | JoinType::Semi => {
             // Using a buffer builder to avoid slower normal builder
             let mut left_indices = UInt64BufferBuilder::new(0);
             let mut right_indices = UInt32BufferBuilder::new(0);
@@ -1108,23 +1115,35 @@ pub fn create_hashes<'a>(
     Ok(hashes_buffer)
 }
 
-// Produces a batch for left-side rows that are not marked as being visited during the whole join
-fn produce_unmatched(
+// Produces a batch for left-side rows that have/have not been matched during the whole join
+fn produce_from_matched(
     visited_left_side: &[bool],
     schema: &SchemaRef,
     column_indices: &[ColumnIndex],
     left_data: &JoinLeftData,
+    unmatched: bool,
 ) -> ArrowResult<RecordBatch> {
     // Find indices which didn't match any right row (are false)
-    let unmatched_indices: Vec<u64> = visited_left_side
-        .iter()
-        .enumerate()
-        .filter(|&(_, &value)| !value)
-        .map(|(index, _)| index as u64)
-        .collect();
+    let indices = if unmatched {
+        UInt64Array::from_iter_values(
+            visited_left_side
+                .iter()
+                .enumerate()
+                .filter(|&(_, &value)| !value)
+                .map(|(index, _)| index as u64),
+        )
+    } else {
+        // produce those that did match
+        UInt64Array::from_iter_values(
+            visited_left_side
+                .iter()
+                .enumerate()
+                .filter(|&(_, &value)| value)
+                .map(|(index, _)| index as u64),
+        )
+    };
 
     // generate batches by taking values from the left side and generating columns filled with null on the right side
-    let indices = UInt64Array::from_iter_values(unmatched_indices);
     let num_rows = indices.len();
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
     for (idx, column_index) in column_indices.iter().enumerate() {
@@ -1171,7 +1190,7 @@ impl Stream for HashJoinStream {
                         self.num_output_rows += batch.num_rows();
 
                         match self.join_type {
-                            JoinType::Left | JoinType::Full => {
+                            JoinType::Left | JoinType::Full | JoinType::Semi => {
                                 left_side.iter().flatten().for_each(|x| {
                                     self.visited_left_side[x as usize] = true;
                                 });
@@ -1185,12 +1204,15 @@ impl Stream for HashJoinStream {
                     let start = Instant::now();
                     // For the left join, produce rows for unmatched rows
                     match self.join_type {
-                        JoinType::Left | JoinType::Full if !self.is_exhausted => {
-                            let result = produce_unmatched(
+                        JoinType::Left | JoinType::Full | JoinType::Semi
+                            if !self.is_exhausted =>
+                        {
+                            let result = produce_from_matched(
                                 &self.visited_left_side,
                                 &self.schema,
                                 &self.column_indices,
                                 &self.left_data,
+                                self.join_type != JoinType::Semi,
                             );
                             if let Ok(ref batch) = result {
                                 self.num_input_batches += 1;
@@ -1207,6 +1229,7 @@ impl Stream for HashJoinStream {
                         }
                         JoinType::Left
                         | JoinType::Full
+                        | JoinType::Semi
                         | JoinType::Inner
                         | JoinType::Right => {}
                     }
@@ -1660,6 +1683,42 @@ mod tests {
             "| 2  | 5  | 8  | 20 | 80 |",
             "| 3  | 7  | 9  |    |    |",
             "+----+----+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_semi() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 2, 3]),
+            ("b1", &vec![4, 5, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b1", &vec![4, 5, 6, 5]), // 5 is double on the right
+            ("c2", &vec![70, 80, 90, 100]),
+        );
+        let on = &[("b1", "b1")];
+
+        let join = join(left, right, on, &JoinType::Semi)?;
+
+        let columns = columns(&join.schema());
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+
+        let stream = join.execute(0).await?;
+        let batches = common::collect(stream).await?;
+
+        let expected = vec![
+            "+----+----+----+",
+            "| a1 | b1 | c1 |",
+            "+----+----+----+",
+            "| 1  | 4  | 7  |",
+            "| 2  | 5  | 8  |",
+            "| 2  | 5  | 8  |",
+            "+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 

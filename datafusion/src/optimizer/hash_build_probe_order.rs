@@ -106,6 +106,13 @@ fn should_swap_join_order(left: &LogicalPlan, right: &LogicalPlan) -> bool {
     }
 }
 
+fn supports_swap(join_type: JoinType) -> bool {
+    match join_type {
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => true,
+        JoinType::Semi => false,
+    }
+}
+
 impl OptimizerRule for HashBuildProbeOrder {
     fn name(&self) -> &str {
         "hash_build_probe_order"
@@ -128,7 +135,7 @@ impl OptimizerRule for HashBuildProbeOrder {
             } => {
                 let left = self.optimize(left, execution_props)?;
                 let right = self.optimize(right, execution_props)?;
-                if should_swap_join_order(&left, &right) {
+                if should_swap_join_order(&left, &right) && supports_swap(*join_type) {
                     // Swap left and right, change join type and (equi-)join key order
                     Ok(LogicalPlan::Join {
                         left: Arc::new(right),
@@ -216,6 +223,7 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::Full => JoinType::Full,
         JoinType::Left => JoinType::Right,
         JoinType::Right => JoinType::Left,
+        _ => unreachable!(),
     }
 }
 
