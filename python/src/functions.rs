@@ -158,9 +158,23 @@ fn md5(value: expression::Expression) -> expression::Expression {
 }
 
 #[pyfunction]
+fn now() -> expression::Expression {
+    expression::Expression {
+        expr: logical_plan::now(),
+    }
+}
+
+#[pyfunction]
 fn octet_length(value: expression::Expression) -> expression::Expression {
     expression::Expression {
         expr: logical_plan::octet_length(value.expr),
+    }
+}
+
+#[pyfunction]
+fn random() -> expression::Expression {
+    expression::Expression {
+        expr: logical_plan::random(),
     }
 }
 
@@ -414,8 +428,10 @@ pub fn init(module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(lower, module)?)?;
     module.add_function(wrap_pyfunction!(lpad, module)?)?;
     module.add_function(wrap_pyfunction!(md5, module)?)?;
+    module.add_function(wrap_pyfunction!(now, module)?)?;
     module.add_function(wrap_pyfunction!(ltrim, module)?)?;
     module.add_function(wrap_pyfunction!(octet_length, module)?)?;
+    module.add_function(wrap_pyfunction!(random, module)?)?;
     module.add_function(wrap_pyfunction!(regexp_replace, module)?)?;
     module.add_function(wrap_pyfunction!(repeat, module)?)?;
     module.add_function(wrap_pyfunction!(replace, module)?)?;
