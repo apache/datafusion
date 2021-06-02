@@ -15,88 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use datafusion::arrow::datatypes::DataType;
-use pyo3::{prelude::*, wrap_pyfunction};
-
-use datafusion::logical_plan;
-
 use crate::udaf;
 use crate::udf;
 use crate::{expression, types::PyDataType};
-
-/// Expression representing a column on the existing plan.
-#[pyfunction]
-#[text_signature = "(name)"]
-fn col(name: &str) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::col(name),
-    }
-}
-
-/// Expression representing a constant value
-#[pyfunction]
-#[text_signature = "(value)"]
-fn lit(value: i32) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::lit(value),
-    }
-}
+use datafusion::arrow::datatypes::DataType;
+use datafusion::logical_plan;
+use pyo3::{prelude::*, wrap_pyfunction};
+use std::sync::Arc;
 
 #[pyfunction]
 fn array(value: Vec<expression::Expression>) -> expression::Expression {
     expression::Expression {
         expr: logical_plan::array(value.into_iter().map(|x| x.expr).collect::<Vec<_>>()),
-    }
-}
-
-#[pyfunction]
-fn ascii(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::ascii(value.expr),
-    }
-}
-
-#[pyfunction]
-fn sum(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::sum(value.expr),
-    }
-}
-
-#[pyfunction]
-fn bit_length(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::bit_length(value.expr),
-    }
-}
-
-#[pyfunction]
-fn btrim(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::btrim(value.expr),
-    }
-}
-
-#[pyfunction]
-fn character_length(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::character_length(value.expr),
-    }
-}
-
-#[pyfunction]
-fn chr(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::chr(value.expr),
-    }
-}
-
-#[pyfunction]
-fn concat_ws(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::concat_ws(value.expr),
     }
 }
 
@@ -115,229 +45,69 @@ fn in_list(
     }
 }
 
-#[pyfunction]
-fn initcap(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::initcap(value.expr),
-    }
+macro_rules! define_function {
+    ($NAME: ident) => {{
+        /// Expression representing a $NAME function
+        #[pyfunction]
+        fn $NAME(value: expression::Expression) -> expression::Expression {
+            expression::Expression {
+                expr: logical_plan::$NAME(value.expr),
+            }
+        }
+    }};
+    ($NAME: ident, $SIGNATURE: expr) => {{
+        /// Expression representing a $NAME function
+        #[pyfunction]
+        #[text_signature = $SIGNATURE]
+        fn $NAME(value: expression::Expression) -> expression::Expression {
+            expression::Expression {
+                expr: logical_plan::$NAME(value.expr),
+            }
+        }
+    }};
 }
 
-#[pyfunction]
-fn left(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::left(value.expr),
-    }
-}
-
-#[pyfunction]
-fn lower(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::lower(value.expr),
-    }
-}
-
-#[pyfunction]
-fn lpad(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::lpad(value.expr),
-    }
-}
-
-#[pyfunction]
-fn ltrim(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::ltrim(value.expr),
-    }
-}
-
-#[pyfunction]
-fn md5(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::md5(value.expr),
-    }
-}
-
-#[pyfunction]
-fn now(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::now(value.expr),
-    }
-}
-
-#[pyfunction]
-fn octet_length(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::octet_length(value.expr),
-    }
-}
-
-#[pyfunction]
-fn random(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::random(value.expr),
-    }
-}
-
-#[pyfunction]
-fn regexp_replace(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::regexp_replace(value.expr),
-    }
-}
-
-#[pyfunction]
-fn repeat(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::repeat(value.expr),
-    }
-}
-
-#[pyfunction]
-fn replace(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::replace(value.expr),
-    }
-}
-
-#[pyfunction]
-fn reverse(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::reverse(value.expr),
-    }
-}
-
-#[pyfunction]
-fn right(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::right(value.expr),
-    }
-}
-
-#[pyfunction]
-fn rpad(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::rpad(value.expr),
-    }
-}
-
-#[pyfunction]
-fn rtrim(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::rtrim(value.expr),
-    }
-}
-
-#[pyfunction]
-fn sha224(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::sha224(value.expr),
-    }
-}
-
-#[pyfunction]
-fn sha256(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::sha256(value.expr),
-    }
-}
-
-#[pyfunction]
-fn sha384(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::sha384(value.expr),
-    }
-}
-
-#[pyfunction]
-fn sha512(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::sha512(value.expr),
-    }
-}
-
-#[pyfunction]
-fn split_part(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::split_part(value.expr),
-    }
-}
-
-#[pyfunction]
-fn starts_with(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::starts_with(value.expr),
-    }
-}
-
-#[pyfunction]
-fn strpos(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::strpos(value.expr),
-    }
-}
-
-#[pyfunction]
-fn substr(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::substr(value.expr),
-    }
-}
-
-#[pyfunction]
-fn to_hex(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::to_hex(value.expr),
-    }
-}
-
-#[pyfunction]
-fn translate(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::translate(value.expr),
-    }
-}
-
-#[pyfunction]
-fn trim(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::trim(value.expr),
-    }
-}
-
-#[pyfunction]
-fn upper(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::upper(value.expr),
-    }
-}
-
-#[pyfunction]
-fn avg(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::avg(value.expr),
-    }
-}
-
-#[pyfunction]
-fn min(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::min(value.expr),
-    }
-}
-
-#[pyfunction]
-fn max(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::max(value.expr),
-    }
-}
-
-#[pyfunction]
-fn count(value: expression::Expression) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::count(value.expr),
-    }
-}
+define_function!(col, "(name)");
+define_function!(lit, "(value)");
+define_function!(ascii);
+define_function!(sum);
+define_function!(bit_length);
+define_function!(btrim);
+define_function!(character_length);
+define_function!(chr);
+define_function!(concat_ws);
+define_function!(initcap);
+define_function!(left);
+define_function!(lower);
+define_function!(lpad);
+define_function!(ltrim);
+define_function!(md5);
+define_function!(now);
+define_function!(octet_length);
+define_function!(random);
+define_function!(replace);
+define_function!(repeat);
+define_function!(regexp_replace);
+define_function!(reverse);
+define_function!(right);
+define_function!(rpad);
+define_function!(rtrim);
+define_function!(sha224);
+define_function!(sha256);
+define_function!(sha384);
+define_function!(sha512);
+define_function!(split_part);
+define_function!(starts_with);
+define_function!(strpos);
+define_function!(substr);
+define_function!(to_hex);
+define_function!(translate);
+define_function!(trim);
+define_function!(upper);
+define_function!(avg);
+define_function!(min);
+define_function!(max);
+define_function!(count);
 
 /*
 #[pyfunction]
