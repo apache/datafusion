@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use libc::uintptr_t;
 use pyo3::prelude::*;
-use pyo3::{libc::uintptr_t, PyErr};
+use pyo3::PyErr;
 
 use std::convert::From;
 

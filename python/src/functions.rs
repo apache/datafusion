@@ -101,9 +101,17 @@ fn concat_ws(value: expression::Expression) -> expression::Expression {
 }
 
 #[pyfunction]
-fn in_list(expr: expression::Expression, value: Vec<expression::Expression>, negated: bool) -> expression::Expression {
+fn in_list(
+    expr: expression::Expression,
+    value: Vec<expression::Expression>,
+    negated: bool,
+) -> expression::Expression {
     expression::Expression {
-        expr: logical_plan::in_list(expr.expr, value.into_iter().map(|x| x.expr).collect::<Vec<_>>(), negated),
+        expr: logical_plan::in_list(
+            expr.expr,
+            value.into_iter().map(|x| x.expr).collect::<Vec<_>>(),
+            negated,
+        ),
     }
 }
 
