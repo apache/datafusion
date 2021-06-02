@@ -367,6 +367,7 @@ impl DefaultPhysicalPlanner {
                     JoinType::Left => hash_utils::JoinType::Left,
                     JoinType::Right => hash_utils::JoinType::Right,
                     JoinType::Full => hash_utils::JoinType::Full,
+                    JoinType::Semi => hash_utils::JoinType::Semi,
                 };
                 if ctx_state.config.concurrency > 1 && ctx_state.config.repartition_joins
                 {

@@ -133,6 +133,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 JoinType::Left => protobuf::JoinType::Left,
                 JoinType::Right => protobuf::JoinType::Right,
                 JoinType::Full => protobuf::JoinType::Full,
+                JoinType::Semi => protobuf::JoinType::Semi,
             };
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
