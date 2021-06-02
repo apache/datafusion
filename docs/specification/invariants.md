@@ -183,7 +183,7 @@ node that creates a new schema (e.g. scan, projection, aggregation, join, etc.).
 ### Physical schema is consistent with data
 
 The contents of every Array in every RecordBatch in every partition returned by
-a physical plan MUST be consistent with recordBatch's schema, in that every
+a physical plan MUST be consistent with RecordBatch's schema, in that every
 Array in the RecordBatch must be downcastable to its corresponding type
 declared in the RecordBatch.
 
