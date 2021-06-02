@@ -1115,7 +1115,7 @@ pub fn create_hashes<'a>(
     Ok(hashes_buffer)
 }
 
-// Produces a batch for left-side rows that are not marked as being visited during the whole join
+// Produces a batch for left-side rows that have/have not been matched during the whole join
 fn produce_from_matched(
     visited_left_side: &[bool],
     schema: &SchemaRef,
