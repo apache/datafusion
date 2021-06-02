@@ -117,6 +117,14 @@ impl Expression {
             expr: self.expr.clone().alias(name),
         })
     }
+
+    /// Create a sort expression from an existing expression.
+    #[args(ascending = true, nulls_first = true)]
+    pub fn sort(&self, ascending: bool, nulls_first: bool) -> PyResult<Expression> {
+        Ok(Expression {
+            expr: self.expr.clone().sort(ascending, nulls_first),
+        })
+    }
 }
 
 /// Represents a ScalarUDF

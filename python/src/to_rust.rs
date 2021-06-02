@@ -25,7 +25,8 @@ use datafusion::arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::scalar::ScalarValue;
-use pyo3::{libc::uintptr_t, prelude::*};
+use libc::uintptr_t;
+use pyo3::prelude::*;
 
 use crate::{errors, types::PyDataType};
 
