@@ -202,7 +202,7 @@ contexts CAN validate this invariant. It is acceptable for physical nodes to
 ### Physical schema is consistent in physical functions
 
 The schema of every Array returned by a physical function MUST match the
-DataType derived by the physical function itself.
+DataType reported by the physical function itself.
 
 This ensures that when a physical function claims that it returns a type
 (e.g. Int32), users can safely downcast its resulting Array to the
