@@ -75,7 +75,7 @@ schema from their child nodes.
 
 #### Column
 
-A type of logical node in a logical plan consists of field name and relation name.
+An identifier in a logical plan consists of field name and relation name.
 
 ### Physical
 
