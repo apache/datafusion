@@ -270,7 +270,7 @@ MUST be equal to the schema of the physical plan. Specifically:
 physical_plan.evaluate(batch).schema = physical_plan.schema
 ```
 
-Together with other invariances, this ensures that the consumers of record
+Together with other invariants, this ensures that the consumers of record
 batches do not need to know the output schema of the physical plan; they can
 safely rely on the record batch's schema to perform downscaling and naming.
 
