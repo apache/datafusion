@@ -158,9 +158,9 @@ fn md5(value: expression::Expression) -> expression::Expression {
 }
 
 #[pyfunction]
-fn now() -> expression::Expression {
+fn now(value: expression::Expression) -> expression::Expression {
     expression::Expression {
-        expr: logical_plan::now(),
+        expr: logical_plan::now(value.expr),
     }
 }
 
@@ -172,9 +172,9 @@ fn octet_length(value: expression::Expression) -> expression::Expression {
 }
 
 #[pyfunction]
-fn random() -> expression::Expression {
+fn random(value: expression::Expression) -> expression::Expression {
     expression::Expression {
-        expr: logical_plan::random(),
+        expr: logical_plan::random(value.expr),
     }
 }
 
