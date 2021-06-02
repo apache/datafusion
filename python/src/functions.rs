@@ -23,6 +23,24 @@ use datafusion::logical_plan;
 use pyo3::{prelude::*, wrap_pyfunction};
 use std::sync::Arc;
 
+/// Expression representing a column on the existing plan.
+#[pyfunction]
+#[text_signature = "(name)"]
+fn col(name: &str) -> expression::Expression {
+    expression::Expression {
+        expr: logical_plan::col(name),
+    }
+}
+
+/// Expression representing a constant value
+#[pyfunction]
+#[text_signature = "(value)"]
+fn lit(value: i32) -> expression::Expression {
+    expression::Expression {
+        expr: logical_plan::lit(value),
+    }
+}
+
 #[pyfunction]
 fn array(value: Vec<expression::Expression>) -> expression::Expression {
     expression::Expression {
@@ -46,64 +64,82 @@ fn in_list(
 }
 
 macro_rules! define_function {
-    ($NAME: ident) => {{
-        /// Expression representing a $NAME function
+    ($NAME: ident) => {
+        #[doc = "This function is not documented yet"]
         #[pyfunction]
         fn $NAME(value: expression::Expression) -> expression::Expression {
             expression::Expression {
                 expr: logical_plan::$NAME(value.expr),
             }
         }
-    }};
-    ($NAME: ident, $SIGNATURE: expr) => {{
-        /// Expression representing a $NAME function
+    };
+    ($NAME: ident, $DOC: expr) => {
+        #[doc = $DOC]
         #[pyfunction]
-        #[text_signature = $SIGNATURE]
         fn $NAME(value: expression::Expression) -> expression::Expression {
             expression::Expression {
                 expr: logical_plan::$NAME(value.expr),
             }
         }
-    }};
+    };
 }
 
-define_function!(col, "(name)");
-define_function!(lit, "(value)");
-define_function!(ascii);
+define_function!(ascii, "Returns the numeric code of the first character of the argument. In UTF8 encoding, returns the Unicode code point of the character. In other multibyte encodings, the argument must be an ASCII character.");
 define_function!(sum);
-define_function!(bit_length);
-define_function!(btrim);
-define_function!(character_length);
-define_function!(chr);
-define_function!(concat_ws);
-define_function!(initcap);
-define_function!(left);
-define_function!(lower);
-define_function!(lpad);
-define_function!(ltrim);
-define_function!(md5);
+define_function!(
+    bit_length,
+    "Returns number of bits in the string (8 times the octet_length)."
+);
+define_function!(btrim, "Removes the longest string containing only characters in characters (a space by default) from the start and end of string.");
+define_function!(
+    character_length,
+    "Returns number of characters in the string."
+);
+define_function!(chr, "Returns the character with the given code.");
+define_function!(concat_ws, "Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.");
+define_function!(initcap, "Converts the first letter of each word to upper case and the rest to lower case. Words are sequences of alphanumeric characters separated by non-alphanumeric characters.");
+define_function!(left, "Returns first n characters in the string, or when n is negative, returns all but last |n| characters.");
+define_function!(lower, "Converts the string to all lower case");
+define_function!(lpad, "Extends the string to length length by prepending the characters fill (a space by default). If the string is already longer than length then it is truncated (on the right).");
+define_function!(ltrim, "Removes the longest string containing only characters in characters (a space by default) from the start of string.");
+define_function!(
+    md5,
+    "Computes the MD5 hash of the argument, with the result written in hexadecimal."
+);
 define_function!(now);
-define_function!(octet_length);
-define_function!(random);
-define_function!(replace);
-define_function!(repeat);
-define_function!(regexp_replace);
-define_function!(reverse);
-define_function!(right);
-define_function!(rpad);
-define_function!(rtrim);
+define_function!(octet_length, "Returns number of bytes in the string. Since this version of the function accepts type character directly, it will not strip trailing spaces.");
+define_function!(random, "Returns a random value in the range 0.0 <= x < 1.0");
+define_function!(
+    replace,
+    "Replaces all occurrences in string of substring from with substring to."
+);
+define_function!(repeat, "Repeats string the specified number of times.");
+define_function!(
+    regexp_replace,
+    "Replaces substring(s) matching a POSIX regular expression"
+);
+define_function!(
+    reverse,
+    "Reverses the order of the characters in the string."
+);
+define_function!(right, "Returns last n characters in the string, or when n is negative, returns all but first |n| characters.");
+define_function!(rpad, "Extends the string to length length by appending the characters fill (a space by default). If the string is already longer than length then it is truncated.");
+define_function!(rtrim, "Removes the longest string containing only characters in characters (a space by default) from the end of string.");
 define_function!(sha224);
 define_function!(sha256);
 define_function!(sha384);
 define_function!(sha512);
-define_function!(split_part);
-define_function!(starts_with);
-define_function!(strpos);
+define_function!(split_part, "Splits string at occurrences of delimiter and returns the n'th field (counting from one).");
+define_function!(starts_with, "Returns true if string starts with prefix.");
+define_function!(strpos,"Returns starting index of specified substring within string, or zero if it's not present. (Same as position(substring in string), but note the reversed argument order.)");
 define_function!(substr);
-define_function!(to_hex);
-define_function!(translate);
-define_function!(trim);
-define_function!(upper);
+define_function!(
+    to_hex,
+    "Converts the number to its equivalent hexadecimal representation."
+);
+define_function!(translate, "Replaces each character in string that matches a character in the from set with the corresponding character in the to set. If from is longer than to, occurrences of the extra characters in from are deleted.");
+define_function!(trim, "Removes the longest string containing only characters in characters (a space by default) from the start, end, or both ends (BOTH is the default) of string.");
+define_function!(upper, "Converts the string to all upper case.");
 define_function!(avg);
 define_function!(min);
 define_function!(max);
