@@ -106,6 +106,7 @@ new specifications as you see fit.
 Here is the list current active specifications:
 
 * [Output field name semantic](docs/specification/output-field-name-semantic.md)
+* [Invariants](docs/specification/invariants.md)
 
 ## How to format `.md` document
 
