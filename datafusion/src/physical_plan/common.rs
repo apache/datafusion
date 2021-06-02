@@ -22,13 +22,18 @@ use std::fs::metadata;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::{RecordBatchStream, SendableRecordBatchStream};
-use crate::error::{DataFusionError, Result};
-
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use futures::{Stream, TryStreamExt};
+use futures::channel::mpsc;
+use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
+use tokio::task::JoinHandle;
+
+use crate::arrow::error::ArrowError;
+use crate::error::{DataFusionError, Result};
+use crate::physical_plan::ExecutionPlan;
+
+use super::{RecordBatchStream, SendableRecordBatchStream};
 
 /// Stream of record batches
 pub struct SizedRecordBatchStream {
@@ -112,4 +117,30 @@ fn build_file_list_recurse(
         }
     }
     Ok(())
+}
+
+/// Spawns a task to the tokio threadpool and writes its outputs to the provided mpsc sender
+pub(crate) fn spawn_execution(
+    input: Arc<dyn ExecutionPlan>,
+    mut output: mpsc::Sender<ArrowResult<RecordBatch>>,
+    partition: usize,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut stream = match input.execute(partition).await {
+            Err(e) => {
+                // If send fails, plan being torn
+                // down, no place to send the error
+                let arrow_error = ArrowError::ExternalError(Box::new(e));
+                output.send(Err(arrow_error)).await.ok();
+                return;
+            }
+            Ok(stream) => stream,
+        };
+
+        while let Some(item) = stream.next().await {
+            // If send fails, plan being torn down,
+            // there is no place to send the error
+            output.send(item).await.ok();
+        }
+    })
 }

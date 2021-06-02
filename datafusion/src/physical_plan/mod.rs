@@ -608,6 +608,7 @@ pub mod projection;
 pub mod regex_expressions;
 pub mod repartition;
 pub mod sort;
+pub mod sort_preserving_merge;
 pub mod source;
 pub mod string_expressions;
 pub mod type_coercion;

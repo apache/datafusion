@@ -182,6 +182,35 @@
 //! * declare and use user-defined aggregate functions ([`AggregateUDF`](physical_plan::udaf::AggregateUDF))
 //!
 //! you can find examples of each of them in examples section.
+//!
+//! ## Examples
+//!
+//! Examples are located in [datafusion-examples directory](https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples)
+//!
+//! Here's how to run them
+//!
+//! ```bash
+//! git clone https://github.com/apache/arrow-datafusion
+//! cd arrow-datafusion
+//! # Download test data
+//! git submodule update --init
+//! export PARQUET_TEST_DATA=parquet-testing/data
+//! export ARROW_TEST_DATA=testing/data
+//!
+//! cargo run --example csv_sql
+//!
+//! cargo run --example parquet_sql
+//!
+//! cargo run --example dataframe
+//!
+//! cargo run --example dataframe_in_memory
+//!
+//! cargo run --example parquet_sql
+//!
+//! cargo run --example simple_udaf
+//!
+//! cargo run --example simple_udf
+//! ```
 
 extern crate sqlparser;
 

@@ -20,7 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates,
-    expressions::{FirstValue, LastValue, Literal, NthValue, RowNumber},
+    expressions::{Literal, NthValue, RowNumber},
     type_coercion::coerce,
     window_functions::signature_for_built_in,
     window_functions::BuiltInWindowFunctionExpr,
@@ -105,19 +105,19 @@ fn create_built_in_window_expr(
                 .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
             let n: u32 = n as u32;
             let data_type = args[0].data_type(input_schema)?;
-            Ok(Arc::new(NthValue::try_new(arg, name, n, data_type)?))
+            Ok(Arc::new(NthValue::nth_value(name, arg, data_type, n)?))
         }
         BuiltInWindowFunction::FirstValue => {
             let arg =
                 coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Ok(Arc::new(FirstValue::new(arg, name, data_type)))
+            Ok(Arc::new(NthValue::first_value(name, arg, data_type)))
         }
         BuiltInWindowFunction::LastValue => {
             let arg =
                 coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Ok(Arc::new(LastValue::new(arg, name, data_type)))
+            Ok(Arc::new(NthValue::last_value(name, arg, data_type)))
         }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Window function with {:?} not yet implemented",

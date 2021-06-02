@@ -388,8 +388,8 @@ impl SchedulerGrpc for SchedulerServer {
                     fail_job!(state
                         .save_stage_plan(
                             &job_id_spawn,
-                            stage.stage_id,
-                            stage.child.clone()
+                            stage.stage_id(),
+                            stage.children()[0].clone()
                         )
                         .await
                         .map_err(|e| {
@@ -402,7 +402,7 @@ impl SchedulerGrpc for SchedulerServer {
                         let pending_status = TaskStatus {
                             partition_id: Some(PartitionId {
                                 job_id: job_id_spawn.clone(),
-                                stage_id: stage.stage_id as u32,
+                                stage_id: stage.stage_id() as u32,
                                 partition_id: partition_id as u32,
                             }),
                             status: None,
