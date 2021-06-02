@@ -82,6 +82,13 @@ fn is_true(expr: &Expr) -> bool {
     }
 }
 
+fn is_null(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(v) => v.is_null(),
+        _ => false,
+    }
+}
+
 fn is_false(expr: &Expr) -> bool {
     match expr {
         Expr::Literal(ScalarValue::Boolean(Some(v))) => *v == false,
@@ -150,6 +157,11 @@ fn simplify(expr: &Expr) -> Expr {
             left,
             op: Operator::Divide,
             right,
+        } if left == right && is_null(left) => *left.clone(),
+        Expr::BinaryExpr {
+            left,
+            op: Operator::Divide,
+            right,
         } if left == right => lit(1),
         Expr::BinaryExpr { left, op, right }
             if left == right && operator_is_boolean(*op) =>
@@ -166,12 +178,12 @@ fn simplify(expr: &Expr) -> Expr {
                     left: _,
                     op: Operator::Or,
                     right: _,
-                } => x.clone(),
+                } => simplify(&x.clone()),
                 Expr::BinaryExpr {
                     left: _,
                     op: Operator::And,
                     right: _,
-                } => *right.clone(),
+                } => simplify(&*right.clone()),
                 _ => expr.clone(),
             })
             .unwrap_or(expr.clone()),
@@ -185,12 +197,12 @@ fn simplify(expr: &Expr) -> Expr {
                     left: _,
                     op: Operator::Or,
                     right: _,
-                } => *right.clone(),
+                } => simplify(&*right.clone()),
                 Expr::BinaryExpr {
                     left: _,
                     op: Operator::And,
                     right: _,
-                } => *left.clone(),
+                } => simplify(&*left.clone()),
                 _ => expr.clone(),
             })
             .unwrap_or(expr.clone()),
@@ -204,12 +216,12 @@ fn simplify(expr: &Expr) -> Expr {
                     left: _,
                     op: Operator::Or,
                     right: _,
-                } => *right.clone(),
+                } => simplify(&*right.clone()),
                 Expr::BinaryExpr {
                     left: _,
                     op: Operator::And,
                     right: _,
-                } => x.clone(),
+                } => simplify(&x.clone()),
                 _ => expr.clone(),
             })
             .unwrap_or(expr.clone()),
@@ -223,12 +235,12 @@ fn simplify(expr: &Expr) -> Expr {
                     left: _,
                     op: Operator::Or,
                     right: _,
-                } => *left.clone(),
+                } => simplify(&*left.clone()),
                 Expr::BinaryExpr {
                     left: _,
                     op: Operator::And,
                     right: _,
-                } => x.clone(),
+                } => simplify(&x.clone()),
                 _ => expr.clone(),
             })
             .unwrap_or(expr.clone()),
@@ -454,7 +466,26 @@ mod tests {
     }
 
     #[test]
-    fn test_do_not_simplify_arithmetic_expr() -> Result<()> {
+    fn test_simplify_and_and_false() -> Result<()> {
+        let expr = binary_expr(lit(ScalarValue::Boolean(None)), Operator::And, lit(false));
+        let expr_eq = lit(false);
+
+        assert_eq!(simplify(&expr), expr_eq);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_divide_null_by_null() -> Result<()> {
+        let null = Expr::Literal(ScalarValue::Int32(None));
+        let expr_plus = binary_expr(null.clone(), Operator::Divide, null.clone());
+        let expr_eq = null;
+
+        assert_eq!(simplify(&expr_plus), expr_eq);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_do_not_simplify_arithmetic_expr() -> Result<()> {
         let expr_plus = binary_expr(lit(1), Operator::Plus, lit(1));
         let expr_eq = binary_expr(lit(1), Operator::Eq, lit(1));
 
@@ -465,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn test_optimized_plan() -> Result<()> {
+    fn test_simplify_optimized_plan() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(&table_scan)
             .project(vec![col("a")])?
@@ -484,7 +515,7 @@ mod tests {
 
     // ((c > 5) AND (d < 6)) AND (c > 5) --> (c > 5) AND (d < 6)
     #[test]
-    fn test_optimized_plan_with_composed_and() -> Result<()> {
+    fn test_simplify_optimized_plan_with_composed_and() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(&table_scan)
             .project(vec![col("a")])?
