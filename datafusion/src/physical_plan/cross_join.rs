@@ -68,7 +68,7 @@ impl CrossJoinExec {
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
-        check_join_is_valid(&left_schema, &right_schema, &vec![])?;
+        check_join_is_valid(&left_schema, &right_schema, &[])?;
 
         let left_schema = left.schema();
         let left_fields = left_schema.fields().iter();

@@ -38,10 +38,12 @@ pub enum JoinType {
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;
+/// Reference for JoinOn.
+pub type JoinOnRef<'a> = &'a [(Column, Column)];
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
 /// They are valid whenever their columns' intersection equals the set `on`
-pub fn check_join_is_valid(left: &Schema, right: &Schema, on: &JoinOn) -> Result<()> {
+pub fn check_join_is_valid(left: &Schema, right: &Schema, on: JoinOnRef) -> Result<()> {
     let left: HashSet<Column> = left
         .fields()
         .iter()
@@ -101,7 +103,7 @@ fn check_join_set_is_valid(
 pub fn build_join_schema(
     left: &Schema,
     right: &Schema,
-    on: &JoinOn,
+    on: JoinOnRef,
     join_type: &JoinType,
 ) -> Schema {
     let fields: Vec<Field> = match join_type {

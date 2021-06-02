@@ -265,7 +265,7 @@ impl DFSchema {
                 .into_iter()
                 .map(|f| {
                     DFField::new(
-                        Some(qualifer.clone()),
+                        Some(qualifer),
                         f.name(),
                         f.data_type().to_owned(),
                         f.is_nullable(),

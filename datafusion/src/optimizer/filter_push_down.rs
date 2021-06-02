@@ -278,7 +278,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     expr => expr.clone(),
                 };
 
-                projection.insert(field.qualified_name().clone(), expr);
+                projection.insert(field.qualified_name(), expr);
             });
 
             // re-write all filters based on this projection

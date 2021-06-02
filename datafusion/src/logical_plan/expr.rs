@@ -87,7 +87,7 @@ impl Column {
 
     /// Normalize Column with qualifier based on provided dataframe schemas.
     pub fn normalize(self, schemas: &[&DFSchemaRef]) -> Result<Self> {
-        if !self.relation.is_none() {
+        if self.relation.is_some() {
             return Ok(self);
         }
 
@@ -445,7 +445,7 @@ impl Expr {
     pub fn to_field(&self, input_schema: &DFSchema) -> Result<DFField> {
         match self {
             Expr::Column(c) => Ok(DFField::new(
-                c.relation.as_ref().map(|s| s.as_str()),
+                c.relation.as_deref(),
                 &c.name,
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
@@ -1110,7 +1110,7 @@ pub fn normalize_cols(
 ) -> Result<Vec<Expr>> {
     exprs
         .into_iter()
-        .map(|e| normalize_col(e.clone(), schemas))
+        .map(|e| normalize_col(e, schemas))
         .collect()
 }
 
