@@ -91,7 +91,7 @@ fn is_null(expr: &Expr) -> bool {
 
 fn is_false(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(Some(v))) => *v == false,
+        Expr::Literal(ScalarValue::Boolean(Some(v))) => !(*v),
         _ => false,
     }
 }
@@ -186,7 +186,7 @@ fn simplify(expr: &Expr) -> Expr {
                 } => simplify(&*right.clone()),
                 _ => expr.clone(),
             })
-            .unwrap_or(expr.clone()),
+            .unwrap_or_else(|| expr.clone()),
         Expr::BinaryExpr {
             left,
             op: Operator::Or,
@@ -205,7 +205,7 @@ fn simplify(expr: &Expr) -> Expr {
                 } => simplify(&*left.clone()),
                 _ => expr.clone(),
             })
-            .unwrap_or(expr.clone()),
+            .unwrap_or_else(|| expr.clone()),
         Expr::BinaryExpr {
             left,
             op: Operator::And,
@@ -224,7 +224,7 @@ fn simplify(expr: &Expr) -> Expr {
                 } => simplify(&x.clone()),
                 _ => expr.clone(),
             })
-            .unwrap_or(expr.clone()),
+            .unwrap_or_else(|| expr.clone()),
         Expr::BinaryExpr {
             left,
             op: Operator::And,
@@ -243,7 +243,7 @@ fn simplify(expr: &Expr) -> Expr {
                 } => simplify(&x.clone()),
                 _ => expr.clone(),
             })
-            .unwrap_or(expr.clone()),
+            .unwrap_or_else(|| expr.clone()),
         Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
             left: Box::new(simplify(&left)),
             op: *op,
@@ -467,7 +467,8 @@ mod tests {
 
     #[test]
     fn test_simplify_and_and_false() -> Result<()> {
-        let expr = binary_expr(lit(ScalarValue::Boolean(None)), Operator::And, lit(false));
+        let expr =
+            binary_expr(lit(ScalarValue::Boolean(None)), Operator::And, lit(false));
         let expr_eq = lit(false);
 
         assert_eq!(simplify(&expr), expr_eq);
