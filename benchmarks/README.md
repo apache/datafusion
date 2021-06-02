@@ -122,7 +122,7 @@ RUST_LOG=info RUSTFLAGS='-C target-cpu=native -C lto -C codegen-units=1 -C embed
 To run the benchmarks:
 
 ```bash
-cd $ARROW_HOME/ballista/rust/benchmarks/tpch
+cd $ARROW_HOME/benchmarks
 cargo run --release benchmark ballista --host localhost --port 50050 --query 1 --path $(pwd)/data --format tbl
 ```
 
@@ -131,9 +131,9 @@ cargo run --release benchmark ballista --host localhost --port 50050 --query 1 -
 To start a Rust scheduler and executor using Docker Compose:
 
 ```bash
-cd $BALLISTA_HOME
+cd $ARROW_HOME
 ./dev/build-rust.sh
-cd $BALLISTA_HOME/rust/benchmarks/tpch
+cd $ARROW_HOME/benchmarks
 docker-compose up
 ```
 

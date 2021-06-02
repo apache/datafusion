@@ -24,8 +24,8 @@ you are already comfortable with managing Kubernetes deployments.
 
 The k8s deployment consists of:
 
-- k8s stateful set for one or more scheduler processes
-- k8s stateful set for one or more executor processes
+- k8s deployment for one or more scheduler processes
+- k8s deployment for one or more executor processes
 - k8s service to route traffic to the schedulers
 - k8s persistent volume and persistent volume claims to make local data accessible to Ballista
 
@@ -37,6 +37,14 @@ Ballista is at an early stage of development and therefore has some significant 
   cluster, including where any client process runs.
 - Only a single scheduler instance is currently supported unless the scheduler is configured to use `etcd` as a
   backing store.
+
+## Publishing your images
+
+Currently there are no official Ballista images that work with the instructions in this guide. For the time being,
+you will need to build and publish your own images. You can do that by invoking the `dev/build-ballista-docker.sh`.
+
+Once the images have been built, you can retag them with `docker tag ballista:0.5.0-SNAPSHOT <new-image-name>` so you
+can push them to your favourite docker registry.
 
 ## Create Persistent Volume and Persistent Volume Claim
 
@@ -88,7 +96,7 @@ persistentvolumeclaim/data-pv-claim created
 
 ## Deploying Ballista Scheduler and Executors
 
-Copy the following yaml to a `cluster.yaml` file.
+Copy the following yaml to a `cluster.yaml` file and change `<your-image>` with the name of your Ballista Docker image.
 
 ```yaml
 apiVersion: v1
@@ -101,16 +109,14 @@ spec:
   ports:
     - port: 50050
       name: scheduler
-  clusterIP: None
   selector:
     app: ballista-scheduler
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: ballista-scheduler
 spec:
-  serviceName: "ballista-scheduler"
   replicas: 1
   selector:
     matchLabels:
@@ -122,27 +128,26 @@ spec:
         ballista-cluster: ballista
     spec:
       containers:
-        - name: ballista-scheduler
-          image: ballistacompute/ballista-rust:0.4.2-SNAPSHOT
-          command: ["/scheduler"]
-          args: ["--port=50050"]
-          ports:
-            - containerPort: 50050
-              name: flight
-          volumeMounts:
-            - mountPath: /mnt
-              name: data
+      - name: ballista-scheduler
+        image: <your-image>
+        command: ["/scheduler"]
+        args: ["--bind-port=50050"]
+        ports:
+          - containerPort: 50050
+            name: flight
+        volumeMounts:
+          - mountPath: /mnt
+            name: data
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: data-pv-claim
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: ballista-executor
 spec:
-  serviceName: "ballista-scheduler"
   replicas: 2
   selector:
     matchLabels:
@@ -155,20 +160,12 @@ spec:
     spec:
       containers:
         - name: ballista-executor
-          image: ballistacompute/ballista-rust:0.4.2-SNAPSHOT
+          image: <your-image>
           command: ["/executor"]
           args:
-            [
-              "--port=50051",
-              "--scheduler-host=ballista-scheduler",
-              "--scheduler-port=50050",
-              "--external-host=$(MY_POD_IP)",
-            ]
-          env:
-            - name: MY_POD_IP
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.podIP
+            - "--bind-port=50051",
+            - "--scheduler-host=ballista-scheduler",
+            - "--scheduler-port=50050"
           ports:
             - containerPort: 50051
               name: flight
@@ -189,19 +186,18 @@ This should show the following output:
 
 ```
 service/ballista-scheduler created
-statefulset.apps/ballista-scheduler created
-statefulset.apps/ballista-executor created
+deployment.apps/ballista-scheduler created
+deployment.apps/ballista-executor created
 ```
 
 You can also check status by running `kubectl get pods`:
 
 ```bash
 $ kubectl get pods
-NAME                   READY   STATUS    RESTARTS   AGE
-busybox                1/1     Running   0          16m
-ballista-scheduler-0   1/1     Running   0          42s
-ballista-executor-0    1/1     Running   2          42s
-ballista-executor-1    1/1     Running   0          26s
+NAME                                 READY   STATUS    RESTARTS   AGE
+ballista-executor-78cc5b6486-4rkn4   0/1     Pending   0          42s
+ballista-executor-78cc5b6486-7crdm   0/1     Pending   0          42s
+ballista-scheduler-879f874c5-rnbd6   0/1     Pending   0          42s
 ```
 
 You can view the scheduler logs with `kubectl logs ballista-scheduler-0`:

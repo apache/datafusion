@@ -53,7 +53,7 @@ doc = "Host name or IP address to register with scheduler so that other executor
 
 [[param]]
 abbr = "p"
-name = "port"
+name = "bind_port"
 type = "u16"
 default = "50051"
 doc = "bind port"

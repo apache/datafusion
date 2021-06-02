@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
 
     let external_host = opt.external_host;
     let bind_host = opt.bind_host;
-    let port = opt.port;
+    let port = opt.bind_port;
 
     let addr = format!("{}:{}", bind_host, port);
     let addr = addr

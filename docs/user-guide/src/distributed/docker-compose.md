@@ -33,7 +33,7 @@ services:
       - "2379:2379"
   ballista-executor:
     image: ballistacompute/ballista-rust:0.4.2-SNAPSHOT
-    command: "/executor --bind-host 0.0.0.0 --port 50051 --local"
+    command: "/executor --bind-host 0.0.0.0 --bind-port 50051 --local"
     environment:
       - RUST_LOG=info
     ports:

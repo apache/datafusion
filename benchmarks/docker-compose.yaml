@@ -21,7 +21,7 @@ services:
     command: "etcd -advertise-client-urls http://etcd:2379 -listen-client-urls http://0.0.0.0:2379"
   ballista-scheduler:
     image: ballista:0.5.0-SNAPSHOT
-    command: "/scheduler --config-backend etcd --etcd-urls etcd:2379 --bind-host 0.0.0.0 --port 50050"
+    command: "/scheduler --config-backend etcd --etcd-urls etcd:2379 --bind-host 0.0.0.0 --bind-port 50050"
     environment:
       - RUST_LOG=ballista=debug
     volumes:
@@ -30,7 +30,7 @@ services:
       - etcd
   ballista-executor:
     image: ballista:0.5.0-SNAPSHOT
-    command: "/executor --bind-host 0.0.0.0 --port 50051 --scheduler-host ballista-scheduler"
+    command: "/executor --bind-host 0.0.0.0 --bind-port 50051 --scheduler-host ballista-scheduler"
     scale: 2
     environment:
       - RUST_LOG=info
