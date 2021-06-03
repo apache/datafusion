@@ -309,7 +309,7 @@ impl LogicalPlanBuilder {
         // FIXME: implement next
         // window_frame: Option<WindowFrame>,
     ) -> Result<Self> {
-        let window_expr = window_expr.into_iter().collect::<Vec<Expr>>();
+        let window_expr = window_expr.into_iter().collect::<Vec<_>>();
         // FIXME: implement next
         // let partition_by_expr = partition_by_expr.into_iter().collect::<Vec<Expr>>();
         // FIXME: implement next

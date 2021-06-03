@@ -17,10 +17,6 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use std::str::FromStr;
-use std::sync::Arc;
-use std::{convert::TryInto, vec};
-
 use crate::catalog::TableReference;
 use crate::datasource::TableProvider;
 use crate::logical_plan::Expr::Alias;
@@ -28,6 +24,7 @@ use crate::logical_plan::{
     and, lit, DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
     StringifiedPlan, ToDFSchema,
 };
+use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::{
     error::{DataFusionError, Result},
@@ -38,11 +35,8 @@ use crate::{
     physical_plan::{aggregates, functions, window_functions},
     sql::parser::{CreateExternalTable, FileType, Statement as DFStatement},
 };
-
 use arrow::datatypes::*;
 use hashbrown::HashMap;
-
-use crate::prelude::JoinType;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query, Select, SelectItem,
@@ -52,6 +46,9 @@ use sqlparser::ast::{
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::{convert::TryInto, vec};
 
 use super::{
     parser::DFParser,
@@ -678,11 +675,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         select_exprs: &[Expr],
     ) -> Result<(LogicalPlan, Vec<Expr>)> {
         let plan = LogicalPlanBuilder::from(input)
-            .window(window_exprs)?
+            .window(window_exprs.clone())?
             .build()?;
         let select_exprs = select_exprs
             .iter()
-            .map(|expr| expr_as_column_expr(&expr, &plan))
+            .map(|expr| rebase_expr(expr, &window_exprs, &plan))
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
         Ok((plan, select_exprs))
@@ -2705,6 +2702,16 @@ mod tests {
         let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
         let expected = "\
         Projection: #order_id, #MAX(order_id)\
+        \n  WindowAggr: windowExpr=[[MAX(#order_id)]] partitionBy=[], orderBy=[]\
+        \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn empty_over_with_alias() {
+        let sql = "SELECT order_id oid, MAX(order_id) OVER () max_oid from orders";
+        let expected = "\
+        Projection: #order_id AS oid, #MAX(order_id) AS max_oid\
         \n  WindowAggr: windowExpr=[[MAX(#order_id)]] partitionBy=[], orderBy=[]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);

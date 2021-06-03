@@ -17,7 +17,7 @@
 
 import unittest
 
-import pyarrow
+import pyarrow as pa
 import datafusion
 f = datafusion.functions
 
@@ -28,8 +28,8 @@ class TestCase(unittest.TestCase):
         ctx = datafusion.ExecutionContext()
 
         # create a RecordBatch and a new DataFrame from it
-        batch = pyarrow.RecordBatch.from_arrays(
-            [pyarrow.array([1, 2, 3]), pyarrow.array([4, 5, 6])],
+        batch = pa.RecordBatch.from_arrays(
+            [pa.array([1, 2, 3]), pa.array([4, 5, 6])],
             names=["a", "b"],
         )
         return ctx.create_dataframe([[batch]])
@@ -45,8 +45,8 @@ class TestCase(unittest.TestCase):
         # execute and collect the first (and only) batch
         result = df.collect()[0]
 
-        self.assertEqual(result.column(0), pyarrow.array([5, 7, 9]))
-        self.assertEqual(result.column(1), pyarrow.array([-3, -3, -3]))
+        self.assertEqual(result.column(0), pa.array([5, 7, 9]))
+        self.assertEqual(result.column(1), pa.array([-3, -3, -3]))
 
     def test_filter(self):
         df = self._prepare()
@@ -61,8 +61,18 @@ class TestCase(unittest.TestCase):
         # execute and collect the first (and only) batch
         result = df.collect()[0]
 
-        self.assertEqual(result.column(0), pyarrow.array([9]))
-        self.assertEqual(result.column(1), pyarrow.array([-3]))
+        self.assertEqual(result.column(0), pa.array([9]))
+        self.assertEqual(result.column(1), pa.array([-3]))
+
+    def test_sort(self):
+        df = self._prepare()
+        df = df.sort([
+            f.col("b").sort(ascending=False)
+        ])
+
+        table = pa.Table.from_batches(df.collect())
+        expected = {'a': [3, 2, 1], 'b': [6, 5, 4]}
+        self.assertEqual(table.to_pydict(), expected)
 
     def test_limit(self):
         df = self._prepare()
@@ -78,38 +88,33 @@ class TestCase(unittest.TestCase):
     def test_udf(self):
         df = self._prepare()
 
-        # is_null is a pyarrow function over arrays
-        udf = f.udf(lambda x: x.is_null(), [pyarrow.int64()], pyarrow.bool_())
+        # is_null is a pa function over arrays
+        udf = f.udf(lambda x: x.is_null(), [pa.int64()], pa.bool_())
 
         df = df.select(udf(f.col("a")))
 
-        self.assertEqual(df.collect()[0].column(0), pyarrow.array([False, False, False]))
+        self.assertEqual(df.collect()[0].column(0), pa.array([False, False, False]))
 
     def test_join(self):
         ctx = datafusion.ExecutionContext()
 
-        batch = pyarrow.RecordBatch.from_arrays(
-            [pyarrow.array([1, 2, 3]), pyarrow.array([4, 5, 6])],
+        batch = pa.RecordBatch.from_arrays(
+            [pa.array([1, 2, 3]), pa.array([4, 5, 6])],
             names=["a", "b"],
         )
         df = ctx.create_dataframe([[batch]])
 
-        batch = pyarrow.RecordBatch.from_arrays(
-            [pyarrow.array([1, 2]), pyarrow.array([8, 10])],
+        batch = pa.RecordBatch.from_arrays(
+            [pa.array([1, 2]), pa.array([8, 10])],
             names=["a", "c"],
         )
         df1 = ctx.create_dataframe([[batch]])
 
         df = df.join(df1, on="a", how="inner")
+        df = df.sort([
+            f.col("a").sort(ascending=True)
+        ])
+        table = pa.Table.from_batches(df.collect())
 
-        # execute and collect the first (and only) batch
-        batch = df.collect()[0]
-
-        if batch.column(0) == pyarrow.array([1, 2]):
-            self.assertEqual(batch.column(0), pyarrow.array([1, 2]))
-            self.assertEqual(batch.column(1), pyarrow.array([8, 10]))
-            self.assertEqual(batch.column(2), pyarrow.array([4, 5]))
-        else:
-            self.assertEqual(batch.column(0), pyarrow.array([2, 1]))
-            self.assertEqual(batch.column(1), pyarrow.array([10, 8]))
-            self.assertEqual(batch.column(2), pyarrow.array([5, 4]))
+        expected = {'a': [1, 2], 'c': [8, 10], 'b': [4, 5]}
+        self.assertEqual(table.to_pydict(), expected)

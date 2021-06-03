@@ -27,6 +27,6 @@ RUN git clone https://github.com/databricks/tpch-dbgen.git && \
 WORKDIR /tpch-dbgen
 ADD entrypoint.sh /tpch-dbgen/
 
-VOLUME data
+VOLUME /data
 
 ENTRYPOINT [ "bash", "./entrypoint.sh" ]
