@@ -19,13 +19,6 @@
 //! such as `col = 5` or `SUM(col)`. See examples on the [`Expr`] struct.
 
 pub use super::Operator;
-
-use std::fmt;
-use std::sync::Arc;
-
-use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
-use arrow::{compute::can_cast_types, datatypes::DataType};
-
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{DFField, DFSchema};
 use crate::physical_plan::{
@@ -33,8 +26,13 @@ use crate::physical_plan::{
     window_functions,
 };
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
+use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
+use arrow::{compute::can_cast_types, datatypes::DataType};
 use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
+use sqlparser::ast::WindowFrame;
 use std::collections::HashSet;
+use std::fmt;
+use std::sync::Arc;
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -199,6 +197,8 @@ pub enum Expr {
         args: Vec<Expr>,
         /// List of order by expressions
         order_by: Vec<Expr>,
+        /// Window frame
+        window_frame: Option<WindowFrame>,
     },
     /// aggregate function
     AggregateUDF {
@@ -735,10 +735,12 @@ impl Expr {
                 args,
                 fun,
                 order_by,
+                window_frame,
             } => Expr::WindowFunction {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
                 order_by: rewrite_vec(order_by, rewriter)?,
+                window_frame,
             },
             Expr::AggregateFunction {
                 args,

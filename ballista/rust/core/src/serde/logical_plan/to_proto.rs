@@ -1007,6 +1007,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                 ref fun,
                 ref args,
                 ref order_by,
+                ref window_frame,
                 ..
             } => {
                 let window_function = match fun {
@@ -1026,10 +1027,15 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     .iter()
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
+                let window_frame = window_frame.as_ref().map(|window_frame| {
+                    let window_frame: protobuf::WindowFrame = window_frame.clone().into();
+                    protobuf::window_expr_node::WindowFrame::Frame(window_frame)
+                });
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: Some(Box::new(arg.try_into()?)),
                     window_function: Some(window_function),
                     order_by,
+                    window_frame,
                 });
                 Ok(protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::WindowExpr(window_expr)),
@@ -1256,23 +1262,35 @@ impl From<WindowFrameUnits> for protobuf::WindowFrameUnits {
     }
 }
 
-impl TryFrom<WindowFrameBound> for protobuf::WindowFrameBound {
-    type Error = BallistaError;
-
-    fn try_from(_bound: WindowFrameBound) -> Result<Self, Self::Error> {
-        Err(BallistaError::NotImplemented(
-            "WindowFrameBound => protobuf::WindowFrameBound".to_owned(),
-        ))
+impl From<WindowFrameBound> for protobuf::WindowFrameBound {
+    fn from(bound: WindowFrameBound) -> Self {
+        match bound {
+            WindowFrameBound::CurrentRow => protobuf::WindowFrameBound {
+                window_frame_bound_type: protobuf::WindowFrameBoundType::CurrentRow
+                    .into(),
+                bound_value: None,
+            },
+            WindowFrameBound::Preceding(v) => protobuf::WindowFrameBound {
+                window_frame_bound_type: protobuf::WindowFrameBoundType::Preceding.into(),
+                bound_value: v.map(protobuf::window_frame_bound::BoundValue::Value),
+            },
+            WindowFrameBound::Following(v) => protobuf::WindowFrameBound {
+                window_frame_bound_type: protobuf::WindowFrameBoundType::Following.into(),
+                bound_value: v.map(protobuf::window_frame_bound::BoundValue::Value),
+            },
+        }
     }
 }
 
-impl TryFrom<WindowFrame> for protobuf::WindowFrame {
-    type Error = BallistaError;
-
-    fn try_from(_window: WindowFrame) -> Result<Self, Self::Error> {
-        Err(BallistaError::NotImplemented(
-            "WindowFrame => protobuf::WindowFrame".to_owned(),
-        ))
+impl From<WindowFrame> for protobuf::WindowFrame {
+    fn from(window: WindowFrame) -> Self {
+        protobuf::WindowFrame {
+            window_frame_units: protobuf::WindowFrameUnits::from(window.units).into(),
+            start_bound: Some(window.start_bound.into()),
+            end_bound: window.end_bound.map(|end_bound| {
+                protobuf::window_frame::EndBound::Bound(end_bound.into())
+            }),
+        }
     }
 }
 

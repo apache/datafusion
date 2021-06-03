@@ -39,6 +39,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sort::SortExec;
 use crate::physical_plan::udf;
+use crate::physical_plan::window_frames;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{hash_utils, Partitioning};
 use crate::physical_plan::{
@@ -747,7 +748,12 @@ impl DefaultPhysicalPlanner {
         };
 
         match e {
-            Expr::WindowFunction { fun, args, .. } => {
+            Expr::WindowFunction {
+                fun,
+                args,
+                window_frame,
+                ..
+            } => {
                 let args = args
                     .iter()
                     .map(|e| {
@@ -759,6 +765,7 @@ impl DefaultPhysicalPlanner {
                 //         "Window function with order by is not yet implemented".to_owned(),
                 //     ));
                 // }
+                let _window_frame = window_frames::validate_window_frame(window_frame)?;
                 windows::create_window_expr(fun, &args, physical_input_schema, name)
             }
             other => Err(DataFusionError::Internal(format!(

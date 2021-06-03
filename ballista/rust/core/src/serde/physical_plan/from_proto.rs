@@ -237,6 +237,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                             fun,
                             args,
                             order_by,
+                            window_frame,
                         } => {
                             let arg = df_planner
                                 .create_physical_expr(
@@ -249,6 +250,9 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                                 })?;
                             if !order_by.is_empty() {
                                 return Err(BallistaError::NotImplemented("Window function with order by is not yet implemented".to_owned()));
+                            }
+                            if window_frame.is_some() {
+                                return Err(BallistaError::NotImplemented("Window function with window frame is not yet implemented".to_owned()));
                             }
                             let window_expr = create_window_expr(
                                 &fun,

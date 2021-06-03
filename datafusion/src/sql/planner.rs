@@ -43,7 +43,7 @@ use sqlparser::ast::{
     SetExpr, SetOperator, ShowStatementFilter, TableFactor, TableWithJoins,
     UnaryOperator, Value,
 };
-use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
+use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption, WindowFrame};
 use sqlparser::ast::{OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
 use std::str::FromStr;
@@ -1109,13 +1109,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 // then, window function
                 if let Some(window) = &function.over {
-                    if window.partition_by.is_empty() && window.window_frame.is_none() {
+                    if window.partition_by.is_empty() {
                         let order_by = window
                             .order_by
                             .iter()
                             .map(|e| self.order_by_to_sort_expr(e))
                             .into_iter()
                             .collect::<Result<Vec<_>>>()?;
+                        let window_frame: Option<WindowFrame> =
+                            window.window_frame.clone();
                         let fun = window_functions::WindowFunction::from_str(&name);
                         if let Ok(window_functions::WindowFunction::AggregateFunction(
                             aggregate_fun,
@@ -1128,6 +1130,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 args: self
                                     .aggregate_fn_to_expr(&aggregate_fun, function)?,
                                 order_by,
+                                window_frame,
                             });
                         } else if let Ok(
                             window_functions::WindowFunction::BuiltInWindowFunction(
@@ -1139,8 +1142,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 fun: window_functions::WindowFunction::BuiltInWindowFunction(
                                     window_fun,
                                 ),
-                                args:self.function_args_to_expr(function)?,
-                                order_by
+                                args: self.function_args_to_expr(function)?,
+                                order_by,
+                                window_frame,
                             });
                         }
                     }
@@ -2787,6 +2791,45 @@ mod tests {
     #[test]
     fn over_order_by() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty), #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty)]] partitionBy=[]\
+        \n    Sort: #order_id ASC NULLS FIRST\
+        \n      WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n        Sort: #order_id DESC NULLS FIRST\
+        \n          TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn over_order_by_with_window_frame_double_end() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id RANGE BETWEEN 3 PRECEDING and 3 FOLLOWING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty), #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty)]] partitionBy=[]\
+        \n    Sort: #order_id ASC NULLS FIRST\
+        \n      WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n        Sort: #order_id DESC NULLS FIRST\
+        \n          TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn over_order_by_with_window_frame_single_end() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id RANGE 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty), #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty)]] partitionBy=[]\
+        \n    Sort: #order_id ASC NULLS FIRST\
+        \n      WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n        Sort: #order_id DESC NULLS FIRST\
+        \n          TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn over_order_by_with_window_frame_single_end_groups() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id GROUPS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
         Projection: #order_id, #MAX(qty), #MIN(qty)\
         \n  WindowAggr: windowExpr=[[MAX(#qty)]] partitionBy=[]\
