@@ -17,8 +17,6 @@
 
 //! Physical query planner
 
-use std::sync::Arc;
-
 use super::{
     aggregates, cross_join::CrossJoinExec, empty::EmptyExec, expressions::binary,
     functions, hash_join::PartitionMode, udaf, union::UnionExec, windows,
@@ -56,6 +54,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use expressions::col;
 use log::debug;
+use std::sync::Arc;
 
 /// This trait exposes the ability to plan an [`ExecutionPlan`] out of a [`LogicalPlan`].
 pub trait ExtensionPlanner {

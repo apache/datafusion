@@ -337,7 +337,9 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
             fun: fun.clone(),
             args: expressions.to_vec(),
         }),
-        Expr::WindowFunction { fun, .. } => {
+        Expr::WindowFunction {
+            fun, window_frame, ..
+        } => {
             let index = expressions
                 .iter()
                 .position(|expr| {
@@ -353,6 +355,7 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
                 fun: fun.clone(),
                 args: expressions[..index].to_vec(),
                 order_by: expressions[index + 1..].to_vec(),
+                window_frame: *window_frame,
             })
         }
         Expr::AggregateFunction { fun, distinct, .. } => Ok(Expr::AggregateFunction {

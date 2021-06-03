@@ -237,6 +237,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                             fun,
                             args,
                             order_by,
+                            ..
                         } => {
                             let arg = df_planner
                                 .create_physical_expr(
