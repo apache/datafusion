@@ -23,7 +23,6 @@ on:
   pull_request:
 
 jobs:
-
   lint:
     name: Lint C++, Python, R, Rust, Docker, RAT
     runs-on: ubuntu-latest
@@ -37,3 +36,17 @@ jobs:
         run: pip install -e dev/archery[docker]
       - name: Lint
         run: archery lint --rat
+
+  prettier:
+    name: Use prettier to check formatting of documents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: "14"
+      - name: Prettier check
+        run: |
+          # if you encounter error, try rerun the command below with --write instead of --check
+          # and commit the changes
+          npx prettier@2.3.0 --check {ballista,datafusion,datafusion-examples,dev,docs,python}/**/*.md README.md DEVELOPERS.md
