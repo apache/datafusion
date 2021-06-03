@@ -57,7 +57,7 @@ fn create_context() -> Arc<Mutex<ExecutionContext>> {
         Field::new("c13", DataType::Utf8, false),
     ]));
 
-    let testdata = arrow::util::test_util::arrow_test_data();
+    let testdata = datafusion::test_util::arrow_test_data();
 
     // create CSV data source
     let csv = CsvFile::try_new(

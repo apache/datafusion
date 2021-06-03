@@ -865,7 +865,7 @@ mod tests {
 
     #[test]
     fn test_all_operators() -> Result<()> {
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn test_with_csv_plan() -> Result<()> {
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
@@ -924,7 +924,7 @@ mod tests {
 
     #[test]
     fn errors() -> Result<()> {
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
         let options = CsvReadOptions::new().schema_infer_max_records(100);
 
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[test]
     fn in_list_types() -> Result<()> {
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
         let options = CsvReadOptions::new().schema_infer_max_records(100);
 
@@ -1074,7 +1074,7 @@ mod tests {
 
     #[test]
     fn hash_agg_input_schema() -> Result<()> {
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
@@ -1097,7 +1097,7 @@ mod tests {
 
     #[test]
     fn hash_agg_group_by_partitioned() -> Result<()> {
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);

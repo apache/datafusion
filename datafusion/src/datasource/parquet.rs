@@ -328,7 +328,7 @@ mod tests {
     }
 
     fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
-        let testdata = arrow::util::test_util::parquet_test_data();
+        let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
         let table = ParquetTable::try_new(&filename, 2)?;
         Ok(Arc::new(table))
