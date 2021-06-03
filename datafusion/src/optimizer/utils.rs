@@ -36,6 +36,7 @@ use crate::{
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
 const CASE_ELSE_MARKER: &str = "__DATAFUSION_CASE_ELSE__";
+const WINDOW_SORT_MARKER: &str = "__DATAFUSION_WINDOW_SORT__";
 
 /// Recursively walk a list of expression trees, collecting the unique set of column
 /// names referenced in the expression
@@ -190,14 +191,6 @@ pub fn from_plan(
             }),
         },
         LogicalPlan::Window {
-            // FIXME implement next
-            // filter_by_expr,
-            // FIXME implement next
-            // partition_by_expr,
-            // FIXME implement next
-            // order_by_expr,
-            // FIXME implement next
-            // window_frame,
             window_expr,
             schema,
             ..
@@ -265,7 +258,13 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         Expr::IsNotNull(e) => Ok(vec![e.as_ref().to_owned()]),
         Expr::ScalarFunction { args, .. } => Ok(args.clone()),
         Expr::ScalarUDF { args, .. } => Ok(args.clone()),
-        Expr::WindowFunction { args, .. } => Ok(args.clone()),
+        Expr::WindowFunction { args, order_by, .. } => {
+            let mut expr_list: Vec<Expr> = vec![];
+            expr_list.extend(args.clone());
+            expr_list.push(lit(WINDOW_SORT_MARKER));
+            expr_list.extend(order_by.clone());
+            Ok(expr_list)
+        }
         Expr::AggregateFunction { args, .. } => Ok(args.clone()),
         Expr::AggregateUDF { args, .. } => Ok(args.clone()),
         Expr::Case {
@@ -338,10 +337,24 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
             fun: fun.clone(),
             args: expressions.to_vec(),
         }),
-        Expr::WindowFunction { fun, .. } => Ok(Expr::WindowFunction {
-            fun: fun.clone(),
-            args: expressions.to_vec(),
-        }),
+        Expr::WindowFunction { fun, .. } => {
+            let index = expressions
+                .iter()
+                .position(|expr| {
+                    matches!(expr, Expr::Literal(ScalarValue::Utf8(Some(str)))
+            if str == WINDOW_SORT_MARKER)
+                })
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Ill-formed window function expressions".to_owned(),
+                    )
+                })?;
+            Ok(Expr::WindowFunction {
+                fun: fun.clone(),
+                args: expressions[..index].to_vec(),
+                order_by: expressions[index + 1..].to_vec(),
+            })
+        }
         Expr::AggregateFunction { fun, distinct, .. } => Ok(Expr::AggregateFunction {
             fun: fun.clone(),
             args: expressions.to_vec(),

@@ -746,13 +746,18 @@ impl DefaultPhysicalPlanner {
         };
 
         match e {
-            Expr::WindowFunction { fun, args } => {
+            Expr::WindowFunction { fun, args, .. } => {
                 let args = args
                     .iter()
                     .map(|e| {
                         self.create_physical_expr(e, physical_input_schema, ctx_state)
                     })
                     .collect::<Result<Vec<_>>>()?;
+                // if !order_by.is_empty() {
+                //     return Err(DataFusionError::NotImplemented(
+                //         "Window function with order by is not yet implemented".to_owned(),
+                //     ));
+                // }
                 windows::create_window_expr(fun, &args, physical_input_schema, name)
             }
             other => Err(DataFusionError::Internal(format!(
