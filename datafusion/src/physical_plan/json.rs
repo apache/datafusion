@@ -21,7 +21,7 @@ use futures::Stream;
 
 use super::{common, source::Source, ExecutionPlan, Partitioning, RecordBatchStream};
 use crate::error::{DataFusionError, Result};
-use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
+use arrow::json::reader::infer_json_schema;
 use arrow::{
     datatypes::{Schema, SchemaRef},
     error::Result as ArrowResult,
@@ -202,16 +202,11 @@ impl NdJsonExec {
         max_records: Option<usize>,
     ) -> Result<Schema> {
         let mut schemas = Vec::new();
-        let mut records_to_read = max_records.unwrap_or(usize::MAX);
-        while records_to_read > 0 && !filenames.is_empty() {
+        let lines_per_file = max_records.map(|x| x / filenames.len());
+        while !filenames.is_empty() {
             let file = File::open(filenames.pop().unwrap())?;
             let mut reader = BufReader::new(file);
-            let iter = ValueIter::new(&mut reader, None);
-            let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
-                let should_take = records_to_read > 0;
-                records_to_read -= 1;
-                should_take
-            }))?;
+            let schema = infer_json_schema(&mut reader, lines_per_file)?;
             schemas.push(schema);
         }
 
