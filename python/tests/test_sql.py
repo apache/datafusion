@@ -29,7 +29,6 @@ def ctx():
 
 
 def test_no_table(ctx):
-    # TODO(kszucs): should raise a DataFusionError instead of plain Exeption
     with pytest.raises(Exception, match="DataFusion error"):
         ctx.sql("SELECT a FROM b").collect()
 
