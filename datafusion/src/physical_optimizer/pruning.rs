@@ -641,7 +641,7 @@ mod tests {
             }
         }
 
-        fn new_bool<'a>(
+        fn new_bool(
             min: impl IntoIterator<Item = Option<bool>>,
             max: impl IntoIterator<Item = Option<bool>>,
         ) -> Self {
@@ -1178,6 +1178,7 @@ mod tests {
             result.to_string().contains(
                 "Data type Boolean not supported for scalar operation on dyn array"
             ),
+            "{}",
             result
         )
     }
@@ -1194,6 +1195,7 @@ mod tests {
             result.to_string().contains(
                 "Data type Boolean not supported for scalar operation on dyn array"
             ),
+            "{}",
             result
         )
     }
