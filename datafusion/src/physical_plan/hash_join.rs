@@ -1739,9 +1739,9 @@ mod tests {
     #[tokio::test]
     async fn join_anti() -> Result<()> {
         let left = build_table(
-            ("a1", &vec![1, 2, 2, 3]),
-            ("b1", &vec![4, 5, 5, 7]), // 7 does not exist on the right
-            ("c1", &vec![7, 8, 8, 9]),
+            ("a1", &vec![1, 2, 2, 3, 5]),
+            ("b1", &vec![4, 5, 5, 7, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 8, 9, 11]),
         );
         let right = build_table(
             ("a2", &vec![10, 20, 30, 40]),
@@ -1763,6 +1763,7 @@ mod tests {
             "| a1 | b1 | c1 |",
             "+----+----+----+",
             "| 3  | 7  | 9  |",
+            "| 5  | 7  | 11 |",
             "+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
