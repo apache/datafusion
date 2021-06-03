@@ -19,11 +19,11 @@ import unittest
 
 import pyarrow as pa
 import datafusion
+
 f = datafusion.functions
 
 
 class TestCase(unittest.TestCase):
-
     def _prepare(self):
         ctx = datafusion.ExecutionContext()
 
@@ -51,12 +51,10 @@ class TestCase(unittest.TestCase):
     def test_filter(self):
         df = self._prepare()
 
-        df = df \
-            .select(
-                f.col("a") + f.col("b"),
-                f.col("a") - f.col("b"),
-            ) \
-            .filter(f.col("a") > f.lit(2))
+        df = df.select(
+            f.col("a") + f.col("b"),
+            f.col("a") - f.col("b"),
+        ).filter(f.col("a") > f.lit(2))
 
         # execute and collect the first (and only) batch
         result = df.collect()[0]
@@ -66,12 +64,10 @@ class TestCase(unittest.TestCase):
 
     def test_sort(self):
         df = self._prepare()
-        df = df.sort([
-            f.col("b").sort(ascending=False)
-        ])
+        df = df.sort([f.col("b").sort(ascending=False)])
 
         table = pa.Table.from_batches(df.collect())
-        expected = {'a': [3, 2, 1], 'b': [6, 5, 4]}
+        expected = {"a": [3, 2, 1], "b": [6, 5, 4]}
         self.assertEqual(table.to_pydict(), expected)
 
     def test_limit(self):
@@ -111,10 +107,8 @@ class TestCase(unittest.TestCase):
         df1 = ctx.create_dataframe([[batch]])
 
         df = df.join(df1, on="a", how="inner")
-        df = df.sort([
-            f.col("a").sort(ascending=True)
-        ])
+        df = df.sort([f.col("a").sort(ascending=True)])
         table = pa.Table.from_batches(df.collect())
 
-        expected = {'a': [1, 2], 'c': [8, 10], 'b': [4, 5]}
+        expected = {"a": [1, 2], "c": [8, 10], "b": [4, 5]}
         self.assertEqual(table.to_pydict(), expected)
