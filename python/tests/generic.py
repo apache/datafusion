@@ -16,23 +16,22 @@
 # under the License.
 
 import datetime
-import os.path
-import shutil
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-import datafusion
 
 # used to write parquet files
 
 
 def data():
     np.random.seed(1)
-    data = np.concatenate([
-        np.random.normal(0, 0.01, size=50),
-        np.random.normal(50, 0.01, size=50)
-    ])
+    data = np.concatenate(
+        [
+            np.random.normal(0, 0.01, size=50),
+            np.random.normal(50, 0.01, size=50),
+        ]
+    )
     return pa.array(data)
 
 

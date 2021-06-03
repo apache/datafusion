@@ -15,20 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import tempfile
-import datetime
-import os.path
-import shutil
-
-import pytest
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
-
+import pytest
 from datafusion import ExecutionContext
-import datafusion
 
-from tests.generic import *
+from . import generic as helpers
 
 
 @pytest.fixture
@@ -37,13 +29,13 @@ def ctx():
 
 
 def test_no_table(ctx):
-    #TODO(kszucs): should raise a DataFusionError instead of plain Exeption
+    # TODO(kszucs): should raise a DataFusionError instead of plain Exeption
     with pytest.raises(Exception, match="DataFusion error"):
         ctx.sql("SELECT a FROM b").collect()
 
 
 def test_register(ctx, tmp_path):
-    path = write_parquet(tmp_path / "a.parquet", data())
+    path = helpers.write_parquet(tmp_path / "a.parquet", helpers.data())
     ctx.register_parquet("t", path)
 
     assert ctx.tables() == {"t"}
@@ -53,7 +45,7 @@ def test_execute(ctx, tmp_path):
     data = [1, 1, 2, 2, 3, 11, 12]
 
     # single column, "a"
-    path = write_parquet(tmp_path / "a.parquet", pa.array(data))
+    path = helpers.write_parquet(tmp_path / "a.parquet", pa.array(data))
     ctx.register_parquet("t", path)
 
     assert ctx.tables() == {"t"}
@@ -109,7 +101,7 @@ def test_cast(ctx, tmp_path):
     """
     Verify that we can cast
     """
-    path = write_parquet(tmp_path / "a.parquet", data())
+    path = helpers.write_parquet(tmp_path / "a.parquet", helpers.data())
     ctx.register_parquet("t", path)
 
     valid_types = [
@@ -137,20 +129,24 @@ def test_cast(ctx, tmp_path):
             [pa.float64()],
             pa.float64(),
             [-1.2, None, 1.2],
-            [-1.2, None, 1.2]
+            [-1.2, None, 1.2],
         ),
         (
             lambda x: x.is_null(),
             [pa.float64()],
             pa.bool_(),
             [-1.2, None, 1.2],
-            [False, True, False]
-        )
-    ]
+            [False, True, False],
+        ),
+    ],
 )
-def test_udf(ctx, tmp_path, fn, input_types, output_type, input_values, expected_values):
+def test_udf(
+    ctx, tmp_path, fn, input_types, output_type, input_values, expected_values
+):
     # write to disk
-    path = write_parquet(tmp_path / "a.parquet", pa.array(input_values))
+    path = helpers.write_parquet(
+        tmp_path / "a.parquet", pa.array(input_values)
+    )
     ctx.register_parquet("t", path)
     ctx.register_udf("udf", fn, input_types, output_type)
 
@@ -163,30 +159,36 @@ def test_udf(ctx, tmp_path, fn, input_types, output_type, input_values, expected
 _null_mask = np.array([False, True, False])
 
 
-@pytest.mark.parametrize('arr', [
-    pa.array(["a", "b", "c"], pa.utf8(), _null_mask),
-    pa.array(["a", "b", "c"], pa.large_utf8(), _null_mask),
-    pa.array([b"1", b"2", b"3"], pa.binary(), _null_mask),
-    pa.array([b"1111", b"2222", b"3333"], pa.large_binary(), _null_mask),
-    pa.array([False, True, True], None, _null_mask),
-    pa.array([0, 1, 2], None),
-    data_binary_other(),
-    data_date32(),
-    data_with_nans(),
-    # C data interface missing
-    pytest.param(pa.array([b"1111", b"2222", b"3333"], pa.binary(4), _null_mask), marks=pytest.mark.xfail),
-    pytest.param(data_datetime("s"), marks=pytest.mark.xfail),
-    pytest.param(data_datetime("ms"), marks=pytest.mark.xfail),
-    pytest.param(data_datetime("us"), marks=pytest.mark.xfail),
-    pytest.param(data_datetime("ns"), marks=pytest.mark.xfail),
-    # Not writtable to parquet
-    pytest.param(data_timedelta("s"), marks=pytest.mark.xfail),
-    pytest.param(data_timedelta("ms"), marks=pytest.mark.xfail),
-    pytest.param(data_timedelta("us"), marks=pytest.mark.xfail),
-    pytest.param(data_timedelta("ns"), marks=pytest.mark.xfail),
-])
+@pytest.mark.parametrize(
+    "arr",
+    [
+        pa.array(["a", "b", "c"], pa.utf8(), _null_mask),
+        pa.array(["a", "b", "c"], pa.large_utf8(), _null_mask),
+        pa.array([b"1", b"2", b"3"], pa.binary(), _null_mask),
+        pa.array([b"1111", b"2222", b"3333"], pa.large_binary(), _null_mask),
+        pa.array([False, True, True], None, _null_mask),
+        pa.array([0, 1, 2], None),
+        helpers.data_binary_other(),
+        helpers.data_date32(),
+        helpers.data_with_nans(),
+        # C data interface missing
+        pytest.param(
+            pa.array([b"1111", b"2222", b"3333"], pa.binary(4), _null_mask),
+            marks=pytest.mark.xfail,
+        ),
+        pytest.param(helpers.data_datetime("s"), marks=pytest.mark.xfail),
+        pytest.param(helpers.data_datetime("ms"), marks=pytest.mark.xfail),
+        pytest.param(helpers.data_datetime("us"), marks=pytest.mark.xfail),
+        pytest.param(helpers.data_datetime("ns"), marks=pytest.mark.xfail),
+        # Not writtable to parquet
+        pytest.param(helpers.data_timedelta("s"), marks=pytest.mark.xfail),
+        pytest.param(helpers.data_timedelta("ms"), marks=pytest.mark.xfail),
+        pytest.param(helpers.data_timedelta("us"), marks=pytest.mark.xfail),
+        pytest.param(helpers.data_timedelta("ns"), marks=pytest.mark.xfail),
+    ],
+)
 def test_simple_select(ctx, tmp_path, arr):
-    path = write_parquet(tmp_path / "a.parquet", arr)
+    path = helpers.write_parquet(tmp_path / "a.parquet", arr)
     ctx.register_parquet("t", path)
 
     batches = ctx.sql("SELECT a AS tt FROM t").collect()

@@ -15,10 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import pytest
-
 import pyarrow as pa
-from datafusion import ExecutionContext, functions as f
+import pytest
+from datafusion import ExecutionContext
+from datafusion import functions as f
 
 
 @pytest.fixture
@@ -48,12 +48,10 @@ def test_select(df):
 
 
 def test_filter(df):
-    df = df \
-        .select(
-            f.col("a") + f.col("b"),
-            f.col("a") - f.col("b"),
-        ) \
-        .filter(f.col("a") > f.lit(2))
+    df = df.select(
+        f.col("a") + f.col("b"),
+        f.col("a") - f.col("b"),
+    ).filter(f.col("a") > f.lit(2))
 
     # execute and collect the first (and only) batch
     result = df.collect()[0]
@@ -63,12 +61,10 @@ def test_filter(df):
 
 
 def test_sort(df):
-    df = df.sort([
-        f.col("b").sort(ascending=False)
-    ])
+    df = df.sort([f.col("b").sort(ascending=False)])
 
     table = pa.Table.from_batches(df.collect())
-    expected = {'a': [3, 2, 1], 'b': [6, 5, 4]}
+    expected = {"a": [3, 2, 1], "b": [6, 5, 4]}
 
     assert table.to_pydict() == expected
 
@@ -109,10 +105,8 @@ def test_join():
     df1 = ctx.create_dataframe([[batch]])
 
     df = df.join(df1, on="a", how="inner")
-    df = df.sort([
-        f.col("a").sort(ascending=True)
-    ])
+    df = df.sort([f.col("a").sort(ascending=True)])
     table = pa.Table.from_batches(df.collect())
 
-    expected = {'a': [1, 2], 'c': [8, 10], 'b': [4, 5]}
+    expected = {"a": [1, 2], "c": [8, 10], "b": [4, 5]}
     assert table.to_pydict() == expected

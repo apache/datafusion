@@ -15,12 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import pytest
-
 import pyarrow as pa
 import pyarrow.compute as pc
-
-from datafusion import ExecutionContext, functions as f
+import pytest
+from datafusion import ExecutionContext
+from datafusion import functions as f
 
 
 class Accumulator:
@@ -35,20 +34,17 @@ class Accumulator:
         return [self._sum]
 
     def update(self, values: pa.Array) -> None:
-        # not nice since pyarrow scalars can't be summed yet. This breaks on `None`
-        self._sum = pa.scalar(
-            self._sum.as_py() + pc.sum(values).as_py()
-        )
+        # Not nice since pyarrow scalars can't be summed yet.
+        # This breaks on `None`
+        self._sum = pa.scalar(self._sum.as_py() + pc.sum(values).as_py())
 
     def merge(self, states: pa.Array) -> None:
-        # not nice since pyarrow scalars can't be summed yet. This breaks on `None`
-        self._sum = pa.scalar(
-            self._sum.as_py() + pc.sum(states).as_py()
-        )
+        # Not nice since pyarrow scalars can't be summed yet.
+        # This breaks on `None`
+        self._sum = pa.scalar(self._sum.as_py() + pc.sum(states).as_py())
 
     def evaluate(self) -> pa.Scalar:
         return self._sum
-
 
 
 @pytest.fixture
@@ -64,9 +60,7 @@ def df():
 
 
 def test_aggregate(df):
-    udaf = f.udaf(
-        Accumulator, pa.float64(), pa.float64(), [pa.float64()]
-    )
+    udaf = f.udaf(Accumulator, pa.float64(), pa.float64(), [pa.float64()])
 
     df = df.aggregate([], [udaf(f.col("a"))])
 
@@ -77,9 +71,7 @@ def test_aggregate(df):
 
 
 def test_group_by(df):
-    udaf = f.udaf(
-        Accumulator, pa.float64(), pa.float64(), [pa.float64()]
-    )
+    udaf = f.udaf(Accumulator, pa.float64(), pa.float64(), [pa.float64()])
 
     df = df.aggregate([f.col("b")], [udaf(f.col("a"))])
 
