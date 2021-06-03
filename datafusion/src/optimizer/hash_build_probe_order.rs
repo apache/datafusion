@@ -132,7 +132,7 @@ impl OptimizerRule for HashBuildProbeOrder {
                 on,
                 join_type,
                 schema,
-            } if *join_type != JoinType::Semi => {
+            } => {
                 let left = self.optimize(left, execution_props)?;
                 let right = self.optimize(right, execution_props)?;
                 if should_swap_join_order(&left, &right) && supports_swap(*join_type) {
