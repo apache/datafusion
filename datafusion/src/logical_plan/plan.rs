@@ -49,6 +49,10 @@ pub enum JoinType {
     /// Anti Join
     Anti,
 }
+
+/// A LogicalPlan represents the different types of relational
+/// operators (such as Projection, Filter, etc) and can be created by
+/// the SQL query planner and the DataFrame API.
 ///
 /// A LogicalPlan represents transforming an input relation (table) to
 /// an output relation (table) with a (potentially) different
