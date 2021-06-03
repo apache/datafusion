@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Remove duplicate filters optimizer rule
+//! Simplify expressions optimizer rule
 
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::LogicalPlan;
