@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_simplify_or_true() -> Result<()> {
-        let expr_a = binary_expr(col("c"), Operator::Or, lit(true));
+        let expr_a = col("c").or(lit(true)));
         let expr_b = binary_expr(lit(true), Operator::Or, col("c"));
         let expected = lit(true);
 
