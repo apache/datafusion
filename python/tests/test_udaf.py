@@ -16,7 +16,6 @@
 # under the License.
 
 import unittest
-
 import pyarrow
 import pyarrow.compute
 import datafusion
@@ -86,6 +85,7 @@ class TestCase(unittest.TestCase):
         df = df.aggregate([f.col("b")], [udaf(f.col("a"))])
 
         # execute and collect the first (and only) batch
-        result = df.collect()[0]
-
-        self.assertEqual(result.column(1), pyarrow.array([1.0 + 2.0, 3.0]))
+        batches = df.collect()
+        arrays = [batch.column(1) for batch in batches]
+        joined = pyarrow.concat_arrays(arrays)
+        self.assertEqual(joined, pyarrow.array([1.0 + 2.0, 3.0]))

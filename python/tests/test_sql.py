@@ -82,12 +82,18 @@ class TestCase(unittest.TestCase):
         )
 
         # group by
-        result = ctx.sql(
+        results = ctx.sql(
             "SELECT CAST(a as int), COUNT(a) FROM t GROUP BY CAST(a as int)"
         ).collect()
 
-        result_keys = result[0].to_pydict()["CAST(a AS Int32)"]
-        result_values = result[0].to_pydict()["COUNT(a)"]
+        # group by returns batches
+        result_keys = []
+        result_values = []
+        for result in results:
+            pydict = result.to_pydict()
+            result_keys.extend(pydict["CAST(a AS Int32)"])
+            result_values.extend(pydict["COUNT(a)"])
+
         result_keys, result_values = (
             list(t) for t in zip(*sorted(zip(result_keys, result_values)))
         )
