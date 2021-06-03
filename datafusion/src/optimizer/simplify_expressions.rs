@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_simplify_or_and() -> Result<()> {
-        // (c > 5) OR ((d < 6) AND (c > 5) -- can't remove
+        // (c > 5) OR ((d < 6) AND (c > 5) -- can remove
         let expr = binary_expr(
             col("c").gt(lit(5)),
             Operator::Or,
