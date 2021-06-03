@@ -194,7 +194,6 @@ impl OptimizerRule for HashBuildProbeOrder {
             | LogicalPlan::CreateExternalTable { .. }
             | LogicalPlan::Explain { .. }
             | LogicalPlan::Union { .. }
-            | LogicalPlan::Join { .. }
             | LogicalPlan::Extension { .. } => {
                 let expr = plan.expressions();
 
