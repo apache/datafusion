@@ -515,23 +515,20 @@ fn build_predicate_expression(
     let (left, op, right) = match expr {
         Expr::BinaryExpr { left, op, right } => (left, *op, right),
         Expr::Column(name) => {
-            if let Some(expr) =
-                build_single_column_expr(&name, schema, required_columns, false)
-            {
-                return Ok(expr);
-            }
-            return Ok(unhandled);
+            let expr = build_single_column_expr(&name, schema, required_columns, false)
+                .unwrap_or(unhandled);
+            return Ok(expr);
         }
         // match !col (don't do so recursively)
         Expr::Not(input) => {
             if let Expr::Column(name) = input.as_ref() {
-                if let Some(expr) =
+                let expr =
                     build_single_column_expr(&name, schema, required_columns, true)
-                {
-                    return Ok(expr);
-                }
+                        .unwrap_or(unhandled);
+                return Ok(expr);
+            } else {
+                return Ok(unhandled);
             }
-            return Ok(unhandled);
         }
         _ => {
             return Ok(unhandled);
