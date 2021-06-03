@@ -54,8 +54,8 @@ use super::{
     parser::DFParser,
     utils::{
         can_columns_satisfy_exprs, expand_wildcard, expr_as_column_expr, extract_aliases,
-        find_aggregate_exprs, find_column_exprs, find_window_exprs, rebase_expr,
-        resolve_aliases_to_exprs,
+        find_aggregate_exprs, find_column_exprs, find_window_exprs,
+        group_window_expr_by_sort_keys, rebase_expr, resolve_aliases_to_exprs,
     },
 };
 
@@ -628,7 +628,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let (plan, exprs) = if window_func_exprs.is_empty() {
             (plan, select_exprs_post_aggr)
         } else {
-            self.window(&plan, window_func_exprs, &select_exprs_post_aggr)?
+            self.window(plan, window_func_exprs, &select_exprs_post_aggr)?
         };
 
         let plan = if select.distinct {
@@ -670,13 +670,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Wrap a plan in a window
     fn window(
         &self,
-        input: &LogicalPlan,
+        input: LogicalPlan,
         window_exprs: Vec<Expr>,
         select_exprs: &[Expr],
     ) -> Result<(LogicalPlan, Vec<Expr>)> {
-        let plan = LogicalPlanBuilder::from(input)
-            .window(window_exprs.clone())?
-            .build()?;
+        let mut plan = input;
+        let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
+        // sort by sort_key len descending, so that more deeply sorted plans gets nested further
+        // down as children; to further minic the behavior of PostgreSQL, we want stable sort
+        // and a reverse so that tieing sort keys are reversed in order; note that by this rule
+        // if there's an empty over, it'll be at the top level
+        groups.sort_by(|(key_a, _), (key_b, _)| key_a.len().cmp(&key_b.len()));
+        groups.reverse();
+        for (sort_keys, exprs) in groups {
+            if !sort_keys.is_empty() {
+                let sort_keys: Vec<Expr> = sort_keys.to_vec();
+                plan = LogicalPlanBuilder::from(&plan).sort(sort_keys)?.build()?;
+            }
+            let window_exprs: Vec<Expr> = exprs.into_iter().cloned().collect();
+            plan = LogicalPlanBuilder::from(&plan)
+                .window(window_exprs)?
+                .build()?;
+        }
         let select_exprs = select_exprs
             .iter()
             .map(|expr| rebase_expr(expr, &window_exprs, &plan))
@@ -779,21 +794,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(plan.clone());
         }
 
-        let input_schema = plan.schema();
-        let order_by_rex: Result<Vec<Expr>> = order_by
+        let order_by_rex = order_by
             .iter()
-            .map(|e| {
-                Ok(Expr::Sort {
-                    expr: Box::new(self.sql_to_rex(&e.expr, &input_schema)?),
-                    // by default asc
-                    asc: e.asc.unwrap_or(true),
-                    // by default nulls first to be consistent with spark
-                    nulls_first: e.nulls_first.unwrap_or(true),
-                })
-            })
-            .collect();
+            .map(|e| self.order_by_to_sort_expr(e))
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
 
-        LogicalPlanBuilder::from(&plan).sort(order_by_rex?)?.build()
+        LogicalPlanBuilder::from(&plan).sort(order_by_rex)?.build()
+    }
+
+    /// convert sql OrderByExpr to Expr::Sort
+    fn order_by_to_sort_expr(&self, e: &OrderByExpr) -> Result<Expr> {
+        Ok(Expr::Sort {
+            expr: Box::new(self.sql_expr_to_logical_expr(&e.expr)?),
+            // by default asc
+            asc: e.asc.unwrap_or(true),
+            // by default nulls first to be consistent with spark
+            nulls_first: e.nulls_first.unwrap_or(true),
+        })
     }
 
     /// Validate the schema provides all of the columns referenced in the expressions.
@@ -982,7 +1000,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 UnaryOperator::Plus => Ok(self.sql_expr_to_logical_expr(expr)?),
                 UnaryOperator::Minus => {
                     match expr.as_ref() {
-                        // optimization: if it's a number literal, we applly the negative operator
+                        // optimization: if it's a number literal, we apply the negative operator
                         // here directly to calculate the new literal.
                         SQLExpr::Value(Value::Number(n,_)) => match n.parse::<i64>() {
                             Ok(n) => Ok(lit(-n)),
@@ -1091,10 +1109,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 // then, window function
                 if let Some(window) = &function.over {
-                    if window.partition_by.is_empty()
-                        && window.order_by.is_empty()
-                        && window.window_frame.is_none()
-                    {
+                    if window.partition_by.is_empty() && window.window_frame.is_none() {
+                        let order_by = window
+                            .order_by
+                            .iter()
+                            .map(|e| self.order_by_to_sort_expr(e))
+                            .into_iter()
+                            .collect::<Result<Vec<_>>>()?;
                         let fun = window_functions::WindowFunction::from_str(&name);
                         if let Ok(window_functions::WindowFunction::AggregateFunction(
                             aggregate_fun,
@@ -1106,6 +1127,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 ),
                                 args: self
                                     .aggregate_fn_to_expr(&aggregate_fun, function)?,
+                                order_by,
                             });
                         } else if let Ok(
                             window_functions::WindowFunction::BuiltInWindowFunction(
@@ -1118,6 +1140,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     window_fun,
                                 ),
                                 args:self.function_args_to_expr(function)?,
+                                order_by
                             });
                         }
                     }
@@ -2702,7 +2725,7 @@ mod tests {
         let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
         let expected = "\
         Projection: #order_id, #MAX(order_id)\
-        \n  WindowAggr: windowExpr=[[MAX(#order_id)]] partitionBy=[], orderBy=[]\
+        \n  WindowAggr: windowExpr=[[MAX(#order_id)]] partitionBy=[]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -2712,7 +2735,7 @@ mod tests {
         let sql = "SELECT order_id oid, MAX(order_id) OVER () max_oid from orders";
         let expected = "\
         Projection: #order_id AS oid, #MAX(order_id) AS max_oid\
-        \n  WindowAggr: windowExpr=[[MAX(#order_id)]] partitionBy=[], orderBy=[]\
+        \n  WindowAggr: windowExpr=[[MAX(#order_id)]] partitionBy=[]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -2722,7 +2745,7 @@ mod tests {
         let sql = "SELECT order_id, MAX(qty * 1.1) OVER () from orders";
         let expected = "\
         Projection: #order_id, #MAX(qty Multiply Float64(1.1))\
-        \n  WindowAggr: windowExpr=[[MAX(#qty Multiply Float64(1.1))]] partitionBy=[], orderBy=[]\
+        \n  WindowAggr: windowExpr=[[MAX(#qty Multiply Float64(1.1))]] partitionBy=[]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -2733,7 +2756,7 @@ mod tests {
             "SELECT order_id, MAX(qty) OVER (), min(qty) over (), aVg(qty) OVER () from orders";
         let expected = "\
         Projection: #order_id, #MAX(qty), #MIN(qty), #AVG(qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#qty), MIN(#qty), AVG(#qty)]] partitionBy=[], orderBy=[]\
+        \n  WindowAggr: windowExpr=[[MAX(#qty), MIN(#qty), AVG(#qty)]] partitionBy=[]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -2749,14 +2772,139 @@ mod tests {
         );
     }
 
+    /// psql result
+    /// ```
+    ///                                     QUERY PLAN
+    /// ----------------------------------------------------------------------------------
+    /// WindowAgg  (cost=137.16..154.66 rows=1000 width=12)
+    /// ->  Sort  (cost=137.16..139.66 rows=1000 width=12)
+    ///         Sort Key: order_id
+    ///         ->  WindowAgg  (cost=69.83..87.33 rows=1000 width=12)
+    ///             ->  Sort  (cost=69.83..72.33 rows=1000 width=8)
+    ///                     Sort Key: order_id DESC
+    ///                     ->  Seq Scan on orders  (cost=0.00..20.00 rows=1000 width=8)
+    /// ```
     #[test]
-    fn over_order_by_not_supported() {
-        let sql = "SELECT order_id, MAX(delivered) OVER (order BY order_id) from orders";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "NotImplemented(\"Unsupported OVER clause (ORDER BY order_id)\")",
-            format!("{:?}", err)
-        );
+    fn over_order_by() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty), #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty)]] partitionBy=[]\
+        \n    Sort: #order_id ASC NULLS FIRST\
+        \n      WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n        Sort: #order_id DESC NULLS FIRST\
+        \n          TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    /// psql result
+    /// ```
+    ///                                     QUERY PLAN
+    /// -----------------------------------------------------------------------------------
+    /// WindowAgg  (cost=142.16..162.16 rows=1000 width=16)
+    ///   ->  Sort  (cost=142.16..144.66 rows=1000 width=16)
+    ///         Sort Key: order_id
+    ///         ->  WindowAgg  (cost=72.33..92.33 rows=1000 width=16)
+    ///               ->  Sort  (cost=72.33..74.83 rows=1000 width=12)
+    ///                     Sort Key: ((order_id + 1))
+    ///                     ->  Seq Scan on orders  (cost=0.00..22.50 rows=1000 width=12)
+    /// ```
+    #[test]
+    fn over_order_by_two_sort_keys() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY (order_id + 1)) from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty), #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty)]] partitionBy=[]\
+        \n    Sort: #order_id ASC NULLS FIRST\
+        \n      WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n        Sort: #order_id Plus Int64(1) ASC NULLS FIRST\
+        \n          TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    /// psql result
+    /// ```
+    ///                                        QUERY PLAN
+    /// ----------------------------------------------------------------------------------------
+    /// WindowAgg  (cost=139.66..172.16 rows=1000 width=24)
+    ///   ->  WindowAgg  (cost=139.66..159.66 rows=1000 width=16)
+    ///         ->  Sort  (cost=139.66..142.16 rows=1000 width=12)
+    ///               Sort Key: qty, order_id
+    ///               ->  WindowAgg  (cost=69.83..89.83 rows=1000 width=12)
+    ///                     ->  Sort  (cost=69.83..72.33 rows=1000 width=8)
+    ///                           Sort Key: order_id, qty
+    ///                           ->  Seq Scan on orders  (cost=0.00..20.00 rows=1000 width=8)
+    /// ```
+    #[test]
+    fn over_order_by_sort_keys_sorting() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty), #SUM(qty), #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[SUM(#qty)]] partitionBy=[]\
+        \n    WindowAggr: windowExpr=[[MAX(#qty)]] partitionBy=[]\
+        \n      Sort: #qty ASC NULLS FIRST, #order_id ASC NULLS FIRST\
+        \n        WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n          Sort: #order_id ASC NULLS FIRST, #qty ASC NULLS FIRST\
+        \n            TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    /// psql result
+    /// ```
+    ///                                     QUERY PLAN
+    /// ----------------------------------------------------------------------------------
+    /// WindowAgg  (cost=69.83..117.33 rows=1000 width=24)
+    ///   ->  WindowAgg  (cost=69.83..104.83 rows=1000 width=16)
+    ///         ->  WindowAgg  (cost=69.83..89.83 rows=1000 width=12)
+    ///               ->  Sort  (cost=69.83..72.33 rows=1000 width=8)
+    ///                     Sort Key: order_id, qty
+    ///                     ->  Seq Scan on orders  (cost=0.00..20.00 rows=1000 width=8)
+    /// ```
+    ///
+    /// FIXME: for now we are not detecting prefix of sorting keys in order to save one sort exec phase
+    #[test]
+    fn over_order_by_sort_keys_sorting_prefix_compacting() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty), #SUM(qty), #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[SUM(#qty)]] partitionBy=[]\
+        \n    WindowAggr: windowExpr=[[MAX(#qty)]] partitionBy=[]\
+        \n      Sort: #order_id ASC NULLS FIRST\
+        \n        WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n          Sort: #order_id ASC NULLS FIRST, #qty ASC NULLS FIRST\
+        \n            TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    /// psql result
+    /// ```
+    ///                                        QUERY PLAN
+    /// ----------------------------------------------------------------------------------------
+    /// WindowAgg  (cost=139.66..172.16 rows=1000 width=24)
+    ///   ->  WindowAgg  (cost=139.66..159.66 rows=1000 width=16)
+    ///         ->  Sort  (cost=139.66..142.16 rows=1000 width=12)
+    ///               Sort Key: order_id, qty
+    ///               ->  WindowAgg  (cost=69.83..89.83 rows=1000 width=12)
+    ///                     ->  Sort  (cost=69.83..72.33 rows=1000 width=8)
+    ///                           Sort Key: qty, order_id
+    ///                           ->  Seq Scan on orders  (cost=0.00..20.00 rows=1000 width=8)
+    /// ```
+    ///
+    /// FIXME: for now we are not detecting prefix of sorting keys in order to re-arrange with global
+    /// sort
+    #[test]
+    fn over_order_by_sort_keys_sorting_global_order_compacting() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders ORDER BY order_id";
+        let expected = "\
+        Sort: #order_id ASC NULLS FIRST\
+        \n  Projection: #order_id, #MAX(qty), #SUM(qty), #MIN(qty)\
+        \n    WindowAggr: windowExpr=[[SUM(#qty)]] partitionBy=[]\
+        \n      WindowAggr: windowExpr=[[MAX(#qty)]] partitionBy=[]\
+        \n        Sort: #qty ASC NULLS FIRST, #order_id ASC NULLS FIRST\
+        \n          WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n            Sort: #order_id ASC NULLS FIRST, #qty ASC NULLS FIRST\
+        \n              TableScan: orders projection=None";
+        quick_test(sql, expected);
     }
 
     #[test]

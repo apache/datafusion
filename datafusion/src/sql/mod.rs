@@ -20,4 +20,4 @@
 
 pub mod parser;
 pub mod planner;
-mod utils;
+pub(crate) mod utils;
