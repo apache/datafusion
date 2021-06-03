@@ -582,7 +582,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // All of the aggregate expressions (deduplicated).
         let aggr_exprs = find_aggregate_exprs(&aggr_expr_haystack);
 
-        let group_by_exprs = select.group_by
+        let group_by_exprs = select
+            .group_by
             .iter()
             .map(|e| {
                 let group_by_expr = self.sql_expr_to_logical_expr(e)?;
@@ -590,42 +591,45 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &group_by_expr,
                     &extract_aliases(&select_exprs),
                 )?;
-                self.validate_schema_satisfies_exprs(plan.schema(), &[group_by_expr.clone()])?;
+                self.validate_schema_satisfies_exprs(
+                    plan.schema(),
+                    &[group_by_expr.clone()],
+                )?;
                 Ok(group_by_expr)
             })
             .collect::<Result<Vec<Expr>>>()?;
 
-        let (plan, select_exprs_post_aggr, having_expr_post_aggr_opt) =
-            if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
-                self.aggregate(
-                    &plan,
-                    &select_exprs,
-                    &having_expr_opt,
-                    group_by_exprs,
-                    aggr_exprs,
-                )?
-            } else {
-                if let Some(having_expr) = &having_expr_opt {
-                    let available_columns = select_exprs
-                        .iter()
-                        .map(|expr| expr_as_column_expr(expr, &plan))
-                        .collect::<Result<Vec<Expr>>>()?;
+        let (plan, select_exprs_post_aggr, having_expr_post_aggr_opt) = if !group_by_exprs
+            .is_empty()
+            || !aggr_exprs.is_empty()
+        {
+            self.aggregate(
+                &plan,
+                &select_exprs,
+                &having_expr_opt,
+                group_by_exprs,
+                aggr_exprs,
+            )?
+        } else {
+            if let Some(having_expr) = &having_expr_opt {
+                let available_columns = select_exprs
+                    .iter()
+                    .map(|expr| expr_as_column_expr(expr, &plan))
+                    .collect::<Result<Vec<Expr>>>()?;
 
-                    // Ensure the HAVING expression is using only columns
-                    // provided by the SELECT.
-                    if !can_columns_satisfy_exprs(
-                        &available_columns,
-                        &[having_expr.clone()],
-                    )? {
-                        return Err(DataFusionError::Plan(
-                            "Having references column(s) not provided by the select"
-                                .to_owned(),
-                        ));
-                    }
+                // Ensure the HAVING expression is using only columns
+                // provided by the SELECT.
+                if !can_columns_satisfy_exprs(&available_columns, &[having_expr.clone()])?
+                {
+                    return Err(DataFusionError::Plan(
+                        "Having references column(s) not provided by the select"
+                            .to_owned(),
+                    ));
                 }
+            }
 
-                (plan, select_exprs, having_expr_opt)
-            };
+            (plan, select_exprs, having_expr_opt)
+        };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr_opt {
             LogicalPlanBuilder::from(&plan)
