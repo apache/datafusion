@@ -326,8 +326,8 @@ mod tests {
 
     #[test]
     fn test_simplify_or_true() -> Result<()> {
-        let expr_a = col("c").or(lit(true)));
-        let expr_b = binary_expr(lit(true), Operator::Or, col("c"));
+        let expr_a = col("c").or(lit(true));
+        let expr_b = lit(true).or(col("c"));
         let expected = lit(true);
 
         assert_eq!(simplify(&expr_a), expected);
@@ -337,8 +337,8 @@ mod tests {
 
     #[test]
     fn test_simplify_or_false() -> Result<()> {
-        let expr_a = binary_expr(lit(false), Operator::Or, col("c"));
-        let expr_b = binary_expr(col("c"), Operator::Or, lit(false));
+        let expr_a = lit(false).or(col("c"));
+        let expr_b = col("c").or(lit(false));
         let expected = col("c");
 
         assert_eq!(simplify(&expr_a), expected);
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_simplify_or_same() -> Result<()> {
-        let expr = binary_expr(col("c"), Operator::Or, col("c"));
+        let expr = col("c").or(col("c"));
         let expected = col("c");
 
         assert_eq!(simplify(&expr), expected);
@@ -357,8 +357,8 @@ mod tests {
 
     #[test]
     fn test_simplify_and_false() -> Result<()> {
-        let expr_a = binary_expr(lit(false), Operator::And, col("c"));
-        let expr_b = binary_expr(col("c"), Operator::And, lit(false));
+        let expr_a = lit(false).and(col("c"));
+        let expr_b = col("c").and(lit(false));
         let expected = lit(false);
 
         assert_eq!(simplify(&expr_a), expected);
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_simplify_and_same() -> Result<()> {
-        let expr = binary_expr(col("c"), Operator::And, col("c"));
+        let expr = col("c").and(col("c"));
         let expected = col("c");
 
         assert_eq!(simplify(&expr), expected);
@@ -377,8 +377,8 @@ mod tests {
 
     #[test]
     fn test_simplify_and_true() -> Result<()> {
-        let expr_a = binary_expr(lit(true), Operator::And, col("c"));
-        let expr_b = binary_expr(col("c"), Operator::And, lit(true));
+        let expr_a = lit(true).and(col("c"));
+        let expr_b = col("c").and(lit(true));
         let expected = col("c");
 
         assert_eq!(simplify(&expr_a), expected);
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn test_simplify_simple_and() -> Result<()> {
         // (c > 5) AND (c > 5)
-        let expr = binary_expr(col("c").gt(lit(5)), Operator::And, col("c").gt(lit(5)));
+        let expr = (col("c").gt(lit(5))).and(col("c").gt(lit(5)));
         let expected = col("c").gt(lit(5));
 
         assert_eq!(simplify(&expr), expected);
