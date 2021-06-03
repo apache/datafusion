@@ -42,11 +42,11 @@ know what they need to enforce at the coding level.
 
 ## Notation
 
-* Field or physical field: the tuple name, `arrow::DataType` and nullability flag (a bool whether values can be null), represented in this document by `PF(name, type, nullable)`
-* Logical field: Field with a relation name. Represented in this document by `LF(relation, name, type, nullable)`
-* Projected plan: plan with projection as the root node.
-* Logical schema: a vector of logical fields, used by logical plan.
-* Physical schema: a vector of physical fields, used by both physical plan and Arrow record batch.
+- Field or physical field: the tuple name, `arrow::DataType` and nullability flag (a bool whether values can be null), represented in this document by `PF(name, type, nullable)`
+- Logical field: Field with a relation name. Represented in this document by `LF(relation, name, type, nullable)`
+- Projected plan: plan with projection as the root node.
+- Logical schema: a vector of logical fields, used by logical plan.
+- Physical schema: a vector of physical fields, used by both physical plan and Arrow record batch.
 
 ### Logical
 
@@ -62,8 +62,8 @@ logical_field(lf1: LF, lf2: LF, ...) -> LF
 
 Examples:
 
-* `plus(a,b) -> LF(None, "{a} Plus {b}", d(a.type,b.type), a.nullable | b.nullable)` where d is the function mapping input types to output type (`get_supertype` in our current implementation).
-* `length(a) -> LF(None, "length({a})", u32, a.nullable)`
+- `plus(a,b) -> LF(None, "{a} Plus {b}", d(a.type,b.type), a.nullable | b.nullable)` where d is the function mapping input types to output type (`get_supertype` in our current implementation).
+- `length(a) -> LF(None, "length({a})", u32, a.nullable)`
 
 #### Plan
 
@@ -91,8 +91,8 @@ physical_field(PF1, PF2, ...) -> PF
 
 Examples:
 
-* `plus(a,b) -> PF("{a} Plus {b}", d(a.type,b.type), a.nullable | b.nullable)` where d is a complex function (`get_supertype` in our current implementation) whose computation is for each element in the columns, sum the two entries together and return it in the same type as the smallest type of both columns.
-* `length(&str) -> PF("length({a})", u32, a.nullable)` whose computation is "count number of bytes in the string".
+- `plus(a,b) -> PF("{a} Plus {b}", d(a.type,b.type), a.nullable | b.nullable)` where d is a complex function (`get_supertype` in our current implementation) whose computation is for each element in the columns, sum the two entries together and return it in the same type as the smallest type of both columns.
+- `length(&str) -> PF("length({a})", u32, a.nullable)` whose computation is "count number of bytes in the string".
 
 #### Plan
 
@@ -216,8 +216,8 @@ guarantee this invariant.
 
 In particular:
 
-* The derived DataType matches the code it uses to build the array for every branch of valid input type combinations.
-* The nullability flag matches how the values are built.
+- The derived DataType matches the code it uses to build the array for every branch of valid input type combinations.
+- The nullability flag matches how the values are built.
 
 #### Validation
 
