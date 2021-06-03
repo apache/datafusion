@@ -144,3 +144,23 @@ Whenever rust code changes (your changes or via git pull):
 venv/bin/maturin develop
 venv/bin/python -m unittest discover tests
 ```
+
+## How to update dependencies
+
+To change test dependencies, change the `requirements.in` and run
+
+```bash
+# install pip-tools (this can be done only once), also consider running in venv
+pip install pip-tools
+
+# change requirements.in and then run
+pip-compile --generate-hashes
+```
+
+To update dependencies, run
+
+```bash
+pip-compile update
+```
+
+More details [here](https://github.com/jazzband/pip-tools)
