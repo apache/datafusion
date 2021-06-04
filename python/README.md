@@ -135,12 +135,9 @@ cd arrow-datafusion/python
 
 # prepare development environment (used to build wheel / install in development)
 python3 -m venv venv
-
 # activate the venv
 source venv/bin/activate
-
-# install dependencies
-pip install maturin==0.10.6 toml==0.10.1 pyarrow==4.0.0
+pip install -r requirements.txt
 ```
 
 Whenever rust code changes (your changes or via `git pull`):
@@ -150,3 +147,23 @@ Whenever rust code changes (your changes or via `git pull`):
 maturin develop
 python -m unittest discover tests
 ```
+
+## How to update dependencies
+
+To change test dependencies, change the `requirements.in` and run
+
+```bash
+# install pip-tools (this can be done only once), also consider running in venv
+pip install pip-tools
+
+# change requirements.in and then run
+pip-compile --generate-hashes
+```
+
+To update dependencies, run
+
+```bash
+pip-compile update
+```
+
+More details [here](https://github.com/jazzband/pip-tools)
