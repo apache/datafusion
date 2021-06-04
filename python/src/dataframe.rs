@@ -147,6 +147,9 @@ impl DataFrame {
             "inner" => JoinType::Inner,
             "left" => JoinType::Left,
             "right" => JoinType::Right,
+            "full" => JoinType::Full,
+            "semi" => JoinType::Semi,
+            "anti" => JoinType::Anti,
             how => {
                 return Err(DataFusionError::Common(format!(
                     "The join type {} does not exist or is not implemented",
