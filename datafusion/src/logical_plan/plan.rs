@@ -24,11 +24,9 @@ use super::{
     display::{GraphvizVisitor, IndentVisitor},
 };
 use crate::datasource::TableProvider;
-use crate::error::DataFusionError;
 use crate::logical_plan::dfschema::DFSchemaRef;
 use crate::sql::parser::FileType;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use std::str::FromStr;
 use std::{
     cmp::min,
     fmt::{self, Display},
