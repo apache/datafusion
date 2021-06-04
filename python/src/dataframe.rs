@@ -165,6 +165,8 @@ impl DataFrame {
             on.as_slice(),
         ))?;
 
+        let plan = errors::wrap(builder.build())?;
+
         Ok(DataFrame {
             ctx_state: self.ctx_state.clone(),
             plan,
