@@ -442,7 +442,7 @@ mod tests {
     #[tokio::test]
     async fn csv_exec_with_projection() -> Result<()> {
         let schema = aggr_test_schema();
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::try_new(
@@ -470,7 +470,7 @@ mod tests {
     #[tokio::test]
     async fn csv_exec_without_projection() -> Result<()> {
         let schema = aggr_test_schema();
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::try_new(
@@ -498,7 +498,7 @@ mod tests {
     #[tokio::test]
     async fn csv_exec_with_reader() -> Result<()> {
         let schema = aggr_test_schema();
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let buf = std::fs::read(path).unwrap();

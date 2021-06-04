@@ -25,7 +25,7 @@
 //! use datafusion::datasource::TableProvider;
 //! use datafusion::datasource::csv::{CsvFile, CsvReadOptions};
 //!
-//! let testdata = arrow::util::test_util::arrow_test_data();
+//! let testdata = datafusion::test_util::arrow_test_data();
 //! let csvdata = CsvFile::try_new(
 //!     &format!("{}/csv/aggregate_test_100.csv", testdata),
 //!     CsvReadOptions::new().delimiter(b'|'),
@@ -222,7 +222,7 @@ mod tests {
 
     #[tokio::test]
     async fn csv_file_from_reader() -> Result<()> {
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let buf = std::fs::read(path).unwrap();
