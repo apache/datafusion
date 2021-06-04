@@ -158,7 +158,12 @@ impl DataFrame {
             }
         };
 
-        let plan = errors::wrap(builder.build())?;
+        let builder = errors::wrap(builder.join(
+            &right.plan,
+            join_type,
+            on.as_slice(),
+            on.as_slice(),
+        ))?;
 
         Ok(DataFrame {
             ctx_state: self.ctx_state.clone(),
