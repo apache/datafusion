@@ -1042,6 +1042,60 @@ mod tests {
     }
 
     #[test]
+    fn row_group_predicate_not() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expected_expr = "Boolean(true)";
+
+        let expr = col("c1").not();
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_not_bool() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
+        let expected_expr = "NOT #c1_min And #c1_max";
+
+        let expr = col("c1").not();
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_bool() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
+        let expected_expr = "#c1_min Or #c1_max";
+
+        let expr = col("c1");
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_lt_bool() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
+        let expected_expr = "#c1_min Lt Boolean(true)";
+
+        // DF doesn't support arithmetic on boolean columns so
+        // this predicate will error when evaluated
+        let expr = col("c1").lt(lit(true));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
     fn row_group_predicate_required_columns() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
