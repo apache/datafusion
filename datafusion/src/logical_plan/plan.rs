@@ -62,7 +62,7 @@ impl FromStr for JoinType {
             "right" => Ok(JoinType::Right),
             "full" => Ok(JoinType::Full),
             "semi" => Ok(JoinType::Semi),
-            "anti" => Ok(JoinType::Semi),
+            "anti" => Ok(JoinType::Anti),
             how => {
                 return Err(DataFusionError::Internal(format!(
                     "The join type {} does not exist or is not implemented",
