@@ -116,7 +116,7 @@ pub fn create_aggregate_expr(
     let arg = coerce(args, input_schema, &signature(fun))?;
     if arg.len() == 0 {
         return Err(DataFusionError::Plan(format!(
-            "Aggregate error: Invalid or wrong number of arguments passed to aggregate: '{}'",
+            "Aggregate error. Invalid or wrong number of arguments passed to aggregate: '{}'",
             name,
         )));
     }
