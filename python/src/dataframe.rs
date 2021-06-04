@@ -26,8 +26,8 @@ use datafusion::logical_plan::{JoinType, LogicalPlanBuilder};
 use datafusion::physical_plan::collect;
 use datafusion::{execution::context::ExecutionContextState, logical_plan};
 
-use crate::expression;
 use crate::{errors, to_py};
+use crate::{errors::DataFusionError, expression};
 
 /// A DataFrame is a representation of a logical plan and an API to compose statements.
 /// Use it to build a plan and `.collect()` to execute the plan and collect the result.
@@ -142,16 +142,21 @@ impl DataFrame {
     /// Returns the join of two DataFrames `on`.
     fn join(&self, right: &DataFrame, on: Vec<&str>, how: &str) -> PyResult<Self> {
         let builder = LogicalPlanBuilder::from(&self.plan);
-        let join_type = how
-            .parse::<JoinType>()
-            .map_err(|e| -> errors::DataFusionError { e.into() })?;
-
-        let builder = errors::wrap(builder.join(
-            &right.plan,
-            join_type,
-            on.as_slice(),
-            on.as_slice(),
-        ))?;
+        let join_type = match how {
+            "inner" => JoinType::Inner,
+            "left" => JoinType::Left,
+            "right" => JoinType::Right,
+            "full" => JoinType::Full,
+            "semi" => JoinType::Semi,
+            "anti" => JoinType::Anti,
+            how => {
+                return Err(DataFusionError::Common(format!(
+                    "The join type {} does not exist or is not implemented",
+                    how
+                ))
+                .into())
+            }
+        };
 
         let plan = errors::wrap(builder.build())?;
 

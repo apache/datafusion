@@ -52,28 +52,6 @@ pub enum JoinType {
     Anti,
 }
 
-impl FromStr for JoinType {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "inner" => Ok(JoinType::Inner),
-            "left" => Ok(JoinType::Left),
-            "right" => Ok(JoinType::Right),
-            "full" => Ok(JoinType::Full),
-            "semi" => Ok(JoinType::Semi),
-            "anti" => Ok(JoinType::Anti),
-            how => {
-                return Err(DataFusionError::Internal(format!(
-                    "The join type {} does not exist or is not implemented",
-                    how
-                ))
-                .into())
-            }
-        }
-    }
-}
-
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
