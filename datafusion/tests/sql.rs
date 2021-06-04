@@ -3443,7 +3443,7 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
-    let logical_plan = ctx.create_logical_plan(&sql).unwrap();
+    let logical_plan = ctx.create_logical_plan(&sql)?;
     let physical_plan = ctx.create_physical_plan(&logical_plan);
     assert!(physical_plan.is_err());
     Ok(())
