@@ -114,7 +114,7 @@ pub fn create_aggregate_expr(
 ) -> Result<Arc<dyn AggregateExpr>> {
     // coerce
     let arg = coerce(args, input_schema, &signature(fun))?;
-    if arg.len() == 0 {
+    if arg.is_empty() {
         return Err(DataFusionError::Plan(format!(
             "Aggregate error. Invalid or wrong number of arguments passed to aggregate: '{}'",
             name,
