@@ -814,6 +814,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     JoinType::Right => protobuf::JoinType::Right,
                     JoinType::Full => protobuf::JoinType::Full,
                     JoinType::Semi => protobuf::JoinType::Semi,
+                    JoinType::Anti => protobuf::JoinType::Anti,
                 };
                 let left_join_column = on.iter().map(|on| on.0.to_owned()).collect();
                 let right_join_column = on.iter().map(|on| on.1.to_owned()).collect();

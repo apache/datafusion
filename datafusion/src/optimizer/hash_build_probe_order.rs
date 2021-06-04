@@ -109,7 +109,7 @@ fn should_swap_join_order(left: &LogicalPlan, right: &LogicalPlan) -> bool {
 fn supports_swap(join_type: JoinType) -> bool {
     match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => true,
-        JoinType::Semi => false,
+        JoinType::Semi | JoinType::Anti => false,
     }
 }
 

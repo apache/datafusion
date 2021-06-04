@@ -46,6 +46,8 @@ pub enum JoinType {
     Full,
     /// Semi Join
     Semi,
+    /// Anti Join
+    Anti,
 }
 
 /// A LogicalPlan represents the different types of relational

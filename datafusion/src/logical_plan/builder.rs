@@ -388,7 +388,7 @@ fn build_join_schema(
             // left then right
             left_fields.chain(right_fields).cloned().collect()
         }
-        JoinType::Semi => {
+        JoinType::Semi | JoinType::Anti => {
             // Only use the left side for the schema
             left.fields().clone()
         }
