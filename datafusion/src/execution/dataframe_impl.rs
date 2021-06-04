@@ -369,7 +369,7 @@ mod tests {
 
     fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
         let schema = test::aggr_test_schema();
-        let testdata = arrow::util::test_util::arrow_test_data();
+        let testdata = crate::test_util::arrow_test_data();
         ctx.register_csv(
             "aggregate_test_100",
             &format!("{}/csv/aggregate_test_100.csv", testdata),
