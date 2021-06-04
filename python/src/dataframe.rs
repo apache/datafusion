@@ -142,6 +142,7 @@ impl DataFrame {
     /// Returns the join of two DataFrames `on`.
     fn join(&self, right: &DataFrame, on: Vec<&str>, how: &str) -> PyResult<Self> {
         let builder = LogicalPlanBuilder::from(&self.plan);
+
         let join_type = match how {
             "inner" => JoinType::Inner,
             "left" => JoinType::Left,
