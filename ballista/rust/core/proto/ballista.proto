@@ -362,6 +362,7 @@ enum JoinType {
   RIGHT = 2;
   FULL = 3;
   SEMI = 4;
+  ANTI = 5;
 }
 
 message JoinNode {
