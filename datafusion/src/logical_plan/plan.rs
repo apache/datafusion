@@ -24,9 +24,11 @@ use super::{
     display::{GraphvizVisitor, IndentVisitor},
 };
 use crate::datasource::TableProvider;
+use crate::error::DataFusionError;
 use crate::logical_plan::dfschema::DFSchemaRef;
 use crate::sql::parser::FileType;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use std::str::FromStr;
 use std::{
     cmp::min,
     fmt::{self, Display},
@@ -48,6 +50,28 @@ pub enum JoinType {
     Semi,
     /// Anti Join
     Anti,
+}
+
+impl FromStr for JoinType {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "inner" => Ok(JoinType::Inner),
+            "left" => Ok(JoinType::Left),
+            "right" => Ok(JoinType::Right),
+            "full" => Ok(JoinType::Full),
+            "semi" => Ok(JoinType::Semi),
+            "anti" => Ok(JoinType::Semi),
+            how => {
+                return Err(DataFusionError::Internal(format!(
+                    "The join type {} does not exist or is not implemented",
+                    how
+                ))
+                .into())
+            }
+        }
+    }
 }
 
 /// A LogicalPlan represents the different types of relational
