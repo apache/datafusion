@@ -1618,10 +1618,10 @@ mod tests {
     fn select_column_does_not_exist() {
         let sql = "SELECT doesnotexist FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Plan(\"No field with unqualified name 'doesnotexist'\")",
-            format!("{:?}", err)
-        );
+        assert!(matches!(
+            err,
+            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'doesnotexist'",
+        ));
     }
 
     #[test]
@@ -1676,20 +1676,20 @@ mod tests {
     fn select_filter_column_does_not_exist() {
         let sql = "SELECT first_name FROM person WHERE doesnotexist = 'A'";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Plan(\"No field with unqualified name 'doesnotexist'\")",
-            format!("{:?}", err)
-        );
+        assert!(matches!(
+            err,
+            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'doesnotexist'",
+        ));
     }
 
     #[test]
     fn select_filter_cannot_use_alias() {
         let sql = "SELECT first_name AS x FROM person WHERE x = 'A'";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Plan(\"No field with unqualified name 'x'\")",
-            format!("{:?}", err)
-        );
+        assert!(matches!(
+            err,
+            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'x'",
+        ));
     }
 
     #[test]
@@ -2157,10 +2157,10 @@ mod tests {
     fn select_simple_aggregate_column_does_not_exist() {
         let sql = "SELECT MIN(doesnotexist) FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Plan(\"No field with unqualified name 'doesnotexist'\")",
-            format!("{:?}", err)
-        );
+        assert!(matches!(
+            err,
+            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'doesnotexist'",
+        ));
     }
 
     #[test]
@@ -2247,20 +2247,20 @@ mod tests {
     fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
         let sql = "SELECT SUM(age) FROM person GROUP BY doesnotexist";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Plan(\"No field with unqualified name 'doesnotexist'\")",
-            format!("{:?}", err)
-        );
+        assert!(matches!(
+            err,
+            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'doesnotexist'",
+        ));
     }
 
     #[test]
     fn select_simple_aggregate_with_groupby_and_column_in_aggregate_does_not_exist() {
         let sql = "SELECT SUM(doesnotexist) FROM person GROUP BY first_name";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Plan(\"No field with unqualified name 'doesnotexist'\")",
-            format!("{:?}", err)
-        );
+        assert!(matches!(
+            err,
+            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'doesnotexist'",
+        ));
     }
 
     #[test]
@@ -2277,10 +2277,10 @@ mod tests {
     fn select_unsupported_complex_interval() {
         let sql = "SELECT INTERVAL '1 year 1 day'";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "NotImplemented(\"DF does not support intervals that have both a Year/Month part as well as Days/Hours/Mins/Seconds: \\\"1 year 1 day\\\". Hint: try breaking the interval into two parts, one with Year/Month and the other with Days/Hours/Mins/Seconds - e.g. (NOW() + INTERVAL '1 year') + INTERVAL '1 day'\")",
-            format!("{:?}", err)
-        );
+        assert!(matches!(
+            err,
+            DataFusionError::NotImplemented(msg) if msg == "DF does not support intervals that have both a Year/Month part as well as Days/Hours/Mins/Seconds: \"1 year 1 day\". Hint: try breaking the interval into two parts, one with Year/Month and the other with Days/Hours/Mins/Seconds - e.g. (NOW() + INTERVAL '1 year') + INTERVAL '1 day'",
+        ));
     }
 
     #[test]
@@ -2297,10 +2297,10 @@ mod tests {
     fn select_simple_aggregate_with_groupby_cannot_use_alias() {
         let sql = "SELECT state AS x, MAX(age) FROM person GROUP BY x";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Plan(\"No field with unqualified name 'x'\")",
-            format!("{:?}", err)
-        );
+        assert!(matches!(
+            err,
+            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'x'",
+        ));
     }
 
     #[test]
