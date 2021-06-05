@@ -30,6 +30,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::Path;
+use std::time::Instant;
 
 #[tokio::main]
 pub async fn main() {
@@ -238,7 +239,9 @@ async fn exec_and_print(
     sql: String,
 ) -> Result<()> {
     let df = ctx.sql(&sql)?;
+    let now = Instant::now();
     let results = df.collect().await?;
-    print_options.print_batches(&results)?;
+
+    print_options.print_batches(&results, now)?;
     Ok(())
 }
