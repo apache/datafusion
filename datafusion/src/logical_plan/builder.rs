@@ -358,23 +358,7 @@ impl LogicalPlanBuilder {
     /// - https://github.com/apache/arrow-datafusion/issues/299 with partition clause
     /// - https://github.com/apache/arrow-datafusion/issues/360 with order by
     /// - https://github.com/apache/arrow-datafusion/issues/361 with window frame
-    pub fn window(
-        &self,
-        window_expr: impl IntoIterator<Item = Expr>,
-        // FIXME: implement next
-        // filter_by_expr: impl IntoIterator<Item = Expr>,
-        // FIXME: implement next
-        // partition_by_expr: impl IntoIterator<Item = Expr>,
-        // FIXME: implement next
-        // order_by_expr: impl IntoIterator<Item = Expr>,
-        // FIXME: implement next
-        // window_frame: Option<WindowFrame>,
-    ) -> Result<Self> {
-        let window_expr = window_expr.into_iter().collect::<Vec<Expr>>();
-        // FIXME: implement next
-        // let partition_by_expr = partition_by_expr.into_iter().collect::<Vec<Expr>>();
-        // FIXME: implement next
-        // let order_by_expr = order_by_expr.into_iter().collect::<Vec<Expr>>();
+    pub fn window(&self, window_expr: Vec<Expr>) -> Result<Self> {
         let all_expr = window_expr.iter();
         validate_unique_names("Windows", all_expr.clone(), self.plan.schema())?;
 
@@ -384,12 +368,6 @@ impl LogicalPlanBuilder {
 
         Ok(Self::from(&LogicalPlan::Window {
             input: Arc::new(self.plan.clone()),
-            // FIXME implement next
-            // partition_by_expr,
-            // FIXME implement next
-            // order_by_expr,
-            // FIXME implement next
-            // window_frame,
             window_expr,
             schema: Arc::new(DFSchema::new(window_fields)?),
         }))
@@ -478,6 +456,10 @@ pub fn build_join_schema(
 
             // left then right
             left_fields.chain(right_fields).cloned().collect()
+        }
+        JoinType::Semi | JoinType::Anti => {
+            // Only use the left side for the schema
+            left.fields().clone()
         }
         JoinType::Right => {
             let duplicate_keys = match join_constraint {

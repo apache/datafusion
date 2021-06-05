@@ -52,7 +52,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
 
 /// Generated partitioned copy of a CSV file
 pub fn create_partitioned_csv(filename: &str, partitions: usize) -> Result<String> {
-    let testdata = arrow::util::test_util::arrow_test_data();
+    let testdata = crate::test_util::arrow_test_data();
     let path = format!("{}/csv/{}", testdata, filename);
 
     let tmp_dir = TempDir::new()?;

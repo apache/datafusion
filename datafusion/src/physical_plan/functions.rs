@@ -1279,7 +1279,7 @@ mod tests {
     use arrow::{
         array::{
             Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float64Array,
-            Int32Array, ListArray, StringArray, UInt32Array, UInt64Array,
+            Int32Array, StringArray, UInt32Array, UInt64Array,
         },
         datatypes::Field,
         record_batch::RecordBatch,
@@ -3559,6 +3559,7 @@ mod tests {
     #[test]
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match() -> Result<()> {
+        use arrow::array::ListArray;
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let ctx_state = ExecutionContextState::new();
 
@@ -3598,6 +3599,7 @@ mod tests {
     #[test]
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match_all_literals() -> Result<()> {
+        use arrow::array::ListArray;
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let ctx_state = ExecutionContextState::new();
 

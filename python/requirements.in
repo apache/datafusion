@@ -14,19 +14,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-
-FROM ubuntu
-
-RUN apt-get update && \
-    apt-get install -y git build-essential
-
-RUN git clone https://github.com/databricks/tpch-dbgen.git && \
-    cd tpch-dbgen && \
-    make
-
-WORKDIR /tpch-dbgen
-ADD entrypoint.sh /tpch-dbgen/
-
-VOLUME /data
-
-ENTRYPOINT [ "bash", "./entrypoint.sh" ]
+maturin
+toml
+pyarrow

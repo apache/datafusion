@@ -116,7 +116,7 @@ Run the benchmarks:
 ```bash
 docker run -it myrepo/ballista-arm64 \
   /tpch benchmark datafusion --query=1 --path=/path/to/data --format=parquet \
-  --concurrency=24 --iterations=1 --debug --host=ballista-scheduler --port=50050
+  --concurrency=24 --iterations=1 --debug --host=ballista-scheduler --bind-port=50050
 ```
 
 Note that it will be necessary to mount appropriate volumes into the containers and also configure networking

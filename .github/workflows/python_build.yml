@@ -28,12 +28,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.6, 3.7, 3.8]
+        python-version: ["3.6", "3.7", "3.8", "3.9"]
         os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v2
 
-      - uses: actions/setup-python@v1
+      - uses: actions/setup-python@v2
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -54,7 +54,7 @@ jobs:
         run: dir python/target\wheels\
 
       - name: List wheels
-        if:  matrix.os != 'windows-latest'
+        if: matrix.os != 'windows-latest'
         run: find ./python/target/wheels/
 
       - name: Archive wheels

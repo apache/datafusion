@@ -705,7 +705,7 @@ mod tests {
 
     #[tokio::test]
     async fn test() -> Result<()> {
-        let testdata = arrow::util::test_util::parquet_test_data();
+        let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let parquet_exec = ParquetExec::try_from_path(
             &filename,

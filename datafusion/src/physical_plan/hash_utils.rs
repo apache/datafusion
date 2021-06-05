@@ -34,6 +34,10 @@ pub enum JoinType {
     Right,
     /// Full Join
     Full,
+    /// Semi Join
+    Semi,
+    /// Anti Join
+    Anti,
 }
 
 /// The on clause of the join, as vector of (left, right) columns.
@@ -143,6 +147,7 @@ pub fn build_join_schema(
             // left then right
             left_fields.chain(right_fields).cloned().collect()
         }
+        JoinType::Semi | JoinType::Anti => left.fields().clone(),
     };
     Schema::new(fields)
 }

@@ -194,8 +194,6 @@
 //! cd arrow-datafusion
 //! # Download test data
 //! git submodule update --init
-//! export PARQUET_TEST_DATA=parquet-testing/data
-//! export ARROW_TEST_DATA=testing/data
 //!
 //! cargo run --example csv_sql
 //!
@@ -234,6 +232,7 @@ pub use parquet;
 
 #[cfg(test)]
 pub mod test;
+pub mod test_util;
 
 #[macro_use]
 #[cfg(feature = "regex_expressions")]

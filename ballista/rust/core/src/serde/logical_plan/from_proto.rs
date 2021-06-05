@@ -100,9 +100,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                 // // FIXME: parse the window_frame data
                 // let window_frame = None;
                 LogicalPlanBuilder::from(&input)
-                    .window(
-                        window_expr, /* filter_by_expr, partition_by_expr, order_by_expr, window_frame*/
-                    )?
+                    .window(window_expr)?
                     .build()
                     .map_err(|e| e.into())
             }
@@ -267,6 +265,8 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     protobuf::JoinType::Left => JoinType::Left,
                     protobuf::JoinType::Right => JoinType::Right,
                     protobuf::JoinType::Full => JoinType::Full,
+                    protobuf::JoinType::Semi => JoinType::Semi,
+                    protobuf::JoinType::Anti => JoinType::Anti,
                 };
                 LogicalPlanBuilder::from(&convert_box_required!(join.left)?)
                     .join(
@@ -808,6 +808,12 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                     .window_function
                     .as_ref()
                     .ok_or_else(|| proto_error("Received empty window function"))?;
+                let order_by = expr
+                    .order_by
+                    .iter()
+                    .map(|e| e.try_into())
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()?;
                 match window_function {
                     window_expr_node::WindowFunction::AggrFunction(i) => {
                         let aggr_function = protobuf::AggregateFunction::from_i32(*i)
@@ -823,6 +829,7 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                                 AggregateFunction::from(aggr_function),
                             ),
                             args: vec![parse_required_expr(&expr.expr)?],
+                            order_by,
                         })
                     }
                     window_expr_node::WindowFunction::BuiltInFunction(i) => {
@@ -841,6 +848,7 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                                 BuiltInWindowFunction::from(built_in_function),
                             ),
                             args: vec![parse_required_expr(&expr.expr)?],
+                            order_by,
                         })
                     }
                 }

@@ -115,7 +115,7 @@ df = df.aggregate(
 )
 ```
 
-## How to install
+## How to install (from pip)
 
 ```bash
 pip install datafusion
@@ -135,12 +135,35 @@ cd arrow-datafusion/python
 
 # prepare development environment (used to build wheel / install in development)
 python3 -m venv venv
-pip install maturin==0.10.4 toml==0.10.1 pyarrow==1.0.0
+# activate the venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Whenever rust code changes (your changes or via git pull):
+Whenever rust code changes (your changes or via `git pull`):
 
 ```bash
-venv/bin/maturin develop
-venv/bin/python -m unittest discover tests
+# make sure you activate the venv using "source venv/bin/activate" first
+maturin develop
+python -m unittest discover tests
 ```
+
+## How to update dependencies
+
+To change test dependencies, change the `requirements.in` and run
+
+```bash
+# install pip-tools (this can be done only once), also consider running in venv
+pip install pip-tools
+
+# change requirements.in and then run
+pip-compile --generate-hashes
+```
+
+To update dependencies, run
+
+```bash
+pip-compile update
+```
+
+More details [here](https://github.com/jazzband/pip-tools)
