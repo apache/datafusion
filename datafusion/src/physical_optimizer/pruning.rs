@@ -42,6 +42,7 @@ use crate::{
     logical_plan::{Expr, Operator},
     optimizer::utils,
     physical_plan::{planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr},
+    scalar::ScalarValue,
 };
 
 /// Interface to pass statistics information to [`PruningPredicates`]
@@ -548,7 +549,7 @@ fn build_predicate_expression(
         // allow partial failure in predicate expression generation
         // this can still produce a useful predicate when multiple conditions are joined using AND
         Err(_) => {
-            return Ok(logical_plan::lit(true));
+            return Ok(unhandled);
         }
     };
     let corrected_op = expr_builder.correct_operator(op);
@@ -586,8 +587,45 @@ fn build_predicate_expression(
                 .min_column_expr()?
                 .lt_eq(expr_builder.scalar_expr().clone())
         }
+        Operator::Like => {
+            match &**right {
+                // If the literal is a 'starts_with'
+                Expr::Literal(ScalarValue::Utf8(Some(string)))
+                    if !string.starts_with('%') =>
+                {
+                    let scalar_expr =
+                        Expr::Literal(ScalarValue::Utf8(Some(string.replace('%', ""))));
+                    // Behaves like Eq
+                    let min_column_expr = expr_builder.min_column_expr()?;
+                    let max_column_expr = expr_builder.max_column_expr()?;
+                    min_column_expr
+                        .lt_eq(scalar_expr.clone())
+                        .and(scalar_expr.lt_eq(max_column_expr))
+                }
+                _ => unhandled,
+            }
+        }
+        Operator::NotLike => {
+            match &**right {
+                // If the literal is a 'starts_with'
+                Expr::Literal(ScalarValue::Utf8(Some(string)))
+                    if !string.starts_with('%') =>
+                {
+                    let scalar_expr =
+                        Expr::Literal(ScalarValue::Utf8(Some(string.replace('%', ""))));
+                    // Behaves like Eq
+                    let min_column_expr = expr_builder.min_column_expr()?;
+                    let max_column_expr = expr_builder.max_column_expr()?;
+                    // Inverse of Like
+                    min_column_expr
+                        .gt_eq(scalar_expr.clone())
+                        .and(scalar_expr.gt_eq(max_column_expr))
+                }
+                _ => unhandled,
+            }
+        }
         // other expressions are not supported
-        _ => logical_plan::lit(true),
+        _ => unhandled,
     };
     Ok(statistics_expr)
 }
@@ -1088,6 +1126,60 @@ mod tests {
         // DF doesn't support arithmetic on boolean columns so
         // this predicate will error when evaluated
         let expr = col("c1").lt(lit(true));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_starts_with() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, true)]);
+        // test LIKE operator that is converted to a 'starts_with'
+        let expr = col("c1").like(lit("Banana%"));
+        let expected_expr =
+            "#c1_min LtEq Utf8(\"Banana\") And Utf8(\"Banana\") LtEq #c1_max";
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_like() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, true)]);
+        // test LIKE operator that can't be converted to a 'starts_with'
+        let expr = col("c1").like(lit("%Banana%"));
+        let expected_expr = "Boolean(true)";
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_not_starts_with() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, true)]);
+        // test LIKE operator that can't be converted to a 'starts_with'
+        let expr = col("c1").not().like(lit("Banana%"));
+        let expected_expr =
+            "NOT #c1_min LtEq Utf8(\"Banana\") And Utf8(\"Banana\") LtEq NOT #c1_max";
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_not_like() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, true)]);
+        // test LIKE operator that can't be converted to a 'starts_with'
+        let expr = col("c1").not().like(lit("%Banana%"));
+        let expected_expr = "Boolean(true)";
         let predicate_expr =
             build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
         assert_eq!(format!("{:?}", predicate_expr), expected_expr);
