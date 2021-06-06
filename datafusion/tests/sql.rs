@@ -3446,6 +3446,6 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let logical_plan = ctx.create_logical_plan(&sql)?;
     let physical_plan = ctx.create_physical_plan(&logical_plan);
     let err = physical_plan.unwrap_err();
-    assert_eq!(err.to_string(), "Invalid or wrong number of arguments passed to aggregate: 'COUNT'");
+    assert_eq!(err.to_string(), "Error during planning: Invalid or wrong number of arguments passed to aggregate: 'COUNT(DISTINCT )'");
     Ok(())
 }
