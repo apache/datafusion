@@ -497,7 +497,6 @@ macro_rules! get_statistic {
 // Extract the min or max value calling `func` or `bytes_func` on the ParquetStatistics as appropriate
 macro_rules! get_min_max_values {
     ($self:expr, $column:expr, $func:ident, $bytes_func:ident) => {{
-        // FIXME: change to use physical column?
         let (column_index, field) = if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.name) {
             (v, f)
         } else {

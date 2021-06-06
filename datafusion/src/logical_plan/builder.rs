@@ -169,7 +169,7 @@ impl LogicalPlanBuilder {
                     .collect(),
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified(table_name, &schema).unwrap()
+                DFSchema::try_from_qualified_schema(table_name, &schema).unwrap()
             });
 
         let table_scan = LogicalPlan::TableScan {
@@ -273,7 +273,6 @@ impl LogicalPlanBuilder {
             .collect::<Result<_>>()?;
         let right_keys: Vec<Column> = right_keys
             .into_iter()
-            // FIXME: write a test for this
             .map(|c| c.into().normalize(&right.all_schemas()))
             .collect::<Result<_>>()?;
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();

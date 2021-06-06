@@ -199,7 +199,7 @@ impl PruningPredicate {
 #[derive(Debug, Default, Clone)]
 struct RequiredStatColumns {
     /// The statistics required to evaluate this predicate:
-    /// * The column name in the input schema
+    /// * The unqualified column in the input schema
     /// * Statistics type (e.g. Min or Max)
     /// * The field the statistics value should be placed in for
     ///   pruning predicate evaluation
@@ -465,7 +465,6 @@ fn build_single_column_expr(
     required_columns: &mut RequiredStatColumns,
     is_not: bool, // if true, treat as !col
 ) -> Option<Expr> {
-    // FIXME(houqp): change logical column to physical column?
     let field = schema.field_with_name(&column.name).ok()?;
 
     if matches!(field.data_type(), &DataType::Boolean) {

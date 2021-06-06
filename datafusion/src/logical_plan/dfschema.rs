@@ -89,8 +89,7 @@ impl DFSchema {
     }
 
     /// Create a `DFSchema` from an Arrow schema
-    // FIXME: change to a better name?
-    pub fn try_from_qualified(qualifier: &str, schema: &Schema) -> Result<Self> {
+    pub fn try_from_qualified_schema(qualifier: &str, schema: &Schema) -> Result<Self> {
         Self::new(
             schema
                 .fields()
@@ -323,7 +322,6 @@ impl Into<Schema> for &DFSchema {
 /// Create a `DFSchema` from an Arrow schema
 impl TryFrom<Schema> for DFSchema {
     type Error = DataFusionError;
-    // FIXME: change this to reference of schema
     fn try_from(schema: Schema) -> std::result::Result<Self, Self::Error> {
         Self::new(
             schema
@@ -509,14 +507,14 @@ mod tests {
 
     #[test]
     fn from_qualified_schema() -> Result<()> {
-        let schema = DFSchema::try_from_qualified("t1", &test_schema_1())?;
+        let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         assert_eq!("t1.c0, t1.c1", schema.to_string());
         Ok(())
     }
 
     #[test]
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {
-        let schema = DFSchema::try_from_qualified("t1", &test_schema_1())?;
+        let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let arrow_schema: Schema = schema.into();
         let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }, \
         Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }";
@@ -526,8 +524,8 @@ mod tests {
 
     #[test]
     fn join_qualified() -> Result<()> {
-        let left = DFSchema::try_from_qualified("t1", &test_schema_1())?;
-        let right = DFSchema::try_from_qualified("t2", &test_schema_1())?;
+        let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+        let right = DFSchema::try_from_qualified_schema("t2", &test_schema_1())?;
         let join = left.join(&right)?;
         assert_eq!("t1.c0, t1.c1, t2.c0, t2.c1", join.to_string());
         // test valid access
@@ -542,8 +540,8 @@ mod tests {
 
     #[test]
     fn join_qualified_duplicate() -> Result<()> {
-        let left = DFSchema::try_from_qualified("t1", &test_schema_1())?;
-        let right = DFSchema::try_from_qualified("t1", &test_schema_1())?;
+        let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+        let right = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let join = left.join(&right);
         assert!(join.is_err());
         assert_eq!(
@@ -570,7 +568,7 @@ mod tests {
 
     #[test]
     fn join_mixed() -> Result<()> {
-        let left = DFSchema::try_from_qualified("t1", &test_schema_1())?;
+        let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_2())?;
         let join = left.join(&right)?;
         assert_eq!("t1.c0, t1.c1, c100, c101", join.to_string());
@@ -588,7 +586,7 @@ mod tests {
 
     #[test]
     fn join_mixed_duplicate() -> Result<()> {
-        let left = DFSchema::try_from_qualified("t1", &test_schema_1())?;
+        let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
         assert!(join.is_err());

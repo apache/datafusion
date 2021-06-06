@@ -54,27 +54,28 @@ impl Column {
         }
     }
 
-    /// Deserialize a flat name string into a column
-    pub fn from_flat_name(flat_name: &str) -> Self {
+    /// Deserialize a fully qualified name string into a column
+    pub fn from_qualified_name(flat_name: &str) -> Self {
         use sqlparser::tokenizer::Token;
 
         let dialect = sqlparser::dialect::GenericDialect {};
         let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, flat_name);
-        // FIXME: remove unwrap
-        let tokens = tokenizer.tokenize().unwrap();
-
-        // any expression that's not in the form of foo.bar will be treated as unqualified
-        // column name
-        match tokens.as_slice() {
-            [Token::Word(relation), Token::Period, Token::Word(name)] => Column {
-                relation: Some(relation.value.clone()),
-                name: name.value.clone(),
-            },
-            _ => Column {
-                relation: None,
-                name: String::from(flat_name),
-            },
+        if let Ok(tokens) = tokenizer.tokenize() {
+            if let [Token::Word(relation), Token::Period, Token::Word(name)] =
+                tokens.as_slice()
+            {
+                return Column {
+                    relation: Some(relation.value.clone()),
+                    name: name.value.clone(),
+                };
+            }
         }
+        // any expression that's not in the form of `foo.bar` will be treated as unqualified column
+        // name
+        return Column {
+            relation: None,
+            name: String::from(flat_name),
+        };
     }
 
     /// Serialize column into a flat name string
@@ -106,7 +107,7 @@ impl Column {
 
 impl From<&str> for Column {
     fn from(c: &str) -> Self {
-        Self::from_flat_name(c)
+        Self::from_qualified_name(c)
     }
 }
 
@@ -1093,22 +1094,11 @@ pub fn normalize_col(e: Expr, schemas: &[&DFSchemaRef]) -> Result<Expr> {
 
     impl<'a, 'b> ExprRewriter for ColumnNormalizer<'a, 'b> {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(ref c) = expr {
-                // FIXME: reuse ColumnNormalizer::normalize?
-                if c.relation.is_none() {
-                    for schema in self.schemas {
-                        if let Ok(field) = schema.field_with_unqualified_name(&c.name) {
-                            return Ok(Expr::Column(field.qualified_column()));
-                        }
-                    }
-                    return Err(DataFusionError::Plan(format!(
-                        "Column {} not found in provided schemas",
-                        c.name,
-                    )));
-                }
+            if let Expr::Column(c) = expr {
+                Ok(Expr::Column(c.normalize(self.schemas)?))
+            } else {
+                Ok(expr)
             }
-
-            Ok(expr)
         }
     }
 
