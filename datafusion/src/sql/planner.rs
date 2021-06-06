@@ -54,7 +54,7 @@ use super::{
     parser::DFParser,
     utils::{
         can_columns_satisfy_exprs, expand_wildcard, expr_as_column_expr, extract_aliases,
-        extract_positions, find_aggregate_exprs, find_column_exprs, find_window_exprs,
+        find_aggregate_exprs, find_column_exprs, find_window_exprs,
         group_window_expr_by_sort_keys, rebase_expr, resolve_aliases_to_exprs,
         resolve_positions_to_exprs,
     },
@@ -583,19 +583,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // All of the aggregate expressions (deduplicated).
         let aggr_exprs = find_aggregate_exprs(&aggr_expr_haystack);
 
+        let alias_map = extract_aliases(&select_exprs);
         let group_by_exprs = select
             .group_by
             .iter()
             .map(|e| {
                 let group_by_expr = self.sql_expr_to_logical_expr(e)?;
-                let group_by_expr = resolve_aliases_to_exprs(
-                    &group_by_expr,
-                    &extract_aliases(&select_exprs),
-                )?;
-                let group_by_expr = resolve_positions_to_exprs(
-                    &group_by_expr,
-                    &extract_positions(&select_exprs),
-                )?;
+                let group_by_expr = resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
+                let group_by_expr =
+                    resolve_positions_to_exprs(&group_by_expr, &select_exprs)?;
                 self.validate_schema_satisfies_exprs(
                     plan.schema(),
                     &[group_by_expr.clone()],

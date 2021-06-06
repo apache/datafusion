@@ -18,6 +18,7 @@
 //! SQL Utility Functions
 
 use crate::logical_plan::{DFSchema, Expr, LogicalPlan};
+use crate::scalar::ScalarValue;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{ExpressionVisitor, Recursion},
@@ -390,39 +391,27 @@ pub(crate) fn extract_aliases(exprs: &[Expr]) -> HashMap<String, Expr> {
         .collect::<HashMap<String, Expr>>()
 }
 
-/// Returns mapping of each position (`String`) to the expression (`Expr`) it is
-/// aliasing.
-pub(crate) fn extract_positions(exprs: &[Expr]) -> HashMap<String, Expr> {
-    let mut position = 0;
-    exprs
-        .iter()
-        .filter_map(|expr| match expr {
-            // position starts with 1
-            Expr::Alias(nested_expr, _alias_name) => {
-                position += 1;
-                Some((position.clone().to_string(), *nested_expr.clone()))
-            }
-            _ => {
-                position += 1;
-                Some((position.clone().to_string(), expr.clone()))
-            }
-        })
-        .collect::<HashMap<String, Expr>>()
-}
-
 pub(crate) fn resolve_positions_to_exprs(
     expr: &Expr,
-    positions: &HashMap<String, Expr>,
+    select_exprs: &[Expr],
 ) -> Result<Expr> {
     match expr {
-        Expr::Literal(value) => {
-            if let Some(position_expr) = positions.get(&(value.to_string())) {
-                Ok(position_expr.clone())
-            } else {
-                Ok(Expr::Literal(value.clone()))
+        Expr::Literal(position) => match position {
+            ScalarValue::Int64(Some(pos)) => {
+                let index = (pos - 1) as usize;
+                if index < select_exprs.len() {
+                    let select_expr = &select_exprs[index];
+                    match select_expr {
+                        Expr::Alias(nested_expr, _alias_name) => Ok(*nested_expr.clone()),
+                        _ => Ok(select_expr.clone()),
+                    }
+                } else {
+                    Ok(expr.clone())
+                }
             }
-        }
-        default => Ok(default.clone()),
+            _ => Ok(expr.clone()),
+        },
+        _ => Ok(expr.clone()),
     }
 }
 
