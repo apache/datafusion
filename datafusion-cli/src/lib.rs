@@ -29,17 +29,16 @@ pub struct PrintOptions {
 
 fn print_timing_info(row_count: usize, now: Instant) {
     println!(
-        "{} {} in set. Query took {} seconds.",
+        "{} {} in set. Query took {:.3} seconds.",
         row_count,
         if row_count == 1 { "row" } else { "rows" },
-        now.elapsed().as_secs()
+        now.elapsed().as_secs_f64()
     );
 }
 
 impl PrintOptions {
     /// print the batches to stdout using the specified format
-    pub fn print_batches(&self, batches: &[RecordBatch]) -> Result<()> {
-        let now = Instant::now();
+    pub fn print_batches(&self, batches: &[RecordBatch], now: Instant) -> Result<()> {
         if batches.is_empty() {
             if !self.quiet {
                 print_timing_info(0, now);
