@@ -54,8 +54,9 @@ use super::{
     parser::DFParser,
     utils::{
         can_columns_satisfy_exprs, expand_wildcard, expr_as_column_expr, extract_aliases,
-        find_aggregate_exprs, find_column_exprs, find_window_exprs,
+        extract_positions, find_aggregate_exprs, find_column_exprs, find_window_exprs,
         group_window_expr_by_sort_keys, rebase_expr, resolve_aliases_to_exprs,
+        resolve_positions_to_exprs,
     },
 };
 
@@ -590,6 +591,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let group_by_expr = resolve_aliases_to_exprs(
                     &group_by_expr,
                     &extract_aliases(&select_exprs),
+                )?;
+                let group_by_expr = resolve_positions_to_exprs(
+                    &group_by_expr,
+                    &extract_positions(&select_exprs),
                 )?;
                 self.validate_schema_satisfies_exprs(
                     plan.schema(),
@@ -2315,6 +2320,16 @@ mod tests {
             "SELECT MAX(first_name) FROM person GROUP BY first_name",
             "Projection: #MAX(first_name)\
              \n  Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#first_name)]]\
+             \n    TableScan: person projection=None",
+        );
+    }
+
+    #[test]
+    fn select_simple_aggregate_with_groupby_can_use_positions() {
+        quick_test(
+            "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 1, 2",
+            "Projection: #state, #age AS b, #COUNT(UInt8(1))\
+             \n  Aggregate: groupBy=[[#state, #age]], aggr=[[COUNT(UInt8(1))]]\
              \n    TableScan: person projection=None",
         );
     }
