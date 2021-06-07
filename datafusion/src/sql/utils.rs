@@ -396,21 +396,20 @@ pub(crate) fn resolve_positions_to_exprs(
     select_exprs: &[Expr],
 ) -> Result<Expr> {
     match expr {
-        Expr::Literal(position) => match position {
-            ScalarValue::Int64(Some(pos)) => {
-                let index = (pos - 1) as usize;
-                if index < select_exprs.len() {
-                    let select_expr = &select_exprs[index];
-                    match select_expr {
-                        Expr::Alias(nested_expr, _alias_name) => Ok(*nested_expr.clone()),
-                        _ => Ok(select_expr.clone()),
-                    }
-                } else {
-                    Ok(expr.clone())
+        // sql_expr_to_logical_expr maps number to i64
+        // https://github.com/apache/arrow-datafusion/blob/8d175c759e17190980f270b5894348dc4cff9bbf/datafusion/src/sql/planner.rs#L882-L887
+        Expr::Literal(ScalarValue::Int64(Some(pos))) => {
+            let index = (pos - 1) as usize;
+            if index < select_exprs.len() {
+                let select_expr = &select_exprs[index];
+                match select_expr {
+                    Expr::Alias(nested_expr, _alias_name) => Ok(*nested_expr.clone()),
+                    _ => Ok(select_expr.clone()),
                 }
+            } else {
+                Ok(expr.clone())
             }
-            _ => Ok(expr.clone()),
-        },
+        }
         _ => Ok(expr.clone()),
     }
 }
