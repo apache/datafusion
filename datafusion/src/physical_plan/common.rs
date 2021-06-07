@@ -17,23 +17,21 @@
 
 //! Defines common code used in execution plans
 
-use std::fs;
-use std::fs::metadata;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
+use super::{RecordBatchStream, SendableRecordBatchStream};
+use crate::error::{DataFusionError, Result};
+use crate::physical_plan::ExecutionPlan;
+use arrow::compute::concat;
 use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use futures::channel::mpsc;
 use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
+use std::fs;
+use std::fs::metadata;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 use tokio::task::JoinHandle;
-
-use crate::arrow::error::ArrowError;
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::ExecutionPlan;
-
-use super::{RecordBatchStream, SendableRecordBatchStream};
 
 /// Stream of record batches
 pub struct SizedRecordBatchStream {
@@ -81,6 +79,32 @@ pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatc
         .try_collect::<Vec<_>>()
         .await
         .map_err(DataFusionError::from)
+}
+
+/// Combine a slice of record batches into one, or returns None if the slice itself
+/// is empty; all the record batches inside the slice must be of the same schema.
+pub(crate) fn combine_batches(
+    batches: &[RecordBatch],
+    schema: SchemaRef,
+) -> ArrowResult<Option<RecordBatch>> {
+    if batches.is_empty() {
+        Ok(None)
+    } else {
+        let columns = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                concat(
+                    &batches
+                        .iter()
+                        .map(|batch| batch.column(i).as_ref())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<ArrowResult<Vec<_>>>()?;
+        Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
+    }
 }
 
 /// Recursively builds a list of files in a directory with a given extension
@@ -143,4 +167,54 @@ pub(crate) fn spawn_execution(
             output.send(item).await.ok();
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::{
+        array::{Float32Array, Float64Array},
+        datatypes::{DataType, Field, Schema},
+        record_batch::RecordBatch,
+    };
+
+    #[test]
+    fn test_combine_batches_empty() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f32", DataType::Float32, false),
+            Field::new("f64", DataType::Float64, false),
+        ]));
+        let result = combine_batches(&[], schema)?;
+        assert!(result.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_combine_batches() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f32", DataType::Float32, false),
+            Field::new("f64", DataType::Float64, false),
+        ]));
+
+        let batch_count = 1000;
+        let batch_size = 10;
+        let batches = (0..batch_count)
+            .map(|i| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Float32Array::from(vec![i as f32; batch_size])),
+                        Arc::new(Float64Array::from(vec![i as f64; batch_size])),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let result = combine_batches(&batches, schema)?;
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert_eq!(batch_count * batch_size, result.num_rows());
+        Ok(())
+    }
 }
