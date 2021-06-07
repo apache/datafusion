@@ -20,10 +20,10 @@
 
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{DFField, DFSchema};
+use crate::logical_plan::{window_frames, DFField, DFSchema};
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
-    window_frames, window_functions,
+    window_functions,
 };
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};

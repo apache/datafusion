@@ -19,22 +19,17 @@
 //! buffer format, allowing DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
-use std::{
-    boxed,
-    convert::{TryFrom, TryInto},
-};
-
 use super::super::proto_error;
 use crate::datasource::DfTableAdapter;
 use crate::serde::{protobuf, BallistaError};
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::datasource::CsvFile;
-use datafusion::logical_plan::{Expr, JoinType, LogicalPlan};
+use datafusion::logical_plan::{
+    window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
+    Expr, JoinType, LogicalPlan,
+};
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
-use datafusion::physical_plan::window_frames::{
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
-};
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
 };
@@ -42,6 +37,10 @@ use datafusion::{datasource::parquet::ParquetTable, logical_plan::exprlist_to_fi
 use protobuf::{
     arrow_type, logical_expr_node::ExprType, scalar_type, DateUnit, PrimitiveScalarType,
     ScalarListValue, ScalarType,
+};
+use std::{
+    boxed,
+    convert::{TryFrom, TryInto},
 };
 
 impl protobuf::IntervalUnit {
