@@ -1121,13 +1121,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 // then, window function
                 if let Some(window) = &function.over {
-                    if window.partition_by.is_empty() && window.window_frame.is_none() {
+                    if window.partition_by.is_empty() {
                         let order_by = window
                             .order_by
                             .iter()
                             .map(|e| self.order_by_to_sort_expr(e))
                             .into_iter()
                             .collect::<Result<Vec<_>>>()?;
+                        let window_frame = window
+                            .window_frame
+                            .as_ref()
+                            .map(|window_frame| window_frame.clone().try_into())
+                            .transpose()?;
                         let fun = window_functions::WindowFunction::from_str(&name);
                         if let Ok(window_functions::WindowFunction::AggregateFunction(
                             aggregate_fun,
@@ -1140,6 +1145,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 args: self
                                     .aggregate_fn_to_expr(&aggregate_fun, function)?,
                                 order_by,
+                                window_frame,
                             });
                         } else if let Ok(
                             window_functions::WindowFunction::BuiltInWindowFunction(
@@ -1151,8 +1157,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 fun: window_functions::WindowFunction::BuiltInWindowFunction(
                                     window_fun,
                                 ),
-                                args:self.function_args_to_expr(function)?,
-                                order_by
+                                args: self.function_args_to_expr(function)?,
+                                order_by,
+                                window_frame,
                             });
                         }
                     }
@@ -2799,6 +2806,45 @@ mod tests {
         let expected = "\
         Projection: #order_id, #MAX(qty), #MIN(qty)\
         \n  WindowAggr: windowExpr=[[MAX(#qty)]] partitionBy=[]\
+        \n    Sort: #order_id ASC NULLS FIRST\
+        \n      WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n        Sort: #order_id DESC NULLS FIRST\
+        \n          TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn over_order_by_with_window_frame_double_end() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id RANGE BETWEEN 3 PRECEDING and 3 FOLLOWING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty) RANGE BETWEEN 3 PRECEDING AND 3 FOLLOWING, #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty) RANGE BETWEEN 3 PRECEDING AND 3 FOLLOWING]] partitionBy=[]\
+        \n    Sort: #order_id ASC NULLS FIRST\
+        \n      WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n        Sort: #order_id DESC NULLS FIRST\
+        \n          TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn over_order_by_with_window_frame_single_end() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id RANGE 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty) RANGE BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty) RANGE BETWEEN 3 PRECEDING AND CURRENT ROW]] partitionBy=[]\
+        \n    Sort: #order_id ASC NULLS FIRST\
+        \n      WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
+        \n        Sort: #order_id DESC NULLS FIRST\
+        \n          TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn over_order_by_with_window_frame_single_end_groups() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id GROUPS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
+        let expected = "\
+        Projection: #order_id, #MAX(qty) GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty) GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW]] partitionBy=[]\
         \n    Sort: #order_id ASC NULLS FIRST\
         \n      WindowAggr: windowExpr=[[MIN(#qty)]] partitionBy=[]\
         \n        Sort: #order_id DESC NULLS FIRST\
