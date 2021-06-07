@@ -17,32 +17,28 @@
 
 //! Defines the SORT plan
 
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::Instant;
-
-use async_trait::async_trait;
-use futures::stream::Stream;
-use futures::Future;
-use hashbrown::HashMap;
-
-use pin_project_lite::pin_project;
-
-pub use arrow::compute::SortOptions;
-use arrow::compute::{concat, lexsort_to_indices, take, SortColumn, TakeOptions};
-use arrow::datatypes::SchemaRef;
-use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, error::ArrowError};
-
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning, SQLMetric,
 };
+pub use arrow::compute::SortOptions;
+use arrow::compute::{lexsort_to_indices, take, SortColumn, TakeOptions};
+use arrow::datatypes::SchemaRef;
+use arrow::error::Result as ArrowResult;
+use arrow::record_batch::RecordBatch;
+use arrow::{array::ArrayRef, error::ArrowError};
+use async_trait::async_trait;
+use futures::stream::Stream;
+use futures::Future;
+use hashbrown::HashMap;
+use pin_project_lite::pin_project;
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Instant;
 
 /// Sort execution plan
 #[derive(Debug)]
@@ -190,47 +186,25 @@ impl ExecutionPlan for SortExec {
     }
 }
 
-fn sort_batches(
-    batches: &[RecordBatch],
-    schema: &SchemaRef,
+fn sort_batch(
+    batch: RecordBatch,
+    schema: SchemaRef,
     expr: &[PhysicalSortExpr],
-) -> ArrowResult<Option<RecordBatch>> {
-    if batches.is_empty() {
-        return Ok(None);
-    }
-    // combine all record batches into one for each column
-    let combined_batch = RecordBatch::try_new(
-        schema.clone(),
-        schema
-            .fields()
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                concat(
-                    &batches
-                        .iter()
-                        .map(|batch| batch.column(i).as_ref())
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<ArrowResult<Vec<ArrayRef>>>()?,
-    )?;
-
-    // sort combined record batch
+) -> ArrowResult<RecordBatch> {
     // TODO: pushup the limit expression to sort
     let indices = lexsort_to_indices(
         &expr
             .iter()
-            .map(|e| e.evaluate_to_sort_column(&combined_batch))
+            .map(|e| e.evaluate_to_sort_column(&batch))
             .collect::<Result<Vec<SortColumn>>>()
             .map_err(DataFusionError::into_arrow_external_error)?,
         None,
     )?;
 
     // reorder all rows based on sorted indices
-    let sorted_batch = RecordBatch::try_new(
-        schema.clone(),
-        combined_batch
+    RecordBatch::try_new(
+        schema,
+        batch
             .columns()
             .iter()
             .map(|column| {
@@ -245,8 +219,7 @@ fn sort_batches(
                 )
             })
             .collect::<ArrowResult<Vec<ArrayRef>>>()?,
-    );
-    sorted_batch.map(Some)
+    )
 }
 
 pin_project! {
@@ -277,9 +250,14 @@ impl SortStream {
                 .map_err(DataFusionError::into_arrow_external_error)
                 .and_then(move |batches| {
                     let now = Instant::now();
-                    let result = sort_batches(&batches, &schema, &expr);
+                    // combine all record batches into one for each column
+                    let combined = common::combine_batches(&batches, schema.clone())?;
+                    // sort combined record batch
+                    let result = combined
+                        .map(|batch| sort_batch(batch, schema, &expr))
+                        .transpose()?;
                     sort_time.add(now.elapsed().as_nanos() as usize);
-                    result
+                    Ok(result)
                 });
 
             tx.send(sorted_batch)
