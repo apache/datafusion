@@ -241,7 +241,6 @@ impl SortStream {
         sort_time: Arc<SQLMetric>,
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
-
         let schema = input.schema();
         tokio::spawn(async move {
             let schema = input.schema();
