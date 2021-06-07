@@ -19,22 +19,19 @@
 //! such as `col = 5` or `SUM(col)`. See examples on the [`Expr`] struct.
 
 pub use super::Operator;
-
-use std::fmt;
-use std::sync::Arc;
-
-use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
-use arrow::{compute::can_cast_types, datatypes::DataType};
-
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{DFField, DFSchema};
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
-    window_functions,
+    window_frames, window_functions,
 };
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
+use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
+use arrow::{compute::can_cast_types, datatypes::DataType};
 use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::HashSet;
+use std::fmt;
+use std::sync::Arc;
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -199,6 +196,8 @@ pub enum Expr {
         args: Vec<Expr>,
         /// List of order by expressions
         order_by: Vec<Expr>,
+        /// Window frame
+        window_frame: Option<window_frames::WindowFrame>,
     },
     /// aggregate function
     AggregateUDF {
@@ -735,10 +734,12 @@ impl Expr {
                 args,
                 fun,
                 order_by,
+                window_frame,
             } => Expr::WindowFunction {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
                 order_by: rewrite_vec(order_by, rewriter)?,
+                window_frame,
             },
             Expr::AggregateFunction {
                 args,
@@ -1283,8 +1284,23 @@ impl fmt::Debug for Expr {
             Expr::ScalarUDF { fun, ref args, .. } => {
                 fmt_function(f, &fun.name, false, args)
             }
-            Expr::WindowFunction { fun, ref args, .. } => {
-                fmt_function(f, &fun.to_string(), false, args)
+            Expr::WindowFunction {
+                fun,
+                ref args,
+                window_frame,
+                ..
+            } => {
+                fmt_function(f, &fun.to_string(), false, args)?;
+                if let Some(window_frame) = window_frame {
+                    write!(
+                        f,
+                        " {} BETWEEN {} AND {}",
+                        window_frame.units,
+                        window_frame.start_bound,
+                        window_frame.end_bound
+                    )?;
+                }
+                Ok(())
             }
             Expr::AggregateFunction {
                 fun,
@@ -1401,8 +1417,18 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::ScalarUDF { fun, args, .. } => {
             create_function_name(&fun.name, false, args, input_schema)
         }
-        Expr::WindowFunction { fun, args, .. } => {
-            create_function_name(&fun.to_string(), false, args, input_schema)
+        Expr::WindowFunction {
+            fun,
+            args,
+            window_frame,
+            ..
+        } => {
+            let fun_name =
+                create_function_name(&fun.to_string(), false, args, input_schema)?;
+            Ok(match window_frame {
+                Some(window_frame) => format!("{} {}", fun_name, window_frame),
+                None => fun_name,
+            })
         }
         Expr::AggregateFunction {
             fun,
