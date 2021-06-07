@@ -78,5 +78,4 @@ def test_group_by(df):
     batches = df.collect()
     arrays = [batch.column(1) for batch in batches]
     joined = pa.concat_arrays(arrays)
-    assert joined == pa.array([1.0 + 2.0, 3.0]))
-
+    assert joined == pa.array([1.0 + 2.0, 3.0])
