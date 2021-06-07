@@ -105,3 +105,4 @@ benchmarks/queries/q*.sql
 ballista/rust/scheduler/testdata/*
 ballista/ui/scheduler/yarn.lock
 python/rust-toolchain
+python/requirements*.txt
