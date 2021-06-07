@@ -2328,6 +2328,29 @@ mod tests {
              \n  Aggregate: groupBy=[[#state, #age]], aggr=[[COUNT(UInt8(1))]]\
              \n    TableScan: person projection=None",
         );
+        quick_test(
+            "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 2, 1",
+            "Projection: #state, #age AS b, #COUNT(UInt8(1))\
+             \n  Aggregate: groupBy=[[#age, #state]], aggr=[[COUNT(UInt8(1))]]\
+             \n    TableScan: person projection=None",
+        );
+    }
+
+    #[test]
+    fn select_simple_aggregate_with_groupby_position_out_of_range() {
+        let sql = "SELECT state, MIN(age) FROM person GROUP BY 0";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Projection references non-aggregate values\")",
+            format!("{:?}", err)
+        );
+
+        let sql2 = "SELECT state, MIN(age) FROM person GROUP BY 5";
+        let err2 = logical_plan(sql2).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Projection references non-aggregate values\")",
+            format!("{:?}", err2)
+        );
     }
 
     #[test]
