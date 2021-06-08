@@ -56,6 +56,7 @@ use super::{
         can_columns_satisfy_exprs, expand_wildcard, expr_as_column_expr, extract_aliases,
         find_aggregate_exprs, find_column_exprs, find_window_exprs,
         group_window_expr_by_sort_keys, rebase_expr, resolve_aliases_to_exprs,
+        resolve_positions_to_exprs,
     },
 };
 
@@ -582,15 +583,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // All of the aggregate expressions (deduplicated).
         let aggr_exprs = find_aggregate_exprs(&aggr_expr_haystack);
 
+        let alias_map = extract_aliases(&select_exprs);
         let group_by_exprs = select
             .group_by
             .iter()
             .map(|e| {
                 let group_by_expr = self.sql_expr_to_logical_expr(e)?;
-                let group_by_expr = resolve_aliases_to_exprs(
-                    &group_by_expr,
-                    &extract_aliases(&select_exprs),
-                )?;
+                let group_by_expr = resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
+                let group_by_expr =
+                    resolve_positions_to_exprs(&group_by_expr, &select_exprs)?;
                 self.validate_schema_satisfies_exprs(
                     plan.schema(),
                     &[group_by_expr.clone()],
@@ -2323,6 +2324,39 @@ mod tests {
             "Projection: #MAX(first_name)\
              \n  Aggregate: groupBy=[[#first_name]], aggr=[[MAX(#first_name)]]\
              \n    TableScan: person projection=None",
+        );
+    }
+
+    #[test]
+    fn select_simple_aggregate_with_groupby_can_use_positions() {
+        quick_test(
+            "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 1, 2",
+            "Projection: #state, #age AS b, #COUNT(UInt8(1))\
+             \n  Aggregate: groupBy=[[#state, #age]], aggr=[[COUNT(UInt8(1))]]\
+             \n    TableScan: person projection=None",
+        );
+        quick_test(
+            "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 2, 1",
+            "Projection: #state, #age AS b, #COUNT(UInt8(1))\
+             \n  Aggregate: groupBy=[[#age, #state]], aggr=[[COUNT(UInt8(1))]]\
+             \n    TableScan: person projection=None",
+        );
+    }
+
+    #[test]
+    fn select_simple_aggregate_with_groupby_position_out_of_range() {
+        let sql = "SELECT state, MIN(age) FROM person GROUP BY 0";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Projection references non-aggregate values\")",
+            format!("{:?}", err)
+        );
+
+        let sql2 = "SELECT state, MIN(age) FROM person GROUP BY 5";
+        let err2 = logical_plan(sql2).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Projection references non-aggregate values\")",
+            format!("{:?}", err2)
         );
     }
 
