@@ -33,11 +33,32 @@ def test_no_table(ctx):
         ctx.sql("SELECT a FROM b").collect()
 
 
-def test_register(ctx, tmp_path):
+def test_register_csv(ctx, tmp_path):
+    path = helpers.write_csv(tmp_path / "a.csv", helpers.data())
+    ctx.register_csv("csv", path)
+    ctx.register_csv(
+        "csv2",
+        path,
+        has_header=True,
+        delimiter=b",",
+        schema_infer_max_records=10,
+    )
+    assert ctx.tables() == {"csv", "csv2"}
+
+    for table in ["csv", "csv2"]:
+        result = ctx.sql(f"SELECT COUNT(a) FROM {table}").collect()
+        result = pa.Table.from_batches(result)
+        assert result.to_pydict() == {"COUNT(a)": [100]}
+
+
+def test_register_parquet(ctx, tmp_path):
     path = helpers.write_parquet(tmp_path / "a.parquet", helpers.data())
     ctx.register_parquet("t", path)
-
     assert ctx.tables() == {"t"}
+
+    result = ctx.sql("SELECT COUNT(a) FROM t").collect()
+    result = pa.Table.from_batches(result)
+    assert result.to_pydict() == {"COUNT(a)": [100]}
 
 
 def test_execute(ctx, tmp_path):
