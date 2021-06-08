@@ -46,8 +46,7 @@ unicode_expressions = ["unicode-segmentation"]
 [dependencies]
 ahash = "0.7"
 hashbrown = "0.11"
-arrow = { version = "4.3", features = ["prettyprint"] }
-parquet = { version = "4.3", features = ["arrow"] }
+arrow = { package = "arrow2", git = "https://github.com/jorgecarleitao/arrow2", rev = "5838950a6a090ebce454516ef6951e6e559151e3" }
 sqlparser = "0.9.0"
 paste = "^1.0"
 num_cpus = "1.13.0"

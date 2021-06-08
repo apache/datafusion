@@ -18,11 +18,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::{
-    array::{make_array_from_raw, ArrayRef},
-    datatypes::Field,
-    datatypes::Schema,
-    ffi,
-    record_batch::RecordBatch,
+    array::ArrayRef, datatypes::Field, datatypes::Schema, ffi, record_batch::RecordBatch,
 };
 use datafusion::scalar::ScalarValue;
 use libc::uintptr_t;
@@ -33,8 +29,8 @@ use crate::{errors, types::PyDataType};
 /// converts a pyarrow Array into a Rust Array
 pub fn to_rust(ob: &PyAny) -> PyResult<ArrayRef> {
     // prepare a pointer to receive the Array struct
-    let (array_pointer, schema_pointer) =
-        ffi::ArrowArray::into_raw(unsafe { ffi::ArrowArray::empty() });
+    let array = Arc::new(ffi::create_empty());
+    let (array_pointer, schema_pointer) = array.references();
 
     // make the conversion through PyArrow's private API
     // this changes the pointer's memory and is thus unsafe. In particular, `_export_to_c` can go out of bounds
@@ -43,8 +39,9 @@ pub fn to_rust(ob: &PyAny) -> PyResult<ArrayRef> {
         (array_pointer as uintptr_t, schema_pointer as uintptr_t),
     )?;
 
-    let array = unsafe { make_array_from_raw(array_pointer, schema_pointer) }
-        .map_err(errors::DataFusionError::from)?;
+    let array = ffi::try_from(array)
+        .map_err(errors::DataFusionError::from)?
+        .into();
     Ok(array)
 }
 

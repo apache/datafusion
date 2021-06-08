@@ -28,8 +28,9 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
+
 use arrow::array::BooleanArray;
-use arrow::compute::filter_record_batch;
+use arrow::compute::filter::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;

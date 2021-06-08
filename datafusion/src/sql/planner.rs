@@ -42,6 +42,8 @@ use crate::{
     sql::parser::{CreateExternalTable, FileType, Statement as DFStatement},
 };
 use arrow::datatypes::*;
+use arrow::types::days_ms;
+
 use hashbrown::HashMap;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
@@ -1419,7 +1421,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))));
         }
 
-        let result: i64 = (result_days << 32) | result_millis;
+        let result = days_ms::new(result_days as i32, result_millis as i32);
         Ok(Expr::Literal(ScalarValue::IntervalDayTime(Some(result))))
     }
 

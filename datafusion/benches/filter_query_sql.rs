@@ -50,8 +50,8 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<ExecutionContex
             RecordBatch::try_new(
                 schema.clone(),
                 vec![
-                    Arc::new(Float32Array::from(vec![i as f32; batch_size])),
-                    Arc::new(Float64Array::from(vec![i as f64; batch_size])),
+                    Arc::new(Float32Array::from_slice(&vec![i as f32; batch_size])),
+                    Arc::new(Float64Array::from_slice(&vec![i as f64; batch_size])),
                 ],
             )
             .unwrap()

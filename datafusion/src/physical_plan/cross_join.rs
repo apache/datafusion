@@ -21,6 +21,7 @@
 use futures::{lock::Mutex, StreamExt};
 use std::{any::Any, sync::Arc, task::Poll};
 
+use crate::physical_plan::memory::MemoryStream;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -36,8 +37,8 @@ use async_trait::async_trait;
 use std::time::Instant;
 
 use super::{
-    coalesce_batches::concat_batches, memory::MemoryStream, DisplayFormatType,
-    ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+    coalesce_batches::concat_batches, DisplayFormatType, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 use log::debug;
 

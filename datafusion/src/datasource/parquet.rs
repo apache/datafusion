@@ -43,7 +43,7 @@ pub struct ParquetTable {
 impl ParquetTable {
     /// Attempt to initialize a new `ParquetTable` from a file path.
     pub fn try_new(path: &str, max_concurrency: usize) -> Result<Self> {
-        let parquet_exec = ParquetExec::try_from_path(path, None, None, 0, 1, None)?;
+        let parquet_exec = ParquetExec::try_from_path(path, None, None, 1, None)?;
         let schema = parquet_exec.schema();
         Ok(Self {
             path: path.to_string(),
@@ -90,9 +90,6 @@ impl TableProvider for ParquetTable {
             &self.path,
             projection.clone(),
             predicate,
-            limit
-                .map(|l| std::cmp::min(l, batch_size))
-                .unwrap_or(batch_size),
             self.max_concurrency,
             limit,
         )?))
@@ -106,10 +103,7 @@ impl TableProvider for ParquetTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{
-        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
-        TimestampNanosecondArray,
-    };
+    use arrow::array::*;
     use arrow::record_batch::RecordBatch;
     use futures::StreamExt;
 
@@ -117,7 +111,7 @@ mod tests {
     async fn read_small_batches() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
         let projection = None;
-        let exec = table.scan(&projection, 2, &[], None)?;
+        let exec = table.scan(&projection, 2, &[], Some(2))?;
         let stream = exec.execute(0).await?;
 
         let _ = stream
@@ -234,7 +228,7 @@ mod tests {
         let array = batch
             .column(0)
             .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
+            .downcast_ref::<Int64Array>()
             .unwrap();
         let mut values: Vec<i64> = vec![];
         for i in 0..batch.num_rows() {
@@ -312,7 +306,7 @@ mod tests {
         let array = batch
             .column(0)
             .as_any()
-            .downcast_ref::<BinaryArray>()
+            .downcast_ref::<BinaryArray<i32>>()
             .unwrap();
         let mut values: Vec<&str> = vec![];
         for i in 0..batch.num_rows() {

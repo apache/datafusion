@@ -23,15 +23,9 @@ use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
 use crate::scalar::ScalarValue;
-use arrow::compute;
-use arrow::compute::kernels;
-use arrow::compute::CastOptions;
+use arrow::compute::cast;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use compute::can_cast_types;
-
-/// provide Datafusion default cast options
-pub const DEFAULT_DATAFUSION_CAST_OPTIONS: CastOptions = CastOptions { safe: false };
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
 #[derive(Debug)]
@@ -40,22 +34,12 @@ pub struct CastExpr {
     expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
     cast_type: DataType,
-    /// Cast options
-    cast_options: CastOptions,
 }
 
 impl CastExpr {
     /// Create a new CastExpr
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        cast_type: DataType,
-        cast_options: CastOptions,
-    ) -> Self {
-        Self {
-            expr,
-            cast_type,
-            cast_options,
-        }
+    pub fn new(expr: Arc<dyn PhysicalExpr>, cast_type: DataType) -> Self {
+        Self { expr, cast_type }
     }
 
     /// The expression to cast
@@ -91,24 +75,19 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        cast_column(&value, &self.cast_type, &self.cast_options)
+        cast_column(&value, &self.cast_type)
     }
 }
 
 /// Internal cast function for casting ColumnarValue -> ColumnarValue for cast_type
-pub fn cast_column(
-    value: &ColumnarValue,
-    cast_type: &DataType,
-    cast_options: &CastOptions,
-) -> Result<ColumnarValue> {
+pub fn cast_column(value: &ColumnarValue, cast_type: &DataType) -> Result<ColumnarValue> {
     match value {
         ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-            kernels::cast::cast_with_options(array, cast_type, cast_options)?,
+            cast::cast(array.as_ref(), cast_type)?.into(),
         )),
         ColumnarValue::Scalar(scalar) => {
             let scalar_array = scalar.to_array();
-            let cast_array =
-                kernels::cast::cast_with_options(&scalar_array, cast_type, cast_options)?;
+            let cast_array = cast::cast(scalar_array.as_ref(), cast_type)?.into();
             let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
             Ok(ColumnarValue::Scalar(cast_scalar))
         }
@@ -123,13 +102,12 @@ pub fn cast_with_options(
     expr: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
     cast_type: DataType,
-    cast_options: CastOptions,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
         Ok(expr.clone())
-    } else if can_cast_types(&expr_type, &cast_type) {
-        Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
+    } else if cast::can_cast_types(&expr_type, &cast_type) {
+        Ok(Arc::new(CastExpr::new(expr, cast_type)))
     } else {
         Err(DataFusionError::Internal(format!(
             "Unsupported CAST from {:?} to {:?}",
@@ -147,12 +125,7 @@ pub fn cast(
     input_schema: &Schema,
     cast_type: DataType,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    cast_with_options(
-        expr,
-        input_schema,
-        cast_type,
-        DEFAULT_DATAFUSION_CAST_OPTIONS,
-    )
+    cast_with_options(expr, input_schema, cast_type)
 }
 
 #[cfg(test)]
@@ -160,11 +133,9 @@ mod tests {
     use super::*;
     use crate::error::Result;
     use crate::physical_plan::expressions::col;
-    use arrow::array::{StringArray, Time64NanosecondArray};
-    use arrow::{
-        array::{Array, Int32Array, Int64Array, TimestampNanosecondArray, UInt32Array},
-        datatypes::*,
-    };
+    use arrow::{array::*, datatypes::*};
+
+    type StringArray = Utf8Array<i32>;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -173,21 +144,17 @@ mod tests {
     // 4. verify that the resulting expression is of type B
     // 5. verify that the resulting values are downcastable and correct
     macro_rules! generic_test_cast {
-        ($A_ARRAY:ident, $A_TYPE:expr, $A_VEC:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr, $CAST_OPTIONS:expr) => {{
+        ($A_ARRAY:ident, $A_TYPE:expr, $A_VEC:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr) => {{
             let schema = Schema::new(vec![Field::new("a", $A_TYPE, false)]);
-            let a = $A_ARRAY::from($A_VEC);
+            let a = $A_ARRAY::from_slice($A_VEC);
             let batch =
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
             // verify that we can construct the expression
-            let expression =
-                cast_with_options(col("a", &schema)?, &schema, $TYPE, $CAST_OPTIONS)?;
+            let expression = cast_with_options(col("a", &schema)?, &schema, $TYPE)?;
 
             // verify that its display is correct
-            assert_eq!(
-                format!("CAST(a@0 AS {:?})", $TYPE),
-                format!("{}", expression)
-            );
+            assert_eq!(format!("CAST(a AS {:?})", $TYPE), format!("{}", expression));
 
             // verify that the expression's type is correct
             assert_eq!(expression.data_type(&schema)?, $TYPE);
@@ -222,7 +189,7 @@ mod tests {
         generic_test_cast!(
             Int32Array,
             DataType::Int32,
-            vec![1, 2, 3, 4, 5],
+            &[1, 2, 3, 4, 5],
             UInt32Array,
             DataType::UInt32,
             vec![
@@ -231,8 +198,7 @@ mod tests {
                 Some(3_u32),
                 Some(4_u32),
                 Some(5_u32)
-            ],
-            DEFAULT_DATAFUSION_CAST_OPTIONS
+            ]
         );
         Ok(())
     }
@@ -242,11 +208,10 @@ mod tests {
         generic_test_cast!(
             Int32Array,
             DataType::Int32,
-            vec![1, 2, 3, 4, 5],
+            &[1, 2, 3, 4, 5],
             StringArray,
             DataType::Utf8,
-            vec![Some("1"), Some("2"), Some("3"), Some("4"), Some("5")],
-            DEFAULT_DATAFUSION_CAST_OPTIONS
+            vec![Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]
         );
         Ok(())
     }
@@ -254,19 +219,15 @@ mod tests {
     #[allow(clippy::redundant_clone)]
     #[test]
     fn test_cast_i64_t64() -> Result<()> {
-        let original = vec![1, 2, 3, 4, 5];
-        let expected: Vec<Option<i64>> = original
-            .iter()
-            .map(|i| Some(Time64NanosecondArray::from(vec![*i]).value(0)))
-            .collect();
+        let original = &[1, 2, 3, 4, 5];
+        let expected: Vec<Option<i64>> = original.iter().map(|i| Some(*i)).collect();
         generic_test_cast!(
             Int64Array,
             DataType::Int64,
-            original.clone(),
-            TimestampNanosecondArray,
+            original,
+            Int64Array,
             DataType::Timestamp(TimeUnit::Nanosecond, None),
-            expected,
-            DEFAULT_DATAFUSION_CAST_OPTIONS
+            expected
         );
         Ok(())
     }
@@ -278,30 +239,5 @@ mod tests {
 
         let result = cast(col("a", &schema).unwrap(), &schema, DataType::LargeBinary);
         result.expect_err("expected Invalid CAST");
-    }
-
-    #[test]
-    fn invalid_cast_with_options_error() -> Result<()> {
-        // Ensure a useful error happens at plan time if invalid casts are used
-        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
-        let a = StringArray::from(vec!["9.1"]);
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
-        let expression = cast_with_options(
-            col("a", &schema)?,
-            &schema,
-            DataType::Int32,
-            DEFAULT_DATAFUSION_CAST_OPTIONS,
-        )?;
-        let result = expression.evaluate(&batch);
-
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(e) => {
-                assert!(e.to_string().contains(
-                    "Cast error: Cannot cast string '9.1' to value of arrow::datatypes::types::Int32Type type"
-                ))
-            }
-        }
-        Ok(())
     }
 }

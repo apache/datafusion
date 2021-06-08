@@ -33,11 +33,10 @@ use super::{
     type_coercion::{coerce, data_types},
     ColumnarValue, PhysicalExpr,
 };
-use crate::execution::context::ExecutionContextState;
 use crate::physical_plan::array_expressions;
 use crate::physical_plan::datetime_expressions;
 use crate::physical_plan::expressions::{
-    cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS, SUPPORTED_NULLIF_TYPES,
+    cast_column, nullif_func, SUPPORTED_NULLIF_TYPES,
 };
 use crate::physical_plan::math_expressions;
 use crate::physical_plan::string_expressions;
@@ -45,11 +44,15 @@ use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
+use crate::{
+    execution::context::ExecutionContextState,
+    physical_plan::array_expressions::SUPPORTED_ARRAY_TYPES,
+};
 use arrow::{
-    array::{ArrayRef, NullArray},
-    compute::kernels::length::{bit_length, length},
+    array::*,
+    compute::length::length,
     datatypes::TimeUnit,
-    datatypes::{DataType, Field, Int32Type, Int64Type, Schema},
+    datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
 use fmt::{Debug, Formatter};
@@ -573,7 +576,7 @@ pub fn create_physical_fun(
             ))),
         }),
         BuiltinScalarFunction::BitLength => Arc::new(|args| match &args[0] {
-            ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
+            ColumnarValue::Array(v) => todo!(),
             ColumnarValue::Scalar(v) => match v {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
                     v.as_ref().map(|x| (x.len() * 8) as i32),
@@ -601,7 +604,7 @@ pub fn create_physical_fun(
                 DataType::Utf8 => {
                     let func = invoke_if_unicode_expressions_feature_flag!(
                         character_length,
-                        Int32Type,
+                        i32,
                         "character_length"
                     );
                     make_scalar_function(func)(args)
@@ -609,7 +612,7 @@ pub fn create_physical_fun(
                 DataType::LargeUtf8 => {
                     let func = invoke_if_unicode_expressions_feature_flag!(
                         character_length,
-                        Int64Type,
+                        i64,
                         "character_length"
                     );
                     make_scalar_function(func)(args)
@@ -693,7 +696,9 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::NullIf => Arc::new(nullif_func),
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
-            ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
+            ColumnarValue::Array(v) => {
+                Ok(ColumnarValue::Array(length(v.as_ref())?.into()))
+            }
             ColumnarValue::Scalar(v) => match v {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
                     v.as_ref().map(|x| x.len() as i32),
@@ -872,15 +877,13 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::Strpos => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                let func = invoke_if_unicode_expressions_feature_flag!(
-                    strpos, Int32Type, "strpos"
-                );
+                let func =
+                    invoke_if_unicode_expressions_feature_flag!(strpos, i32, "strpos");
                 make_scalar_function(func)(args)
             }
             DataType::LargeUtf8 => {
-                let func = invoke_if_unicode_expressions_feature_flag!(
-                    strpos, Int64Type, "strpos"
-                );
+                let func =
+                    invoke_if_unicode_expressions_feature_flag!(strpos, i64, "strpos");
                 make_scalar_function(func)(args)
             }
             other => Err(DataFusionError::Internal(format!(
@@ -906,10 +909,10 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::ToHex => Arc::new(|args| match args[0].data_type() {
             DataType::Int32 => {
-                make_scalar_function(string_expressions::to_hex::<Int32Type>)(args)
+                make_scalar_function(string_expressions::to_hex::<i32>)(args)
             }
             DataType::Int64 => {
-                make_scalar_function(string_expressions::to_hex::<Int64Type>)(args)
+                make_scalar_function(string_expressions::to_hex::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function to_hex",
@@ -980,7 +983,6 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Nanosecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -1000,7 +1002,6 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Millisecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -1020,7 +1021,6 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Microsecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -1040,7 +1040,6 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Second, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -1078,7 +1077,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
     // for now, the list is small, as we do not have many built-in functions.
     match fun {
         BuiltinScalarFunction::Array => {
-            Signature::Variadic(array_expressions::SUPPORTED_ARRAY_TYPES.to_vec())
+            Signature::Variadic(SUPPORTED_ARRAY_TYPES.to_vec())
         }
         BuiltinScalarFunction::Concat | BuiltinScalarFunction::ConcatWithSeparator => {
             Signature::Variadic(vec![DataType::Utf8])
@@ -1341,7 +1340,7 @@ type NullColumnarValue = ColumnarValue;
 impl From<&RecordBatch> for NullColumnarValue {
     fn from(batch: &RecordBatch) -> Self {
         let num_rows = batch.num_rows();
-        ColumnarValue::Array(Arc::new(NullArray::new(num_rows)))
+        ColumnarValue::Array(Arc::new(NullArray::from_data(num_rows)))
     }
 }
 
@@ -1425,14 +1424,9 @@ mod tests {
         physical_plan::expressions::{col, lit},
         scalar::ScalarValue,
     };
-    use arrow::{
-        array::{
-            Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float64Array,
-            Int32Array, StringArray, UInt32Array, UInt64Array,
-        },
-        datatypes::Field,
-        record_batch::RecordBatch,
-    };
+    use arrow::{datatypes::Field, record_batch::RecordBatch};
+
+    type StringArray = Utf8Array<i32>;
 
     /// $FUNC function to test
     /// $ARGS arguments (vec) to pass to function
@@ -1448,7 +1442,7 @@ mod tests {
 
             // any type works here: we evaluate against a literal of `value`
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
 
             let expr =
                 create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &ctx_state)?;
@@ -2919,6 +2913,7 @@ mod tests {
             Utf8,
             StringArray
         );
+        type B = BinaryArray<i32>;
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA224,
@@ -2930,7 +2925,7 @@ mod tests {
             ])),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -2943,7 +2938,7 @@ mod tests {
             ])),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -2952,7 +2947,7 @@ mod tests {
             Ok(None),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(not(feature = "crypto_expressions"))]
         test_function!(
@@ -2963,7 +2958,7 @@ mod tests {
             )),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -2976,7 +2971,7 @@ mod tests {
             ])),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -2989,7 +2984,7 @@ mod tests {
             ])),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -2998,7 +2993,7 @@ mod tests {
             Ok(None),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(not(feature = "crypto_expressions"))]
         test_function!(
@@ -3009,7 +3004,7 @@ mod tests {
             )),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -3024,7 +3019,7 @@ mod tests {
             ])),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -3039,7 +3034,7 @@ mod tests {
             ])),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -3048,7 +3043,7 @@ mod tests {
             Ok(None),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(not(feature = "crypto_expressions"))]
         test_function!(
@@ -3059,7 +3054,7 @@ mod tests {
             )),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -3075,7 +3070,7 @@ mod tests {
             ])),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -3091,7 +3086,7 @@ mod tests {
             ])),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(feature = "crypto_expressions")]
         test_function!(
@@ -3100,7 +3095,7 @@ mod tests {
             Ok(None),
             &[u8],
             Binary,
-            BinaryArray
+            B
         );
         #[cfg(not(feature = "crypto_expressions"))]
         test_function!(
@@ -3622,7 +3617,7 @@ mod tests {
             &ctx_state,
         )?;
 
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
         let result = expr.evaluate(&batch);
 
@@ -3638,8 +3633,7 @@ mod tests {
     fn generic_test_array(
         value1: ArrayRef,
         value2: ArrayRef,
-        expected_type: DataType,
-        expected: &str,
+        expected: ArrayRef,
     ) -> Result<()> {
         // any type works here: we evaluate against a literal of `value`
         let schema = Schema::new(vec![
@@ -3656,13 +3650,6 @@ mod tests {
             &ctx_state,
         )?;
 
-        // type is correct
-        assert_eq!(
-            expr.data_type(&schema)?,
-            // type equals to a common coercion
-            DataType::FixedSizeList(Box::new(Field::new("item", expected_type, true)), 2)
-        );
-
         // evaluate works
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
@@ -3673,8 +3660,8 @@ mod tests {
             .downcast_ref::<FixedSizeListArray>()
             .unwrap();
 
-        // value is correct
-        assert_eq!(format!("{:?}", result.value(0)), expected);
+        // value and type is correct
+        assert_eq!(result.value(0).as_ref(), expected.as_ref());
 
         Ok(())
     }
@@ -3682,26 +3669,23 @@ mod tests {
     #[test]
     fn test_array() -> Result<()> {
         generic_test_array(
-            Arc::new(StringArray::from(vec!["aa"])),
-            Arc::new(StringArray::from(vec!["bb"])),
-            DataType::Utf8,
-            "StringArray\n[\n  \"aa\",\n  \"bb\",\n]",
+            Arc::new(StringArray::from_slice(&["aa"])),
+            Arc::new(StringArray::from_slice(&["bb"])),
+            Arc::new(StringArray::from_slice(&["aa", "bb"])),
         )?;
 
         // different types, to validate that casting happens
         generic_test_array(
-            Arc::new(UInt32Array::from(vec![1u32])),
-            Arc::new(UInt64Array::from(vec![1u64])),
-            DataType::UInt64,
-            "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
+            Arc::new(UInt32Array::from_slice(&[1])),
+            Arc::new(UInt64Array::from_slice(&[1])),
+            Arc::new(UInt64Array::from_slice(&[1, 1])),
         )?;
 
         // different types (another order), to validate that casting happens
         generic_test_array(
-            Arc::new(UInt64Array::from(vec![1u64])),
-            Arc::new(UInt32Array::from(vec![1u32])),
-            DataType::UInt64,
-            "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
+            Arc::new(UInt64Array::from_slice(&[1])),
+            Arc::new(UInt32Array::from_slice(&[1])),
+            Arc::new(UInt64Array::from_slice(&[1, 1])),
         )
     }
 
@@ -3713,7 +3697,7 @@ mod tests {
         let ctx_state = ExecutionContextState::new();
 
         // concat(value, value)
-        let col_value: ArrayRef = Arc::new(StringArray::from(vec!["aaa-555"]));
+        let col_value: ArrayRef = Arc::new(StringArray::from_slice(&["aaa-555"]));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
         let columns: Vec<ArrayRef> = vec![col_value];
         let expr = create_physical_expr(
@@ -3734,7 +3718,7 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
 
         // downcast works
-        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let result = result.as_any().downcast_ref::<ListArray<i32>>().unwrap();
         let first_row = result.value(0);
         let first_row = first_row.as_any().downcast_ref::<StringArray>().unwrap();
 
@@ -3755,7 +3739,7 @@ mod tests {
         // concat(value, value)
         let col_value = lit(ScalarValue::Utf8(Some("aaa-555".to_string())));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
         let expr = create_physical_expr(
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],
@@ -3774,7 +3758,7 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
 
         // downcast works
-        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let result = result.as_any().downcast_ref::<ListArray<i32>>().unwrap();
         let first_row = result.value(0);
         let first_row = first_row.as_any().downcast_ref::<StringArray>().unwrap();
 

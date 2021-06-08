@@ -21,9 +21,6 @@ use criterion::Criterion;
 
 use std::sync::{Arc, Mutex};
 
-extern crate arrow;
-extern crate datafusion;
-
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion::datasource::{CsvFile, CsvReadOptions, MemTable};

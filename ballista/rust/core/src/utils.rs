@@ -29,12 +29,19 @@ use crate::serde::scheduler::PartitionStats;
 
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
+<<<<<<< HEAD
     array::{
         ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
     },
     datatypes::{DataType, Field, SchemaRef},
     ipc::reader::FileReader,
     ipc::writer::FileWriter,
+=======
+    array::*,
+    datatypes::{DataType, Field},
+    io::ipc::read::FileReader,
+    io::ipc::write::FileWriter,
+>>>>>>> Wip.
     record_batch::RecordBatch,
 };
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
@@ -63,7 +70,7 @@ pub async fn write_stream_to_disk(
     stream: &mut Pin<Box<dyn RecordBatchStream + Send + Sync>>,
     path: &str,
 ) -> Result<PartitionStats> {
-    let file = File::create(&path).map_err(|e| {
+    let mut file = File::create(&path).map_err(|e| {
         BallistaError::General(format!(
             "Failed to create partition file at {}: {:?}",
             path, e
@@ -73,7 +80,7 @@ pub async fn write_stream_to_disk(
     let mut num_rows = 0;
     let mut num_batches = 0;
     let mut num_bytes = 0;
-    let mut writer = FileWriter::try_new(file, stream.schema().as_ref())?;
+    let mut writer = FileWriter::try_new(&mut file, stream.schema().as_ref())?;
 
     while let Some(result) = stream.next().await {
         let batch = result?;

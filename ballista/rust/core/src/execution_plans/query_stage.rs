@@ -30,7 +30,7 @@ use crate::memory_stream::MemoryStream;
 use crate::utils;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{ArrayRef, StringBuilder};
+use datafusion::arrow::array::{ArrayRef, Utf8Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
@@ -156,9 +156,7 @@ impl ExecutionPlan for QueryStageExec {
                 ]));
 
                 // build result set with summary of the partition execution status
-                let mut c0 = StringBuilder::new(1);
-                c0.append_value(&path).unwrap();
-                let path: ArrayRef = Arc::new(c0.finish());
+                let path: ArrayRef = Arc::new(Utf8Array::<i32>::from_slice(&[path]));
 
                 let stats: ArrayRef = stats
                     .to_arrow_arrayref()
@@ -188,7 +186,7 @@ impl ExecutionPlan for QueryStageExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::array::{StringArray, StructArray, UInt32Array, UInt64Array};
+    use datafusion::arrow::array::*;
     use datafusion::physical_plan::memory::MemoryExec;
     use tempfile::TempDir;
 
@@ -213,7 +211,7 @@ mod tests {
         assert_eq!(1, batch.num_rows());
         let path = batch.columns()[0]
             .as_any()
-            .downcast_ref::<StringArray>()
+            .downcast_ref::<Utf8Array<i32>>()
             .unwrap();
         let file = path.value(0);
         assert!(file.ends_with("data.arrow"));
@@ -221,9 +219,7 @@ mod tests {
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();
-        let num_rows = stats
-            .column_by_name("num_rows")
-            .unwrap()
+        let num_rows = stats.values()[0]
             .as_any()
             .downcast_ref::<UInt64Array>()
             .unwrap();
@@ -241,8 +237,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(UInt32Array::from(vec![Some(1), Some(2)])),
-                Arc::new(StringArray::from(vec![Some("hello"), Some("world")])),
+                Arc::new(UInt32Array::from(&[Some(1), Some(2)])),
+                Arc::new(Utf8Array::<i32>::from(&[Some("hello"), Some("world")])),
             ],
         )?;
         let partition = vec![batch.clone(), batch];

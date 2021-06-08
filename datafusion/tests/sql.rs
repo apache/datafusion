@@ -15,26 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::convert::TryFrom;
 use std::sync::Arc;
 
-use chrono::prelude::*;
 use chrono::Duration;
 
-extern crate arrow;
-extern crate datafusion;
+use arrow::{array::*, datatypes::*, record_batch::RecordBatch};
 
-use arrow::{array::*, datatypes::TimeUnit};
-use arrow::{datatypes::Int32Type, datatypes::Int64Type, record_batch::RecordBatch};
-use arrow::{
-    datatypes::{
-        ArrowNativeType, ArrowPrimitiveType, ArrowTimestampType, DataType, Field, Schema,
-        SchemaRef, TimestampMicrosecondType, TimestampMillisecondType,
-        TimestampNanosecondType, TimestampSecondType,
-    },
-    util::display::array_value_to_string,
-};
-
+use chrono::TimeZone;
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::prelude::*;
 use datafusion::{
@@ -183,44 +170,44 @@ async fn parquet_list_columns() {
     let batch = &results[0];
     assert_eq!(3, batch.num_rows());
     assert_eq!(2, batch.num_columns());
-    assert_eq!(schema, batch.schema());
+    assert_eq!(schema.as_ref(), batch.schema().as_ref());
 
     let int_list_array = batch
         .column(0)
         .as_any()
-        .downcast_ref::<ListArray>()
+        .downcast_ref::<ListArray<i32>>()
         .unwrap();
     let utf8_list_array = batch
         .column(1)
         .as_any()
-        .downcast_ref::<ListArray>()
+        .downcast_ref::<ListArray<i32>>()
         .unwrap();
 
     assert_eq!(
         int_list_array
             .value(0)
             .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
+            .downcast_ref::<PrimitiveArray<i64>>()
             .unwrap(),
-        &PrimitiveArray::<Int64Type>::from(vec![Some(1), Some(2), Some(3),])
+        &PrimitiveArray::<i64>::from(vec![Some(1), Some(2), Some(3)])
     );
 
     assert_eq!(
         utf8_list_array
             .value(0)
             .as_any()
-            .downcast_ref::<StringArray>()
+            .downcast_ref::<Utf8Array<i32>>()
             .unwrap(),
-        &StringArray::try_from(vec![Some("abc"), Some("efg"), Some("hij"),]).unwrap()
+        &Utf8Array::<i32>::from(vec![Some("abc"), Some("efg"), Some("hij")])
     );
 
     assert_eq!(
         int_list_array
             .value(1)
             .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
+            .downcast_ref::<PrimitiveArray<i64>>()
             .unwrap(),
-        &PrimitiveArray::<Int64Type>::from(vec![None, Some(1),])
+        &PrimitiveArray::<i64>::from(vec![None, Some(1),])
     );
 
     assert!(utf8_list_array.is_null(1));
@@ -229,13 +216,13 @@ async fn parquet_list_columns() {
         int_list_array
             .value(2)
             .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
+            .downcast_ref::<PrimitiveArray<i64>>()
             .unwrap(),
-        &PrimitiveArray::<Int64Type>::from(vec![Some(4),])
+        &PrimitiveArray::<i64>::from(vec![Some(4),])
     );
 
     let result = utf8_list_array.value(2);
-    let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+    let result = result.as_any().downcast_ref::<Utf8Array<i32>>().unwrap();
 
     assert_eq!(result.value(0), "efg");
     assert!(result.is_null(1));
@@ -1209,7 +1196,7 @@ async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
 #[tokio::test]
 async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    ctx.register_table("ts_secs", make_timestamp_table::<TimestampSecondType>()?)?;
+    ctx.register_table("ts_secs", make_timestamp_table(TimeUnit::Second)?)?;
 
     // Original column is seconds, convert to millis and check timestamp
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_secs LIMIT 3";
@@ -1236,10 +1223,7 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
 #[tokio::test]
 async fn query_cast_timestamp_micros_to_others() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    ctx.register_table(
-        "ts_micros",
-        make_timestamp_table::<TimestampMicrosecondType>()?,
-    )?;
+    ctx.register_table("ts_micros", make_timestamp_table(TimeUnit::Microsecond)?)?;
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_micros LIMIT 3";
@@ -1667,7 +1651,7 @@ fn create_case_context() -> Result<ExecutionContext> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
     let data = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(StringArray::from(vec![
+        vec![Arc::new(Utf8Array::<i32>::from(vec![
             Some("a"),
             Some("b"),
             Some("c"),
@@ -1877,8 +1861,8 @@ fn create_join_context(
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44])),
+            Arc::new(Utf8Array::<i32>::from(&[
                 Some("a"),
                 Some("b"),
                 Some("c"),
@@ -1896,8 +1880,8 @@ fn create_join_context(
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
+            Arc::new(Utf8Array::<i32>::from(&[
                 Some("z"),
                 Some("y"),
                 Some("x"),
@@ -1922,9 +1906,9 @@ fn create_join_context_qualified() -> Result<ExecutionContext> {
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
-            Arc::new(UInt32Array::from(vec![10, 20, 30, 40])),
-            Arc::new(UInt32Array::from(vec![50, 60, 70, 80])),
+            Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4])),
+            Arc::new(UInt32Array::from_slice(&[10, 20, 30, 40])),
+            Arc::new(UInt32Array::from_slice(&[50, 60, 70, 80])),
         ],
     )?;
     let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
@@ -1938,9 +1922,9 @@ fn create_join_context_qualified() -> Result<ExecutionContext> {
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![1, 2, 9, 4])),
-            Arc::new(UInt32Array::from(vec![100, 200, 300, 400])),
-            Arc::new(UInt32Array::from(vec![500, 600, 700, 800])),
+            Arc::new(UInt32Array::from_slice(&[1, 2, 9, 4])),
+            Arc::new(UInt32Array::from_slice(&[100, 200, 300, 400])),
+            Arc::new(UInt32Array::from_slice(&[500, 600, 700, 800])),
         ],
     )?;
     let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
@@ -2481,42 +2465,23 @@ async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
     result_vec(&results)
 }
 
-/// Specialised String representation
-fn col_str(column: &ArrayRef, row_index: usize) -> String {
-    if column.is_null(row_index) {
-        return "NULL".to_string();
-    }
-
-    // Special case ListArray as there is no pretty print support for it yet
-    if let DataType::FixedSizeList(_, n) = column.data_type() {
-        let array = column
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .unwrap()
-            .value(row_index);
-
-        let mut r = Vec::with_capacity(*n as usize);
-        for i in 0..*n {
-            r.push(col_str(&array, i as usize));
-        }
-        return format!("[{}]", r.join(","));
-    }
-
-    array_value_to_string(column, row_index)
-        .ok()
-        .unwrap_or_else(|| "???".to_string())
-}
-
 /// Converts the results into a 2d array of strings, `result[row][column]`
 /// Special cases nulls to NULL for testing
 fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
     let mut result = vec![];
     for batch in results {
+        let display_col = batch
+            .columns()
+            .iter()
+            .map(|x| {
+                get_display(x.as_ref())
+                    .unwrap_or_else(|_| Box::new(|_| "???".to_string()))
+            })
+            .collect::<Vec<_>>();
         for row_index in 0..batch.num_rows() {
-            let row_vec = batch
-                .columns()
+            let row_vec = display_col
                 .iter()
-                .map(|column| col_str(column, row_index))
+                .map(|display_col| display_col(row_index))
                 .collect();
             result.push(row_vec);
         }
@@ -2524,14 +2489,14 @@ fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
     result
 }
 
-async fn generic_query_length<T: 'static + Array + From<Vec<&'static str>>>(
-    datatype: DataType,
-) -> Result<()> {
+async fn generic_query_length<O: Offset>(datatype: DataType) -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", datatype, false)]));
 
     let data = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(T::from(vec!["", "a", "aa", "aaa"]))],
+        vec![Arc::new(Utf8Array::<O>::from_slice(vec![
+            "", "a", "aa", "aaa",
+        ]))],
     )?;
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
@@ -2548,13 +2513,13 @@ async fn generic_query_length<T: 'static + Array + From<Vec<&'static str>>>(
 #[tokio::test]
 #[cfg_attr(not(feature = "unicode_expressions"), ignore)]
 async fn query_length() -> Result<()> {
-    generic_query_length::<StringArray>(DataType::Utf8).await
+    generic_query_length::<i32>(DataType::Utf8).await
 }
 
 #[tokio::test]
 #[cfg_attr(not(feature = "unicode_expressions"), ignore)]
 async fn query_large_length() -> Result<()> {
-    generic_query_length::<LargeStringArray>(DataType::LargeUtf8).await
+    generic_query_length::<i64>(DataType::LargeUtf8).await
 }
 
 #[tokio::test]
@@ -2591,7 +2556,7 @@ async fn query_concat() -> Result<()> {
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec!["", "a", "aa", "aaa"])),
+            Arc::new(Utf8Array::<i32>::from_slice(vec!["", "a", "aa", "aaa"])),
             Arc::new(Int32Array::from(vec![Some(0), Some(1), None, Some(3)])),
         ],
     )?;
@@ -2622,7 +2587,7 @@ async fn query_array() -> Result<()> {
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec!["", "a", "aa", "aaa"])),
+            Arc::new(Utf8Array::<i32>::from_slice(vec!["", "a", "aa", "aaa"])),
             Arc::new(Int32Array::from(vec![Some(0), Some(1), None, Some(3)])),
         ],
     )?;
@@ -2697,38 +2662,34 @@ async fn like() -> Result<()> {
     Ok(())
 }
 
-fn make_timestamp_table<A>() -> Result<Arc<MemTable>>
-where
-    A: ArrowTimestampType,
-{
+fn make_timestamp_table(time_unit: TimeUnit) -> Result<Arc<MemTable>> {
     let schema = Arc::new(Schema::new(vec![
-        Field::new("ts", DataType::Timestamp(A::get_time_unit(), None), false),
+        Field::new("ts", DataType::Timestamp(time_unit, None), false),
         Field::new("value", DataType::Int32, true),
     ]));
 
-    let mut builder = PrimitiveBuilder::<A>::new(3);
-
-    let nanotimestamps = vec![
-        1599572549190855000i64, // 2020-09-08T13:42:29.190855+00:00
-        1599568949190855000,    // 2020-09-08T12:42:29.190855+00:00
-        1599565349190855000,    //2020-09-08T11:42:29.190855+00:00
-    ]; // 2020-09-08T11:42:29.190855+00:00
-    let divisor = match A::get_time_unit() {
-        TimeUnit::Nanosecond => 1,
+    let divisor = match time_unit {
+        TimeUnit::Nanosecond => 1i64,
         TimeUnit::Microsecond => 1000,
         TimeUnit::Millisecond => 1_000_000,
         TimeUnit::Second => 1_000_000_000,
     };
-    for ts in nanotimestamps {
-        builder.append_value(
-            <A as ArrowPrimitiveType>::Native::from_i64(ts / divisor).unwrap(),
-        )?;
-    }
+
+    let nanotimestamps = vec![
+        1599572549190855000, // 2020-09-08T13:42:29.190855+00:00
+        1599568949190855000, // 2020-09-08T12:42:29.190855+00:00
+        1599565349190855000, //2020-09-08T11:42:29.190855+00:00
+    ];
+    let values = nanotimestamps.into_iter().map(|x| x / divisor);
+
+    let array = values
+        .collect::<Int64Array>()
+        .to(DataType::Timestamp(time_unit, None));
 
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(builder.finish()),
+            Arc::new(array),
             Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
         ],
     )?;
@@ -2737,7 +2698,7 @@ where
 }
 
 fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
-    make_timestamp_table::<TimestampNanosecondType>()
+    make_timestamp_table(TimeUnit::Nanosecond)
 }
 
 #[tokio::test]
@@ -2756,10 +2717,7 @@ async fn to_timestamp() -> Result<()> {
 #[tokio::test]
 async fn to_timestamp_millis() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    ctx.register_table(
-        "ts_data",
-        make_timestamp_table::<TimestampMillisecondType>()?,
-    )?;
+    ctx.register_table("ts_data", make_timestamp_table(TimeUnit::Millisecond)?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_millis('2020-09-08T12:00:00+00:00')";
     let actual = execute(&mut ctx, sql).await;
@@ -2772,10 +2730,7 @@ async fn to_timestamp_millis() -> Result<()> {
 #[tokio::test]
 async fn to_timestamp_micros() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    ctx.register_table(
-        "ts_data",
-        make_timestamp_table::<TimestampMicrosecondType>()?,
-    )?;
+    ctx.register_table("ts_data", make_timestamp_table(TimeUnit::Microsecond)?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_micros('2020-09-08T12:00:00+00:00')";
     let actual = execute(&mut ctx, sql).await;
@@ -2788,7 +2743,7 @@ async fn to_timestamp_micros() -> Result<()> {
 #[tokio::test]
 async fn to_timestamp_seconds() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
+    ctx.register_table("ts_data", make_timestamp_table(TimeUnit::Second)?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')";
     let actual = execute(&mut ctx, sql).await;
@@ -2892,18 +2847,18 @@ async fn query_on_string_dictionary() -> Result<()> {
     // Use StringDictionary (32 bit indexes = keys)
     let field_type =
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-    let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "d1",
+        field_type.clone(),
+        true,
+    )]));
 
-    let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
-    let values_builder = StringBuilder::new(10);
-    let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+    let data = vec![Some("one"), None, Some("three")];
 
-    builder.append("one")?;
-    builder.append_null()?;
-    builder.append("three")?;
-    let array = Arc::new(builder.finish());
+    let mut array = MutableDictionaryArray::<i32, MutableUtf8Array<i32>>::new();
+    array.try_extend(data)?;
 
-    let data = RecordBatch::try_new(schema.clone(), vec![array])?;
+    let data = RecordBatch::try_new(schema.clone(), vec![array.into_arc()])?;
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
     let mut ctx = ExecutionContext::new();
@@ -3105,15 +3060,18 @@ async fn csv_group_by_date() -> Result<()> {
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Date32Array::from(vec![
-                Some(100),
-                Some(100),
-                Some(100),
-                Some(101),
-                Some(101),
-                Some(101),
-            ])),
-            Arc::new(Int32Array::from(vec![
+            Arc::new(
+                Int32Array::from([
+                    Some(100),
+                    Some(100),
+                    Some(100),
+                    Some(101),
+                    Some(101),
+                    Some(101),
+                ])
+                .to(DataType::Date32),
+            ),
+            Arc::new(Int32Array::from([
                 Some(1),
                 Some(2),
                 Some(3),
@@ -3139,15 +3097,12 @@ async fn csv_group_by_date() -> Result<()> {
 async fn group_by_timestamp_millis() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 
+    let data_type = DataType::Timestamp(TimeUnit::Millisecond, None);
     let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "timestamp",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            false,
-        ),
+        Field::new("timestamp", data_type.clone(), false),
         Field::new("count", DataType::Int32, false),
     ]));
-    let base_dt = Utc.ymd(2018, 7, 1).and_hms(6, 0, 0); // 2018-Jul-01 06:00
+    let base_dt = chrono::Utc.ymd(2018, 7, 1).and_hms(6, 0, 0); // 2018-Jul-01 06:00
     let hour1 = Duration::hours(1);
     let timestamps = vec![
         base_dt.timestamp_millis(),
@@ -3160,8 +3115,8 @@ async fn group_by_timestamp_millis() -> Result<()> {
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(TimestampMillisecondArray::from(timestamps)),
-            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
+            Arc::new(Int64Array::from_slice(&timestamps).to(data_type)),
+            Arc::new(Int32Array::from_slice(&[10, 20, 30, 40, 50, 60])),
         ],
     )?;
     let t1_table = MemTable::try_new(schema, vec![vec![data]])?;

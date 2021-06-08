@@ -24,6 +24,7 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     memory::MemoryStream, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
+
 use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -109,7 +110,7 @@ impl ExecutionPlan for EmptyExec {
                     DataType::Null,
                     true,
                 )])),
-                vec![Arc::new(NullArray::new(1))],
+                vec![Arc::new(NullArray::from_data(1))],
             )?]
         } else {
             vec![]

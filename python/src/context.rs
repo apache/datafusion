@@ -76,8 +76,10 @@ impl ExecutionContext {
             })
             .collect::<PyResult<_>>()?;
 
-        let table =
-            errors::wrap(MemTable::try_new(partitions[0][0].schema(), partitions))?;
+        let table = errors::wrap(MemTable::try_new(
+            partitions[0][0].schema().clone(),
+            partitions,
+        ))?;
 
         // generate a random (unique) name for this table
         let name = rand::thread_rng()

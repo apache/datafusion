@@ -132,7 +132,6 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     &filenames,
                     Some(projection),
                     None,
-                    scan.batch_size as usize,
                     scan.num_partitions as usize,
                     None,
                 )?))
@@ -199,6 +198,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
             PhysicalPlanType::Window(window_agg) => {
                 let input: Arc<dyn ExecutionPlan> =
                     convert_box_required!(window_agg.input)?;
+<<<<<<< HEAD
                 let input_schema = window_agg
                     .input_schema
                     .as_ref()
@@ -210,6 +210,15 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     .clone();
                 let physical_schema: SchemaRef =
                     SchemaRef::new((&input_schema).try_into()?);
+=======
+                let input_schema = window_agg.input_schema.ok_or_else(|| {
+                    BallistaError::General(
+                        "input_schema in WindowAggrNode is missing.".to_owned(),
+                    )
+                })?;
+
+                let physical_schema = Arc::new(input_schema);
+>>>>>>> Wip.
 
                 let physical_window_expr: Vec<Arc<dyn WindowExpr>> = window_agg
                     .window_expr
@@ -220,9 +229,36 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                             proto_error("Unexpected empty window physical expression")
                         })?;
 
+<<<<<<< HEAD
                         match expr_type {
                             ExprType::WindowExpr(window_node) => Ok(create_window_expr(
                                 &convert_required!(window_node.window_function)?,
+=======
+                for (expr, name) in &window_agg_expr {
+                    match expr {
+                        Expr::WindowFunction {
+                            fun,
+                            args,
+                            order_by,
+                            ..
+                        } => {
+                            let arg = df_planner
+                                .create_physical_expr(
+                                    &args[0],
+                                    physical_schema,
+                                    &ctx_state,
+                                )
+                                .map_err(|e| {
+                                    BallistaError::General(format!("{:?}", e))
+                                })?;
+                            if !order_by.is_empty() {
+                                return Err(BallistaError::NotImplemented("Window function with order by is not yet implemented".to_owned()));
+                            }
+                            let window_expr = create_window_expr(
+                                &fun,
+                                &[arg],
+                                &physical_schema,
+>>>>>>> Wip.
                                 name.to_owned(),
                                 &[convert_box_required!(window_node.expr)?],
                                 &[],

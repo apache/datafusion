@@ -17,17 +17,23 @@
 //! This module contains the  `LogicalPlan` enum that describes queries
 //! via a logical query plan.
 
-use super::display::{GraphvizVisitor, IndentVisitor};
-use super::expr::{Column, Expr};
-use super::extension::UserDefinedLogicalNode;
-use crate::datasource::TableProvider;
-use crate::logical_plan::dfschema::DFSchemaRef;
-use crate::sql::parser::FileType;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use std::{
     fmt::{self, Display},
     sync::Arc,
 };
+
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+
+use crate::datasource::TableProvider;
+use crate::sql::parser::FileType;
+
+use super::expr::Expr;
+use super::extension::UserDefinedLogicalNode;
+use super::{
+    display::{GraphvizVisitor, IndentVisitor},
+    Column,
+};
+use crate::logical_plan::dfschema::DFSchemaRef;
 
 /// Join type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

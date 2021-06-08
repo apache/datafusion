@@ -21,14 +21,14 @@ use pyo3::PyErr;
 
 use std::convert::From;
 
-use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::arrow::{array::ArrayRef, ffi, record_batch::RecordBatch};
 
 use crate::errors;
 
 pub fn to_py_array(array: &ArrayRef, py: Python) -> PyResult<PyObject> {
-    let (array_pointer, schema_pointer) =
-        array.to_raw().map_err(errors::DataFusionError::from)?;
+    let ffi_array =
+        ffi::export_to_c(array.clone()).map_err(errors::DataFusionError::from)?;
+    let (array_pointer, schema_pointer) = ffi_array.references();
 
     let pa = py.import("pyarrow")?;
 

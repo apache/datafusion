@@ -244,6 +244,7 @@ mod tests {
         logical_plan::{DFSchema, Expr},
         test::*,
     };
+    use arrow::datatypes::SchemaRef;
 
     struct TestTableProvider {
         num_rows: usize,
@@ -253,7 +254,7 @@ mod tests {
         fn as_any(&self) -> &dyn std::any::Any {
             unimplemented!()
         }
-        fn schema(&self) -> arrow::datatypes::SchemaRef {
+        fn schema(&self) -> SchemaRef {
             unimplemented!()
         }
 

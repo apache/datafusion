@@ -17,30 +17,32 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
-use self::{display::DisplayableExecutionPlan, merge::MergeExec};
-use crate::execution::context::ExecutionContextState;
-use crate::logical_plan::LogicalPlan;
-use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
-use arrow::compute::kernels::partition::lexicographical_partition_ranges;
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
-use arrow::datatypes::{DataType, Schema, SchemaRef};
-use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
-use async_trait::async_trait;
-pub use display::DisplayFormatType;
-use futures::stream::Stream;
-use hashbrown::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Display};
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{any::Any, pin::Pin};
+
+use self::display::DisplayableExecutionPlan;
+use self::expressions::{PhysicalSortExpr, SortColumn};
+use crate::error::DataFusionError;
+use crate::execution::context::ExecutionContextState;
+use crate::logical_plan::LogicalPlan;
+use crate::physical_plan::merge::MergeExec;
+use crate::{error::Result, scalar::ScalarValue};
+
+use arrow::array::ArrayRef;
+use arrow::compute::merge_sort::SortOptions;
+//use arrow::compute::partition::lexicographical_partition_ranges;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::error::Result as ArrowResult;
+use arrow::record_batch::RecordBatch;
+
+use async_trait::async_trait;
+pub use display::DisplayFormatType;
+use futures::stream::Stream;
+use hashbrown::HashMap;
 
 /// Trait for types that stream [arrow::record_batch::RecordBatch]
 pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
@@ -498,8 +500,9 @@ pub trait WindowExpr: Send + Sync + Debug {
                 end: num_rows,
             }])
         } else {
-            lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)
+            todo!()
+            //lexicographical_partition_ranges(partition_columns)
+            //    .map_err(DataFusionError::ArrowError)
         }
     }
 
@@ -626,6 +629,7 @@ pub mod string_expressions;
 pub mod type_coercion;
 pub mod udaf;
 pub mod udf;
+
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
 pub mod union;

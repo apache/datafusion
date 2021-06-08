@@ -24,8 +24,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{ArrayRef, MutableArrayData};
-use arrow::compute::SortOptions;
+use arrow::array::{growable::make_growable, ord::build_compare, ArrayRef};
+use arrow::compute::sort::SortOptions;
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::FusedStream;
@@ -256,7 +256,7 @@ impl SortKeyCursor {
                 (false, false) => {}
                 (true, true) => {
                     // TODO: Building the predicate each time is sub-optimal
-                    let c = arrow::array::build_compare(l.as_ref(), r.as_ref())?;
+                    let c = build_compare(l.as_ref(), r.as_ref())?;
                     match c(self.cur_row, other.cur_row) {
                         Ordering::Equal => {}
                         o if sort_options.descending => return Ok(o.reverse()),
@@ -354,7 +354,10 @@ impl SortPreservingMergeStream {
                 let cursor = match SortKeyCursor::new(batch, &self.column_expressions) {
                     Ok(cursor) => cursor,
                     Err(e) => {
-                        return Poll::Ready(Err(ArrowError::ExternalError(Box::new(e))));
+                        return Poll::Ready(Err(ArrowError::External(
+                            "".to_string(),
+                            Box::new(e),
+                        )));
                     }
                 };
                 self.cursors[idx].push_back(cursor)
@@ -408,36 +411,29 @@ impl SortPreservingMergeStream {
             .fields()
             .iter()
             .enumerate()
-            .map(|(column_idx, field)| {
+            .map(|(column_idx, _)| {
                 let arrays = self
                     .cursors
                     .iter()
                     .flat_map(|cursor| {
                         cursor
                             .iter()
-                            .map(|cursor| cursor.batch.column(column_idx).data())
+                            .map(|cursor| cursor.batch.column(column_idx).as_ref())
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
 
-                let mut array_data = MutableArrayData::new(
-                    arrays,
-                    field.is_nullable(),
-                    self.in_progress.len(),
-                );
+                let mut array_data =
+                    make_growable(&arrays, false, self.in_progress.len());
 
                 for row_index in &self.in_progress {
                     let buffer_idx =
                         stream_to_buffer_idx[row_index.stream_idx] + row_index.cursor_idx;
 
                     // TODO: Coalesce contiguous writes
-                    array_data.extend(
-                        buffer_idx,
-                        row_index.row_idx,
-                        row_index.row_idx + 1,
-                    );
+                    array_data.extend(buffer_idx, row_index.row_idx, 1);
                 }
 
-                arrow::array::make_array(array_data.freeze())
+                array_data.as_arc()
             })
             .collect();
 
@@ -492,9 +488,10 @@ impl Stream for SortPreservingMergeStream {
                 Ok(None) => return Poll::Ready(Some(self.build_record_batch())),
                 Err(e) => {
                     self.aborted = true;
-                    return Poll::Ready(Some(Err(ArrowError::ExternalError(Box::new(
-                        e,
-                    )))));
+                    return Poll::Ready(Some(Err(ArrowError::External(
+                        "".to_string(),
+                        Box::new(e),
+                    ))));
                 }
             };
 
@@ -537,9 +534,9 @@ impl RecordBatchStream for SortPreservingMergeStream {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::FromIterator;
-
-    use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
+    use crate::arrow::array::*;
+    use crate::arrow::datatypes::*;
+    use crate::arrow::io::print;
     use crate::assert_batches_eq;
     use crate::datasource::CsvReadOptions;
     use crate::physical_plan::csv::CsvExec;
@@ -556,28 +553,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge() {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
+        let b: ArrayRef = Arc::new(Utf8Array::<i32>::from(&[
             Some("a"),
             Some("b"),
             Some("c"),
             Some("d"),
             Some("e"),
         ]));
-        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 4]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from_slice(&[8, 7, 6, 5, 4])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
+        let b: ArrayRef = Arc::new(Utf8Array::<i32>::from(&[
             Some("d"),
             Some("e"),
             Some("g"),
             Some("h"),
             Some("i"),
         ]));
-        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![4, 6, 2, 2, 6]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from_slice(&[4, 6, 2, 2, 6])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
-        let schema = b1.schema();
+        let schema = b1.schema().clone();
 
         let sort = vec![
             PhysicalSortExpr {
@@ -684,8 +687,8 @@ mod tests {
         let basic = basic_sort(csv.clone(), sort.clone()).await;
         let partition = partition_sort(csv, sort).await;
 
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic]).unwrap();
-        let partition = arrow::util::pretty::pretty_format_batches(&[partition]).unwrap();
+        let basic = print::write(&[basic]).unwrap();
+        let partition = print::write(&[partition]).unwrap();
 
         assert_eq!(basic, partition);
     }
@@ -706,10 +709,11 @@ mod tests {
                         sorted
                             .column(column_idx)
                             .slice(batch_idx * batch_size, length)
+                            .into()
                     })
                     .collect();
 
-                RecordBatch::try_new(sorted.schema(), columns).unwrap()
+                RecordBatch::try_new(sorted.schema().clone(), columns).unwrap()
             })
             .collect()
     }
@@ -736,7 +740,7 @@ mod tests {
         let sorted = basic_sort(csv, sort).await;
         let split: Vec<_> = sizes.iter().map(|x| split_batch(&sorted, *x)).collect();
 
-        Arc::new(MemoryExec::try_new(&split, sorted.schema(), None).unwrap())
+        Arc::new(MemoryExec::try_new(&split, sorted.schema().clone(), None).unwrap())
     }
 
     #[tokio::test]
@@ -772,8 +776,8 @@ mod tests {
         assert_eq!(basic.num_rows(), 300);
         assert_eq!(partition.num_rows(), 300);
 
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic]).unwrap();
-        let partition = arrow::util::pretty::pretty_format_batches(&[partition]).unwrap();
+        let basic = print::write(&[basic]).unwrap();
+        let partition = print::write(&[partition]).unwrap();
 
         assert_eq!(basic, partition);
     }
@@ -806,49 +810,42 @@ mod tests {
         assert_eq!(basic.num_rows(), 300);
         assert_eq!(merged.iter().map(|x| x.num_rows()).sum::<usize>(), 300);
 
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic]).unwrap();
-        let partition =
-            arrow::util::pretty::pretty_format_batches(merged.as_slice()).unwrap();
+        let basic = print::write(&[basic]).unwrap();
+        let partition = print::write(merged.as_slice()).unwrap();
 
         assert_eq!(basic, partition);
     }
 
     #[tokio::test]
     async fn test_nulls() {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
+        let b: ArrayRef = Arc::new(Utf8Array::<i32>::from(&[
             None,
             Some("a"),
             Some("b"),
             Some("d"),
             Some("e"),
         ]));
-        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![
-            Some(8),
-            None,
-            Some(6),
-            None,
-            Some(4),
-        ]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from(&[Some(8), None, Some(6), None, Some(4)])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
+        let b: ArrayRef = Arc::new(Utf8Array::<i32>::from(&[
             None,
             Some("b"),
             Some("g"),
             Some("h"),
             Some("i"),
         ]));
-        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![
-            Some(8),
-            None,
-            Some(5),
-            None,
-            Some(4),
-        ]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from(&[Some(8), None, Some(5), None, Some(4)])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
-        let schema = b1.schema();
+        let schema = b1.schema().clone();
 
         let sort = vec![
             PhysicalSortExpr {
@@ -939,8 +936,8 @@ mod tests {
         let merged = merged.remove(0);
         let basic = basic_sort(batches, sort.clone()).await;
 
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic]).unwrap();
-        let partition = arrow::util::pretty::pretty_format_batches(&[merged]).unwrap();
+        let basic = print::write(&[basic]).unwrap();
+        let partition = print::write(&[merged]).unwrap();
 
         assert_eq!(basic, partition);
     }

@@ -742,6 +742,7 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarValue {
                 let pb_scalar_type = opt_scalar_type
                     .as_ref()
                     .ok_or_else(|| proto_error("Protobuf deserialization err: ScalaListValue missing required field 'datatype'"))?;
+
                 let typechecked_values: Vec<ScalarValue> = values
                     .iter()
                     .map(|val| val.try_into())

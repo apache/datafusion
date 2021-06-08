@@ -31,7 +31,7 @@ use arrow_flight::{FlightDescriptor, Ticket};
 /// This example is run along-side the example `flight_server`.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let testdata = datafusion::arrow::util::test_util::parquet_test_data();
+    let testdata = datafusion::crate::test::parquet_test_data();
 
     // Create Flight client
     let mut client = FlightServiceClient::connect("http://localhost:50051").await?;

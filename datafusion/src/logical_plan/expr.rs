@@ -19,6 +19,12 @@
 //! such as `col = 5` or `SUM(col)`. See examples on the [`Expr`] struct.
 
 pub use super::Operator;
+
+use std::fmt;
+use std::sync::Arc;
+
+use arrow::{compute::cast::can_cast_types, datatypes::DataType};
+
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{window_frames, DFField, DFSchema, DFSchemaRef};
 use crate::physical_plan::{
@@ -27,11 +33,8 @@ use crate::physical_plan::{
 };
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
-use arrow::{compute::can_cast_types, datatypes::DataType};
 use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::HashSet;
-use std::fmt;
-use std::sync::Arc;
 
 /// A named reference to a qualified field in a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -18,23 +18,24 @@
 //! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
-
 use ahash::RandomState;
-use std::collections::HashSet;
+
+use arrow::{
+    array::*,
+    datatypes::{DataType, Field},
+};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::group_scalar::GroupByScalar;
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-struct DistinctScalarValues(Vec<GroupByScalar>);
+type DistinctScalarValues = Vec<GroupByScalar>;
 
 fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{}[{}]", name, state_name)
@@ -98,11 +99,7 @@ impl AggregateExpr for DistinctCount {
             .map(|state_data_type| {
                 Field::new(
                     &format_state_name(&self.name, "count distinct"),
-                    DataType::List(Box::new(Field::new(
-                        "item",
-                        state_data_type.clone(),
-                        true,
-                    ))),
+                    ListArray::<i32>::default_datatype(state_data_type.clone()),
                     false,
                 )
             })
@@ -137,12 +134,11 @@ impl Accumulator for DistinctCountAccumulator {
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         // If a row has a NULL, it is not included in the final count.
         if !values.iter().any(|v| v.is_null()) {
-            self.values.insert(DistinctScalarValues(
-                values
-                    .iter()
-                    .map(GroupByScalar::try_from)
-                    .collect::<Result<Vec<_>>>()?,
-            ));
+            let values = values
+                .iter()
+                .map(GroupByScalar::try_from)
+                .collect::<Result<Vec<_>>>()?;
+            self.values.insert(values);
         }
 
         Ok(())
@@ -167,38 +163,35 @@ impl Accumulator for DistinctCountAccumulator {
         (0..col_values[0].len()).try_for_each(|row_index| {
             let row_values = col_values
                 .iter()
-                .map(|col| col[row_index].clone())
-                .collect::<Vec<_>>();
+                .map(|col| ScalarValue::try_from_array(col, row_index))
+                .collect::<Result<Vec<_>>>()?;
             self.update(&row_values)
         })
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let mut cols_out = self
-            .state_data_types
-            .iter()
-            .map(|state_data_type| {
-                ScalarValue::List(Some(Vec::new()), state_data_type.clone())
-            })
-            .collect::<Vec<_>>();
-
-        let mut cols_vec = cols_out
-            .iter_mut()
-            .map(|c| match c {
-                ScalarValue::List(Some(ref mut v), _) => v,
-                _ => unreachable!(),
-            })
-            .collect::<Vec<_>>();
-
-        self.values.iter().for_each(|distinct_values| {
-            distinct_values.0.iter().enumerate().for_each(
-                |(col_index, distinct_value)| {
-                    cols_vec[col_index].push(ScalarValue::from(distinct_value));
-                },
-            )
+        // create a ListArray for each `state_data_type`. The `ListArray`
+        let a = self.state_data_types.iter().enumerate().map(|(i, type_)| {
+            if self.values.is_empty() {
+                return Ok((new_empty_array(type_.clone()), type_));
+            };
+            let arrays = self
+                .values
+                .iter()
+                .map(|distinct_values| ScalarValue::from(&distinct_values[i]).to_array())
+                .collect::<Vec<_>>();
+            let arrays = arrays.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
+            Ok(arrow::compute::concat::concatenate(&arrays).map(|x| (x, type_))?)
         });
-
-        Ok(cols_out)
+        a.map(|values: Result<(Box<dyn Array>, &DataType)>| {
+            values.map(|(values, type_)| {
+                ScalarValue::List(
+                    Some(values.into()),
+                    ListArray::<i32>::default_datatype(type_.clone()),
+                )
+            })
+        })
+        .collect()
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -216,61 +209,55 @@ impl Accumulator for DistinctCountAccumulator {
 mod tests {
     use super::*;
 
-    use arrow::array::{
-        ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int8Array, ListArray, UInt16Array, UInt32Array, UInt64Array,
-        UInt8Array,
-    };
-    use arrow::array::{Int32Builder, ListBuilder, UInt64Builder};
     use arrow::datatypes::DataType;
 
-    macro_rules! build_list {
-        ($LISTS:expr, $BUILDER_TYPE:ident) => {{
-            let mut builder = ListBuilder::new($BUILDER_TYPE::new(0));
-            for list in $LISTS.iter() {
-                match list {
-                    Some(values) => {
-                        for value in values.iter() {
-                            match value {
-                                Some(v) => builder.values().append_value((*v).into())?,
-                                None => builder.values().append_null()?,
-                            }
-                        }
-
-                        builder.append(true)?;
-                    }
-                    None => {
-                        builder.append(false)?;
-                    }
-                }
-            }
-
-            let array = Arc::new(builder.finish()) as ArrayRef;
-
-            Ok(array) as Result<ArrayRef>
-        }};
-    }
-
     macro_rules! state_to_vec {
-        ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
+        ($LIST:expr, $DATA_TYPE:ident, $ARRAY_TY:ty) => {{
             match $LIST {
-                ScalarValue::List(_, data_type) => match data_type {
-                    DataType::$DATA_TYPE => (),
-                    _ => panic!("Unexpected DataType for list"),
-                },
+                ScalarValue::List(_, data_type) => assert_eq!(
+                    ListArray::<i32>::get_child_type(data_type),
+                    &DataType::$DATA_TYPE
+                ),
                 _ => panic!("Expected a ScalarValue::List"),
             }
 
             match $LIST {
                 ScalarValue::List(None, _) => None,
-                ScalarValue::List(Some(scalar_values), _) => {
-                    let vec = scalar_values
+                ScalarValue::List(Some(values), _) => {
+                    let vec = values
+                        .as_any()
+                        .downcast_ref::<$ARRAY_TY>()
+                        .unwrap()
                         .iter()
-                        .map(|scalar_value| match scalar_value {
-                            ScalarValue::$DATA_TYPE(value) => *value,
-                            _ => panic!("Unexpected ScalarValue variant"),
-                        })
-                        .collect::<Vec<Option<$PRIM_TY>>>();
+                        .map(|x| x.map(|x| *x))
+                        .collect::<Vec<_>>();
+
+                    Some(vec)
+                }
+                _ => unreachable!(),
+            }
+        }};
+    }
+
+    macro_rules! state_to_vec_bool {
+        ($LIST:expr, $DATA_TYPE:ident, $ARRAY_TY:ty) => {{
+            match $LIST {
+                ScalarValue::List(_, data_type) => assert_eq!(
+                    ListArray::<i32>::get_child_type(data_type),
+                    &DataType::$DATA_TYPE
+                ),
+                _ => panic!("Expected a ScalarValue::List"),
+            }
+
+            match $LIST {
+                ScalarValue::List(None, _) => None,
+                ScalarValue::List(Some(values), _) => {
+                    let vec = values
+                        .as_any()
+                        .downcast_ref::<$ARRAY_TY>()
+                        .unwrap()
+                        .iter()
+                        .collect::<Vec<_>>();
 
                     Some(vec)
                 }
@@ -333,7 +320,7 @@ mod tests {
         let agg = DistinctCount::new(
             arrays
                 .iter()
-                .map(|a| a.as_any().downcast_ref::<ListArray>().unwrap())
+                .map(|a| a.as_any().downcast_ref::<ListArray<i32>>().unwrap())
                 .map(|a| a.values().data_type().clone())
                 .collect::<Vec<_>>(),
             vec![],
@@ -349,7 +336,7 @@ mod tests {
 
     macro_rules! test_count_distinct_update_batch_numeric {
         ($ARRAY_TYPE:ident, $DATA_TYPE:ident, $PRIM_TYPE:ty) => {{
-            let values: Vec<Option<$PRIM_TYPE>> = vec![
+            let values = &[
                 Some(1),
                 Some(1),
                 None,
@@ -366,7 +353,7 @@ mod tests {
             let (states, result) = run_update_batch(&arrays)?;
 
             let mut state_vec =
-                state_to_vec!(&states[0], $DATA_TYPE, $PRIM_TYPE).unwrap();
+                state_to_vec!(&states[0], $DATA_TYPE, $ARRAY_TYPE).unwrap();
             state_vec.sort();
 
             assert_eq!(states.len(), 1);
@@ -418,7 +405,7 @@ mod tests {
             let (states, result) = run_update_batch(&arrays)?;
 
             let mut state_vec =
-                state_to_vec!(&states[0], $DATA_TYPE, $PRIM_TYPE).unwrap();
+                state_to_vec!(&states[0], $DATA_TYPE, $ARRAY_TYPE).unwrap();
             state_vec.sort_by(|a, b| match (a, b) {
                 (Some(lhs), Some(rhs)) => {
                     OrderedFloat::from(*lhs).cmp(&OrderedFloat::from(*rhs))
@@ -502,7 +489,8 @@ mod tests {
         let get_count = |data: BooleanArray| -> Result<(Vec<Option<bool>>, u64)> {
             let arrays = vec![Arc::new(data) as ArrayRef];
             let (states, result) = run_update_batch(&arrays)?;
-            let mut state_vec = state_to_vec!(&states[0], Boolean, bool).unwrap();
+            let mut state_vec =
+                state_to_vec_bool!(&states[0], Boolean, BooleanArray).unwrap();
             state_vec.sort();
             let count = match result {
                 ScalarValue::UInt64(c) => c.ok_or_else(|| {
@@ -516,13 +504,14 @@ mod tests {
             Ok((state_vec, count))
         };
 
-        let zero_count_values = BooleanArray::from(Vec::<bool>::new());
+        let zero_count_values = BooleanArray::from_slice(&[]);
 
-        let one_count_values = BooleanArray::from(vec![false, false]);
+        let one_count_values = BooleanArray::from_slice(&[false, false]);
         let one_count_values_with_null =
             BooleanArray::from(vec![Some(true), Some(true), None, None]);
 
-        let two_count_values = BooleanArray::from(vec![true, false, true, false, true]);
+        let two_count_values =
+            BooleanArray::from_slice(&[true, false, true, false, true]);
         let two_count_values_with_null = BooleanArray::from(vec![
             Some(true),
             Some(false),
@@ -561,7 +550,7 @@ mod tests {
         let (states, result) = run_update_batch(&arrays)?;
 
         assert_eq!(states.len(), 1);
-        assert_eq!(state_to_vec!(&states[0], Int32, i32), Some(vec![]));
+        assert_eq!(state_to_vec!(&states[0], Int32, Int32Array), Some(vec![]));
         assert_eq!(result, ScalarValue::UInt64(Some(0)));
 
         Ok(())
@@ -569,13 +558,12 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_empty() -> Result<()> {
-        let arrays =
-            vec![Arc::new(Int32Array::from(vec![] as Vec<Option<i32>>)) as ArrayRef];
+        let arrays = vec![Arc::new(Int32Array::new_empty(DataType::Int32)) as ArrayRef];
 
         let (states, result) = run_update_batch(&arrays)?;
 
         assert_eq!(states.len(), 1);
-        assert_eq!(state_to_vec!(&states[0], Int32, i32), Some(vec![]));
+        assert_eq!(state_to_vec!(&states[0], Int32, Int32Array), Some(vec![]));
         assert_eq!(result, ScalarValue::UInt64(Some(0)));
 
         Ok(())
@@ -583,14 +571,14 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_multiple_columns() -> Result<()> {
-        let array_int8: ArrayRef = Arc::new(Int8Array::from(vec![1, 1, 2]));
-        let array_int16: ArrayRef = Arc::new(Int16Array::from(vec![3, 3, 4]));
+        let array_int8: ArrayRef = Arc::new(Int8Array::from_slice(&[1, 1, 2]));
+        let array_int16: ArrayRef = Arc::new(Int16Array::from_slice(&[3, 3, 4]));
         let arrays = vec![array_int8, array_int16];
 
         let (states, result) = run_update_batch(&arrays)?;
 
-        let state_vec1 = state_to_vec!(&states[0], Int8, i8).unwrap();
-        let state_vec2 = state_to_vec!(&states[1], Int16, i16).unwrap();
+        let state_vec1 = state_to_vec!(&states[0], Int8, Int8Array).unwrap();
+        let state_vec2 = state_to_vec!(&states[1], Int16, Int16Array).unwrap();
         let state_pairs = collect_states::<i8, i16>(&state_vec1, &state_vec2);
 
         assert_eq!(states.len(), 2);
@@ -619,8 +607,8 @@ mod tests {
             ],
         )?;
 
-        let state_vec1 = state_to_vec!(&states[0], Int32, i32).unwrap();
-        let state_vec2 = state_to_vec!(&states[1], UInt64, u64).unwrap();
+        let state_vec1 = state_to_vec!(&states[0], Int32, Int32Array).unwrap();
+        let state_vec2 = state_to_vec!(&states[1], UInt64, UInt64Array).unwrap();
         let state_pairs = collect_states::<i32, u64>(&state_vec1, &state_vec2);
 
         assert_eq!(states.len(), 2);
@@ -656,8 +644,8 @@ mod tests {
             ],
         )?;
 
-        let state_vec1 = state_to_vec!(&states[0], Int32, i32).unwrap();
-        let state_vec2 = state_to_vec!(&states[1], UInt64, u64).unwrap();
+        let state_vec1 = state_to_vec!(&states[0], Int32, Int32Array).unwrap();
+        let state_vec2 = state_to_vec!(&states[1], UInt64, UInt64Array).unwrap();
         let state_pairs = collect_states::<i32, u64>(&state_vec1, &state_vec2);
 
         assert_eq!(states.len(), 2);
@@ -673,26 +661,27 @@ mod tests {
 
     #[test]
     fn count_distinct_merge_batch() -> Result<()> {
-        let state_in1 = build_list!(
-            vec![
-                Some(vec![Some(-1_i32), Some(-1_i32), Some(-2_i32), Some(-2_i32)]),
-                Some(vec![Some(-2_i32), Some(-3_i32)]),
-            ],
-            Int32Builder
-        )?;
+        let state_in1 = vec![
+            Some(vec![Some(-1_i32), Some(-1_i32), Some(-2_i32), Some(-2_i32)]),
+            Some(vec![Some(-2_i32), Some(-3_i32)]),
+        ];
+        let mut array = MutableListArray::<i32, MutablePrimitiveArray<i32>>::new();
+        array.try_extend(state_in1)?;
+        let state_in1: ListArray<i32> = array.into();
 
-        let state_in2 = build_list!(
-            vec![
-                Some(vec![Some(5_u64), Some(6_u64), Some(5_u64), Some(7_u64)]),
-                Some(vec![Some(5_u64), Some(7_u64)]),
-            ],
-            UInt64Builder
-        )?;
+        let state_in2 = vec![
+            Some(vec![Some(5_u64), Some(6_u64), Some(5_u64), Some(7_u64)]),
+            Some(vec![Some(5_u64), Some(7_u64)]),
+        ];
+        let mut array = MutableListArray::<i32, MutablePrimitiveArray<u64>>::new();
+        array.try_extend(state_in2)?;
+        let state_in2: ListArray<i32> = array.into();
 
-        let (states, result) = run_merge_batch(&[state_in1, state_in2])?;
+        let (states, result) =
+            run_merge_batch(&[Arc::new(state_in1), Arc::new(state_in2)])?;
 
-        let state_out_vec1 = state_to_vec!(&states[0], Int32, i32).unwrap();
-        let state_out_vec2 = state_to_vec!(&states[1], UInt64, u64).unwrap();
+        let state_out_vec1 = state_to_vec!(&states[0], Int32, Int32Array).unwrap();
+        let state_out_vec2 = state_to_vec!(&states[1], UInt64, UInt64Array).unwrap();
         let state_pairs = collect_states::<i32, u64>(&state_out_vec1, &state_out_vec2);
 
         assert_eq!(

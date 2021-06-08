@@ -21,16 +21,6 @@
 use ahash::CallHasher;
 use ahash::RandomState;
 
-use arrow::{
-    array::{
-        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array,
-        Float64Array, LargeStringArray, PrimitiveArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, UInt32BufferBuilder,
-        UInt32Builder, UInt64BufferBuilder, UInt64Builder,
-    },
-    compute,
-    datatypes::{TimeUnit, UInt32Type, UInt64Type},
-};
 use smallvec::{smallvec, SmallVec};
 use std::{any::Any, usize};
 use std::{hash::Hasher, sync::Arc};
@@ -41,16 +31,12 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use tokio::sync::Mutex;
 
-use arrow::array::Array;
-use arrow::datatypes::DataType;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::*;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use arrow::{array::*, buffer::MutableBuffer};
 
-use arrow::array::{
-    Int16Array, Int32Array, Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
-};
+use arrow::compute::take;
 
 use super::expressions::Column;
 use super::{
@@ -66,6 +52,9 @@ use super::{
 use crate::physical_plan::coalesce_batches::concat_batches;
 use crate::physical_plan::PhysicalExpr;
 use log::debug;
+
+type StringArray = Utf8Array<i32>;
+type LargeStringArray = Utf8Array<i64>;
 
 // Maps a `u64` hash value based on the left ["on" values] to a list of indices with this key's value.
 //
@@ -540,10 +529,10 @@ fn build_batch_from_indices(
     for column_index in column_indices {
         let array = if column_index.is_left {
             let array = left.column(column_index.index);
-            compute::take(array.as_ref(), &left_indices, None)?
+            take::take(array.as_ref(), &left_indices)?.into()
         } else {
             let array = right.column(column_index.index);
-            compute::take(array.as_ref(), &right_indices, None)?
+            take::take(array.as_ref(), &right_indices)?.into()
         };
         columns.push(array);
     }
@@ -632,8 +621,8 @@ fn build_join_indexes(
     match join_type {
         JoinType::Inner | JoinType::Semi | JoinType::Anti => {
             // Using a buffer builder to avoid slower normal builder
-            let mut left_indices = UInt64BufferBuilder::new(0);
-            let mut right_indices = UInt32BufferBuilder::new(0);
+            let mut left_indices = MutableBuffer::<u64>::new();
+            let mut right_indices = MutableBuffer::<u32>::new();
 
             // Visit all of the right rows
             for (row, hash_value) in hash_values.iter().enumerate() {
@@ -648,29 +637,29 @@ fn build_join_indexes(
                     for &i in indices {
                         // Check hash collisions
                         if equal_rows(i as usize, row, &left_join_values, &keys_values)? {
-                            left_indices.append(i);
-                            right_indices.append(row as u32);
+                            left_indices.push(i as u64);
+                            right_indices.push(row as u32);
                         }
                     }
                 }
             }
-            let left = ArrayData::builder(DataType::UInt64)
-                .len(left_indices.len())
-                .add_buffer(left_indices.finish())
-                .build();
-            let right = ArrayData::builder(DataType::UInt32)
-                .len(right_indices.len())
-                .add_buffer(right_indices.finish())
-                .build();
 
             Ok((
-                PrimitiveArray::<UInt64Type>::from(left),
-                PrimitiveArray::<UInt32Type>::from(right),
+                PrimitiveArray::<u64>::from_data(
+                    DataType::UInt64,
+                    left_indices.into(),
+                    None,
+                ),
+                PrimitiveArray::<u32>::from_data(
+                    DataType::UInt32,
+                    right_indices.into(),
+                    None,
+                ),
             ))
         }
         JoinType::Left => {
-            let mut left_indices = UInt64Builder::new(0);
-            let mut right_indices = UInt32Builder::new(0);
+            let mut left_indices = MutableBuffer::<u64>::new();
+            let mut right_indices = MutableBuffer::<u32>::new();
 
             // First visit all of the rows
             for (row, hash_value) in hash_values.iter().enumerate() {
@@ -680,17 +669,28 @@ fn build_join_indexes(
                     for &i in indices {
                         // Collision check
                         if equal_rows(i as usize, row, &left_join_values, &keys_values)? {
-                            left_indices.append_value(i)?;
-                            right_indices.append_value(row as u32)?;
+                            left_indices.push(i as u64);
+                            right_indices.push(row as u32);
                         }
                     }
                 };
             }
-            Ok((left_indices.finish(), right_indices.finish()))
+            Ok((
+                PrimitiveArray::<u64>::from_data(
+                    DataType::UInt64,
+                    left_indices.into(),
+                    None,
+                ),
+                PrimitiveArray::<u32>::from_data(
+                    DataType::UInt32,
+                    right_indices.into(),
+                    None,
+                ),
+            ))
         }
         JoinType::Right | JoinType::Full => {
-            let mut left_indices = UInt64Builder::new(0);
-            let mut right_indices = UInt32Builder::new(0);
+            let mut left_indices = MutablePrimitiveArray::<u64>::new();
+            let mut right_indices = MutablePrimitiveArray::<u32>::new();
 
             for (row, hash_value) in hash_values.iter().enumerate() {
                 match left.raw_entry().from_hash(*hash_value, |_| true) {
@@ -702,21 +702,21 @@ fn build_join_indexes(
                                 &left_join_values,
                                 &keys_values,
                             )? {
-                                left_indices.append_value(i)?;
+                                left_indices.push(Some(i as u64));
                             } else {
-                                left_indices.append_null()?;
+                                left_indices.push(None);
                             }
-                            right_indices.append_value(row as u32)?;
+                            right_indices.push(Some(row as u32));
                         }
                     }
                     None => {
                         // when no match, add the row with None for the left side
-                        left_indices.append_null()?;
-                        right_indices.append_value(row as u32)?;
+                        left_indices.push(None);
+                        right_indices.push(Some(row as u32));
                     }
                 }
             }
-            Ok((left_indices.finish(), right_indices.finish()))
+            Ok((left_indices.into(), right_indices.into()))
         }
     }
 }
@@ -724,7 +724,7 @@ use core::hash::BuildHasher;
 
 /// `Hasher` that returns the same `u64` value as a hash, to avoid re-hashing
 /// it when inserting/indexing or regrowing the `HashMap`
-struct IdHasher {
+pub(crate) struct IdHasher {
     hash: u64,
 }
 
@@ -742,8 +742,8 @@ impl Hasher for IdHasher {
     }
 }
 
-#[derive(Debug)]
-struct IdHashBuilder {}
+#[derive(Debug, Default)]
+pub(crate) struct IdHashBuilder {}
 
 impl BuildHasher for IdHashBuilder {
     type Hasher = IdHasher;
@@ -755,7 +755,7 @@ impl BuildHasher for IdHashBuilder {
 
 // Combines two hashes into one hash
 #[inline]
-fn combine_hashes(l: u64, r: u64) -> u64 {
+pub(crate) fn combine_hashes(l: u64, r: u64) -> u64 {
     let hash = (17 * 37u64).wrapping_add(l);
     hash.wrapping_mul(37).wrapping_add(r)
 }
@@ -895,19 +895,13 @@ macro_rules! hash_array_float {
             if $multi_col {
                 for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
                     *hash = combine_hashes(
-                        $ty::get_hash(
-                            &$ty::from_le_bytes(value.to_le_bytes()),
-                            $random_state,
-                        ),
+                        $ty::get_hash(&value.to_le_bytes(), $random_state),
                         *hash,
                     );
                 }
             } else {
                 for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = $ty::get_hash(
-                        &$ty::from_le_bytes(value.to_le_bytes()),
-                        $random_state,
-                    )
+                    *hash = $ty::get_hash(&value.to_le_bytes(), $random_state)
                 }
             }
         } else {
@@ -917,10 +911,7 @@ macro_rules! hash_array_float {
                 {
                     if !array.is_null(i) {
                         *hash = combine_hashes(
-                            $ty::get_hash(
-                                &$ty::from_le_bytes(value.to_le_bytes()),
-                                $random_state,
-                            ),
+                            $ty::get_hash(&value.to_le_bytes(), $random_state),
                             *hash,
                         );
                     }
@@ -930,10 +921,7 @@ macro_rules! hash_array_float {
                     $hashes.iter_mut().zip(values.iter()).enumerate()
                 {
                     if !array.is_null(i) {
-                        *hash = $ty::get_hash(
-                            &$ty::from_le_bytes(value.to_le_bytes()),
-                            $random_state,
-                        );
+                        *hash = $ty::get_hash(&value.to_le_bytes(), $random_state);
                     }
                 }
             }
@@ -1012,7 +1000,7 @@ pub fn create_hashes<'a>(
                     multi_col
                 );
             }
-            DataType::Int32 => {
+            DataType::Int32 | DataType::Date32 => {
                 hash_array_primitive!(
                     Int32Array,
                     col,
@@ -1022,79 +1010,9 @@ pub fn create_hashes<'a>(
                     multi_col
                 );
             }
-            DataType::Int64 => {
+            DataType::Int64 | DataType::Timestamp(_, None) | DataType::Date64 => {
                 hash_array_primitive!(
                     Int64Array,
-                    col,
-                    i64,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Float32 => {
-                hash_array_float!(
-                    Float32Array,
-                    col,
-                    u32,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Float64 => {
-                hash_array_float!(
-                    Float64Array,
-                    col,
-                    u64,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Timestamp(TimeUnit::Millisecond, None) => {
-                hash_array_primitive!(
-                    TimestampMillisecondArray,
-                    col,
-                    i64,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                hash_array_primitive!(
-                    TimestampMicrosecondArray,
-                    col,
-                    i64,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                hash_array_primitive!(
-                    TimestampNanosecondArray,
-                    col,
-                    i64,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Date32 => {
-                hash_array_primitive!(
-                    Date32Array,
-                    col,
-                    i32,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Date64 => {
-                hash_array_primitive!(
-                    Date64Array,
                     col,
                     i64,
                     hashes_buffer,
@@ -1105,6 +1023,26 @@ pub fn create_hashes<'a>(
             DataType::Boolean => {
                 hash_array!(
                     BooleanArray,
+                    col,
+                    u8,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Float32 => {
+                hash_array_float!(
+                    Float32Array,
+                    col,
+                    u8,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Float64 => {
+                hash_array_float!(
+                    Float64Array,
                     col,
                     u8,
                     hashes_buffer,
@@ -1153,34 +1091,34 @@ fn produce_from_matched(
 ) -> ArrowResult<RecordBatch> {
     // Find indices which didn't match any right row (are false)
     let indices = if unmatched {
-        UInt64Array::from_iter_values(
-            visited_left_side
-                .iter()
-                .enumerate()
-                .filter(|&(_, &value)| !value)
-                .map(|(index, _)| index as u64),
-        )
+        visited_left_side
+            .iter()
+            .enumerate()
+            .filter(|&(_, &value)| !value)
+            .map(|(index, _)| index as u64)
+            .collect::<MutableBuffer<u64>>()
     } else {
         // produce those that did match
-        UInt64Array::from_iter_values(
-            visited_left_side
-                .iter()
-                .enumerate()
-                .filter(|&(_, &value)| value)
-                .map(|(index, _)| index as u64),
-        )
+        visited_left_side
+            .iter()
+            .enumerate()
+            .filter(|&(_, &value)| value)
+            .map(|(index, _)| index as u64)
+            .collect::<MutableBuffer<u64>>()
     };
 
     // generate batches by taking values from the left side and generating columns filled with null on the right side
+    let indices = UInt64Array::from_data(DataType::UInt64, indices.into(), None);
+
     let num_rows = indices.len();
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
     for (idx, column_index) in column_indices.iter().enumerate() {
         let array = if column_index.is_left {
             let array = left_data.1.column(column_index.index);
-            compute::take(array.as_ref(), &indices, None).unwrap()
+            take::take(array.as_ref(), &indices)?.into()
         } else {
-            let datatype = schema.field(idx).data_type();
-            arrow::array::new_null_array(datatype, num_rows)
+            let datatype = schema.field(idx).data_type().clone();
+            new_null_array(datatype, num_rows).into()
         };
 
         columns.push(array);
@@ -1223,7 +1161,7 @@ impl Stream for HashJoinStream {
                             | JoinType::Semi
                             | JoinType::Anti => {
                                 left_side.iter().flatten().for_each(|x| {
-                                    self.visited_left_side[x as usize] = true;
+                                    self.visited_left_side[*x as usize] = true;
                                 });
                             }
                             JoinType::Inner | JoinType::Right => {}
@@ -1304,7 +1242,7 @@ mod tests {
         c: (&str, &Vec<i32>),
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
-        let schema = batch.schema();
+        let schema = batch.schema().clone();
         Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
     }
 
@@ -1550,7 +1488,7 @@ mod tests {
         );
         let batch2 =
             build_table_i32(("a1", &vec![2]), ("b2", &vec![2]), ("c1", &vec![9]));
-        let schema = batch1.schema();
+        let schema = batch1.schema().clone();
         let left = Arc::new(
             MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
         );
@@ -1608,7 +1546,7 @@ mod tests {
         );
         let batch2 =
             build_table_i32(("a2", &vec![30]), ("b1", &vec![5]), ("c2", &vec![90]));
-        let schema = batch1.schema();
+        let schema = batch1.schema().clone();
         let right = Arc::new(
             MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
         );
@@ -1661,7 +1599,7 @@ mod tests {
         c: (&str, &Vec<i32>),
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
-        let schema = batch.schema();
+        let schema = batch.schema().clone();
         Arc::new(
             MemoryExec::try_new(&[vec![batch.clone(), batch]], schema, None).unwrap(),
         )
@@ -1760,9 +1698,9 @@ mod tests {
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
         let on = vec![(
             Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Column::new_with_schema("b1", right.schema()).unwrap(),
         )];
-        let schema = right.schema();
+        let schema = right.schema().clone();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
         let join = join(left, right, on, &JoinType::Left).unwrap();
 
@@ -1795,9 +1733,9 @@ mod tests {
         let right = build_table_i32(("a2", &vec![]), ("b2", &vec![]), ("c2", &vec![]));
         let on = vec![(
             Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Column::new_with_schema("b2", right.schema()).unwrap(),
         )];
-        let schema = right.schema();
+        let schema = right.schema().clone();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
         let join = join(left, right, on, &JoinType::Full).unwrap();
 
@@ -2087,8 +2025,8 @@ mod tests {
 
     #[test]
     fn create_hashes_for_float_arrays() -> Result<()> {
-        let f32_arr = Arc::new(Float32Array::from(vec![0.12, 0.5, 1f32, 444.7]));
-        let f64_arr = Arc::new(Float64Array::from(vec![0.12, 0.5, 1f64, 444.7]));
+        let f32_arr = Arc::new(Float32Array::from_slice(&[0.12, 0.5, 1f32, 444.7]));
+        let f64_arr = Arc::new(Float64Array::from_slice(&[0.12, 0.5, 1f64, 444.7]));
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; f32_arr.len()];
@@ -2145,17 +2083,11 @@ mod tests {
             &random_state,
         )?;
 
-        let mut left_ids = UInt64Builder::new(0);
-        left_ids.append_value(0)?;
-        left_ids.append_value(1)?;
+        let left_ids = UInt64Array::from_slice(&[0, 1]);
+        let right_ids = UInt32Array::from_slice(&[0, 1]);
 
-        let mut right_ids = UInt32Builder::new(0);
-        right_ids.append_value(0)?;
-        right_ids.append_value(1)?;
-
-        assert_eq!(left_ids.finish(), l);
-
-        assert_eq!(right_ids.finish(), r);
+        assert_eq!(left_ids, l);
+        assert_eq!(right_ids, r);
 
         Ok(())
     }

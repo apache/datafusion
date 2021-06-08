@@ -31,7 +31,7 @@ use crate::physical_plan::{
 };
 use arrow::compute::concat;
 use arrow::{
-    array::ArrayRef,
+    array::*,
     datatypes::{Field, Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
@@ -183,7 +183,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 let len = partition_range.end - start;
                 let values = values
                     .iter()
-                    .map(|arr| arr.slice(start, len))
+                    .map(|arr| arr.slice(start, len).into())
                     .collect::<Vec<_>>();
                 self.window.evaluate(len, &values)
             })
@@ -191,7 +191,9 @@ impl WindowExpr for BuiltInWindowExpr {
             .into_iter()
             .collect::<Vec<ArrayRef>>();
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat(&results).map_err(DataFusionError::ArrowError)
+        concat::concatenate(&results)
+            .map(|x| x.into())
+            .map_err(DataFusionError::ArrowError)
     }
 }
 
@@ -260,7 +262,9 @@ impl AggregateWindowExpr {
             .flatten()
             .collect::<Vec<ArrayRef>>();
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat(&results).map_err(DataFusionError::ArrowError)
+        concat::concatenate(&results)
+            .map(|x| x.into())
+            .map_err(DataFusionError::ArrowError)
     }
 
     fn group_based_evaluate(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
@@ -337,7 +341,7 @@ impl AggregateWindowAccumulator {
         let len = value_range.end - value_range.start;
         let values = values
             .iter()
-            .map(|v| v.slice(value_range.start, len))
+            .map(|v| v.slice(value_range.start, len).into())
             .collect::<Vec<_>>();
         self.accumulator.update_batch(&values)?;
         let value = self.accumulator.evaluate()?;
@@ -541,7 +545,9 @@ impl Stream for WindowAggStream {
                 *this.finished = true;
                 // check for error in receiving channel and unwrap actual result
                 let result = match result {
-                    Err(e) => Some(Err(ArrowError::ExternalError(Box::new(e)))), // error receiving
+                    Err(e) => {
+                        Some(Err(ArrowError::External("".to_string(), Box::new(e))))
+                    } // error receiving
                     Ok(result) => Some(result),
                 };
                 Poll::Ready(result)
@@ -566,7 +572,6 @@ mod tests {
     use crate::physical_plan::csv::{CsvExec, CsvReadOptions};
     use crate::physical_plan::expressions::col;
     use crate::test;
-    use arrow::array::*;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
         let schema = test::aggr_test_schema();
@@ -660,15 +665,15 @@ mod tests {
 
         // c3 is small int
 
-        let count: &UInt64Array = as_primitive_array(&columns[0]);
+        let count = columns[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         assert_eq!(count.value(0), 100);
         assert_eq!(count.value(99), 100);
 
-        let max: &Int8Array = as_primitive_array(&columns[1]);
+        let max = columns[1].as_any().downcast_ref::<Int8Array>().unwrap();
         assert_eq!(max.value(0), 125);
         assert_eq!(max.value(99), 125);
 
-        let min: &Int8Array = as_primitive_array(&columns[2]);
+        let min = columns[2].as_any().downcast_ref::<Int8Array>().unwrap();
         assert_eq!(min.value(0), -117);
         assert_eq!(min.value(99), -117);
 

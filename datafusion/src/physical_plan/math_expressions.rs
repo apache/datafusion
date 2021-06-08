@@ -16,42 +16,35 @@
 // under the License.
 
 //! Math expressions
-use super::{ColumnarValue, ScalarValue};
-use crate::error::{DataFusionError, Result};
-use arrow::array::{Float32Array, Float64Array};
-use arrow::datatypes::DataType;
 use rand::{thread_rng, Rng};
 use std::iter;
 use std::sync::Arc;
 
-macro_rules! downcast_compute_op {
-    ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident) => {{
-        let n = $ARRAY.as_any().downcast_ref::<$TYPE>();
-        match n {
-            Some(array) => {
-                let res: $TYPE =
-                    arrow::compute::kernels::arity::unary(array, |x| x.$FUNC());
-                Ok(Arc::new(res))
-            }
-            _ => Err(DataFusionError::Internal(format!(
-                "Invalid data type for {}",
-                $NAME
-            ))),
-        }
-    }};
-}
+use arrow::array::Float64Array;
+use arrow::compute::arity::unary;
+use arrow::datatypes::DataType;
+
+use super::{ColumnarValue, ScalarValue};
+use crate::error::{DataFusionError, Result};
 
 macro_rules! unary_primitive_array_op {
     ($VALUE:expr, $NAME:expr, $FUNC:ident) => {{
         match ($VALUE) {
             ColumnarValue::Array(array) => match array.data_type() {
                 DataType::Float32 => {
-                    let result = downcast_compute_op!(array, $NAME, $FUNC, Float32Array);
-                    Ok(ColumnarValue::Array(result?))
+                    let array = array.as_any().downcast_ref().unwrap();
+                    let array = unary::<f32, _, f64>(
+                        array,
+                        |x| x.$FUNC() as f64,
+                        DataType::Float32,
+                    );
+                    Ok(ColumnarValue::Array(Arc::new(array)))
                 }
                 DataType::Float64 => {
-                    let result = downcast_compute_op!(array, $NAME, $FUNC, Float64Array);
-                    Ok(ColumnarValue::Array(result?))
+                    let array = array.as_any().downcast_ref().unwrap();
+                    let array =
+                        unary::<f64, _, f64>(array, |x| x.$FUNC(), DataType::Float64);
+                    Ok(ColumnarValue::Array(Arc::new(array)))
                 }
                 other => Err(DataFusionError::Internal(format!(
                     "Unsupported data type {:?} for function {}",
@@ -114,7 +107,7 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     };
     let mut rng = thread_rng();
     let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
-    let array = Float64Array::from_iter_values(values);
+    let array = Float64Array::from_trusted_len_values_iter(values);
     Ok(ColumnarValue::Array(Arc::new(array)))
 }
 
@@ -122,11 +115,11 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 mod tests {
 
     use super::*;
-    use arrow::array::{Float64Array, NullArray};
+    use arrow::array::{Array, Float64Array, NullArray};
 
     #[test]
     fn test_random_expression() {
-        let args = vec![ColumnarValue::Array(Arc::new(NullArray::new(1)))];
+        let args = vec![ColumnarValue::Array(Arc::new(NullArray::from_data(1)))];
         let array = random(&args).expect("fail").into_array(1);
         let floats = array.as_any().downcast_ref::<Float64Array>().expect("fail");
 

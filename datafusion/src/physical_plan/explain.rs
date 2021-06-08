@@ -26,7 +26,7 @@ use crate::{
     physical_plan::Partitioning,
     physical_plan::{common::SizedRecordBatchStream, DisplayFormatType, ExecutionPlan},
 };
-use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::{array::*, datatypes::SchemaRef, record_batch::RecordBatch};
 
 use super::SendableRecordBatchStream;
 use async_trait::async_trait;
@@ -100,20 +100,19 @@ impl ExecutionPlan for ExplainExec {
             )));
         }
 
-        let mut type_builder = StringBuilder::new(self.stringified_plans.len());
-        let mut plan_builder = StringBuilder::new(self.stringified_plans.len());
+        let mut type_builder =
+            MutableUtf8Array::<i32>::with_capacity(self.stringified_plans.len());
+        let mut plan_builder =
+            MutableUtf8Array::<i32>::with_capacity(self.stringified_plans.len());
 
         for p in &self.stringified_plans {
-            type_builder.append_value(&String::from(&p.plan_type))?;
-            plan_builder.append_value(&*p.plan)?;
+            type_builder.push(Some(String::from(&p.plan_type)));
+            plan_builder.push(Some(p.plan.as_ref()));
         }
 
         let record_batch = RecordBatch::try_new(
             self.schema.clone(),
-            vec![
-                Arc::new(type_builder.finish()),
-                Arc::new(plan_builder.finish()),
-            ],
+            vec![type_builder.into_arc(), plan_builder.into_arc()],
         )?;
 
         Ok(Box::pin(SizedRecordBatchStream::new(

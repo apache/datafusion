@@ -21,20 +21,16 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use arrow::array::*;
+use arrow::compute::aggregate::*;
+use arrow::datatypes::*;
+
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
-use arrow::compute;
-use arrow::datatypes::{DataType, TimeUnit};
-use arrow::{
-    array::{
-        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-    },
-    datatypes::Field,
-};
+
+type StringArray = Utf8Array<i32>;
+type LargeStringArray = Utf8Array<i64>;
 
 use super::format_state_name;
 
@@ -98,7 +94,7 @@ impl AggregateExpr for Max {
 macro_rules! typed_min_max_batch_string {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
-        let value = compute::$OP(array);
+        let value = $OP(array);
         let value = value.and_then(|e| Some(e.to_string()));
         ScalarValue::$SCALAR(value)
     }};
@@ -108,7 +104,7 @@ macro_rules! typed_min_max_batch_string {
 macro_rules! typed_min_max_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
-        let value = compute::$OP(array);
+        let value = $OP(array);
         ScalarValue::$SCALAR(value)
     }};
 }
@@ -119,13 +115,9 @@ macro_rules! min_max_batch {
     ($VALUES:expr, $OP:ident) => {{
         match $VALUES.data_type() {
             // all types that have a natural order
-            DataType::Float64 => {
-                typed_min_max_batch!($VALUES, Float64Array, Float64, $OP)
+            DataType::Int64 => {
+                typed_min_max_batch!($VALUES, Int64Array, Int64, $OP)
             }
-            DataType::Float32 => {
-                typed_min_max_batch!($VALUES, Float32Array, Float32, $OP)
-            }
-            DataType::Int64 => typed_min_max_batch!($VALUES, Int64Array, Int64, $OP),
             DataType::Int32 => typed_min_max_batch!($VALUES, Int32Array, Int32, $OP),
             DataType::Int16 => typed_min_max_batch!($VALUES, Int16Array, Int16, $OP),
             DataType::Int8 => typed_min_max_batch!($VALUES, Int8Array, Int8, $OP),
@@ -134,26 +126,17 @@ macro_rules! min_max_batch {
             DataType::UInt16 => typed_min_max_batch!($VALUES, UInt16Array, UInt16, $OP),
             DataType::UInt8 => typed_min_max_batch!($VALUES, UInt8Array, UInt8, $OP),
             DataType::Timestamp(TimeUnit::Second, _) => {
-                typed_min_max_batch!($VALUES, TimestampSecondArray, TimestampSecond, $OP)
+                typed_min_max_batch!($VALUES, Int64Array, TimestampSecond, $OP)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => typed_min_max_batch!(
-                $VALUES,
-                TimestampMillisecondArray,
-                TimestampMillisecond,
-                $OP
-            ),
-            DataType::Timestamp(TimeUnit::Microsecond, _) => typed_min_max_batch!(
-                $VALUES,
-                TimestampMicrosecondArray,
-                TimestampMicrosecond,
-                $OP
-            ),
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => typed_min_max_batch!(
-                $VALUES,
-                TimestampNanosecondArray,
-                TimestampNanosecond,
-                $OP
-            ),
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                typed_min_max_batch!($VALUES, Int64Array, TimestampMillisecond, $OP)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                typed_min_max_batch!($VALUES, Int64Array, TimestampMicrosecond, $OP)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                typed_min_max_batch!($VALUES, Int64Array, TimestampNanosecond, $OP)
+            }
             other => {
                 // This should have been handled before
                 return Err(DataFusionError::Internal(format!(
@@ -174,7 +157,13 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::LargeUtf8 => {
             typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, min_string)
         }
-        _ => min_max_batch!(values, min),
+        DataType::Float64 => {
+            typed_min_max_batch!(values, Float64Array, Float64, min_primitive)
+        }
+        DataType::Float32 => {
+            typed_min_max_batch!(values, Float32Array, Float32, min_primitive)
+        }
+        _ => min_max_batch!(values, min_primitive),
     })
 }
 
@@ -187,7 +176,13 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::LargeUtf8 => {
             typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, max_string)
         }
-        _ => min_max_batch!(values, max),
+        DataType::Float64 => {
+            typed_min_max_batch!(values, Float64Array, Float64, max_primitive)
+        }
+        DataType::Float32 => {
+            typed_min_max_batch!(values, Float32Array, Float32, max_primitive)
+        }
+        _ => min_max_batch!(values, max_primitive),
     })
 }
 
@@ -448,12 +443,11 @@ mod tests {
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::expressions::tests::aggregate;
     use crate::{error::Result, generic_test_op};
-    use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
 
     #[test]
     fn max_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -465,7 +459,7 @@ mod tests {
 
     #[test]
     fn min_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -477,7 +471,7 @@ mod tests {
 
     #[test]
     fn max_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(StringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -489,7 +483,7 @@ mod tests {
 
     #[test]
     fn max_large_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(LargeStringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,
@@ -501,7 +495,7 @@ mod tests {
 
     #[test]
     fn min_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(StringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -513,7 +507,7 @@ mod tests {
 
     #[test]
     fn min_large_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(LargeStringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,
@@ -525,7 +519,7 @@ mod tests {
 
     #[test]
     fn max_i32_with_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from(&[
             Some(1),
             None,
             Some(3),
@@ -543,7 +537,7 @@ mod tests {
 
     #[test]
     fn min_i32_with_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from(&[
             Some(1),
             None,
             Some(3),
@@ -561,7 +555,7 @@ mod tests {
 
     #[test]
     fn max_i32_all_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        let a: ArrayRef = Arc::new(Int32Array::from(&[None, None]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -573,7 +567,7 @@ mod tests {
 
     #[test]
     fn min_i32_all_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        let a: ArrayRef = Arc::new(Int32Array::from(&[None, None]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -585,8 +579,9 @@ mod tests {
 
     #[test]
     fn max_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(&[
+            1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
+        ]));
         generic_test_op!(
             a,
             DataType::UInt32,
@@ -598,8 +593,9 @@ mod tests {
 
     #[test]
     fn min_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(&[
+            1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
+        ]));
         generic_test_op!(
             a,
             DataType::UInt32,
@@ -611,8 +607,9 @@ mod tests {
 
     #[test]
     fn max_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from_slice(&[
+            1_f32, 2_f32, 3_f32, 4_f32, 5_f32,
+        ]));
         generic_test_op!(
             a,
             DataType::Float32,
@@ -624,8 +621,9 @@ mod tests {
 
     #[test]
     fn min_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from_slice(&[
+            1_f32, 2_f32, 3_f32, 4_f32, 5_f32,
+        ]));
         generic_test_op!(
             a,
             DataType::Float32,
@@ -637,8 +635,9 @@ mod tests {
 
     #[test]
     fn max_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -650,8 +649,9 @@ mod tests {
 
     #[test]
     fn min_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
         generic_test_op!(
             a,
             DataType::Float64,

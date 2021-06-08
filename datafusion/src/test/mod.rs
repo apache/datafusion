@@ -17,21 +17,20 @@
 
 //! Common unit test utility methods
 
-use crate::datasource::{MemTable, TableProvider};
-use crate::error::Result;
-use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
-use array::{
-    Array, ArrayRef, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray,
-};
-use arrow::array::{self, Int32Array};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
 use std::sync::Arc;
+
 use tempfile::TempDir;
+
+use arrow::array::*;
+use arrow::datatypes::*;
+use arrow::record_batch::RecordBatch;
+
+use crate::datasource::{MemTable, TableProvider};
+use crate::error::Result;
+use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 
 pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let dual_schema = Arc::new(Schema::new(vec![
@@ -41,8 +40,8 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         dual_schema.clone(),
         vec![
-            Arc::new(array::Int32Array::from(vec![1])),
-            Arc::new(array::StringArray::from(vec!["a"])),
+            Arc::new(Int32Array::from_slice(&[1])),
+            Arc::new(Utf8Array::<i32>::from_slice(&["a"])),
         ],
     )
     .unwrap();
@@ -92,7 +91,7 @@ pub fn create_partitioned_csv(filename: &str, partitions: usize) -> Result<Strin
 }
 
 /// Get the schema for the aggregate_test_* csv files
-pub fn aggr_test_schema() -> SchemaRef {
+pub fn aggr_test_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Utf8, false),
         Field::new("c2", DataType::UInt32, false),
@@ -145,9 +144,9 @@ pub fn build_table_i32(
     RecordBatch::try_new(
         Arc::new(schema),
         vec![
-            Arc::new(Int32Array::from(a.1.clone())),
-            Arc::new(Int32Array::from(b.1.clone())),
-            Arc::new(Int32Array::from(c.1.clone())),
+            Arc::new(Int32Array::from_slice(a.1)),
+            Arc::new(Int32Array::from_slice(b.1)),
+            Arc::new(Int32Array::from_slice(c.1)),
         ],
     )
     .unwrap()
@@ -165,11 +164,10 @@ pub fn table_with_sequence(
     seq_end: i32,
 ) -> Result<Arc<dyn TableProvider>> {
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from((seq_start..=seq_end).collect::<Vec<_>>()));
-    let partitions = vec![vec![RecordBatch::try_new(
-        schema.clone(),
-        vec![arr as ArrayRef],
-    )?]];
+    let arr = Arc::new(Int32Array::from_slice(
+        &(seq_start..=seq_end).collect::<Vec<_>>(),
+    ));
+    let partitions = vec![vec![RecordBatch::try_new(schema.clone(), vec![arr])?]];
     Ok(Arc::new(MemTable::try_new(schema, partitions)?))
 }
 
@@ -179,8 +177,7 @@ pub fn make_partition(sz: i32) -> RecordBatch {
     let seq_end = sz;
     let values = (seq_start..seq_end).collect::<Vec<_>>();
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from(values));
-    let arr = arr as ArrayRef;
+    let arr = Arc::new(Int32Array::from_slice(&values));
 
     RecordBatch::try_new(schema, vec![arr]).unwrap()
 }
@@ -188,7 +185,7 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 /// Return a new table provider containing all of the supported timestamp types
 pub fn table_with_timestamps() -> Arc<dyn TableProvider> {
     let batch = make_timestamps();
-    let schema = batch.schema();
+    let schema = batch.schema().clone();
     let partitions = vec![vec![batch]];
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
 }
@@ -239,16 +236,18 @@ pub fn make_timestamps() -> RecordBatch {
     let names = ts_nanos
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("Row {}", i))
-        .collect::<Vec<_>>();
+        .map(|(i, _)| format!("Row {}", i));
 
-    let arr_nanos = TimestampNanosecondArray::from_opt_vec(ts_nanos, None);
-    let arr_micros = TimestampMicrosecondArray::from_opt_vec(ts_micros, None);
-    let arr_millis = TimestampMillisecondArray::from_opt_vec(ts_millis, None);
-    let arr_secs = TimestampSecondArray::from_opt_vec(ts_secs, None);
+    let arr_names = Utf8Array::<i32>::from_trusted_len_values_iter(names);
 
-    let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    let arr_names = StringArray::from(names);
+    let arr_nanos =
+        Int64Array::from(ts_nanos).to(DataType::Timestamp(TimeUnit::Nanosecond, None));
+    let arr_micros =
+        Int64Array::from(ts_micros).to(DataType::Timestamp(TimeUnit::Microsecond, None));
+    let arr_millis =
+        Int64Array::from(ts_millis).to(DataType::Timestamp(TimeUnit::Millisecond, None));
+    let arr_secs =
+        Int64Array::from(ts_secs).to(DataType::Timestamp(TimeUnit::Second, None));
 
     let schema = Schema::new(vec![
         Field::new("nanos", arr_nanos.data_type().clone(), false),
@@ -292,7 +291,7 @@ macro_rules! assert_batches_eq {
         let expected_lines: Vec<String> =
             $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
 
-        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS).unwrap();
+        let formatted = arrow::io::print::write($CHUNKS).unwrap();
 
         let actual_lines: Vec<&str> = formatted.trim().lines().collect();
 
@@ -326,7 +325,7 @@ macro_rules! assert_batches_sorted_eq {
             expected_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
         }
 
-        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS).unwrap();
+        let formatted = arrow::io::print::write($CHUNKS).unwrap();
         // fix for windows: \r\n -->
 
         let mut actual_lines: Vec<&str> = formatted.trim().lines().collect();

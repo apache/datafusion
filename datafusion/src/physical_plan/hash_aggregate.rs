@@ -20,54 +20,35 @@
 use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::vec;
 
-use ahash::RandomState;
 use futures::{
     stream::{Stream, StreamExt},
     Future,
 };
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     Accumulator, AggregateExpr, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, PhysicalExpr, SQLMetric,
 };
-use crate::scalar::ScalarValue;
+use crate::{
+    error::{DataFusionError, Result},
+    scalar::ScalarValue,
+};
 
+use arrow::error::{ArrowError, Result as ArrowResult};
+use arrow::{array::*, compute};
+use arrow::{buffer::MutableBuffer, datatypes::*};
 use arrow::{
-    array::{Array, UInt32Builder},
-    error::{ArrowError, Result as ArrowResult},
-};
-use arrow::{
-    array::{
-        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-    },
-    compute,
-};
-use arrow::{
-    array::{BooleanArray, Date32Array, DictionaryArray},
-    compute::cast,
-    datatypes::{
-        ArrowDictionaryKeyType, ArrowNativeType, Int16Type, Int32Type, Int64Type,
-        Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    },
-};
-use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit},
+    datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use pin_project_lite::pin_project;
 
-use arrow::array::{
-    LargeStringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray,
-};
 use async_trait::async_trait;
 
+use super::hash_join::{combine_hashes, IdHashBuilder};
 use super::{
     expressions::Column, group_scalar::GroupByScalar, RecordBatchStream,
     SendableRecordBatchStream,
@@ -341,6 +322,36 @@ pin_project! {
     }
 }
 
+fn hash_(group_values: &[ArrayRef]) -> Result<MutableBuffer<u64>> {
+    // compute the hashes
+    // todo: we should be able to use `MutableBuffer<u64>` to compute the hash and ^ them without
+    // allocating all the hashes before ^ them
+    let hashes = group_values
+        .iter()
+        .map(|x| {
+            let a = match x.data_type() {
+                DataType::Dictionary(_, d) => {
+                    // todo: think about how to perform this more efficiently
+                    // * first hash, then unpack
+                    // * do not unpack at all, and instead figure out a way to leverage dictionary-encoded.
+                    let unpacked = arrow::compute::cast::cast(x.as_ref(), d)?;
+                    arrow::compute::hash::hash(unpacked.as_ref())
+                }
+                _ => arrow::compute::hash::hash(x.as_ref()),
+            };
+            Ok(a?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let hash = MutableBuffer::<u64>::from(hashes[0].values().as_slice());
+
+    Ok(hashes.iter().skip(1).fold(hash, |mut acc, x| {
+        acc.iter_mut()
+            .zip(x.values().iter())
+            .for_each(|(hash, other)| *hash = combine_hashes(*hash, *other));
+        acc
+    }))
+}
+
 fn group_aggregate_batch(
     mode: &AggregateMode,
     group_expr: &[Arc<dyn PhysicalExpr>],
@@ -367,57 +378,48 @@ fn group_aggregate_batch(
 
     let mut group_by_values = group_by_values.into_boxed_slice();
 
-    let mut key = Vec::with_capacity(group_values.len());
-
-    // 1.1 construct the key from the group values
-    // 1.2 construct the mapping key if it does not exist
-    // 1.3 add the row' index to `indices`
-
     // Make sure we can create the accumulators or otherwise return an error
     create_accumulators(aggr_expr).map_err(DataFusionError::into_arrow_external_error)?;
 
-    // Keys received in this batch
+    let hash = hash_(&group_values)?;
+
     let mut batch_keys = vec![];
-
-    for row in 0..batch.num_rows() {
-        // 1.1
-        create_key(&group_values, row, &mut key)
-            .map_err(DataFusionError::into_arrow_external_error)?;
-
+    hash.iter().enumerate().for_each(|(row, key)| {
         accumulators
             .raw_entry_mut()
-            .from_key(&key)
+            .from_key(key)
             // 1.3
             .and_modify(|_, (_, _, v)| {
                 if v.is_empty() {
-                    batch_keys.push(key.clone())
+                    batch_keys.push(*key)
                 };
-                v.push(row as u32)
+                v.push(row as i32)
             })
             // 1.2
             .or_insert_with(|| {
                 // We can safely unwrap here as we checked we can create an accumulator before
                 let accumulator_set = create_accumulators(aggr_expr).unwrap();
-                batch_keys.push(key.clone());
+                batch_keys.push(*key);
                 let _ = create_group_by_values(&group_values, row, &mut group_by_values);
                 (
-                    key.clone(),
-                    (group_by_values.clone(), accumulator_set, vec![row as u32]),
+                    *key,
+                    (group_by_values.clone(), accumulator_set, vec![row as i32]),
                 )
             });
-    }
+    });
 
     // Collect all indices + offsets based on keys in this vec
-    let mut batch_indices: UInt32Builder = UInt32Builder::new(0);
+    let mut batch_indices = MutableBuffer::<i32>::new();
     let mut offsets = vec![0];
     let mut offset_so_far = 0;
     for key in batch_keys.iter() {
         let (_, _, indices) = accumulators.get_mut(key).unwrap();
-        batch_indices.append_slice(indices)?;
+        batch_indices.extend_from_slice(indices);
         offset_so_far += indices.len();
         offsets.push(offset_so_far);
     }
-    let batch_indices = batch_indices.finish();
+    let batch_indices =
+        Int32Array::from_data(DataType::Int32, batch_indices.into(), None);
 
     // `Take` all values based on indices into Arrays
     let values: Vec<Vec<Arc<dyn Array>>> = aggr_input_values
@@ -426,12 +428,9 @@ fn group_aggregate_batch(
             array
                 .iter()
                 .map(|array| {
-                    compute::take(
-                        array.as_ref(),
-                        &batch_indices,
-                        None, // None: no index check
-                    )
-                    .unwrap()
+                    compute::take::take(array.as_ref(), &batch_indices)
+                        .unwrap()
+                        .into()
                 })
                 .collect()
             // 2.3
@@ -459,7 +458,7 @@ fn group_aggregate_batch(
                             .iter()
                             .map(|array| {
                                 // 2.3
-                                array.slice(offsets[0], offsets[1] - offsets[0])
+                                array.slice(offsets[0], offsets[1] - offsets[0]).into()
                             })
                             .collect::<Vec<ArrayRef>>(),
                     )
@@ -478,182 +477,6 @@ fn group_aggregate_batch(
                 })
         })?;
     Ok(accumulators)
-}
-
-/// Appends a sequence of [u8] bytes for the value in `col[row]` to
-/// `vec` to be used as a key into the hash map for a dictionary type
-///
-/// Note that ideally, for dictionary encoded columns, we would be
-/// able to simply use the dictionary idicies themselves (no need to
-/// look up values) or possibly simply build the hash table entirely
-/// on the dictionary indexes.
-///
-/// This aproach would likely work (very) well for the common case,
-/// but it also has to to handle the case where the dictionary itself
-/// is not the same across all record batches (and thus indexes in one
-/// record batch may not correspond to the same index in another)
-fn dictionary_create_key_for_col<K: ArrowDictionaryKeyType>(
-    col: &ArrayRef,
-    row: usize,
-    vec: &mut Vec<u8>,
-) -> Result<()> {
-    let dict_col = col.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
-
-    // look up the index in the values dictionary
-    let keys_col = dict_col.keys();
-    let values_index = keys_col.value(row).to_usize().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Can not convert index to usize in dictionary of type creating group by value {:?}",
-            keys_col.data_type()
-        ))
-    })?;
-
-    create_key_for_col(&dict_col.values(), values_index, vec)
-}
-
-/// Appends a sequence of [u8] bytes for the value in `col[row]` to
-/// `vec` to be used as a key into the hash map
-fn create_key_for_col(col: &ArrayRef, row: usize, vec: &mut Vec<u8>) -> Result<()> {
-    match col.data_type() {
-        DataType::Boolean => {
-            let array = col.as_any().downcast_ref::<BooleanArray>().unwrap();
-            vec.extend_from_slice(&[array.value(row) as u8]);
-        }
-        DataType::Float32 => {
-            let array = col.as_any().downcast_ref::<Float32Array>().unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::Float64 => {
-            let array = col.as_any().downcast_ref::<Float64Array>().unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::UInt8 => {
-            let array = col.as_any().downcast_ref::<UInt8Array>().unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::UInt16 => {
-            let array = col.as_any().downcast_ref::<UInt16Array>().unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::UInt32 => {
-            let array = col.as_any().downcast_ref::<UInt32Array>().unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::UInt64 => {
-            let array = col.as_any().downcast_ref::<UInt64Array>().unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::Int8 => {
-            let array = col.as_any().downcast_ref::<Int8Array>().unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::Int16 => {
-            let array = col.as_any().downcast_ref::<Int16Array>().unwrap();
-            vec.extend(array.value(row).to_le_bytes().iter());
-        }
-        DataType::Int32 => {
-            let array = col.as_any().downcast_ref::<Int32Array>().unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::Int64 => {
-            let array = col.as_any().downcast_ref::<Int64Array>().unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, None) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::Utf8 => {
-            let array = col.as_any().downcast_ref::<StringArray>().unwrap();
-            let value = array.value(row);
-            // store the size
-            vec.extend_from_slice(&value.len().to_le_bytes());
-            // store the string value
-            vec.extend_from_slice(value.as_bytes());
-        }
-        DataType::LargeUtf8 => {
-            let array = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
-            let value = array.value(row);
-            // store the size
-            vec.extend_from_slice(&value.len().to_le_bytes());
-            // store the string value
-            vec.extend_from_slice(value.as_bytes());
-        }
-        DataType::Date32 => {
-            let array = col.as_any().downcast_ref::<Date32Array>().unwrap();
-            vec.extend_from_slice(&array.value(row).to_le_bytes());
-        }
-        DataType::Dictionary(index_type, _) => match **index_type {
-            DataType::Int8 => {
-                dictionary_create_key_for_col::<Int8Type>(col, row, vec)?;
-            }
-            DataType::Int16 => {
-                dictionary_create_key_for_col::<Int16Type>(col, row, vec)?;
-            }
-            DataType::Int32 => {
-                dictionary_create_key_for_col::<Int32Type>(col, row, vec)?;
-            }
-            DataType::Int64 => {
-                dictionary_create_key_for_col::<Int64Type>(col, row, vec)?;
-            }
-            DataType::UInt8 => {
-                dictionary_create_key_for_col::<UInt8Type>(col, row, vec)?;
-            }
-            DataType::UInt16 => {
-                dictionary_create_key_for_col::<UInt16Type>(col, row, vec)?;
-            }
-            DataType::UInt32 => {
-                dictionary_create_key_for_col::<UInt32Type>(col, row, vec)?;
-            }
-            DataType::UInt64 => {
-                dictionary_create_key_for_col::<UInt64Type>(col, row, vec)?;
-            }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                "Unsupported GROUP BY type (dictionary index type not supported creating key) {}",
-                col.data_type(),
-            )))
-            }
-        },
-        _ => {
-            // This is internal because we should have caught this before.
-            return Err(DataFusionError::Internal(format!(
-                "Unsupported GROUP BY type creating key {}",
-                col.data_type(),
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Create a key `Vec<u8>` that is used as key for the hashmap
-pub(crate) fn create_key(
-    group_by_keys: &[ArrayRef],
-    row: usize,
-    vec: &mut Vec<u8>,
-) -> Result<()> {
-    vec.clear();
-    for col in group_by_keys {
-        create_key_for_col(col, row, vec)?
-    }
-    Ok(())
 }
 
 async fn compute_grouped_hash_aggregate(
@@ -719,7 +542,7 @@ impl GroupedHashAggregateStream {
             tx.send(result)
         });
 
-        Self {
+        GroupedHashAggregateStream {
             schema,
             output: rx,
             finished: false,
@@ -730,7 +553,7 @@ impl GroupedHashAggregateStream {
 
 type AccumulatorItem = Box<dyn Accumulator>;
 type Accumulators =
-    HashMap<Vec<u8>, (Box<[GroupByScalar]>, Vec<AccumulatorItem>, Vec<u32>), RandomState>;
+    HashMap<u64, (Box<[GroupByScalar]>, Vec<AccumulatorItem>, Vec<i32>), IdHashBuilder>;
 
 impl Stream for GroupedHashAggregateStream {
     type Item = ArrowResult<RecordBatch>;
@@ -755,7 +578,7 @@ impl Stream for GroupedHashAggregateStream {
 
                 // check for error in receiving channel and unwrap actual result
                 let result = match result {
-                    Err(e) => Err(ArrowError::ExternalError(Box::new(e))), // error receiving
+                    Err(e) => Err(ArrowError::External("".to_string(), Box::new(e))), // error receiving
                     Ok(result) => result,
                 };
 
@@ -844,8 +667,7 @@ fn aggregate_expressions(
 }
 
 pin_project! {
-    /// stream struct for hash aggregation
-    pub struct HashAggregateStream {
+    struct HashAggregateStream {
         schema: SchemaRef,
         #[pin]
         output: futures::channel::oneshot::Receiver<ArrowResult<RecordBatch>>,
@@ -896,7 +718,7 @@ impl HashAggregateStream {
             tx.send(result)
         });
 
-        Self {
+        HashAggregateStream {
             schema,
             output: rx,
             finished: false,
@@ -957,7 +779,7 @@ impl Stream for HashAggregateStream {
 
                 // check for error in receiving channel and unwrap actual result
                 let result = match result {
-                    Err(e) => Err(ArrowError::ExternalError(Box::new(e))), // error receiving
+                    Err(e) => Err(ArrowError::External("".to_string(), Box::new(e))), // error receiving
                     Ok(result) => result,
                 };
 
@@ -974,6 +796,20 @@ impl RecordBatchStream for HashAggregateStream {
     }
 }
 
+/// Given Vec<Vec<ArrayRef>>, concatenates the inners `Vec<ArrayRef>` into `ArrayRef`, returning `Vec<ArrayRef>`
+/// This assumes that `arrays` is not empty.
+fn concatenate(arrays: Vec<Vec<ArrayRef>>) -> ArrowResult<Vec<ArrayRef>> {
+    (0..arrays[0].len())
+        .map(|column| {
+            let array_list = arrays
+                .iter()
+                .map(|a| a[column].as_ref())
+                .collect::<Vec<_>>();
+            Ok(compute::concat::concatenate(&array_list)?.into())
+        })
+        .collect::<ArrowResult<Vec<_>>>()
+}
+
 /// Create a RecordBatch with all group keys and accumulator' states or values.
 fn create_batch_from_map(
     mode: &AggregateMode,
@@ -981,72 +817,54 @@ fn create_batch_from_map(
     num_group_expr: usize,
     output_schema: &Schema,
 ) -> ArrowResult<RecordBatch> {
-    if accumulators.is_empty() {
-        return Ok(RecordBatch::new_empty(Arc::new(output_schema.to_owned())));
-    }
-    let (_, (_, accs, _)) = accumulators.iter().next().unwrap();
-    let mut acc_data_types: Vec<usize> = vec![];
-
-    // Calculate number/shape of state arrays
-    match mode {
-        AggregateMode::Partial => {
-            for acc in accs.iter() {
-                let state = acc
-                    .state()
-                    .map_err(DataFusionError::into_arrow_external_error)?;
-                acc_data_types.push(state.len());
-            }
-        }
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
-            acc_data_types = vec![1; accs.len()];
-        }
-    }
-
-    let mut columns = (0..num_group_expr)
-        .map(|i| {
-            ScalarValue::iter_to_array(accumulators.into_iter().map(
-                |(_, (group_by_values, _, _))| ScalarValue::from(&group_by_values[i]),
-            ))
-        })
-        .collect::<Result<Vec<_>>>()
-        .map_err(|x| x.into_arrow_external_error())?;
-
-    // add state / evaluated arrays
-    for (x, &state_len) in acc_data_types.iter().enumerate() {
-        for y in 0..state_len {
-            match mode {
-                AggregateMode::Partial => {
-                    let res = ScalarValue::iter_to_array(accumulators.into_iter().map(
-                        |(_, (_, accumulator, _))| {
-                            let x = accumulator[x].state().unwrap();
-                            x[y].clone()
-                        },
-                    ))
-                    .map_err(DataFusionError::into_arrow_external_error)?;
-
-                    columns.push(res);
-                }
-                AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                    let res = ScalarValue::iter_to_array(accumulators.into_iter().map(
-                        |(_, (_, accumulator, _))| accumulator[x].evaluate().unwrap(),
-                    ))
-                    .map_err(DataFusionError::into_arrow_external_error)?;
-                    columns.push(res);
-                }
-            }
-        }
-    }
-
-    // cast output if needed (e.g. for types like Dictionary where
-    // the intermediate GroupByScalar type was not the same as the
-    // output
-    let columns = columns
+    // 1. for each key
+    // 2. create single-row ArrayRef with all group expressions
+    // 3. create single-row ArrayRef with all aggregate states or values
+    // 4. collect all in a vector per key of vec<ArrayRef>, vec[i][j]
+    // 5. concatenate the arrays over the second index [j] into a single vec<ArrayRef>.
+    let arrays = accumulators
         .iter()
-        .zip(output_schema.fields().iter())
-        .map(|(col, desired_field)| cast(col, desired_field.data_type()))
-        .collect::<ArrowResult<Vec<_>>>()?;
+        .map(|(_, (group_by_values, accumulator_set, _))| {
+            // 2.
+            let mut groups = (0..num_group_expr)
+                .map(|i| {
+                    let scalar: ScalarValue = (&group_by_values[i]).into();
+                    scalar.to_array()
+                })
+                .collect::<Vec<ArrayRef>>();
 
-    RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns)
+            // 3.
+            groups.extend(
+                finalize_aggregation(accumulator_set, mode)
+                    .map_err(DataFusionError::into_arrow_external_error)?,
+            );
+
+            Ok(groups)
+        })
+        // 4.
+        .collect::<ArrowResult<Vec<Vec<ArrayRef>>>>()?;
+
+    let batch = if !arrays.is_empty() {
+        // 5.
+        let columns = concatenate(arrays)?;
+
+        // cast output if needed (e.g. for types like Dictionary where
+        // the intermediate GroupByScalar type was not the same as the
+        // output
+        let columns = columns
+            .iter()
+            .zip(output_schema.fields().iter())
+            .map(|(col, desired_field)| {
+                compute::cast::cast(col.as_ref(), desired_field.data_type())
+                    .map(|x| x.into())
+            })
+            .collect::<ArrowResult<Vec<_>>>()?;
+
+        RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns)?
+    } else {
+        RecordBatch::new_empty(Arc::new(output_schema.to_owned()))
+    };
+    Ok(batch)
 }
 
 fn create_accumulators(
@@ -1089,7 +907,7 @@ fn finalize_aggregation(
 }
 
 /// Extract the value in `col[row]` from a dictionary a GroupByScalar
-fn dictionary_create_group_by_value<K: ArrowDictionaryKeyType>(
+fn dictionary_create_group_by_value<K: DictionaryKey>(
     col: &ArrayRef,
     row: usize,
 ) -> Result<GroupByScalar> {
@@ -1104,7 +922,7 @@ fn dictionary_create_group_by_value<K: ArrowDictionaryKeyType>(
         ))
     })?;
 
-    create_group_by_value(&dict_col.values(), values_index)
+    create_group_by_value(dict_col.values(), values_index)
 }
 
 /// Extract the value in `col[row]` as a GroupByScalar
@@ -1151,11 +969,11 @@ fn create_group_by_value(col: &ArrayRef, row: usize) -> Result<GroupByScalar> {
             Ok(GroupByScalar::Int64(array.value(row)))
         }
         DataType::Utf8 => {
-            let array = col.as_any().downcast_ref::<StringArray>().unwrap();
+            let array = col.as_any().downcast_ref::<Utf8Array<i32>>().unwrap();
             Ok(GroupByScalar::Utf8(Box::new(array.value(row).into())))
         }
         DataType::LargeUtf8 => {
-            let array = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            let array = col.as_any().downcast_ref::<Utf8Array<i64>>().unwrap();
             Ok(GroupByScalar::LargeUtf8(Box::new(array.value(row).into())))
         }
         DataType::Boolean => {
@@ -1163,39 +981,30 @@ fn create_group_by_value(col: &ArrayRef, row: usize) -> Result<GroupByScalar> {
             Ok(GroupByScalar::Boolean(array.value(row)))
         }
         DataType::Timestamp(TimeUnit::Millisecond, None) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap();
-            Ok(GroupByScalar::TimeMillisecond(array.value(row)))
+            let array = col.as_any().downcast_ref::<Int64Array>().unwrap();
+            Ok(GroupByScalar::TimestampMillisecond(array.value(row)))
         }
         DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap();
-            Ok(GroupByScalar::TimeMicrosecond(array.value(row)))
+            let array = col.as_any().downcast_ref::<Int64Array>().unwrap();
+            Ok(GroupByScalar::TimestampMicrosecond(array.value(row)))
         }
         DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap();
-            Ok(GroupByScalar::TimeNanosecond(array.value(row)))
+            let array = col.as_any().downcast_ref::<Int64Array>().unwrap();
+            Ok(GroupByScalar::TimestampNanosecond(array.value(row)))
         }
         DataType::Date32 => {
-            let array = col.as_any().downcast_ref::<Date32Array>().unwrap();
+            let array = col.as_any().downcast_ref::<Int32Array>().unwrap();
             Ok(GroupByScalar::Date32(array.value(row)))
         }
         DataType::Dictionary(index_type, _) => match **index_type {
-            DataType::Int8 => dictionary_create_group_by_value::<Int8Type>(col, row),
-            DataType::Int16 => dictionary_create_group_by_value::<Int16Type>(col, row),
-            DataType::Int32 => dictionary_create_group_by_value::<Int32Type>(col, row),
-            DataType::Int64 => dictionary_create_group_by_value::<Int64Type>(col, row),
-            DataType::UInt8 => dictionary_create_group_by_value::<UInt8Type>(col, row),
-            DataType::UInt16 => dictionary_create_group_by_value::<UInt16Type>(col, row),
-            DataType::UInt32 => dictionary_create_group_by_value::<UInt32Type>(col, row),
-            DataType::UInt64 => dictionary_create_group_by_value::<UInt64Type>(col, row),
+            DataType::Int8 => dictionary_create_group_by_value::<i8>(col, row),
+            DataType::Int16 => dictionary_create_group_by_value::<i16>(col, row),
+            DataType::Int32 => dictionary_create_group_by_value::<i32>(col, row),
+            DataType::Int64 => dictionary_create_group_by_value::<i64>(col, row),
+            DataType::UInt8 => dictionary_create_group_by_value::<u8>(col, row),
+            DataType::UInt16 => dictionary_create_group_by_value::<u16>(col, row),
+            DataType::UInt32 => dictionary_create_group_by_value::<u32>(col, row),
+            DataType::UInt64 => dictionary_create_group_by_value::<u64>(col, row),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported GROUP BY type (dictionary index type not supported) {}",
                 col.data_type(),
@@ -1247,16 +1056,16 @@ mod tests {
                 RecordBatch::try_new(
                     schema.clone(),
                     vec![
-                        Arc::new(UInt32Array::from(vec![2, 3, 4, 4])),
-                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from_slice(&[2, 3, 4, 4])),
+                        Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),
                 RecordBatch::try_new(
                     schema,
                     vec![
-                        Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
-                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from_slice(&[2, 3, 3, 4])),
+                        Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),

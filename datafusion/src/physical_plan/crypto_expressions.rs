@@ -29,7 +29,7 @@ use crate::{
     scalar::ScalarValue,
 };
 use arrow::{
-    array::{Array, BinaryArray, GenericStringArray, StringOffsetSizeTrait},
+    array::{Array, BinaryArray, Offset, Utf8Array},
     datatypes::DataType,
 };
 
@@ -60,15 +60,15 @@ fn sha_process<D: SHA2Digest + Default>(input: &str) -> SHA2DigestOutput<D> {
 /// # Errors
 /// This function errors when:
 /// * the number of arguments is not 1
-/// * the first argument is not castable to a `GenericStringArray`
+/// * the first argument is not castable to a `Utf8Array`
 fn unary_binary_function<T, R, F>(
     args: &[&dyn Array],
     op: F,
     name: &str,
-) -> Result<BinaryArray>
+) -> Result<BinaryArray<i32>>
 where
     R: AsRef<[u8]>,
-    T: StringOffsetSizeTrait,
+    T: Offset,
     F: Fn(&str) -> R,
 {
     if args.len() != 1 {
@@ -81,7 +81,7 @@ where
 
     let array = args[0]
         .as_any()
-        .downcast_ref::<GenericStringArray<T>>()
+        .downcast_ref::<Utf8Array<T>>()
         .ok_or_else(|| {
             DataFusionError::Internal("failed to downcast to string".to_string())
         })?;
@@ -137,9 +137,7 @@ where
     }
 }
 
-fn md5_array<T: StringOffsetSizeTrait>(
-    args: &[&dyn Array],
-) -> Result<GenericStringArray<i32>> {
+fn md5_array<T: Offset>(args: &[&dyn Array]) -> Result<Utf8Array<i32>> {
     unary_string_function::<T, i32, _, _>(args, md5_process, "md5")
 }
 

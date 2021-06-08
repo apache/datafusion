@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::util::pretty;
+use datafusion::arrow::io::print;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     // create local execution context
     let mut ctx = ExecutionContext::new();
 
-    let testdata = datafusion::arrow::util::test_util::parquet_test_data();
+    let testdata = datafusion::test::parquet_test_data();
 
     let filename = &format!("{}/alltypes_plain.parquet", testdata);
 

@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
-    array::{Int32Array, StringArray},
+    array::{Int32Array, Utf8Array},
     record_batch::RecordBatch,
 };
 
@@ -43,16 +43,16 @@ async fn join() -> Result<()> {
     let batch1 = RecordBatch::try_new(
         schema1.clone(),
         vec![
-            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Utf8Array::<i32>::from_slice(&["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
         ],
     )?;
     // define data.
     let batch2 = RecordBatch::try_new(
         schema2.clone(),
         vec![
-            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Utf8Array::<i32>::from_slice(&["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
         ],
     )?;
 

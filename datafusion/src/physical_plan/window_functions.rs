@@ -21,13 +21,13 @@
 //! see also https://www.postgresql.org/docs/current/functions-window.html
 
 use crate::arrow::array::ArrayRef;
-use crate::arrow::datatypes::Field;
+use arrow::datatypes::{DataType, Field};
+
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates, aggregates::AggregateFunction, functions::Signature,
     type_coercion::data_types, PhysicalExpr,
 };
-use arrow::datatypes::DataType;
 use std::any::Any;
 use std::sync::Arc;
 use std::{fmt, str::FromStr};

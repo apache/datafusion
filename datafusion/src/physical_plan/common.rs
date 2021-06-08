@@ -95,12 +95,13 @@ pub(crate) fn combine_batches(
             .iter()
             .enumerate()
             .map(|(i, _)| {
-                concat(
+                concat::concatenate(
                     &batches
                         .iter()
                         .map(|batch| batch.column(i).as_ref())
                         .collect::<Vec<_>>(),
                 )
+                .map(|x| x.into())
             })
             .collect::<ArrowResult<Vec<_>>>()?;
         Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
@@ -154,7 +155,7 @@ pub(crate) fn spawn_execution(
             Err(e) => {
                 // If send fails, plan being torn
                 // down, no place to send the error
-                let arrow_error = ArrowError::ExternalError(Box::new(e));
+                let arrow_error = ArrowError::External("".to_string(), Box::new(e));
                 output.send(Err(arrow_error)).await.ok();
                 return;
             }
@@ -203,8 +204,8 @@ mod tests {
                 RecordBatch::try_new(
                     Arc::clone(&schema),
                     vec![
-                        Arc::new(Float32Array::from(vec![i as f32; batch_size])),
-                        Arc::new(Float64Array::from(vec![i as f64; batch_size])),
+                        Arc::new(Float32Array::from_slice(&vec![i as f32; batch_size])),
+                        Arc::new(Float64Array::from_slice(&vec![i as f64; batch_size])),
                     ],
                 )
                 .unwrap()

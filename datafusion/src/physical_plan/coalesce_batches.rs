@@ -29,7 +29,7 @@ use crate::physical_plan::{
     SendableRecordBatchStream,
 };
 
-use arrow::compute::kernels::concat::concat;
+use arrow::compute::concat::concatenate;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -239,12 +239,13 @@ pub fn concat_batches(
     }
     let mut arrays = Vec::with_capacity(schema.fields().len());
     for i in 0..schema.fields().len() {
-        let array = concat(
+        let array = concatenate(
             &batches
                 .iter()
                 .map(|batch| batch.column(i).as_ref())
                 .collect::<Vec<_>>(),
-        )?;
+        )?
+        .into();
         arrays.push(array);
     }
     debug!(
@@ -299,7 +300,7 @@ mod tests {
     fn create_batch(schema: &Arc<Schema>) -> RecordBatch {
         RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
+            vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
         )
         .unwrap()
     }

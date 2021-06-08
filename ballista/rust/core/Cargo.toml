@@ -40,7 +40,7 @@ tokio = "1.0"
 tonic = "0.4"
 uuid = { version = "0.8", features = ["v4"] }
 
-arrow-flight = { version = "4.0"  }
+arrow-flight = { git = "https://github.com/jorgecarleitao/arrow2", rev = "5838950a6a090ebce454516ef6951e6e559151e3" }
 
 datafusion = { path = "../../../datafusion" }
 

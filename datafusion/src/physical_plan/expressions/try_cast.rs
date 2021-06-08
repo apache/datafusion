@@ -24,10 +24,9 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
 use crate::scalar::ScalarValue;
 use arrow::compute;
-use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use compute::can_cast_types;
+use compute::cast;
 
 /// TRY_CAST expression casts an expression to a specific data type and retuns NULL on invalid cast
 #[derive(Debug)]
@@ -78,13 +77,13 @@ impl PhysicalExpr for TryCastExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
         match value {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(kernels::cast::cast(
-                &array,
-                &self.cast_type,
-            )?)),
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
+                cast::cast(array.as_ref(), &self.cast_type)?.into(),
+            )),
             ColumnarValue::Scalar(scalar) => {
                 let scalar_array = scalar.to_array();
-                let cast_array = kernels::cast::cast(&scalar_array, &self.cast_type)?;
+                let cast_array =
+                    cast::cast(scalar_array.as_ref(), &self.cast_type)?.into();
                 let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
                 Ok(ColumnarValue::Scalar(cast_scalar))
             }
@@ -104,7 +103,7 @@ pub fn try_cast(
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
         Ok(expr.clone())
-    } else if can_cast_types(&expr_type, &cast_type) {
+    } else if cast::can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {
         Err(DataFusionError::Internal(format!(
@@ -119,11 +118,9 @@ mod tests {
     use super::*;
     use crate::error::Result;
     use crate::physical_plan::expressions::col;
-    use arrow::array::{StringArray, Time64NanosecondArray};
-    use arrow::{
-        array::{Array, Int32Array, Int64Array, TimestampNanosecondArray, UInt32Array},
-        datatypes::*,
-    };
+    use arrow::{array::*, datatypes::*};
+
+    type StringArray = Utf8Array<i32>;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -134,7 +131,7 @@ mod tests {
     macro_rules! generic_test_cast {
         ($A_ARRAY:ident, $A_TYPE:expr, $A_VEC:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr) => {{
             let schema = Schema::new(vec![Field::new("a", $A_TYPE, false)]);
-            let a = $A_ARRAY::from($A_VEC);
+            let a = $A_ARRAY::from_slice(&$A_VEC);
             let batch =
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
@@ -180,7 +177,7 @@ mod tests {
         generic_test_cast!(
             Int32Array,
             DataType::Int32,
-            vec![1, 2, 3, 4, 5],
+            [1, 2, 3, 4, 5],
             UInt32Array,
             DataType::UInt32,
             vec![
@@ -199,7 +196,7 @@ mod tests {
         generic_test_cast!(
             Int32Array,
             DataType::Int32,
-            vec![1, 2, 3, 4, 5],
+            [1, 2, 3, 4, 5],
             StringArray,
             DataType::Utf8,
             vec![Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]
@@ -224,15 +221,12 @@ mod tests {
     #[test]
     fn test_cast_i64_t64() -> Result<()> {
         let original = vec![1, 2, 3, 4, 5];
-        let expected: Vec<Option<i64>> = original
-            .iter()
-            .map(|i| Some(Time64NanosecondArray::from(vec![*i]).value(0)))
-            .collect();
+        let expected: Vec<Option<i64>> = original.iter().map(|i| Some(*i)).collect();
         generic_test_cast!(
             Int64Array,
             DataType::Int64,
             original.clone(),
-            TimestampNanosecondArray,
+            Int64Array,
             DataType::Timestamp(TimeUnit::Nanosecond, None),
             expected
         );

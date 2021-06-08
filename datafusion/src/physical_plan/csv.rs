@@ -17,23 +17,31 @@
 
 //! Execution plan for reading CSV files
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::{common, source::Source, Partitioning};
-use arrow::csv;
+use futures::StreamExt;
+use tokio::{
+    sync::mpsc::{channel, Receiver, Sender},
+    task,
+};
+use tokio_stream::wrappers::ReceiverStream;
+
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::error::Result as ArrowResult;
+use arrow::error::{ArrowError, Result as ArrowResult};
+use arrow::io::csv::read;
 use arrow::record_batch::RecordBatch;
+
 use futures::Stream;
 use std::any::Any;
-use std::fs::File;
 use std::io::Read;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
 
-use super::{DisplayFormatType, RecordBatchStream, SendableRecordBatchStream};
+use crate::error::{DataFusionError, Result};
+use crate::physical_plan::{
+    common, source::Source, DisplayFormatType, ExecutionPlan, Partitioning,
+};
+
+use super::{RecordBatchStream, SendableRecordBatchStream};
 use async_trait::async_trait;
 
 /// CSV file read option
@@ -128,6 +136,45 @@ pub struct CsvExec {
     batch_size: usize,
     /// Limit in nr. of rows
     limit: Option<usize>,
+}
+
+/// Infer schema from a list of CSV files by reading through first n records
+/// with `max_read_records` controlling the maximum number of records to read.
+///
+/// Files will be read in the given order untill n records have been reached.
+///
+/// If `max_read_records` is not set, all files will be read fully to infer the schema.
+pub fn infer_schema_from_files(
+    files: &[String],
+    delimiter: u8,
+    max_read_records: Option<usize>,
+    has_header: bool,
+) -> Result<Schema> {
+    let mut schemas = vec![];
+    let mut records_to_read = max_read_records.unwrap_or(std::usize::MAX);
+
+    for fname in files.iter() {
+        let mut reader = read::ReaderBuilder::new()
+            .delimiter(delimiter)
+            .has_headers(has_header)
+            .from_path(fname)
+            .map_err(ArrowError::from_external_error)?;
+
+        let schema = read::infer_schema(
+            &mut reader,
+            Some(records_to_read),
+            has_header,
+            &read::infer,
+        )?;
+
+        schemas.push(schema);
+        records_to_read -= records_to_read;
+        if records_to_read == 0 {
+            break;
+        }
+    }
+
+    Ok(Schema::try_merge(schemas)?)
 }
 
 impl CsvExec {
@@ -261,13 +308,63 @@ impl CsvExec {
         filenames: &[String],
         options: &CsvReadOptions,
     ) -> Result<Schema> {
-        Ok(csv::infer_schema_from_files(
+        infer_schema_from_files(
             filenames,
             options.delimiter,
             Some(options.schema_infer_max_records),
             options.has_header,
-        )?)
+        )
     }
+}
+
+type Payload = ArrowResult<RecordBatch>;
+
+fn producer_task<R: Read>(
+    reader: R,
+    response_tx: Sender<Payload>,
+    limit: usize,
+    batch_size: usize,
+    delimiter: u8,
+    has_header: bool,
+    projection: &[usize],
+    schema: Arc<Schema>,
+) -> Result<()> {
+    let mut reader = read::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .has_headers(has_header)
+        .from_reader(reader);
+
+    let mut current_read = 0;
+    let mut rows = vec![read::ByteRecord::default(); batch_size];
+    while current_read < limit {
+        let batch_size = batch_size.min(limit - current_read);
+        let rows_read = read::read_rows(&mut reader, 0, &mut rows[..batch_size])?;
+        current_read += rows_read;
+
+        let batch = deserialize(&rows[..rows_read], projection, schema.clone());
+        response_tx
+            .blocking_send(batch)
+            .map_err(|x| DataFusionError::Execution(format!("{}", x)))?;
+        if rows_read < batch_size {
+            break;
+        }
+    }
+    Ok(())
+}
+
+// CPU-intensive task
+fn deserialize(
+    rows: &[read::ByteRecord],
+    projection: &[usize],
+    schema: SchemaRef,
+) -> ArrowResult<RecordBatch> {
+    read::deserialize_batch(
+        rows,
+        schema.fields(),
+        Some(projection),
+        0,
+        read::deserialize_column,
+    )
 }
 
 #[async_trait]
@@ -310,34 +407,67 @@ impl ExecutionPlan for CsvExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+        let limit = self.limit.unwrap_or(usize::MAX);
+        let batch_size = self.batch_size;
+        let delimiter = self.delimiter.unwrap_or(b","[0]);
+        let has_header = self.has_header;
+
+        let projection = match &self.projection {
+            Some(p) => p.clone(),
+            None => (0..self.schema.fields().len()).collect(),
+        };
+        let schema = self.schema.clone();
+
         match &self.source {
             Source::PartitionedFiles { filenames, .. } => {
-                Ok(Box::pin(CsvStream::try_new(
-                    &filenames[partition],
+                let path = filenames[partition].clone();
+
+                let (response_tx, response_rx): (Sender<Payload>, Receiver<Payload>) =
+                    channel(2);
+
+                task::spawn_blocking(move || {
+                    let reader = std::fs::File::open(path).unwrap();
+                    producer_task(
+                        reader,
+                        response_tx,
+                        limit,
+                        batch_size,
+                        delimiter,
+                        has_header,
+                        &projection,
+                        schema,
+                    )
+                    .unwrap()
+                });
+
+                Ok(Box::pin(CsvStream::new(
                     self.schema.clone(),
-                    self.has_header,
-                    self.delimiter,
-                    &self.projection,
-                    self.batch_size,
-                    self.limit,
-                )?))
+                    ReceiverStream::new(response_rx),
+                )))
             }
-            Source::Reader(rdr) => {
-                if partition != 0 {
-                    Err(DataFusionError::Internal(
-                        "Only partition 0 is valid when CSV comes from a reader"
-                            .to_string(),
-                    ))
-                } else if let Some(rdr) = rdr.lock().unwrap().take() {
-                    Ok(Box::pin(CsvStream::try_new_from_reader(
-                        rdr,
+            Source::Reader(reader) => {
+                let (response_tx, response_rx): (Sender<Payload>, Receiver<Payload>) =
+                    channel(2);
+
+                if let Some(reader) = reader.lock().unwrap().take() {
+                    task::spawn_blocking(move || {
+                        producer_task(
+                            reader,
+                            response_tx,
+                            limit,
+                            batch_size,
+                            delimiter,
+                            has_header,
+                            &projection,
+                            schema,
+                        )
+                        .unwrap()
+                    });
+
+                    Ok(Box::pin(CsvStream::new(
                         self.schema.clone(),
-                        self.has_header,
-                        self.delimiter,
-                        &self.projection,
-                        self.batch_size,
-                        self.limit,
-                    )?))
+                        ReceiverStream::new(response_rx),
+                    )))
                 } else {
                     Err(DataFusionError::Execution(
                         "Error reading CSV: Data can only be read a single time when the source is a reader"
@@ -366,70 +496,32 @@ impl ExecutionPlan for CsvExec {
 }
 
 /// Iterator over batches
-struct CsvStream<R: Read> {
-    /// Arrow CSV reader
-    reader: csv::Reader<R>,
+struct CsvStream {
+    schema: SchemaRef,
+    receiver: ReceiverStream<Payload>,
 }
-impl CsvStream<File> {
+impl CsvStream {
     /// Create an iterator for a CSV file
-    pub fn try_new(
-        filename: &str,
-        schema: SchemaRef,
-        has_header: bool,
-        delimiter: Option<u8>,
-        projection: &Option<Vec<usize>>,
-        batch_size: usize,
-        limit: Option<usize>,
-    ) -> Result<Self> {
-        let file = File::open(filename)?;
-        Self::try_new_from_reader(
-            file, schema, has_header, delimiter, projection, batch_size, limit,
-        )
-    }
-}
-impl<R: Read> CsvStream<R> {
-    /// Create an iterator for a reader
-    pub fn try_new_from_reader(
-        reader: R,
-        schema: SchemaRef,
-        has_header: bool,
-        delimiter: Option<u8>,
-        projection: &Option<Vec<usize>>,
-        batch_size: usize,
-        limit: Option<usize>,
-    ) -> Result<CsvStream<R>> {
-        let start_line = if has_header { 1 } else { 0 };
-        let bounds = limit.map(|x| (0, x + start_line));
-
-        let reader = csv::Reader::new(
-            reader,
-            schema,
-            has_header,
-            delimiter,
-            batch_size,
-            bounds,
-            projection.clone(),
-        );
-
-        Ok(Self { reader })
+    pub fn new(schema: SchemaRef, receiver: ReceiverStream<Payload>) -> Self {
+        Self { schema, receiver }
     }
 }
 
-impl<R: Read + Unpin> Stream for CsvStream<R> {
+impl Stream for CsvStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
-        mut self: Pin<&mut Self>,
-        _: &mut Context<'_>,
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        Poll::Ready(self.reader.next())
+        self.receiver.poll_next_unpin(cx)
     }
 }
 
-impl<R: Read + Unpin> RecordBatchStream for CsvStream<R> {
+impl RecordBatchStream for CsvStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        self.reader.schema()
+        self.schema.clone()
     }
 }
 

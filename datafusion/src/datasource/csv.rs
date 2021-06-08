@@ -33,11 +33,13 @@
 //! let schema = csvdata.schema();
 //! ```
 
-use arrow::datatypes::SchemaRef;
 use std::any::Any;
 use std::io::{Read, Seek};
 use std::string::String;
 use std::sync::{Arc, Mutex};
+
+use arrow::datatypes::SchemaRef;
+use arrow::io::csv::read as csv_read;
 
 use crate::datasource::datasource::Statistics;
 use crate::datasource::{Source, TableProvider};
@@ -111,21 +113,22 @@ impl CsvFile {
 
     /// Attempt to initialize a `CsvRead` from a reader impls `Seek`. The schema can be inferred automatically.
     pub fn try_new_from_reader_infer_schema<R: Read + Seek + Send + Sync + 'static>(
-        mut reader: R,
+        reader: R,
         options: CsvReadOptions,
     ) -> Result<Self> {
+        let mut reader = csv_read::ReaderBuilder::new()
+            .delimiter(options.delimiter)
+            .from_reader(reader);
         let schema = Arc::new(match options.schema {
             Some(s) => s.clone(),
-            None => {
-                let (schema, _) = arrow::csv::reader::infer_file_schema(
-                    &mut reader,
-                    options.delimiter,
-                    Some(options.schema_infer_max_records),
-                    options.has_header,
-                )?;
-                schema
-            }
+            None => csv_read::infer_schema(
+                &mut reader,
+                Some(options.schema_infer_max_records),
+                options.has_header,
+                &csv_read::infer,
+            )?,
         });
+        let reader = reader.into_inner();
 
         Ok(Self {
             source: Source::Reader(Mutex::new(Some(Box::new(reader)))),
@@ -220,6 +223,8 @@ mod tests {
     use super::*;
     use crate::prelude::*;
 
+    use arrow::array::Int64Array;
+
     #[tokio::test]
     async fn csv_file_from_reader() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
@@ -241,7 +246,7 @@ mod tests {
             batches[0]
                 .column(0)
                 .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(0),
             5

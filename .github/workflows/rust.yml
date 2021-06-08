@@ -318,8 +318,7 @@ jobs:
         run: |
           cargo miri setup
           cargo clean
-          # Ignore MIRI errors until we can get a clean run
-          cargo miri test || true
+          cargo miri test
 
 # Coverage job was failing. https://github.com/apache/arrow-datafusion/issues/590 tracks re-instating it
 

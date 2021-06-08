@@ -20,6 +20,7 @@
 use crate::error::Result;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use arrow::array::{ArrayRef, UInt64Array};
+use arrow::buffer::Buffer;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
@@ -58,9 +59,11 @@ impl BuiltInWindowFunctionExpr for RowNumber {
     }
 
     fn evaluate(&self, num_rows: usize, _values: &[ArrayRef]) -> Result<ArrayRef> {
-        Ok(Arc::new(UInt64Array::from_iter_values(
-            (1..num_rows + 1).map(|i| i as u64),
-        )))
+        let values = (1..num_rows as u64 + 1).collect::<Buffer<u64>>();
+
+        let array = UInt64Array::from_data(DataType::UInt64, values, None);
+
+        Ok(Arc::new(array))
     }
 }
 
@@ -81,14 +84,14 @@ mod tests {
         let row_number = RowNumber::new("row_number".to_owned());
         let result = row_number.evaluate(batch.num_rows(), &[])?;
         let result = result.as_any().downcast_ref::<UInt64Array>().unwrap();
-        let result = result.values();
+        let result = result.values().as_slice();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
         Ok(())
     }
 
     #[test]
     fn row_number_all_values() -> Result<()> {
-        let arr: ArrayRef = Arc::new(BooleanArray::from(vec![
+        let arr: ArrayRef = Arc::new(BooleanArray::from_slice(&[
             true, false, true, false, false, true, false, true,
         ]));
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
@@ -96,7 +99,7 @@ mod tests {
         let row_number = RowNumber::new("row_number".to_owned());
         let result = row_number.evaluate(batch.num_rows(), &[])?;
         let result = result.as_any().downcast_ref::<UInt64Array>().unwrap();
-        let result = result.values();
+        let result = result.values().as_slice();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
         Ok(())
     }

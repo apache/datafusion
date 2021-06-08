@@ -20,6 +20,7 @@
 
 use std::sync::Arc;
 
+use arrow::compute::cast;
 use arrow::datatypes::DataType;
 
 use crate::error::Result;
@@ -29,8 +30,6 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
-use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use arrow::compute::{kernels, DEFAULT_CAST_OPTIONS};
 
 /// Optimizer that simplifies comparison expressions involving boolean literals.
 ///
@@ -226,7 +225,7 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
                 if !args.is_empty() {
                     match &args[0] {
                         Expr::Literal(ScalarValue::Utf8(Some(val))) => {
-                            match string_to_timestamp_nanos(val) {
+                            match cast::utf8_to_timestamp_ns_scalar(val) {
                                 Ok(timestamp) => Expr::Literal(
                                     ScalarValue::TimestampNanosecond(Some(timestamp)),
                                 ),
@@ -254,11 +253,8 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
             } => match inner.as_ref() {
                 Expr::Literal(val) => {
                     let scalar_array = val.to_array();
-                    let cast_array = kernels::cast::cast_with_options(
-                        &scalar_array,
-                        &data_type,
-                        &DEFAULT_CAST_OPTIONS,
-                    )?;
+                    let cast_array =
+                        cast::cast(scalar_array.as_ref(), &data_type)?.into();
                     let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
                     Expr::Literal(cast_scalar)
                 }

@@ -24,7 +24,7 @@ mod roundtrip_tests {
 
     use datafusion::{
         arrow::{
-            compute::kernels::sort::SortOptions,
+            compute::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
         logical_plan::Operator,

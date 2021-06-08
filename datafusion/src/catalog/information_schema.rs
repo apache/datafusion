@@ -22,7 +22,7 @@
 use std::{any, sync::Arc};
 
 use arrow::{
-    array::{StringBuilder, UInt64Builder},
+    array::*,
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
@@ -189,23 +189,19 @@ impl SchemaProvider for InformationSchemaProvider {
 ///
 /// Columns are based on https://www.postgresql.org/docs/current/infoschema-columns.html
 struct InformationSchemaTablesBuilder {
-    catalog_names: StringBuilder,
-    schema_names: StringBuilder,
-    table_names: StringBuilder,
-    table_types: StringBuilder,
+    catalog_names: MutableUtf8Array<i32>,
+    schema_names: MutableUtf8Array<i32>,
+    table_names: MutableUtf8Array<i32>,
+    table_types: MutableUtf8Array<i32>,
 }
 
 impl InformationSchemaTablesBuilder {
     fn new() -> Self {
-        // StringBuilder requires providing an initial capacity, so
-        // pick 10 here arbitrarily as this is not performance
-        // critical code and the number of tables is unavailable here.
-        let default_capacity = 10;
         Self {
-            catalog_names: StringBuilder::new(default_capacity),
-            schema_names: StringBuilder::new(default_capacity),
-            table_names: StringBuilder::new(default_capacity),
-            table_types: StringBuilder::new(default_capacity),
+            catalog_names: MutableUtf8Array::new(),
+            schema_names: MutableUtf8Array::new(),
+            table_names: MutableUtf8Array::new(),
+            table_types: MutableUtf8Array::new(),
         }
     }
 
@@ -217,20 +213,14 @@ impl InformationSchemaTablesBuilder {
         table_type: TableType,
     ) {
         // Note: append_value is actually infallable.
-        self.catalog_names
-            .append_value(catalog_name.as_ref())
-            .unwrap();
-        self.schema_names
-            .append_value(schema_name.as_ref())
-            .unwrap();
-        self.table_names.append_value(table_name.as_ref()).unwrap();
-        self.table_types
-            .append_value(match table_type {
-                TableType::Base => "BASE TABLE",
-                TableType::View => "VIEW",
-                TableType::Temporary => "LOCAL TEMPORARY",
-            })
-            .unwrap();
+        self.catalog_names.push(Some(&catalog_name.as_ref()));
+        self.schema_names.push(Some(&schema_name.as_ref()));
+        self.table_names.push(Some(&table_name.as_ref()));
+        self.table_types.push(Some(&match table_type {
+            TableType::Base => "BASE TABLE",
+            TableType::View => "VIEW",
+            TableType::Temporary => "LOCAL TEMPORARY",
+        }));
     }
 }
 
@@ -244,20 +234,20 @@ impl From<InformationSchemaTablesBuilder> for MemTable {
         ]);
 
         let InformationSchemaTablesBuilder {
-            mut catalog_names,
-            mut schema_names,
-            mut table_names,
-            mut table_types,
+            catalog_names,
+            schema_names,
+            table_names,
+            table_types,
         } = value;
 
         let schema = Arc::new(schema);
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(catalog_names.finish()),
-                Arc::new(schema_names.finish()),
-                Arc::new(table_names.finish()),
-                Arc::new(table_types.finish()),
+                catalog_names.into_arc(),
+                schema_names.into_arc(),
+                table_names.into_arc(),
+                table_types.into_arc(),
             ],
         )
         .unwrap();
@@ -270,45 +260,41 @@ impl From<InformationSchemaTablesBuilder> for MemTable {
 ///
 /// Columns are based on https://www.postgresql.org/docs/current/infoschema-columns.html
 struct InformationSchemaColumnsBuilder {
-    catalog_names: StringBuilder,
-    schema_names: StringBuilder,
-    table_names: StringBuilder,
-    column_names: StringBuilder,
-    ordinal_positions: UInt64Builder,
-    column_defaults: StringBuilder,
-    is_nullables: StringBuilder,
-    data_types: StringBuilder,
-    character_maximum_lengths: UInt64Builder,
-    character_octet_lengths: UInt64Builder,
-    numeric_precisions: UInt64Builder,
-    numeric_precision_radixes: UInt64Builder,
-    numeric_scales: UInt64Builder,
-    datetime_precisions: UInt64Builder,
-    interval_types: StringBuilder,
+    catalog_names: MutableUtf8Array<i32>,
+    schema_names: MutableUtf8Array<i32>,
+    table_names: MutableUtf8Array<i32>,
+    column_names: MutableUtf8Array<i32>,
+    ordinal_positions: UInt64Vec,
+    column_defaults: MutableUtf8Array<i32>,
+    is_nullables: MutableUtf8Array<i32>,
+    data_types: MutableUtf8Array<i32>,
+    character_maximum_lengths: UInt64Vec,
+    character_octet_lengths: UInt64Vec,
+    numeric_precisions: UInt64Vec,
+    numeric_precision_radixes: UInt64Vec,
+    numeric_scales: UInt64Vec,
+    datetime_precisions: UInt64Vec,
+    interval_types: MutableUtf8Array<i32>,
 }
 
 impl InformationSchemaColumnsBuilder {
     fn new() -> Self {
-        // StringBuilder requires providing an initial capacity, so
-        // pick 10 here arbitrarily as this is not performance
-        // critical code and the number of tables is unavailable here.
-        let default_capacity = 10;
         Self {
-            catalog_names: StringBuilder::new(default_capacity),
-            schema_names: StringBuilder::new(default_capacity),
-            table_names: StringBuilder::new(default_capacity),
-            column_names: StringBuilder::new(default_capacity),
-            ordinal_positions: UInt64Builder::new(default_capacity),
-            column_defaults: StringBuilder::new(default_capacity),
-            is_nullables: StringBuilder::new(default_capacity),
-            data_types: StringBuilder::new(default_capacity),
-            character_maximum_lengths: UInt64Builder::new(default_capacity),
-            character_octet_lengths: UInt64Builder::new(default_capacity),
-            numeric_precisions: UInt64Builder::new(default_capacity),
-            numeric_precision_radixes: UInt64Builder::new(default_capacity),
-            numeric_scales: UInt64Builder::new(default_capacity),
-            datetime_precisions: UInt64Builder::new(default_capacity),
-            interval_types: StringBuilder::new(default_capacity),
+            catalog_names: MutableUtf8Array::new(),
+            schema_names: MutableUtf8Array::new(),
+            table_names: MutableUtf8Array::new(),
+            column_names: MutableUtf8Array::new(),
+            ordinal_positions: UInt64Vec::new(),
+            column_defaults: MutableUtf8Array::new(),
+            is_nullables: MutableUtf8Array::new(),
+            data_types: MutableUtf8Array::new(),
+            character_maximum_lengths: UInt64Vec::new(),
+            character_octet_lengths: UInt64Vec::new(),
+            numeric_precisions: UInt64Vec::new(),
+            numeric_precision_radixes: UInt64Vec::new(),
+            numeric_scales: UInt64Vec::new(),
+            datetime_precisions: UInt64Vec::new(),
+            interval_types: MutableUtf8Array::new(),
         }
     }
 
@@ -326,33 +312,23 @@ impl InformationSchemaColumnsBuilder {
         use DataType::*;
 
         // Note: append_value is actually infallable.
-        self.catalog_names
-            .append_value(catalog_name.as_ref())
-            .unwrap();
-        self.schema_names
-            .append_value(schema_name.as_ref())
-            .unwrap();
-        self.table_names.append_value(table_name.as_ref()).unwrap();
+        self.catalog_names.push(Some(catalog_name));
+        self.schema_names.push(Some(schema_name));
+        self.table_names.push(Some(table_name));
 
-        self.column_names
-            .append_value(column_name.as_ref())
-            .unwrap();
+        self.column_names.push(Some(column_name));
 
-        self.ordinal_positions
-            .append_value(column_position as u64)
-            .unwrap();
+        self.ordinal_positions.push(Some(column_position as u64));
 
         // DataFusion does not support column default values, so null
-        self.column_defaults.append_null().unwrap();
+        self.column_defaults.push_null();
 
         // "YES if the column is possibly nullable, NO if it is known not nullable. "
         let nullable_str = if is_nullable { "YES" } else { "NO" };
-        self.is_nullables.append_value(nullable_str).unwrap();
+        self.is_nullables.push(Some(nullable_str));
 
         // "System supplied type" --> Use debug format of the datatype
-        self.data_types
-            .append_value(format!("{:?}", data_type))
-            .unwrap();
+        self.data_types.push(Some(format!("{:?}", data_type)));
 
         // "If data_type identifies a character or bit string type, the
         // declared maximum length; null for all other data types or
@@ -360,9 +336,7 @@ impl InformationSchemaColumnsBuilder {
         //
         // Arrow has no equivalent of VARCHAR(20), so we leave this as Null
         let max_chars = None;
-        self.character_maximum_lengths
-            .append_option(max_chars)
-            .unwrap();
+        self.character_maximum_lengths.push(max_chars);
 
         // "Maximum length, in bytes, for binary data, character data,
         // or text and image data."
@@ -371,9 +345,7 @@ impl InformationSchemaColumnsBuilder {
             LargeBinary | LargeUtf8 => Some(i64::MAX as u64),
             _ => None,
         };
-        self.character_octet_lengths
-            .append_option(char_len)
-            .unwrap();
+        self.character_octet_lengths.push(char_len);
 
         // numeric_precision: "If data_type identifies a numeric type, this column
         // contains the (declared or implicit) precision of the type
@@ -414,16 +386,12 @@ impl InformationSchemaColumnsBuilder {
             _ => (None, None, None),
         };
 
-        self.numeric_precisions
-            .append_option(numeric_precision)
-            .unwrap();
-        self.numeric_precision_radixes
-            .append_option(numeric_radix)
-            .unwrap();
-        self.numeric_scales.append_option(numeric_scale).unwrap();
+        self.numeric_precisions.push(numeric_precision);
+        self.numeric_precision_radixes.push(numeric_radix);
+        self.numeric_scales.push(numeric_scale);
 
-        self.datetime_precisions.append_option(None).unwrap();
-        self.interval_types.append_null().unwrap();
+        self.datetime_precisions.push(None);
+        self.interval_types.push_null();
     }
 }
 
@@ -448,42 +416,42 @@ impl From<InformationSchemaColumnsBuilder> for MemTable {
         ]);
 
         let InformationSchemaColumnsBuilder {
-            mut catalog_names,
-            mut schema_names,
-            mut table_names,
-            mut column_names,
-            mut ordinal_positions,
-            mut column_defaults,
-            mut is_nullables,
-            mut data_types,
-            mut character_maximum_lengths,
-            mut character_octet_lengths,
-            mut numeric_precisions,
-            mut numeric_precision_radixes,
-            mut numeric_scales,
-            mut datetime_precisions,
-            mut interval_types,
+            catalog_names,
+            schema_names,
+            table_names,
+            column_names,
+            ordinal_positions,
+            column_defaults,
+            is_nullables,
+            data_types,
+            character_maximum_lengths,
+            character_octet_lengths,
+            numeric_precisions,
+            numeric_precision_radixes,
+            numeric_scales,
+            datetime_precisions,
+            interval_types,
         } = value;
 
         let schema = Arc::new(schema);
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(catalog_names.finish()),
-                Arc::new(schema_names.finish()),
-                Arc::new(table_names.finish()),
-                Arc::new(column_names.finish()),
-                Arc::new(ordinal_positions.finish()),
-                Arc::new(column_defaults.finish()),
-                Arc::new(is_nullables.finish()),
-                Arc::new(data_types.finish()),
-                Arc::new(character_maximum_lengths.finish()),
-                Arc::new(character_octet_lengths.finish()),
-                Arc::new(numeric_precisions.finish()),
-                Arc::new(numeric_precision_radixes.finish()),
-                Arc::new(numeric_scales.finish()),
-                Arc::new(datetime_precisions.finish()),
-                Arc::new(interval_types.finish()),
+                catalog_names.into_arc(),
+                schema_names.into_arc(),
+                table_names.into_arc(),
+                column_names.into_arc(),
+                ordinal_positions.into_arc(),
+                column_defaults.into_arc(),
+                is_nullables.into_arc(),
+                data_types.into_arc(),
+                character_maximum_lengths.into_arc(),
+                character_octet_lengths.into_arc(),
+                numeric_precisions.into_arc(),
+                numeric_precision_radixes.into_arc(),
+                numeric_scales.into_arc(),
+                datetime_precisions.into_arc(),
+                interval_types.into_arc(),
             ],
         )
         .unwrap();

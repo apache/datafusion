@@ -20,12 +20,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::GenericStringArray;
-use arrow::array::{
-    ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, StringOffsetSizeTrait, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
-};
+use arrow::array::Utf8Array;
+use arrow::array::*;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -130,16 +126,13 @@ impl InListExpr {
 
     /// Compare for specific utf8 types
     #[allow(clippy::unnecessary_wraps)]
-    fn compare_utf8<T: StringOffsetSizeTrait>(
+    fn compare_utf8<T: Offset>(
         &self,
         array: ArrayRef,
         list_values: Vec<ColumnarValue>,
         negated: bool,
     ) -> Result<ColumnarValue> {
-        let array = array
-            .as_any()
-            .downcast_ref::<GenericStringArray<T>>()
-            .unwrap();
+        let array = array.as_any().downcast_ref::<Utf8Array<T>>().unwrap();
 
         let mut contains_null = false;
         let values = list_values
@@ -288,7 +281,9 @@ pub fn in_list(
 
 #[cfg(test)]
 mod tests {
-    use arrow::{array::StringArray, datatypes::Field};
+    use arrow::{array::Utf8Array, datatypes::Field};
+
+    type StringArray = Utf8Array<i32>;
 
     use super::*;
     use crate::error::Result;

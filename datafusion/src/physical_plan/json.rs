@@ -21,11 +21,10 @@ use futures::Stream;
 
 use super::{common, source::Source, ExecutionPlan, Partitioning, RecordBatchStream};
 use crate::error::{DataFusionError, Result};
-use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use arrow::{
     datatypes::{Schema, SchemaRef},
     error::Result as ArrowResult,
-    json,
+    io::json,
     record_batch::RecordBatch,
 };
 use std::fs::File;
@@ -202,16 +201,11 @@ impl NdJsonExec {
         max_records: Option<usize>,
     ) -> Result<Schema> {
         let mut schemas = Vec::new();
-        let mut records_to_read = max_records.unwrap_or(usize::MAX);
-        while records_to_read > 0 && !filenames.is_empty() {
+        let records_to_read = max_records.map(|x| x / filenames.len());
+        while !filenames.is_empty() {
             let file = File::open(filenames.pop().unwrap())?;
             let mut reader = BufReader::new(file);
-            let iter = ValueIter::new(&mut reader, None);
-            let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
-                let should_take = records_to_read > 0;
-                records_to_read -= 1;
-                should_take
-            }))?;
+            let schema = json::infer_json_schema(&mut reader, records_to_read)?;
             schemas.push(schema);
         }
 
@@ -350,10 +344,10 @@ impl<R: Read + Unpin> Stream for NdJsonStream<R> {
                         let len = *remain;
                         *remain = 0;
                         Some(Ok(RecordBatch::try_new(
-                            item.schema(),
+                            item.schema().clone(),
                             item.columns()
                                 .iter()
-                                .map(|column| column.slice(0, len))
+                                .map(|column| column.slice(0, len).into())
                                 .collect(),
                         )?))
                     }
@@ -369,20 +363,21 @@ impl<R: Read + Unpin> Stream for NdJsonStream<R> {
 
 impl<R: Read + Unpin> RecordBatchStream for NdJsonStream<R> {
     fn schema(&self) -> SchemaRef {
-        self.reader.schema()
+        self.reader.schema().clone()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{Int64Array, Utf8Array};
+    use arrow::datatypes::DataType;
     use futures::StreamExt;
 
     const TEST_DATA_BASE: &str = "tests/jsons";
 
     #[tokio::test]
     async fn nd_json_exec_file_without_projection() -> Result<()> {
-        use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::try_new(&path, Default::default(), None, 1024, Some(3))?;
         let inferred_schema = exec.schema();
@@ -414,7 +409,7 @@ mod tests {
         let values = batch
             .column(0)
             .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
+            .downcast_ref::<Int64Array>()
             .unwrap();
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
@@ -443,7 +438,7 @@ mod tests {
         let values = batch
             .column(0)
             .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
+            .downcast_ref::<Int64Array>()
             .unwrap();
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
@@ -457,8 +452,7 @@ mod tests {
 {"a":"bbb", "b":[2.0, 1.3, -6.1], "c":[true, true], "d":"4"}"#;
         let cur = std::io::Cursor::new(content);
         let mut bufrdr = std::io::BufReader::new(cur);
-        let schema =
-            arrow::json::reader::infer_json_schema_from_seekable(&mut bufrdr, None)?;
+        let schema = json::infer_json_schema_from_seekable(&mut bufrdr, None)?;
         let exec = NdJsonExec::try_new_from_reader(
             bufrdr,
             NdJsonReadOptions {
@@ -478,7 +472,7 @@ mod tests {
         let values = batch
             .column(0)
             .as_any()
-            .downcast_ref::<arrow::array::StringArray>()
+            .downcast_ref::<Utf8Array<i32>>()
             .unwrap();
         assert_eq!(values.value(0), "aaa");
 

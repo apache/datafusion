@@ -35,7 +35,8 @@ use crate::{
         ExecutionPlan,
     },
 };
-use arrow::{datatypes::SchemaRef, json::reader::infer_json_schema_from_seekable};
+use arrow::datatypes::SchemaRef;
+use arrow::io::json::infer_json_schema_from_seekable;
 
 use super::datasource::Statistics;
 

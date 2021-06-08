@@ -39,7 +39,10 @@ use std::{
 use futures::{StreamExt, TryStreamExt};
 use tokio::task::{self, JoinHandle};
 
-use arrow::csv;
+use arrow::error::{ArrowError, Result as ArrowResult};
+use arrow::io::csv::write as csv_write;
+use arrow::io::parquet::write;
+use arrow::record_batch::RecordBatch;
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -76,8 +79,6 @@ use crate::sql::{
 use crate::variable::{VarProvider, VarType};
 use crate::{dataframe::DataFrame, physical_plan::udaf::AggregateUDF};
 use chrono::{DateTime, Utc};
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
 
 /// ExecutionContext is the main interface for executing queries with DataFusion. The context
 /// provides the following functionality:
@@ -485,12 +486,21 @@ impl ExecutionContext {
                     let plan = plan.clone();
                     let filename = format!("part-{}.csv", i);
                     let path = fs_path.join(&filename);
-                    let file = fs::File::create(path)?;
-                    let mut writer = csv::Writer::new(file);
+
+                    let mut writer = csv_write::WriterBuilder::new()
+                        .from_path(path)
+                        .map_err(ArrowError::from)?;
+
+                    csv_write::write_header(&mut writer, plan.schema().as_ref())?;
+
+                    let options = csv_write::SerializeOptions::default();
+
                     let stream = plan.execute(i).await?;
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
                         stream
-                            .map(|batch| writer.write(&batch?))
+                            .map(|batch| {
+                                csv_write::write_batch(&mut writer, &batch?, &options)
+                            })
                             .try_collect()
                             .await
                             .map_err(DataFusionError::from)
@@ -512,7 +522,7 @@ impl ExecutionContext {
         &self,
         plan: Arc<dyn ExecutionPlan>,
         path: String,
-        writer_properties: Option<WriterProperties>,
+        options: write::WriteOptions,
     ) -> Result<()> {
         // create directory to contain the Parquet files (one per partition)
         let fs_path = Path::new(&path);
@@ -521,22 +531,46 @@ impl ExecutionContext {
                 let mut tasks = vec![];
                 for i in 0..plan.output_partitioning().partition_count() {
                     let plan = plan.clone();
+                    let schema = plan.schema();
                     let filename = format!("part-{}.parquet", i);
                     let path = fs_path.join(&filename);
-                    let file = fs::File::create(path)?;
-                    let mut writer = ArrowWriter::try_new(
-                        file.try_clone().unwrap(),
-                        plan.schema(),
-                        writer_properties.clone(),
-                    )?;
+
+                    let mut file = fs::File::create(path)?;
                     let stream = plan.execute(i).await?;
+
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
-                        stream
-                            .map(|batch| writer.write(&batch?))
-                            .try_collect()
-                            .await
-                            .map_err(DataFusionError::from)?;
-                        writer.close().map_err(DataFusionError::from).map(|_| ())
+                        let parquet_schema = write::to_parquet_schema(&schema)?;
+
+                        let a = parquet_schema.clone();
+                        let stream = stream.map(|batch: ArrowResult<RecordBatch>| {
+                            batch.map(|batch| {
+                                let columns = batch.columns().to_vec();
+                                write::DynIter::new(
+                                    columns
+                                        .into_iter()
+                                        .zip(a.columns().to_vec().into_iter())
+                                        .map(|(array, type_)| {
+                                            Ok(write::DynIter::new(std::iter::once(
+                                                write::array_to_page(
+                                                    array.as_ref(),
+                                                    type_,
+                                                    options,
+                                                ),
+                                            )))
+                                        }),
+                                )
+                            })
+                        });
+
+                        Ok(write::stream::write_stream(
+                            &mut file,
+                            stream,
+                            schema.as_ref(),
+                            parquet_schema,
+                            options,
+                            None,
+                        )
+                        .await?)
                     });
                     tasks.push(handle);
                 }
@@ -897,12 +931,8 @@ mod tests {
         logical_plan::create_udaf,
         physical_plan::expressions::AvgAccumulator,
     };
-    use arrow::array::{
-        Array, ArrayRef, BinaryArray, DictionaryArray, Float64Array, Int32Array,
-        Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
-        TimestampNanosecondArray,
-    };
-    use arrow::compute::add;
+    use arrow::array::*;
+    use arrow::compute::arithmetics::basic::add::add;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use std::fs::File;
@@ -1138,9 +1168,9 @@ mod tests {
         let partitions = vec![vec![RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
-                Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
-                Arc::new(Int32Array::from(vec![3, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[3, 12, 12, 120])),
             ],
         )?]];
 
@@ -1857,13 +1887,10 @@ mod tests {
             // C, 1
             // A, 1
 
-            let str_array: LargeStringArray = vec!["A", "B", "A", "A", "C", "A"]
-                .into_iter()
-                .map(Some)
-                .collect();
+            let str_array = Utf8Array::<i64>::from_slice(&["A", "B", "A", "A", "C", "A"]);
             let str_array = Arc::new(str_array);
 
-            let val_array: Int64Array = vec![1, 2, 2, 4, 1, 1].into();
+            let val_array = Int64Array::from_slice(&[1, 2, 2, 4, 1, 1]);
             let val_array = Arc::new(val_array);
 
             let schema = Arc::new(Schema::new(vec![
@@ -1897,7 +1924,7 @@ mod tests {
 
     #[tokio::test]
     async fn group_by_dictionary() {
-        async fn run_test_case<K: ArrowDictionaryKeyType>() {
+        async fn run_test_case<K: DictionaryKey>() {
             let mut ctx = ExecutionContext::new();
 
             // input data looks like:
@@ -1908,11 +1935,16 @@ mod tests {
             // C, 1
             // A, 1
 
-            let dict_array: DictionaryArray<K> =
-                vec!["A", "B", "A", "A", "C", "A"].into_iter().collect();
-            let dict_array = Arc::new(dict_array);
+            let data = vec!["A", "B", "A", "A", "C", "A"];
 
-            let val_array: Int64Array = vec![1, 2, 2, 4, 1, 1].into();
+            let data = data.into_iter().map(Some);
+
+            let mut dict_array =
+                MutableDictionaryArray::<K, MutableUtf8Array<i32>>::new();
+            dict_array.try_extend(data).unwrap();
+            let dict_array = dict_array.into_arc();
+
+            let val_array = Int64Array::from_slice(&[1, 2, 2, 4, 1, 1]);
             let val_array = Arc::new(val_array);
 
             let schema = Arc::new(Schema::new(vec![
@@ -1981,14 +2013,14 @@ mod tests {
             assert_batches_sorted_eq!(expected, &results);
         }
 
-        run_test_case::<Int8Type>().await;
-        run_test_case::<Int16Type>().await;
-        run_test_case::<Int32Type>().await;
-        run_test_case::<Int64Type>().await;
-        run_test_case::<UInt8Type>().await;
-        run_test_case::<UInt16Type>().await;
-        run_test_case::<UInt32Type>().await;
-        run_test_case::<UInt64Type>().await;
+        run_test_case::<i8>().await;
+        run_test_case::<i16>().await;
+        run_test_case::<i32>().await;
+        run_test_case::<i64>().await;
+        run_test_case::<u8>().await;
+        run_test_case::<u16>().await;
+        run_test_case::<u32>().await;
+        run_test_case::<u64>().await;
     }
 
     async fn run_count_distinct_integers_aggregated_scenario(
@@ -2193,7 +2225,7 @@ mod tests {
             vec![test::make_partition(4)],
             vec![test::make_partition(5)],
         ];
-        let schema = partitions[0][0].schema();
+        let schema = partitions[0][0].schema().clone();
         let provider = Arc::new(MemTable::try_new(schema, partitions).unwrap());
 
         ctx.register_table("t", provider).unwrap();
@@ -2419,7 +2451,7 @@ mod tests {
 
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
+        write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
         let mut ctx = ExecutionContext::new();
@@ -2531,8 +2563,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
-                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
-                Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
             ],
         )?;
 
@@ -2630,11 +2662,11 @@ mod tests {
 
         let batch1 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+            vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
         )?;
         let batch2 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![4, 5]))],
+            vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
         )?;
 
         let mut ctx = ExecutionContext::new();
@@ -2667,11 +2699,11 @@ mod tests {
 
         let batch1 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+            vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
         )?;
         let batch2 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![4, 5]))],
+            vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
         )?;
 
         let mut ctx = ExecutionContext::new();
@@ -3133,16 +3165,16 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
-                Arc::new(Int32Array::from(vec![1])),
-                Arc::new(Float64Array::from(vec![1.0])),
-                Arc::new(StringArray::from(vec![Some("foo")])),
-                Arc::new(LargeStringArray::from(vec![Some("bar")])),
-                Arc::new(BinaryArray::from(vec![b"foo" as &[u8]])),
-                Arc::new(LargeBinaryArray::from(vec![b"foo" as &[u8]])),
-                Arc::new(TimestampNanosecondArray::from_opt_vec(
-                    vec![Some(123)],
-                    None,
-                )),
+                Arc::new(Int32Array::from_slice(&[1])),
+                Arc::new(Float64Array::from_slice(&[1.0])),
+                Arc::new(Utf8Array::<i32>::from(&[Some("foo")])),
+                Arc::new(Utf8Array::<i64>::from(&[Some("bar")])),
+                Arc::new(BinaryArray::<i32>::from_slice(&[b"foo" as &[u8]])),
+                Arc::new(BinaryArray::<i64>::from_slice(&[b"foo" as &[u8]])),
+                Arc::new(
+                    Int64Array::from(&[Some(123)])
+                        .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+                ),
             ],
         )
         .unwrap();
@@ -3405,12 +3437,18 @@ mod tests {
         ctx: &mut ExecutionContext,
         sql: &str,
         out_dir: &str,
-        writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
         let logical_plan = ctx.create_logical_plan(sql)?;
         let logical_plan = ctx.optimize(&logical_plan)?;
         let physical_plan = ctx.create_physical_plan(&logical_plan)?;
-        ctx.write_parquet(physical_plan, out_dir.to_string(), writer_properties)
+
+        let options = write::WriteOptions {
+            compression: write::CompressionCodec::Uncompressed,
+            write_statistics: false,
+            version: write::Version::V1,
+        };
+
+        ctx.write_parquet(physical_plan, out_dir.to_string(), options)
             .await
     }
 

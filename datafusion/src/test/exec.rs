@@ -109,7 +109,7 @@ impl Stream for TestStream {
 impl RecordBatchStream for TestStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        self.data[0].schema()
+        self.data[0].schema().clone()
     }
 }
 
@@ -199,7 +199,7 @@ impl ExecutionPlan for MockExec {
 fn clone_error(e: &ArrowError) -> ArrowError {
     use ArrowError::*;
     match e {
-        ComputeError(msg) => ComputeError(msg.to_string()),
+        InvalidArgumentError(msg) => InvalidArgumentError(msg.to_string()),
         _ => unimplemented!(),
     }
 }

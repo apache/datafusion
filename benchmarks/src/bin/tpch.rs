@@ -27,11 +27,12 @@ use std::{
 
 use futures::StreamExt;
 
-use ballista::context::BallistaContext;
+//use ballista::context::BallistaContext;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::io::parquet::write::{CompressionCodec, WriteOptions};
+use datafusion::arrow::io::print;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::arrow::util::pretty;
 
 use datafusion::datasource::parquet::ParquetTable;
 use datafusion::datasource::{CsvFile, MemTable, TableProvider};
@@ -40,8 +41,6 @@ use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 
-use datafusion::parquet::basic::Compression;
-use datafusion::parquet::file::properties::WriterProperties;
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -188,7 +187,7 @@ async fn main() -> Result<()> {
     env_logger::init();
     match TpchOpt::from_args() {
         TpchOpt::Benchmark(BallistaBenchmark(opt)) => {
-            benchmark_ballista(opt).await.map(|_| ())
+            todo!() //benchmark_ballista(opt).await.map(|_| ())
         }
         TpchOpt::Benchmark(DataFusionBenchmark(opt)) => {
             benchmark_datafusion(opt).await.map(|_| ())
@@ -248,6 +247,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     Ok(result)
 }
 
+/*
 async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     println!("Running benchmarks with the following options: {:?}", opt);
 
@@ -320,6 +320,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
 
     Ok(())
 }
+*/
 
 fn get_query_sql(query: usize) -> Result<String> {
     if query > 0 && query < 23 {
@@ -358,7 +359,7 @@ async fn execute_query(
     }
     let result = collect(physical_plan).await?;
     if debug {
-        pretty::print_batches(&result)?;
+        print::print(&result)?;
     }
     Ok(result)
 }
@@ -402,13 +403,13 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
             "csv" => ctx.write_csv(csv, output_path).await?,
             "parquet" => {
                 let compression = match opt.compression.as_str() {
-                    "none" => Compression::UNCOMPRESSED,
-                    "snappy" => Compression::SNAPPY,
-                    "brotli" => Compression::BROTLI,
-                    "gzip" => Compression::GZIP,
-                    "lz4" => Compression::LZ4,
-                    "lz0" => Compression::LZO,
-                    "zstd" => Compression::ZSTD,
+                    "none" => CompressionCodec::Uncompressed,
+                    "snappy" => CompressionCodec::Snappy,
+                    "brotli" => CompressionCodec::Brotli,
+                    "gzip" => CompressionCodec::Gzip,
+                    "lz4" => CompressionCodec::Lz4,
+                    "lz0" => CompressionCodec::Lzo,
+                    "zstd" => CompressionCodec::Zstd,
                     other => {
                         return Err(DataFusionError::NotImplemented(format!(
                             "Invalid compression format: {}",
@@ -416,10 +417,12 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
                         )))
                     }
                 };
-                let props = WriterProperties::builder()
-                    .set_compression(compression)
-                    .build();
-                ctx.write_parquet(csv, output_path, Some(props)).await?
+
+                let options = WriteOptions {
+                    compression,
+                    write_statistics: false,
+                };
+                ctx.write_parquet(csv, options, output_path).await?
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -572,7 +575,6 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::array::*;
-    use datafusion::arrow::util::display::array_value_to_string;
 
     use datafusion::logical_plan::Expr;
     use datafusion::logical_plan::Expr::Cast;
@@ -743,7 +745,7 @@ mod tests {
     }
 
     /// Specialised String representation
-    fn col_str(column: &ArrayRef, row_index: usize) -> String {
+    fn col_str(column: &dyn Array, row_index: usize) -> String {
         if column.is_null(row_index) {
             return "NULL".to_string();
         }
@@ -758,7 +760,7 @@ mod tests {
 
             let mut r = Vec::with_capacity(*n as usize);
             for i in 0..*n {
-                r.push(col_str(&array, i as usize));
+                r.push(col_str(array.as_ref(), i as usize));
             }
             return format!("[{}]", r.join(","));
         }
@@ -937,7 +939,7 @@ mod tests {
 
     // convert the schema to the same but with all columns set to nullable=true.
     // this allows direct schema comparison ignoring nullable.
-    fn nullable_schema(schema: Arc<Schema>) -> Schema {
+    fn nullable_schema(schema: &Schema) -> Schema {
         Schema::new(
             schema
                 .fields()

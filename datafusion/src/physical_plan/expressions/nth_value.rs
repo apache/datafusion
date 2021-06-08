@@ -128,7 +128,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
             )));
         }
         if num_rows == 0 {
-            return Ok(new_empty_array(value.data_type()));
+            return Ok(new_empty_array(value.data_type().clone()).into());
         }
         let index: usize = match self.kind {
             NthValueKind::First => 0,
@@ -136,7 +136,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
             NthValueKind::Nth(n) => (n as usize) - 1,
         };
         Ok(if index >= num_rows {
-            new_null_array(value.data_type(), num_rows)
+            new_null_array(value.data_type().clone(), num_rows).into()
         } else {
             let value = ScalarValue::try_from_array(value, index)?;
             value.to_array_of_size(num_rows)
@@ -153,14 +153,15 @@ mod tests {
     use arrow::{array::*, datatypes::*};
 
     fn test_i32_result(expr: NthValue, expected: Vec<i32>) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let arr: ArrayRef =
+            Arc::new(Int32Array::from_slice(&[1, -2, 3, -4, 5, -6, 7, 8]));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
         let result = expr.evaluate(batch.num_rows(), &values)?;
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
         let result = result.values();
-        assert_eq!(expected, result);
+        assert_eq!(expected, result.as_slice());
         Ok(())
     }
 

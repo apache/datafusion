@@ -120,14 +120,12 @@ mod tests {
             vec![],
             Arc::new(ParquetExec::new(
                 vec![ParquetPartition {
-                    filenames: vec!["x".to_string()],
+                    filename: "x".to_string(),
                     statistics: Statistics::default(),
                 }],
                 schema,
                 None,
-                None,
                 2048,
-                None,
             )),
         )?;
 
@@ -157,14 +155,12 @@ mod tests {
                 vec![],
                 Arc::new(ParquetExec::new(
                     vec![ParquetPartition {
-                        filenames: vec!["x".to_string()],
+                        filename: "x".to_string(),
                         statistics: Statistics::default(),
                     }],
                     schema,
                     None,
-                    None,
                     2048,
-                    None,
                 )),
             )?),
         )?;

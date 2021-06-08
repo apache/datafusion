@@ -23,7 +23,7 @@ use std::process;
 use std::time::Instant;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::util::pretty;
+use datafusion::arrow::io::print;
 
 use datafusion::error::Result;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
@@ -124,7 +124,7 @@ async fn execute_sql(ctx: &mut ExecutionContext, sql: &str, debug: bool) -> Resu
     let physical_plan = ctx.create_physical_plan(&plan)?;
     let result = collect(physical_plan).await?;
     if debug {
-        pretty::print_batches(&result)?;
+        print::print(&result)?;
     }
     Ok(())
 }

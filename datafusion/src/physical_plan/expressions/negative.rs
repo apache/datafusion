@@ -20,10 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
-use arrow::compute::kernels::arithmetic::negate;
 use arrow::{
-    array::{Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array},
+    array::*,
+    compute::arithmetics::negate,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
@@ -36,12 +35,12 @@ use super::coercion;
 /// Invoke a compute kernel on array(s)
 macro_rules! compute_op {
     // invoke unary operator
-    ($OPERAND:expr, $OP:ident, $DT:ident) => {{
+    ($OPERAND:expr, $DT:ident) => {{
         let operand = $OPERAND
             .as_any()
             .downcast_ref::<$DT>()
             .expect("compute_op failed to downcast array");
-        Ok(Arc::new($OP(&operand)?))
+        Ok(Arc::new(negate(operand)))
     }};
 }
 
@@ -89,12 +88,12 @@ impl PhysicalExpr for NegativeExpr {
         match arg {
             ColumnarValue::Array(array) => {
                 let result: Result<ArrayRef> = match array.data_type() {
-                    DataType::Int8 => compute_op!(array, negate, Int8Array),
-                    DataType::Int16 => compute_op!(array, negate, Int16Array),
-                    DataType::Int32 => compute_op!(array, negate, Int32Array),
-                    DataType::Int64 => compute_op!(array, negate, Int64Array),
-                    DataType::Float32 => compute_op!(array, negate, Float32Array),
-                    DataType::Float64 => compute_op!(array, negate, Float64Array),
+                    DataType::Int8 => compute_op!(array, Int8Array),
+                    DataType::Int16 => compute_op!(array, Int16Array),
+                    DataType::Int32 => compute_op!(array, Int32Array),
+                    DataType::Int64 => compute_op!(array, Int64Array),
+                    DataType::Float32 => compute_op!(array, Float32Array),
+                    DataType::Float64 => compute_op!(array, Float64Array),
                     _ => Err(DataFusionError::Internal(format!(
                         "(- '{:?}') can't be evaluated because the expression's type is {:?}, not signed numeric",
                         self,

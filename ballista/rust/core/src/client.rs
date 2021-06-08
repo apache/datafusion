@@ -35,7 +35,7 @@ use arrow_flight::utils::flight_data_to_arrow_batch;
 use arrow_flight::Ticket;
 use arrow_flight::{flight_service_client::FlightServiceClient, FlightData};
 use datafusion::arrow::{
-    array::{StringArray, StructArray},
+    array::{StructArray, Utf8Array},
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
@@ -104,10 +104,8 @@ impl BallistaClient {
                     let path = batch
                         .column(0)
                         .as_any()
-                        .downcast_ref::<StringArray>()
-                        .expect(
-                            "execute_partition expected column 0 to be a StringArray",
-                        );
+                        .downcast_ref::<Utf8Array<i32>>()
+                        .expect("execute_partition expected column 0 to be a Utf8Array");
 
                     let stats = batch
                         .column(1)
@@ -206,6 +204,7 @@ impl Stream for FlightDataStream {
                         flight_data_to_arrow_batch(
                             &flight_data_chunk,
                             self.schema.clone(),
+                            true,
                             &[],
                         )
                     });
