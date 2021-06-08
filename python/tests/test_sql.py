@@ -50,6 +50,11 @@ def test_register_csv(ctx, tmp_path):
         result = pa.Table.from_batches(result)
         assert result.to_pydict() == {"COUNT(a)": [100]}
 
+    with pytest.raises(
+        ValueError, match="Delimiter must be a single character"
+    ):
+        ctx.register_csv("csv3", path, delimiter=b"wrong")
+
 
 def test_register_parquet(ctx, tmp_path):
     path = helpers.write_parquet(tmp_path / "a.parquet", helpers.data())
