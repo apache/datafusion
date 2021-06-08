@@ -24,11 +24,11 @@ use crate::physical_plan::{
     common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning, SQLMetric,
 };
 pub use arrow::compute::SortOptions;
-use arrow::compute::{lexsort_to_indices, take, SortColumn, TakeOptions};
+use arrow::compute::{lexsort, SortColumn};
 use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, error::ArrowError};
 use async_trait::async_trait;
 use futures::stream::Stream;
 use futures::Future;
@@ -191,35 +191,15 @@ fn sort_batch(
     schema: SchemaRef,
     expr: &[PhysicalSortExpr],
 ) -> ArrowResult<RecordBatch> {
+    let sort_columns = expr
+        .iter()
+        .map(|e| e.evaluate_to_sort_column(&batch))
+        .collect::<Result<Vec<SortColumn>>>()
+        .map_err(DataFusionError::into_arrow_external_error)?;
     // TODO: pushup the limit expression to sort
-    let indices = lexsort_to_indices(
-        &expr
-            .iter()
-            .map(|e| e.evaluate_to_sort_column(&batch))
-            .collect::<Result<Vec<SortColumn>>>()
-            .map_err(DataFusionError::into_arrow_external_error)?,
-        None,
-    )?;
-
-    // reorder all rows based on sorted indices
-    RecordBatch::try_new(
-        schema,
-        batch
-            .columns()
-            .iter()
-            .map(|column| {
-                take(
-                    column.as_ref(),
-                    &indices,
-                    // disable bound check overhead since indices are already generated from
-                    // the same record batch
-                    Some(TakeOptions {
-                        check_bounds: false,
-                    }),
-                )
-            })
-            .collect::<ArrowResult<Vec<ArrayRef>>>()?,
-    )
+    let limit = None;
+    let sorted = lexsort(&sort_columns, limit)?;
+    RecordBatch::try_new(schema, sorted)
 }
 
 pin_project! {
