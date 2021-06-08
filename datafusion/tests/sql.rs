@@ -3437,3 +3437,15 @@ async fn test_physical_plan_display_indent_multi_children() {
         expected, actual
     );
 }
+
+#[tokio::test]
+async fn test_aggregation_with_bad_arguments() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
+    let logical_plan = ctx.create_logical_plan(&sql)?;
+    let physical_plan = ctx.create_physical_plan(&logical_plan);
+    let err = physical_plan.unwrap_err();
+    assert_eq!(err.to_string(), "Error during planning: Invalid or wrong number of arguments passed to aggregate: 'COUNT(DISTINCT )'");
+    Ok(())
+}
