@@ -53,7 +53,7 @@ jobs:
           pip install -r requirements.txt
           maturin develop
 
-          python -m unittest discover tests
+          pytest -v .
         env:
           CARGO_HOME: "/home/runner/.cargo"
           CARGO_TARGET_DIR: "/home/runner/target"

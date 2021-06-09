@@ -15,100 +15,98 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import unittest
-
 import pyarrow as pa
-import datafusion
+import pytest
+from datafusion import ExecutionContext
+from datafusion import functions as f
 
-f = datafusion.functions
+
+@pytest.fixture
+def df():
+    ctx = ExecutionContext()
+
+    # create a RecordBatch and a new DataFrame from it
+    batch = pa.RecordBatch.from_arrays(
+        [pa.array([1, 2, 3]), pa.array([4, 5, 6])],
+        names=["a", "b"],
+    )
+
+    return ctx.create_dataframe([[batch]])
 
 
-class TestCase(unittest.TestCase):
-    def _prepare(self):
-        ctx = datafusion.ExecutionContext()
+def test_select(df):
+    df = df.select(
+        f.col("a") + f.col("b"),
+        f.col("a") - f.col("b"),
+    )
 
-        # create a RecordBatch and a new DataFrame from it
-        batch = pa.RecordBatch.from_arrays(
-            [pa.array([1, 2, 3]), pa.array([4, 5, 6])],
-            names=["a", "b"],
-        )
-        return ctx.create_dataframe([[batch]])
+    # execute and collect the first (and only) batch
+    result = df.collect()[0]
 
-    def test_select(self):
-        df = self._prepare()
+    assert result.column(0) == pa.array([5, 7, 9])
+    assert result.column(1) == pa.array([-3, -3, -3])
 
-        df = df.select(
-            f.col("a") + f.col("b"),
-            f.col("a") - f.col("b"),
-        )
 
-        # execute and collect the first (and only) batch
-        result = df.collect()[0]
+def test_filter(df):
+    df = df.select(
+        f.col("a") + f.col("b"),
+        f.col("a") - f.col("b"),
+    ).filter(f.col("a") > f.lit(2))
 
-        self.assertEqual(result.column(0), pa.array([5, 7, 9]))
-        self.assertEqual(result.column(1), pa.array([-3, -3, -3]))
+    # execute and collect the first (and only) batch
+    result = df.collect()[0]
 
-    def test_filter(self):
-        df = self._prepare()
+    assert result.column(0) == pa.array([9])
+    assert result.column(1) == pa.array([-3])
 
-        df = df.select(
-            f.col("a") + f.col("b"),
-            f.col("a") - f.col("b"),
-        ).filter(f.col("a") > f.lit(2))
 
-        # execute and collect the first (and only) batch
-        result = df.collect()[0]
+def test_sort(df):
+    df = df.sort([f.col("b").sort(ascending=False)])
 
-        self.assertEqual(result.column(0), pa.array([9]))
-        self.assertEqual(result.column(1), pa.array([-3]))
+    table = pa.Table.from_batches(df.collect())
+    expected = {"a": [3, 2, 1], "b": [6, 5, 4]}
 
-    def test_sort(self):
-        df = self._prepare()
-        df = df.sort([f.col("b").sort(ascending=False)])
+    assert table.to_pydict() == expected
 
-        table = pa.Table.from_batches(df.collect())
-        expected = {"a": [3, 2, 1], "b": [6, 5, 4]}
-        self.assertEqual(table.to_pydict(), expected)
 
-    def test_limit(self):
-        df = self._prepare()
+def test_limit(df):
+    df = df.limit(1)
 
-        df = df.limit(1)
+    # execute and collect the first (and only) batch
+    result = df.collect()[0]
 
-        # execute and collect the first (and only) batch
-        result = df.collect()[0]
+    assert len(result.column(0)) == 1
+    assert len(result.column(1)) == 1
 
-        self.assertEqual(len(result.column(0)), 1)
-        self.assertEqual(len(result.column(1)), 1)
 
-    def test_udf(self):
-        df = self._prepare()
+def test_udf(df):
+    # is_null is a pa function over arrays
+    udf = f.udf(lambda x: x.is_null(), [pa.int64()], pa.bool_())
 
-        # is_null is a pa function over arrays
-        udf = f.udf(lambda x: x.is_null(), [pa.int64()], pa.bool_())
+    df = df.select(udf(f.col("a")))
+    result = df.collect()[0].column(0)
 
-        df = df.select(udf(f.col("a")))
+    assert result == pa.array([False, False, False])
 
-        self.assertEqual(df.collect()[0].column(0), pa.array([False, False, False]))
 
-    def test_join(self):
-        ctx = datafusion.ExecutionContext()
+def test_join():
+    ctx = ExecutionContext()
 
-        batch = pa.RecordBatch.from_arrays(
-            [pa.array([1, 2, 3]), pa.array([4, 5, 6])],
-            names=["a", "b"],
-        )
-        df = ctx.create_dataframe([[batch]])
+    batch = pa.RecordBatch.from_arrays(
+        [pa.array([1, 2, 3]), pa.array([4, 5, 6])],
+        names=["a", "b"],
+    )
+    df = ctx.create_dataframe([[batch]])
 
-        batch = pa.RecordBatch.from_arrays(
-            [pa.array([1, 2]), pa.array([8, 10])],
-            names=["a", "c"],
-        )
-        df1 = ctx.create_dataframe([[batch]])
+    batch = pa.RecordBatch.from_arrays(
+        [pa.array([1, 2]), pa.array([8, 10])],
+        names=["a", "c"],
+    )
+    df1 = ctx.create_dataframe([[batch]])
 
-        df = df.join(df1, on="a", how="inner")
-        df = df.sort([f.col("a").sort(ascending=True)])
-        table = pa.Table.from_batches(df.collect())
+    df = df.join(df1, on="a", how="inner")
+    df = df.sort([f.col("a").sort(ascending=True)])
+    table = pa.Table.from_batches(df.collect())
 
-        expected = {"a": [1, 2], "c": [8, 10], "b": [4, 5]}
-        self.assertEqual(table.to_pydict(), expected)
+    expected = {"a": [1, 2], "c": [8, 10], "b": [4, 5]}
+    assert table.to_pydict() == expected
