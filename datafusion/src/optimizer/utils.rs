@@ -356,7 +356,8 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
                 })
                 .ok_or_else(|| {
                     DataFusionError::Internal(
-                        "Ill-formed window function expressions: unexpected marker".to_owned(),
+                        "Ill-formed window function expressions: unexpected marker"
+                            .to_owned(),
                     )
                 })?;
 
@@ -374,7 +375,8 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
 
             if partition_index >= sort_index {
                 Err(DataFusionError::Internal(
-                    "Ill-formed window function expressions: partition index too large".to_owned(),
+                    "Ill-formed window function expressions: partition index too large"
+                        .to_owned(),
                 ))
             } else {
                 Ok(Expr::WindowFunction {
