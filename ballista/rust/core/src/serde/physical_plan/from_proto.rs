@@ -236,7 +236,9 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         Expr::WindowFunction {
                             fun,
                             args,
+                            partition_by,
                             order_by,
+                            window_frame,
                             ..
                         } => {
                             let arg = df_planner
@@ -248,8 +250,14 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                                 .map_err(|e| {
                                     BallistaError::General(format!("{:?}", e))
                                 })?;
+                            if !partition_by.is_empty() {
+                                return Err(BallistaError::NotImplemented("Window function with partition by is not yet implemented".to_owned()));
+                            }
                             if !order_by.is_empty() {
                                 return Err(BallistaError::NotImplemented("Window function with order by is not yet implemented".to_owned()));
+                            }
+                            if window_frame.is_some() {
+                                return Err(BallistaError::NotImplemented("Window function with window frame is not yet implemented".to_owned()));
                             }
                             let window_expr = create_window_expr(
                                 &fun,

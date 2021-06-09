@@ -1006,6 +1006,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
             Expr::WindowFunction {
                 ref fun,
                 ref args,
+                ref partition_by,
                 ref order_by,
                 ref window_frame,
                 ..
@@ -1023,6 +1024,10 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     }
                 };
                 let arg = &args[0];
+                let partition_by = partition_by
+                    .iter()
+                    .map(|e| e.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
                 let order_by = order_by
                     .iter()
                     .map(|e| e.try_into())
@@ -1035,6 +1040,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: Some(Box::new(arg.try_into()?)),
                     window_function: Some(window_function),
+                    partition_by,
                     order_by,
                     window_frame,
                 });
