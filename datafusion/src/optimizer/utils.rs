@@ -36,6 +36,7 @@ use crate::{
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
 const CASE_ELSE_MARKER: &str = "__DATAFUSION_CASE_ELSE__";
+const WINDOW_PARTITION_MARKER: &str = "__DATAFUSION_WINDOW_PARTITION__";
 const WINDOW_SORT_MARKER: &str = "__DATAFUSION_WINDOW_SORT__";
 
 /// Recursively walk a list of expression trees, collecting the unique set of column
@@ -258,9 +259,16 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         Expr::IsNotNull(e) => Ok(vec![e.as_ref().to_owned()]),
         Expr::ScalarFunction { args, .. } => Ok(args.clone()),
         Expr::ScalarUDF { args, .. } => Ok(args.clone()),
-        Expr::WindowFunction { args, order_by, .. } => {
+        Expr::WindowFunction {
+            args,
+            partition_by,
+            order_by,
+            ..
+        } => {
             let mut expr_list: Vec<Expr> = vec![];
             expr_list.extend(args.clone());
+            expr_list.push(lit(WINDOW_PARTITION_MARKER));
+            expr_list.extend(partition_by.clone());
             expr_list.push(lit(WINDOW_SORT_MARKER));
             expr_list.extend(order_by.clone());
             Ok(expr_list)
@@ -340,7 +348,20 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
         Expr::WindowFunction {
             fun, window_frame, ..
         } => {
-            let index = expressions
+            let partition_index = expressions
+                .iter()
+                .position(|expr| {
+                    matches!(expr, Expr::Literal(ScalarValue::Utf8(Some(str)))
+            if str == WINDOW_PARTITION_MARKER)
+                })
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Ill-formed window function expressions: unexpected marker"
+                            .to_owned(),
+                    )
+                })?;
+
+            let sort_index = expressions
                 .iter()
                 .position(|expr| {
                     matches!(expr, Expr::Literal(ScalarValue::Utf8(Some(str)))
@@ -351,12 +372,21 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
                         "Ill-formed window function expressions".to_owned(),
                     )
                 })?;
-            Ok(Expr::WindowFunction {
-                fun: fun.clone(),
-                args: expressions[..index].to_vec(),
-                order_by: expressions[index + 1..].to_vec(),
-                window_frame: *window_frame,
-            })
+
+            if partition_index >= sort_index {
+                Err(DataFusionError::Internal(
+                    "Ill-formed window function expressions: partition index too large"
+                        .to_owned(),
+                ))
+            } else {
+                Ok(Expr::WindowFunction {
+                    fun: fun.clone(),
+                    args: expressions[..partition_index].to_vec(),
+                    partition_by: expressions[partition_index + 1..sort_index].to_vec(),
+                    order_by: expressions[sort_index + 1..].to_vec(),
+                    window_frame: *window_frame,
+                })
+            }
         }
         Expr::AggregateFunction { fun, distinct, .. } => Ok(Expr::AggregateFunction {
             fun: fun.clone(),

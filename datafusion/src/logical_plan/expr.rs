@@ -194,6 +194,8 @@ pub enum Expr {
         fun: window_functions::WindowFunction,
         /// List of expressions to feed to the functions as arguments
         args: Vec<Expr>,
+        /// List of partition by expressions
+        partition_by: Vec<Expr>,
         /// List of order by expressions
         order_by: Vec<Expr>,
         /// Window frame
@@ -588,8 +590,16 @@ impl Expr {
             Expr::ScalarUDF { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
-            Expr::WindowFunction { args, order_by, .. } => {
+            Expr::WindowFunction {
+                args,
+                partition_by,
+                order_by,
+                ..
+            } => {
                 let visitor = args
+                    .iter()
+                    .try_fold(visitor, |visitor, arg| arg.accept(visitor))?;
+                let visitor = partition_by
                     .iter()
                     .try_fold(visitor, |visitor, arg| arg.accept(visitor))?;
                 let visitor = order_by
@@ -733,11 +743,13 @@ impl Expr {
             Expr::WindowFunction {
                 args,
                 fun,
+                partition_by,
                 order_by,
                 window_frame,
             } => Expr::WindowFunction {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
+                partition_by: rewrite_vec(partition_by, rewriter)?,
                 order_by: rewrite_vec(order_by, rewriter)?,
                 window_frame,
             },

@@ -910,6 +910,12 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                     .window_function
                     .as_ref()
                     .ok_or_else(|| proto_error("Received empty window function"))?;
+                let partition_by = expr
+                    .partition_by
+                    .iter()
+                    .map(|e| e.try_into())
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()?;
                 let order_by = expr
                     .order_by
                     .iter()
@@ -940,6 +946,7 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                                 AggregateFunction::from(aggr_function),
                             ),
                             args: vec![parse_required_expr(&expr.expr)?],
+                            partition_by,
                             order_by,
                             window_frame,
                         })
@@ -960,6 +967,7 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                                 BuiltInWindowFunction::from(built_in_function),
                             ),
                             args: vec![parse_required_expr(&expr.expr)?],
+                            partition_by,
                             order_by,
                             window_frame,
                         })

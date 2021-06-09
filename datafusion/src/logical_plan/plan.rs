@@ -687,11 +687,7 @@ impl LogicalPlan {
                     LogicalPlan::Window {
                         ref window_expr, ..
                     } => {
-                        write!(
-                            f,
-                            "WindowAggr: windowExpr=[{:?}] partitionBy=[]",
-                            window_expr
-                        )
+                        write!(f, "WindowAggr: windowExpr=[{:?}]", window_expr)
                     }
                     LogicalPlan::Aggregate {
                         ref group_expr,
