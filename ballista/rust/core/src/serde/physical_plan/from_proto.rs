@@ -206,16 +206,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     .clone();
                 let physical_schema: SchemaRef =
                     SchemaRef::new((&input_schema).try_into()?);
-                let catalog_list =
-                    Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
-                let ctx_state = ExecutionContextState {
-                    catalog_list,
-                    scalar_functions: Default::default(),
-                    var_provider: Default::default(),
-                    aggregate_functions: Default::default(),
-                    config: ExecutionConfig::new(),
-                    execution_props: ExecutionProps::new(),
-                };
+                let ctx_state = ExecutionContextState::new();
                 let window_agg_expr: Vec<(Expr, String)> = window_agg
                     .window_expr
                     .iter()
@@ -256,7 +247,6 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         AggregateMode::FinalPartitioned
                     }
                 };
-
                 let group = hash_agg
                     .group_expr
                     .iter()
@@ -265,25 +255,13 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         compile_expr(expr, &input.schema()).map(|e| (e, name.to_string()))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-
                 let logical_agg_expr: Vec<(Expr, String)> = hash_agg
                     .aggr_expr
                     .iter()
                     .zip(hash_agg.aggr_expr_name.iter())
                     .map(|(expr, name)| expr.try_into().map(|expr| (expr, name.clone())))
                     .collect::<Result<Vec<_>, _>>()?;
-
-                let catalog_list =
-                    Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
-                let ctx_state = ExecutionContextState {
-                    catalog_list,
-                    scalar_functions: Default::default(),
-                    var_provider: Default::default(),
-                    aggregate_functions: Default::default(),
-                    config: ExecutionConfig::new(),
-                    execution_props: ExecutionProps::new(),
-                };
-
+                let ctx_state = ExecutionContextState::new();
                 let input_schema = hash_agg
                     .input_schema
                     .as_ref()
@@ -424,15 +402,7 @@ fn compile_expr(
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>, BallistaError> {
     let df_planner = DefaultPhysicalPlanner::default();
-    let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
-    let state = ExecutionContextState {
-        catalog_list,
-        scalar_functions: HashMap::new(),
-        var_provider: HashMap::new(),
-        aggregate_functions: HashMap::new(),
-        config: ExecutionConfig::new(),
-        execution_props: ExecutionProps::new(),
-    };
+    let state = ExecutionContextState::new();
     let expr: Expr = expr.try_into()?;
     df_planner
         .create_physical_expr(&expr, schema, &state)
