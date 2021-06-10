@@ -713,7 +713,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let select_exprs = select_exprs
             .iter()
             .map(|expr| rebase_expr(expr, &window_exprs, &plan))
-            .into_iter()
             .collect::<Result<Vec<_>>>()?;
         Ok((plan, select_exprs))
     }
@@ -810,7 +809,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let order_by_rex = order_by
             .iter()
             .map(|e| self.order_by_to_sort_expr(e))
-            .into_iter()
             .collect::<Result<Vec<_>>>()?;
 
         LogicalPlanBuilder::from(&plan).sort(order_by_rex)?.build()
@@ -1126,13 +1124,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .partition_by
                         .iter()
                         .map(|e| self.sql_expr_to_logical_expr(e))
-                        .into_iter()
                         .collect::<Result<Vec<_>>>()?;
                     let order_by = window
                         .order_by
                         .iter()
                         .map(|e| self.order_by_to_sort_expr(e))
-                        .into_iter()
                         .collect::<Result<Vec<_>>>()?;
                     let window_frame = window
                         .window_frame
