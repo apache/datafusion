@@ -82,6 +82,22 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
         )))
         } else {
             let units = value.units.into();
+            if units == WindowFrameUnits::Range {
+                for bound in &[start_bound, end_bound] {
+                    match bound {
+                        WindowFrameBound::Preceding(Some(v))
+                        | WindowFrameBound::Following(Some(v))
+                            if *v > 0 =>
+                        {
+                            Err(DataFusionError::NotImplemented(format!(
+                                "With WindowFrameUnits={}, the bound cannot be {} PRECEDING or FOLLOWING at the moment",
+                                units, v
+                            )))
+                        }
+                        _ => Ok(()),
+                    }?;
+                }
+            }
             Ok(Self {
                 units,
                 start_bound,
@@ -270,6 +286,25 @@ mod tests {
             result.err().unwrap().to_string(),
             "Execution error: Invalid window frame: start bound (1 PRECEDING) cannot be larger than end bound (2 PRECEDING)".to_owned()
         );
+
+        let window_frame = ast::WindowFrame {
+            units: ast::WindowFrameUnits::Range,
+            start_bound: ast::WindowFrameBound::Preceding(Some(2)),
+            end_bound: Some(ast::WindowFrameBound::Preceding(Some(1))),
+        };
+        let result = WindowFrame::try_from(window_frame);
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "This feature is not implemented: With WindowFrameUnits=RANGE, the bound cannot be 2 PRECEDING or FOLLOWING at the moment".to_owned()
+        );
+
+        let window_frame = ast::WindowFrame {
+            units: ast::WindowFrameUnits::Rows,
+            start_bound: ast::WindowFrameBound::Preceding(Some(2)),
+            end_bound: Some(ast::WindowFrameBound::Preceding(Some(1))),
+        };
+        let result = WindowFrame::try_from(window_frame);
+        assert!(result.is_ok());
         Ok(())
     }
 
