@@ -19,6 +19,7 @@
 
 use crate::catalog::TableReference;
 use crate::datasource::TableProvider;
+use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, lit, DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
@@ -1137,7 +1138,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let window_frame = window
                         .window_frame
                         .as_ref()
-                        .map(|window_frame| window_frame.clone().try_into())
+                        .map(|window_frame| {
+                            let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                            if WindowFrameUnits::Range == window_frame.units
+                                && order_by.len() != 1
+                            {
+                                Err(DataFusionError::Plan(format!(
+                                    "With window frame of type RANGE, the order by expression must be of length 1, got {}", order_by.len())))
+                            } else {
+                                Ok(window_frame)
+                            }
+
+                        })
                         .transpose()?;
                     let fun = window_functions::WindowFunction::from_str(&name)?;
                     match fun {
@@ -2859,10 +2871,10 @@ mod tests {
 
     #[test]
     fn over_order_by_with_window_frame_double_end() {
-        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id RANGE BETWEEN 3 PRECEDING and 3 FOLLOWING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS BETWEEN 3 PRECEDING and 3 FOLLOWING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: #order_id, #MAX(qty) RANGE BETWEEN 3 PRECEDING AND 3 FOLLOWING, #MIN(qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#qty) RANGE BETWEEN 3 PRECEDING AND 3 FOLLOWING]]\
+        Projection: #order_id, #MAX(qty) ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING, #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty) ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING]]\
         \n    Sort: #order_id ASC NULLS FIRST\
         \n      WindowAggr: windowExpr=[[MIN(#qty)]]\
         \n        Sort: #order_id DESC NULLS FIRST\
@@ -2872,15 +2884,47 @@ mod tests {
 
     #[test]
     fn over_order_by_with_window_frame_single_end() {
-        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id RANGE 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: #order_id, #MAX(qty) RANGE BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#qty) RANGE BETWEEN 3 PRECEDING AND CURRENT ROW]]\
+        Projection: #order_id, #MAX(qty) ROWS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(qty)\
+        \n  WindowAggr: windowExpr=[[MAX(#qty) ROWS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
         \n    Sort: #order_id ASC NULLS FIRST\
         \n      WindowAggr: windowExpr=[[MIN(#qty)]]\
         \n        Sort: #order_id DESC NULLS FIRST\
         \n          TableScan: orders projection=None";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn over_order_by_with_window_frame_range_value_check() {
+        let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id RANGE 3 PRECEDING) from orders";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "NotImplemented(\"With WindowFrameUnits=RANGE, the bound cannot be 3 PRECEDING or FOLLOWING at the moment\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn over_order_by_with_window_frame_range_order_by_check() {
+        let sql =
+            "SELECT order_id, MAX(qty) OVER (RANGE UNBOUNDED PRECEDING) from orders";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"With window frame of type RANGE, the order by expression must be of length 1, got 0\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn over_order_by_with_window_frame_range_order_by_check_2() {
+        let sql =
+            "SELECT order_id, MAX(qty) OVER (ORDER BY order_id, qty RANGE UNBOUNDED PRECEDING) from orders";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"With window frame of type RANGE, the order by expression must be of length 1, got 2\")",
+            format!("{:?}", err)
+        );
     }
 
     #[test]

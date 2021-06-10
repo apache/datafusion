@@ -927,10 +927,18 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                     .as_ref()
                     .map::<Result<WindowFrame, _>, _>(|e| match e {
                         window_expr_node::WindowFrame::Frame(frame) => {
-                            frame.clone().try_into()
+                            let window_frame: WindowFrame = frame.clone().try_into()?;
+                            if WindowFrameUnits::Range == window_frame.units
+                                && order_by.len() != 1
+                            {
+                                Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
+                            } else {
+                                Ok(window_frame)
+                            }
                         }
                     })
                     .transpose()?;
+
                 match window_function {
                     window_expr_node::WindowFunction::AggrFunction(i) => {
                         let aggr_function = protobuf::AggregateFunction::from_i32(*i)
