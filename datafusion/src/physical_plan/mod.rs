@@ -343,7 +343,8 @@ pub enum Partitioning {
     RoundRobinBatch(usize),
     /// Allocate rows based on a hash of one of more expressions and the specified
     /// number of partitions
-    /// This partitioning scheme is not yet fully supported. See [ARROW-11011](https://issues.apache.org/jira/browse/ARROW-11011)
+    /// FIXME: This partitioning scheme is not yet fully supported.
+    /// See https://github.com/apache/arrow-datafusion/issues/131
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
