@@ -348,7 +348,6 @@ fn window_aggregate_batch(
                 .collect::<Result<Vec<_>>>()?;
             window_acc.scan_batch(batch.num_rows(), values)
         })
-        .into_iter()
         .collect::<Result<Vec<_>>>()
 }
 
