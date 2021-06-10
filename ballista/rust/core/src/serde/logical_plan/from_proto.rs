@@ -914,13 +914,11 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                     .partition_by
                     .iter()
                     .map(|e| e.try_into())
-                    .into_iter()
                     .collect::<Result<Vec<_>, _>>()?;
                 let order_by = expr
                     .order_by
                     .iter()
                     .map(|e| e.try_into())
-                    .into_iter()
                     .collect::<Result<Vec<_>, _>>()?;
                 let window_frame = expr
                     .window_frame
