@@ -36,7 +36,7 @@ use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
 use datafusion::logical_plan::{DFSchema, Expr};
-use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
+use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::expressions::col;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::PartitionMode;
@@ -45,7 +45,6 @@ use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
 };
-use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::{
     coalesce_batches::CoalesceBatchesExec,
@@ -205,10 +204,8 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         )
                     })?
                     .clone();
-
                 let physical_schema: SchemaRef =
                     SchemaRef::new((&input_schema).try_into()?);
-
                 let catalog_list =
                     Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
                 let ctx_state = ExecutionContextState {
@@ -219,62 +216,24 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     config: ExecutionConfig::new(),
                     execution_props: ExecutionProps::new(),
                 };
-
                 let window_agg_expr: Vec<(Expr, String)> = window_agg
                     .window_expr
                     .iter()
                     .zip(window_agg.window_expr_name.iter())
                     .map(|(expr, name)| expr.try_into().map(|expr| (expr, name.clone())))
                     .collect::<Result<Vec<_>, _>>()?;
-
-                let mut physical_window_expr = vec![];
-
                 let df_planner = DefaultPhysicalPlanner::default();
-
-                for (expr, name) in &window_agg_expr {
-                    match expr {
-                        Expr::WindowFunction {
-                            fun,
-                            args,
-                            partition_by,
-                            order_by,
-                            window_frame,
-                            ..
-                        } => {
-                            let arg = df_planner
-                                .create_physical_expr(
-                                    &args[0],
-                                    &physical_schema,
-                                    &ctx_state,
-                                )
-                                .map_err(|e| {
-                                    BallistaError::General(format!("{:?}", e))
-                                })?;
-                            if !partition_by.is_empty() {
-                                return Err(BallistaError::NotImplemented("Window function with partition by is not yet implemented".to_owned()));
-                            }
-                            if !order_by.is_empty() {
-                                return Err(BallistaError::NotImplemented("Window function with order by is not yet implemented".to_owned()));
-                            }
-                            if window_frame.is_some() {
-                                return Err(BallistaError::NotImplemented("Window function with window frame is not yet implemented".to_owned()));
-                            }
-                            let window_expr = create_window_expr(
-                                &fun,
-                                &[arg],
-                                &physical_schema,
-                                name.to_owned(),
-                            )?;
-                            physical_window_expr.push(window_expr);
-                        }
-                        _ => {
-                            return Err(BallistaError::General(
-                                "Invalid expression for WindowAggrExec".to_string(),
-                            ));
-                        }
-                    }
-                }
-
+                let physical_window_expr = window_agg_expr
+                    .iter()
+                    .map(|(expr, name)| {
+                        df_planner.create_window_expr_with_name(
+                            expr,
+                            name.to_string(),
+                            &physical_schema,
+                            &ctx_state,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(Arc::new(WindowAggExec::try_new(
                     physical_window_expr,
                     input,
@@ -336,37 +295,18 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     .clone();
                 let physical_schema: SchemaRef =
                     SchemaRef::new((&input_schema).try_into()?);
-
-                let mut physical_aggr_expr = vec![];
-
                 let df_planner = DefaultPhysicalPlanner::default();
-                for (expr, name) in &logical_agg_expr {
-                    match expr {
-                        Expr::AggregateFunction { fun, args, .. } => {
-                            let arg = df_planner
-                                .create_physical_expr(
-                                    &args[0],
-                                    &physical_schema,
-                                    &ctx_state,
-                                )
-                                .map_err(|e| {
-                                    BallistaError::General(format!("{:?}", e))
-                                })?;
-                            physical_aggr_expr.push(create_aggregate_expr(
-                                &fun,
-                                false,
-                                &[arg],
-                                &physical_schema,
-                                name.to_string(),
-                            )?);
-                        }
-                        _ => {
-                            return Err(BallistaError::General(
-                                "Invalid expression for HashAggregateExec".to_string(),
-                            ))
-                        }
-                    }
-                }
+                let physical_aggr_expr = logical_agg_expr
+                    .iter()
+                    .map(|(expr, name)| {
+                        df_planner.create_aggregate_expr_with_name(
+                            expr,
+                            name.to_string(),
+                            &physical_schema,
+                            &ctx_state,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(Arc::new(HashAggregateExec::try_new(
                     agg_mode,
                     group,

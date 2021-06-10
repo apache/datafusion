@@ -731,20 +731,14 @@ impl DefaultPhysicalPlanner {
         }
     }
 
-    /// Create a window expression from a logical expression
-    pub fn create_window_expr(
+    /// Create a window expression with a name from a logical expression
+    pub fn create_window_expr_with_name(
         &self,
         e: &Expr,
-        logical_input_schema: &DFSchema,
+        name: String,
         physical_input_schema: &Schema,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn WindowExpr>> {
-        // unpack aliased logical expressions, e.g. "sum(col) over () as total"
-        let (name, e) = match e {
-            Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-            _ => (e.name(logical_input_schema)?, e),
-        };
-
         match e {
             Expr::WindowFunction { fun, args, .. } => {
                 let args = args
@@ -767,20 +761,30 @@ impl DefaultPhysicalPlanner {
         }
     }
 
-    /// Create an aggregate expression from a logical expression
-    pub fn create_aggregate_expr(
+    /// Create a window expression from a logical expression or an alias
+    pub fn create_window_expr(
         &self,
         e: &Expr,
         logical_input_schema: &DFSchema,
         physical_input_schema: &Schema,
         ctx_state: &ExecutionContextState,
-    ) -> Result<Arc<dyn AggregateExpr>> {
-        // unpack aliased logical expressions, e.g. "sum(col) as total"
+    ) -> Result<Arc<dyn WindowExpr>> {
+        // unpack aliased logical expressions, e.g. "sum(col) over () as total"
         let (name, e) = match e {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
             _ => (e.name(logical_input_schema)?, e),
         };
+        self.create_window_expr_with_name(e, name, physical_input_schema, ctx_state)
+    }
 
+    /// Create an aggregate expression with a name from a logical expression
+    pub fn create_aggregate_expr_with_name(
+        &self,
+        e: &Expr,
+        name: String,
+        physical_input_schema: &Schema,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn AggregateExpr>> {
         match e {
             Expr::AggregateFunction {
                 fun,
@@ -819,7 +823,23 @@ impl DefaultPhysicalPlanner {
         }
     }
 
-    /// Create an aggregate expression from a logical expression
+    /// Create an aggregate expression from a logical expression or an alias
+    pub fn create_aggregate_expr(
+        &self,
+        e: &Expr,
+        logical_input_schema: &DFSchema,
+        physical_input_schema: &Schema,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn AggregateExpr>> {
+        // unpack aliased logical expressions, e.g. "sum(col) as total"
+        let (name, e) = match e {
+            Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
+            _ => (e.name(logical_input_schema)?, e),
+        };
+        self.create_aggregate_expr_with_name(e, name, physical_input_schema, ctx_state)
+    }
+
+    /// Create a physical sort expression from a logical expression
     pub fn create_physical_sort_expr(
         &self,
         e: &Expr,
