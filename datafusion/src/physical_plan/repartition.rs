@@ -60,12 +60,40 @@ pub struct RepartitionExec {
             HashMap<usize, (UnboundedSender<MaybeBatch>, UnboundedReceiver<MaybeBatch>)>,
         >,
     >,
+
+    /// Execution metrics
+    metrics: RepartitionMetrics,
+}
+
+#[derive(Debug, Clone)]
+struct RepartitionMetrics {
     /// Time in nanos to execute child operator and fetch batches
-    fetch_time_nanos: Arc<SQLMetric>,
+    fetch_nanos: Arc<SQLMetric>,
     /// Time in nanos to perform repartitioning
-    repart_time_nanos: Arc<SQLMetric>,
+    repart_nanos: Arc<SQLMetric>,
     /// Time in nanos for sending resulting batches to channels
-    send_time_nanos: Arc<SQLMetric>,
+    send_nanos: Arc<SQLMetric>,
+}
+
+impl RepartitionMetrics {
+    fn new() -> Self {
+        Self {
+            fetch_nanos: SQLMetric::time_nanos(),
+            repart_nanos: SQLMetric::time_nanos(),
+            send_nanos: SQLMetric::time_nanos(),
+        }
+    }
+    /// Convert into the external metrics form
+    fn to_hashmap(&self) -> HashMap<String, SQLMetric> {
+        let mut metrics = HashMap::new();
+        metrics.insert("fetchTime".to_owned(), self.fetch_nanos.as_ref().clone());
+        metrics.insert(
+            "repartitionTime".to_owned(),
+            self.repart_nanos.as_ref().clone(),
+        );
+        metrics.insert("sendTime".to_owned(), self.send_nanos.as_ref().clone());
+        metrics
+    }
 }
 
 impl RepartitionExec {
@@ -145,6 +173,7 @@ impl ExecutionPlan for RepartitionExec {
                     .iter()
                     .map(|(partition, (tx, _rx))| (*partition, tx.clone()))
                     .collect();
+
                 let input_task: JoinHandle<Result<()>> =
                     tokio::spawn(Self::pull_from_input(
                         random.clone(),
@@ -152,9 +181,7 @@ impl ExecutionPlan for RepartitionExec {
                         i,
                         txs.clone(),
                         self.partitioning.clone(),
-                        self.fetch_time_nanos.clone(),
-                        self.repart_time_nanos.clone(),
-                        self.send_time_nanos.clone(),
+                        self.metrics.clone(),
                     ));
 
                 // In a separate task, wait for each input to be done
@@ -174,14 +201,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn metrics(&self) -> HashMap<String, SQLMetric> {
-        let mut metrics = HashMap::new();
-        metrics.insert("fetchTime".to_owned(), (*self.fetch_time_nanos).clone());
-        metrics.insert(
-            "repartitionTime".to_owned(),
-            (*self.repart_time_nanos).clone(),
-        );
-        metrics.insert("sendTime".to_owned(), (*self.send_time_nanos).clone());
-        metrics
+        self.metrics.to_hashmap()
     }
 
     fn fmt_as(
@@ -207,9 +227,7 @@ impl RepartitionExec {
             input,
             partitioning,
             channels: Arc::new(Mutex::new(HashMap::new())),
-            fetch_time_nanos: SQLMetric::time_nanos(),
-            repart_time_nanos: SQLMetric::time_nanos(),
-            send_time_nanos: SQLMetric::time_nanos(),
+            metrics: RepartitionMetrics::new(),
         })
     }
 
@@ -225,17 +243,14 @@ impl RepartitionExec {
         i: usize,
         mut txs: HashMap<usize, UnboundedSender<Option<ArrowResult<RecordBatch>>>>,
         partitioning: Partitioning,
-        // TODO move these to a single Metrics object
-        fetch_time: Arc<SQLMetric>,
-        repart_time: Arc<SQLMetric>,
-        send_time: Arc<SQLMetric>,
+        metrics: RepartitionMetrics,
     ) -> Result<()> {
         let num_output_partitions = txs.len();
 
         // execute the child operator
         let now = Instant::now();
         let mut stream = input.execute(i).await?;
-        fetch_time.add(now.elapsed().as_nanos() as usize);
+        metrics.fetch_nanos.add(now.elapsed().as_nanos() as usize);
 
         let mut counter = 0;
         let hashes_buf = &mut vec![];
@@ -244,7 +259,7 @@ impl RepartitionExec {
             // fetch the next batch
             let now = Instant::now();
             let result = stream.next().await;
-            fetch_time.add(now.elapsed().as_nanos() as usize);
+            metrics.fetch_nanos.add(now.elapsed().as_nanos() as usize);
 
             if result.is_none() {
                 break;
@@ -258,7 +273,7 @@ impl RepartitionExec {
                     let tx = txs.get_mut(&output_partition).unwrap();
                     tx.send(Some(result))
                         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-                    send_time.add(now.elapsed().as_nanos() as usize);
+                    metrics.send_nanos.add(now.elapsed().as_nanos() as usize);
                 }
                 Partitioning::Hash(exprs, _) => {
                     let now = Instant::now();
@@ -280,7 +295,7 @@ impl RepartitionExec {
                         indices[(*hash % num_output_partitions as u64) as usize]
                             .push(index as u64)
                     }
-                    repart_time.add(now.elapsed().as_nanos() as usize);
+                    metrics.repart_nanos.add(now.elapsed().as_nanos() as usize);
                     for (num_output_partition, partition_indices) in
                         indices.into_iter().enumerate()
                     {
@@ -298,12 +313,12 @@ impl RepartitionExec {
                             .collect::<Result<Vec<Arc<dyn Array>>>>()?;
                         let output_batch =
                             RecordBatch::try_new(input_batch.schema(), columns);
-                        repart_time.add(now.elapsed().as_nanos() as usize);
+                        metrics.repart_nanos.add(now.elapsed().as_nanos() as usize);
                         let now = Instant::now();
                         let tx = txs.get_mut(&num_output_partition).unwrap();
                         tx.send(Some(output_batch))
                             .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-                        send_time.add(now.elapsed().as_nanos() as usize);
+                        metrics.send_nanos.add(now.elapsed().as_nanos() as usize);
                     }
                 }
                 other => {
