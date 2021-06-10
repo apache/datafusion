@@ -107,6 +107,11 @@ impl SQLMetric {
         self.value.fetch_add(n, Ordering::Relaxed);
     }
 
+    /// Add elapsed nanoseconds since `start`to self
+    pub fn add_elapsed(&self, start: std::time::Instant) {
+        self.add(start.elapsed().as_nanos() as usize)
+    }
+
     /// Get the current value
     pub fn value(&self) -> usize {
         self.value.load(Ordering::Relaxed)

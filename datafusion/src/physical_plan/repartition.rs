@@ -250,7 +250,7 @@ impl RepartitionExec {
         // execute the child operator
         let now = Instant::now();
         let mut stream = input.execute(i).await?;
-        metrics.fetch_nanos.add(now.elapsed().as_nanos() as usize);
+        metrics.fetch_nanos.add_elapsed(now);
 
         let mut counter = 0;
         let hashes_buf = &mut vec![];
@@ -259,7 +259,7 @@ impl RepartitionExec {
             // fetch the next batch
             let now = Instant::now();
             let result = stream.next().await;
-            metrics.fetch_nanos.add(now.elapsed().as_nanos() as usize);
+            metrics.fetch_nanos.add_elapsed(now);
 
             if result.is_none() {
                 break;
@@ -273,7 +273,7 @@ impl RepartitionExec {
                     let tx = txs.get_mut(&output_partition).unwrap();
                     tx.send(Some(result))
                         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-                    metrics.send_nanos.add(now.elapsed().as_nanos() as usize);
+                    metrics.send_nanos.add_elapsed(now);
                 }
                 Partitioning::Hash(exprs, _) => {
                     let now = Instant::now();
@@ -295,7 +295,7 @@ impl RepartitionExec {
                         indices[(*hash % num_output_partitions as u64) as usize]
                             .push(index as u64)
                     }
-                    metrics.repart_nanos.add(now.elapsed().as_nanos() as usize);
+                    metrics.repart_nanos.add_elapsed(now);
                     for (num_output_partition, partition_indices) in
                         indices.into_iter().enumerate()
                     {
@@ -313,12 +313,12 @@ impl RepartitionExec {
                             .collect::<Result<Vec<Arc<dyn Array>>>>()?;
                         let output_batch =
                             RecordBatch::try_new(input_batch.schema(), columns);
-                        metrics.repart_nanos.add(now.elapsed().as_nanos() as usize);
+                        metrics.repart_nanos.add_elapsed(now);
                         let now = Instant::now();
                         let tx = txs.get_mut(&num_output_partition).unwrap();
                         tx.send(Some(output_batch))
                             .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-                        metrics.send_nanos.add(now.elapsed().as_nanos() as usize);
+                        metrics.send_nanos.add_elapsed(now);
                     }
                 }
                 other => {
