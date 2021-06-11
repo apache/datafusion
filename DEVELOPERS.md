@@ -33,6 +33,12 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 - `cargo test` to test
 - etc.
 
+Testing setup:
+- `git submodule init`
+- `git submodule update`
+- `export PARQUET_TEST_DATA=parquet_testing/`
+- `export ARROW_TEST_DATA=testing/data/`
+
 ## How to add a new scalar function
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
