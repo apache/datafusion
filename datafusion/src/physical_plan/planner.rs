@@ -22,7 +22,6 @@ use super::{
     functions, hash_join::PartitionMode, udaf, union::UnionExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
-use crate::logical_plan::window_frames::WindowFrame;
 use crate::logical_plan::{
     DFSchema, Expr, LogicalPlan, Operator, Partitioning as LogicalPartitioning, PlanType,
     StringifiedPlan, UserDefinedLogicalNode,
@@ -781,14 +780,31 @@ impl DefaultPhysicalPlanner {
                         )),
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let window_frame = window_frame.unwrap_or_else(WindowFrame::default);
+                if !partition_by.is_empty() {
+                    return Err(DataFusionError::NotImplemented(
+                            "window expression with non-empty partition by clause is not yet supported"
+                                .to_owned(),
+                        ));
+                }
+                if !order_by.is_empty() {
+                    return Err(DataFusionError::NotImplemented(
+                            "window expression with non-empty order by clause is not yet supported"
+                                .to_owned(),
+                        ));
+                }
+                if window_frame.is_some() {
+                    return Err(DataFusionError::NotImplemented(
+                            "window expression with window frame definition is not yet supported"
+                                .to_owned(),
+                        ));
+                }
                 windows::create_window_expr(
                     fun,
                     name,
                     &args,
                     &partition_by,
                     &order_by,
-                    window_frame,
+                    *window_frame,
                     physical_input_schema,
                 )
             }

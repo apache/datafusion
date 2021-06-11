@@ -65,9 +65,12 @@ pub fn create_window_expr(
     fun: &WindowFunction,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
+    // https://github.com/apache/arrow-datafusion/issues/299
     _partition_by: &[Arc<dyn PhysicalExpr>],
+    // https://github.com/apache/arrow-datafusion/issues/360
     _order_by: &[PhysicalSortExpr],
-    _window_frame: WindowFrame,
+    // https://github.com/apache/arrow-datafusion/issues/361
+    _window_frame: Option<WindowFrame>,
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
@@ -546,7 +549,7 @@ mod tests {
                 &[col("c3")],
                 &[],
                 &[],
-                WindowFrame::default(),
+                Some(WindowFrame::default()),
                 schema.as_ref(),
             )?],
             input,
@@ -579,7 +582,7 @@ mod tests {
                     &[col("c3")],
                     &[],
                     &[],
-                    WindowFrame::default(),
+                    Some(WindowFrame::default()),
                     schema.as_ref(),
                 )?,
                 create_window_expr(
@@ -588,7 +591,7 @@ mod tests {
                     &[col("c3")],
                     &[],
                     &[],
-                    WindowFrame::default(),
+                    Some(WindowFrame::default()),
                     schema.as_ref(),
                 )?,
                 create_window_expr(
@@ -597,7 +600,7 @@ mod tests {
                     &[col("c3")],
                     &[],
                     &[],
-                    WindowFrame::default(),
+                    Some(WindowFrame::default()),
                     schema.as_ref(),
                 )?,
             ],
