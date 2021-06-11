@@ -20,8 +20,9 @@
 //! a query stage either forms the input of another query stage or can be the final result of
 //! a query.
 
+use std::iter::Iterator;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{any::Any, pin::Pin};
 
@@ -30,12 +31,17 @@ use crate::memory_stream::MemoryStream;
 use crate::utils;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{ArrayRef, StringBuilder};
+use datafusion::arrow::array::{Array, ArrayRef, StringBuilder, UInt32Builder};
+use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::ipc::writer::FileWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::physical_plan::hash_join::create_hashes;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning, RecordBatchStream};
+use futures::StreamExt;
 use log::info;
+use std::fs::File;
 use uuid::Uuid;
 
 /// QueryStageExec represents a section of a query plan that has consistent partitioning and
@@ -169,13 +175,108 @@ impl ExecutionPlan for QueryStageExec {
                 Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
             }
 
-            Some(Partitioning::Hash(_, _)) => {
-                //TODO re-use code from RepartitionExec to split each batch into
-                // partitions and write to one IPC file per partition
-                // See https://github.com/apache/arrow-datafusion/issues/456
-                Err(DataFusionError::NotImplemented(
-                    "Shuffle partitioning not implemented yet".to_owned(),
-                ))
+            Some(Partitioning::Hash(exprs, n)) => {
+                let num_output_partitions = *n;
+
+                let mut writers: Vec<Option<Arc<Mutex<FileWriter<File>>>>> = vec![];
+                for _ in 0..num_output_partitions {
+                    writers.push(None);
+                }
+
+                let mut partition_builder = UInt32Builder::new(num_output_partitions);
+                let mut path_builder = StringBuilder::new(num_output_partitions);
+
+                let hashes_buf = &mut vec![];
+                let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+                while let Some(result) = stream.next().await {
+                    let input_batch = result?;
+                    let arrays = exprs
+                        .iter()
+                        .map(|expr| {
+                            Ok(expr
+                                .evaluate(&input_batch)?
+                                .into_array(input_batch.num_rows()))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    hashes_buf.clear();
+                    hashes_buf.resize(arrays[0].len(), 0);
+                    // Hash arrays and compute buckets based on number of partitions
+                    let hashes = create_hashes(&arrays, &random_state, hashes_buf)?;
+                    let mut indices = vec![vec![]; num_output_partitions];
+                    for (index, hash) in hashes.iter().enumerate() {
+                        indices[(*hash % num_output_partitions as u64) as usize]
+                            .push(index as u64)
+                    }
+                    for (num_output_partition, partition_indices) in
+                        indices.into_iter().enumerate()
+                    {
+                        let indices = partition_indices.into();
+                        // Produce batches based on indices
+                        let columns = input_batch
+                            .columns()
+                            .iter()
+                            .map(|c| {
+                                take(c.as_ref(), &indices, None).map_err(|e| {
+                                    DataFusionError::Execution(e.to_string())
+                                })
+                            })
+                            .collect::<Result<Vec<Arc<dyn Array>>>>()?;
+
+                        let output_batch =
+                            RecordBatch::try_new(input_batch.schema(), columns)?;
+
+                        // write batch out
+                        match &writers[num_output_partition] {
+                            Some(w) => {
+                                let mut w = w.lock().unwrap();
+                                w.write(&output_batch)?;
+                            }
+                            None => {
+                                //TODO allocate directory for this partition
+                                let dir = "";
+                                path_builder.append_value(dir)?;
+                                partition_builder
+                                    .append_value(num_output_partition as u32)?;
+
+                                //TODO create unique filename in dir
+                                let path = "";
+                                let file = File::create(path)
+                                    .map_err(|e| {
+                                        BallistaError::General(format!(
+                                            "Failed to create partition file at {}: {:?}",
+                                            path, e
+                                        ))
+                                    })
+                                    .map_err(|e| {
+                                        DataFusionError::Execution(format!("{:?}", e))
+                                    })?;
+
+                                let mut writer =
+                                    FileWriter::try_new(file, stream.schema().as_ref())?;
+                                writer.write(&output_batch)?;
+                                writers[num_output_partition] =
+                                    Some(Arc::new(Mutex::new(writer)));
+                            }
+                        }
+                    }
+                }
+
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("partition", DataType::UInt32, false),
+                    Field::new("path", DataType::Utf8, false),
+                    // stats.arrow_struct_repr(),
+                ]));
+
+                let partition_num: ArrayRef = Arc::new(partition_builder.finish());
+                let path: ArrayRef = Arc::new(path_builder.finish());
+
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![partition_num, path /*, stats*/],
+                )
+                .map_err(DataFusionError::ArrowError)?;
+
+                Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
             }
 
             _ => Err(DataFusionError::Execution(
