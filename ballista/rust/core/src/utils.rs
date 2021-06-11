@@ -27,11 +27,12 @@ use crate::execution_plans::{QueryStageExec, UnresolvedShuffleExec};
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
+use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
     array::{
         ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
     },
-    datatypes::{DataType, Field},
+    datatypes::{DataType, Field, SchemaRef},
     ipc::reader::FileReader,
     ipc::writer::FileWriter,
     record_batch::RecordBatch,
@@ -54,7 +55,7 @@ use datafusion::physical_plan::sort::SortExec;
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, PhysicalExpr, RecordBatchStream,
 };
-use futures::StreamExt;
+use futures::{future, Stream, StreamExt};
 
 /// Stream data to disk in Arrow IPC format
 
@@ -233,4 +234,39 @@ pub fn create_datafusion_context() -> ExecutionContext {
         .with_repartition_aggregations(false)
         .with_physical_optimizer_rules(rules);
     ExecutionContext::with_config(config)
+}
+
+pub struct WrappedStream {
+    stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send + Sync>>,
+    schema: SchemaRef,
+}
+
+impl WrappedStream {
+    pub fn new(
+        stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send + Sync>>,
+        schema: SchemaRef,
+    ) -> Self {
+        Self { stream, schema }
+    }
+}
+
+impl RecordBatchStream for WrappedStream {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
+
+impl Stream for WrappedStream {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.stream.poll_next_unpin(cx)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.stream.size_hint()
+    }
 }

@@ -489,8 +489,13 @@ message HashAggregateExecNode {
 }
 
 message ShuffleReaderExecNode {
-  repeated PartitionLocation partition_location = 1;
+  repeated ShuffleReaderPartition partition = 1;
   Schema schema = 2;
+}
+
+message ShuffleReaderPartition {
+  // each partition of a shuffle read can read data from multiple locations
+  repeated PartitionLocation location = 1;
 }
 
 message GlobalLimitExecNode {
