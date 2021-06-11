@@ -30,8 +30,12 @@ use crate::error::BallistaError;
 use crate::memory_stream::MemoryStream;
 use crate::utils;
 
+use crate::serde::scheduler::PartitionStats;
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, ArrayRef, StringBuilder, UInt32Builder};
+use datafusion::arrow::array::{
+    Array, ArrayBuilder, ArrayRef, StringBuilder, StructBuilder, UInt32Builder,
+    UInt64Builder,
+};
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::ipc::writer::FileWriter;
@@ -139,7 +143,6 @@ impl ExecutionPlan for QueryStageExec {
             None => {
                 path.push(&format!("{}", partition));
                 std::fs::create_dir_all(&path)?;
-
                 path.push("data.arrow");
                 let path = path.to_str().unwrap();
                 info!("Writing results to {}", path);
@@ -156,20 +159,21 @@ impl ExecutionPlan for QueryStageExec {
                     stats
                 );
 
-                let schema = Arc::new(Schema::new(vec![
-                    Field::new("path", DataType::Utf8, false),
-                    stats.arrow_struct_repr(),
-                ]));
+                let schema = result_schema();
 
                 // build result set with summary of the partition execution status
-                let mut c0 = StringBuilder::new(1);
-                c0.append_value(&path).unwrap();
-                let path: ArrayRef = Arc::new(c0.finish());
+                let mut part_builder = UInt32Builder::new(1);
+                part_builder.append_value(partition as u32)?;
+                let part: ArrayRef = Arc::new(part_builder.finish());
+
+                let mut path_builder = StringBuilder::new(1);
+                path_builder.append_value(&path).unwrap();
+                let path: ArrayRef = Arc::new(path_builder.finish());
 
                 let stats: ArrayRef = stats
                     .to_arrow_arrayref()
                     .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-                let batch = RecordBatch::try_new(schema.clone(), vec![path, stats])
+                let batch = RecordBatch::try_new(schema.clone(), vec![part, path, stats])
                     .map_err(DataFusionError::ArrowError)?;
 
                 Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
@@ -178,13 +182,12 @@ impl ExecutionPlan for QueryStageExec {
             Some(Partitioning::Hash(exprs, n)) => {
                 let num_output_partitions = *n;
 
-                let mut writers: Vec<Option<Arc<Mutex<FileWriter<File>>>>> = vec![];
+                // we won't necessary produce output for every possible partition, so we
+                // create writes on demand
+                let mut writers: Vec<Option<Arc<Mutex<ShuffleWriter>>>> = vec![];
                 for _ in 0..num_output_partitions {
                     writers.push(None);
                 }
-
-                let mut partition_builder = UInt32Builder::new(num_output_partitions);
-                let mut path_builder = StringBuilder::new(num_output_partitions);
 
                 let hashes_buf = &mut vec![];
                 let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
@@ -232,27 +235,17 @@ impl ExecutionPlan for QueryStageExec {
                                 w.write(&output_batch)?;
                             }
                             None => {
-                                //TODO allocate directory for this partition
-                                let dir = "";
-                                path_builder.append_value(dir)?;
-                                partition_builder
-                                    .append_value(num_output_partition as u32)?;
+                                let mut path = path.clone();
+                                path.push(&format!("{}", partition));
+                                std::fs::create_dir_all(&path)?;
 
-                                //TODO create unique filename in dir
-                                let path = "";
-                                let file = File::create(path)
-                                    .map_err(|e| {
-                                        BallistaError::General(format!(
-                                            "Failed to create partition file at {}: {:?}",
-                                            path, e
-                                        ))
-                                    })
-                                    .map_err(|e| {
-                                        DataFusionError::Execution(format!("{:?}", e))
-                                    })?;
+                                path.push("data.arrow");
+                                let path = path.to_str().unwrap();
+                                info!("Writing results to {}", path);
 
                                 let mut writer =
-                                    FileWriter::try_new(file, stream.schema().as_ref())?;
+                                    ShuffleWriter::new(path, stream.schema().as_ref())?;
+
                                 writer.write(&output_batch)?;
                                 writers[num_output_partition] =
                                     Some(Arc::new(Mutex::new(writer)));
@@ -261,18 +254,47 @@ impl ExecutionPlan for QueryStageExec {
                     }
                 }
 
-                let schema = Arc::new(Schema::new(vec![
-                    Field::new("partition", DataType::UInt32, false),
-                    Field::new("path", DataType::Utf8, false),
-                    // stats.arrow_struct_repr(),
-                ]));
+                // build metadata result batch
+                let mut partition_builder = UInt32Builder::new(num_output_partitions);
+                let mut path_builder = StringBuilder::new(num_output_partitions);
+                let mut num_rows_builder = UInt64Builder::new(num_output_partitions);
+                let mut num_batches_builder = UInt64Builder::new(num_output_partitions);
+                let mut num_bytes_builder = UInt64Builder::new(num_output_partitions);
+
+                for i in 0..num_output_partitions {
+                    match &writers[i] {
+                        Some(w) => {
+                            let mut w = w.lock().unwrap();
+                            w.finish()?;
+                            path_builder.append_value(w.path())?;
+                            partition_builder.append_value(i as u32)?;
+                            num_rows_builder.append_value(w.num_rows)?;
+                            num_batches_builder.append_value(w.num_batches)?;
+                            num_bytes_builder.append_value(w.num_bytes)?;
+                        }
+                        None => {}
+                    }
+                }
 
                 let partition_num: ArrayRef = Arc::new(partition_builder.finish());
                 let path: ArrayRef = Arc::new(path_builder.finish());
 
+                let mut field_builders = Vec::new();
+                field_builders.push(Box::new(num_rows_builder) as Box<dyn ArrayBuilder>);
+                field_builders
+                    .push(Box::new(num_batches_builder) as Box<dyn ArrayBuilder>);
+                field_builders.push(Box::new(num_bytes_builder) as Box<dyn ArrayBuilder>);
+                let mut stats_builder = StructBuilder::new(
+                    PartitionStats::default().arrow_struct_fields(),
+                    field_builders,
+                );
+                stats_builder.append(true)?;
+                let stats = Arc::new(stats_builder.finish());
+
+                let schema = result_schema();
                 let batch = RecordBatch::try_new(
                     schema.clone(),
-                    vec![partition_num, path /*, stats*/],
+                    vec![partition_num, path, stats],
                 )
                 .map_err(DataFusionError::ArrowError)?;
 
@@ -283,6 +305,64 @@ impl ExecutionPlan for QueryStageExec {
                 "Invalid shuffle partitioning scheme".to_owned(),
             )),
         }
+    }
+}
+
+fn result_schema() -> SchemaRef {
+    let stats = PartitionStats::default();
+    Arc::new(Schema::new(vec![
+        Field::new("partition", DataType::UInt32, false),
+        Field::new("path", DataType::Utf8, false),
+        stats.arrow_struct_repr(),
+    ]))
+}
+
+struct ShuffleWriter {
+    path: String,
+    writer: FileWriter<File>,
+    num_batches: u64,
+    num_rows: u64,
+    num_bytes: u64,
+}
+
+impl ShuffleWriter {
+    fn new(path: &str, schema: &Schema) -> Result<Self> {
+        let file = File::create(path)
+            .map_err(|e| {
+                BallistaError::General(format!(
+                    "Failed to create partition file at {}: {:?}",
+                    path, e
+                ))
+            })
+            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+        Ok(Self {
+            num_batches: 0,
+            num_rows: 0,
+            num_bytes: 0,
+            path: path.to_owned(),
+            writer: FileWriter::try_new(file, schema)?,
+        })
+    }
+
+    fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.writer.write(batch)?;
+        self.num_batches += 1;
+        self.num_rows += batch.num_rows() as u64;
+        let num_bytes: usize = batch
+            .columns()
+            .iter()
+            .map(|array| array.get_array_memory_size())
+            .sum();
+        self.num_bytes += num_bytes as u64;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        self.writer.finish().map_err(DataFusionError::ArrowError)
+    }
+
+    fn path(&self) -> &str {
+        &self.path
     }
 }
 
@@ -310,15 +390,15 @@ mod tests {
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
         assert!(batches.len() == 1);
         let batch = &batches[0];
-        assert_eq!(2, batch.num_columns());
+        assert_eq!(3, batch.num_columns());
         assert_eq!(1, batch.num_rows());
-        let path = batch.columns()[0]
+        let path = batch.columns()[1]
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
         let file = path.value(0);
         assert!(file.ends_with("data.arrow"));
-        let stats = batch.columns()[1]
+        let stats = batch.columns()[2]
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();

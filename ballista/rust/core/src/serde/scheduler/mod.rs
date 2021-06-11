@@ -134,7 +134,8 @@ impl PartitionStats {
             false,
         )
     }
-    fn arrow_struct_fields(self) -> Vec<Field> {
+
+    pub fn arrow_struct_fields(self) -> Vec<Field> {
         vec![
             Field::new("num_rows", DataType::UInt64, false),
             Field::new("num_batches", DataType::UInt64, false),
