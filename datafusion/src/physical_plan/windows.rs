@@ -18,9 +18,11 @@
 //! Execution plan for window functions
 
 use crate::error::{DataFusionError, Result};
+
+use crate::logical_plan::window_frames::WindowFrame;
 use crate::physical_plan::{
     aggregates, common,
-    expressions::{Literal, NthValue, RowNumber},
+    expressions::{Literal, NthValue, PhysicalSortExpr, RowNumber},
     type_coercion::coerce,
     window_functions::signature_for_built_in,
     window_functions::BuiltInWindowFunctionExpr,
@@ -61,12 +63,18 @@ pub struct WindowAggExec {
 /// Create a physical expression for window function
 pub fn create_window_expr(
     fun: &WindowFunction,
-    args: &[Arc<dyn PhysicalExpr>],
-    input_schema: &Schema,
     name: String,
+    args: &[Arc<dyn PhysicalExpr>],
+    // https://github.com/apache/arrow-datafusion/issues/299
+    _partition_by: &[Arc<dyn PhysicalExpr>],
+    // https://github.com/apache/arrow-datafusion/issues/360
+    _order_by: &[PhysicalSortExpr],
+    // https://github.com/apache/arrow-datafusion/issues/361
+    _window_frame: Option<WindowFrame>,
+    input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
-    match fun {
-        WindowFunction::AggregateFunction(fun) => Ok(Arc::new(AggregateWindowExpr {
+    Ok(match fun {
+        WindowFunction::AggregateFunction(fun) => Arc::new(AggregateWindowExpr {
             aggregate: aggregates::create_aggregate_expr(
                 fun,
                 false,
@@ -74,11 +82,11 @@ pub fn create_window_expr(
                 input_schema,
                 name,
             )?,
-        })),
-        WindowFunction::BuiltInWindowFunction(fun) => Ok(Arc::new(BuiltInWindowExpr {
+        }),
+        WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr {
             window: create_built_in_window_expr(fun, args, input_schema, name)?,
-        })),
-    }
+        }),
+    })
 }
 
 fn create_built_in_window_expr(
@@ -537,9 +545,12 @@ mod tests {
         let window_exec = Arc::new(WindowAggExec::try_new(
             vec![create_window_expr(
                 &WindowFunction::AggregateFunction(AggregateFunction::Count),
-                &[col("c3")],
-                schema.as_ref(),
                 "count".to_owned(),
+                &[col("c3")],
+                &[],
+                &[],
+                Some(WindowFrame::default()),
+                schema.as_ref(),
             )?],
             input,
             schema.clone(),
@@ -567,21 +578,30 @@ mod tests {
             vec![
                 create_window_expr(
                     &WindowFunction::AggregateFunction(AggregateFunction::Count),
-                    &[col("c3")],
-                    schema.as_ref(),
                     "count".to_owned(),
+                    &[col("c3")],
+                    &[],
+                    &[],
+                    Some(WindowFrame::default()),
+                    schema.as_ref(),
                 )?,
                 create_window_expr(
                     &WindowFunction::AggregateFunction(AggregateFunction::Max),
-                    &[col("c3")],
-                    schema.as_ref(),
                     "max".to_owned(),
+                    &[col("c3")],
+                    &[],
+                    &[],
+                    Some(WindowFrame::default()),
+                    schema.as_ref(),
                 )?,
                 create_window_expr(
                     &WindowFunction::AggregateFunction(AggregateFunction::Min),
-                    &[col("c3")],
-                    schema.as_ref(),
                     "min".to_owned(),
+                    &[col("c3")],
+                    &[],
+                    &[],
+                    Some(WindowFrame::default()),
+                    schema.as_ref(),
                 )?,
             ],
             input,
