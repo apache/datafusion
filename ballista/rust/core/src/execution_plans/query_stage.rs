@@ -183,7 +183,7 @@ impl ExecutionPlan for QueryStageExec {
                 let num_output_partitions = *n;
 
                 // we won't necessary produce output for every possible partition, so we
-                // create writes on demand
+                // create writers on demand
                 let mut writers: Vec<Option<Arc<Mutex<ShuffleWriter>>>> = vec![];
                 for _ in 0..num_output_partitions {
                     writers.push(None);
@@ -262,8 +262,8 @@ impl ExecutionPlan for QueryStageExec {
                 let mut num_batches_builder = UInt64Builder::new(num_writers);
                 let mut num_bytes_builder = UInt64Builder::new(num_writers);
 
-                for i in 0..num_output_partitions {
-                    match &writers[i] {
+                for (i, w) in writers.iter().enumerate() {
+                    match w {
                         Some(w) => {
                             let mut w = w.lock().unwrap();
                             w.finish()?;
@@ -280,11 +280,11 @@ impl ExecutionPlan for QueryStageExec {
                 // build arrays
                 let partition_num: ArrayRef = Arc::new(partition_builder.finish());
                 let path: ArrayRef = Arc::new(path_builder.finish());
-                let mut field_builders = Vec::new();
-                field_builders.push(Box::new(num_rows_builder) as Box<dyn ArrayBuilder>);
-                field_builders
-                    .push(Box::new(num_batches_builder) as Box<dyn ArrayBuilder>);
-                field_builders.push(Box::new(num_bytes_builder) as Box<dyn ArrayBuilder>);
+                let field_builders: Vec<Box<dyn ArrayBuilder>> = vec![
+                    Box::new(num_rows_builder),
+                    Box::new(num_batches_builder),
+                    Box::new(num_bytes_builder),
+                ];
                 let mut stats_builder = StructBuilder::new(
                     PartitionStats::default().arrow_struct_fields(),
                     field_builders,
