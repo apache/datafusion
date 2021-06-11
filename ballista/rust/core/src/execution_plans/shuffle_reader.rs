@@ -88,8 +88,8 @@ impl ExecutionPlan for ShuffleReaderExec {
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
         info!("ShuffleReaderExec::execute({})", partition);
 
-        let x = self.partition[partition].clone();
-        let result = future::join_all(x.into_iter().map(fetch_partition))
+        let partition_locations = &self.partition[partition];
+        let result = future::join_all(partition_locations.iter().map(fetch_partition))
             .await
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
@@ -135,10 +135,10 @@ impl ExecutionPlan for ShuffleReaderExec {
 }
 
 async fn fetch_partition(
-    location: PartitionLocation,
+    location: &PartitionLocation,
 ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-    let metadata = location.executor_meta;
-    let partition_id = location.partition_id;
+    let metadata = &location.executor_meta;
+    let partition_id = &location.partition_id;
     let mut ballista_client =
         BallistaClient::try_new(metadata.host.as_str(), metadata.port as u16)
             .await
