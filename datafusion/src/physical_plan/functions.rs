@@ -36,7 +36,9 @@ use super::{
 use crate::execution::context::ExecutionContextState;
 use crate::physical_plan::array_expressions;
 use crate::physical_plan::datetime_expressions;
-use crate::physical_plan::expressions::{nullif_func, SUPPORTED_NULLIF_TYPES};
+use crate::physical_plan::expressions::{
+    cast_array, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS, SUPPORTED_NULLIF_TYPES,
+};
 use crate::physical_plan::math_expressions;
 use crate::physical_plan::string_expressions;
 use crate::{
@@ -205,6 +207,8 @@ pub enum BuiltinScalarFunction {
     ToHex,
     /// to_timestamp
     ToTimestamp,
+    /// to_timestamp_millis
+    ToTimestampMillis,
     ///now
     Now,
     /// translate
@@ -298,6 +302,7 @@ impl FromStr for BuiltinScalarFunction {
             "substr" => BuiltinScalarFunction::Substr,
             "to_hex" => BuiltinScalarFunction::ToHex,
             "to_timestamp" => BuiltinScalarFunction::ToTimestamp,
+            "to_timestamp_millis" => BuiltinScalarFunction::ToTimestampMillis,
             "now" => BuiltinScalarFunction::Now,
             "translate" => BuiltinScalarFunction::Translate,
             "trim" => BuiltinScalarFunction::Trim,
@@ -411,6 +416,9 @@ pub fn return_type(
         }),
         BuiltinScalarFunction::ToTimestamp => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+        }
+        BuiltinScalarFunction::ToTimestampMillis => {
+            Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
         }
         BuiltinScalarFunction::Now => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         BuiltinScalarFunction::Translate => utf8_to_str_type(&arg_types[0], "translate"),
@@ -905,6 +913,25 @@ pub fn create_physical_expr(
             ))),
         },
         BuiltinScalarFunction::ToTimestamp => datetime_expressions::to_timestamp,
+        // Unlike the string functions above, which actually figure out the function to use with each array,
+        // here we return either a cast fn or string timestamp translation based on the expression data type
+        // so we don't have to pay a per-array/batch cost.
+        BuiltinScalarFunction::ToTimestampMillis => match args[0].data_type(input_schema)
+        {
+            Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
+                cast_array(
+                    &col_values[0],
+                    &DataType::Timestamp(TimeUnit::Millisecond, None),
+                    &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                )
+            },
+            other => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported data type {:?} for function to_timestamp_millis",
+                    other,
+                )))
+            }
+        },
         BuiltinScalarFunction::Translate => |args| match args[0].data_type() {
             DataType::Utf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(
@@ -1023,6 +1050,10 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
             Signature::Exact(vec![DataType::LargeUtf8, DataType::Int64]),
         ]),
         BuiltinScalarFunction::ToTimestamp => Signature::Uniform(1, vec![DataType::Utf8]),
+        BuiltinScalarFunction::ToTimestampMillis => Signature::Uniform(
+            1,
+            vec![DataType::Utf8, DataType::LargeUtf8, DataType::Int64],
+        ),
         BuiltinScalarFunction::DateTrunc => Signature::Exact(vec![
             DataType::Utf8,
             DataType::Timestamp(TimeUnit::Nanosecond, None),
