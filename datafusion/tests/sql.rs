@@ -27,7 +27,11 @@ extern crate datafusion;
 use arrow::{array::*, datatypes::TimeUnit};
 use arrow::{datatypes::Int32Type, datatypes::Int64Type, record_batch::RecordBatch};
 use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
+    datatypes::{
+        ArrowNativeType, ArrowPrimitiveType, ArrowTimestampType, DataType, Field, Schema,
+        SchemaRef, TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampNanosecondType, TimestampSecondType,
+    },
     util::display::array_value_to_string,
 };
 
@@ -2349,17 +2353,33 @@ async fn like() -> Result<()> {
     Ok(())
 }
 
-fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
+fn make_timestamp_table<A>() -> Result<Arc<MemTable>>
+where
+    A: ArrowTimestampType,
+{
     let schema = Arc::new(Schema::new(vec![
-        Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), false),
+        Field::new("ts", DataType::Timestamp(A::get_time_unit(), None), false),
         Field::new("value", DataType::Int32, true),
     ]));
 
-    let mut builder = TimestampNanosecondArray::builder(3);
+    let mut builder = PrimitiveBuilder::<A>::new(3);
 
-    builder.append_value(1599572549190855000)?; // 2020-09-08T13:42:29.190855+00:00
-    builder.append_value(1599568949190855000)?; // 2020-09-08T12:42:29.190855+00:00
-    builder.append_value(1599565349190855000)?; // 2020-09-08T11:42:29.190855+00:00
+    let nanotimestamps = vec![
+        1599572549190855000i64, // 2020-09-08T13:42:29.190855+00:00
+        1599568949190855000,    // 2020-09-08T12:42:29.190855+00:00
+        1599565349190855000,
+    ]; // 2020-09-08T11:42:29.190855+00:00
+    let divisor = match A::get_time_unit() {
+        TimeUnit::Nanosecond => 1,
+        TimeUnit::Microsecond => 1000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Second => 1_000_000_000,
+    };
+    for ts in nanotimestamps {
+        builder.append_value(
+            <A as ArrowPrimitiveType>::Native::from_i64(ts / divisor).unwrap(),
+        )?;
+    }
 
     let data = RecordBatch::try_new(
         schema.clone(),
@@ -2372,12 +2392,32 @@ fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
     Ok(Arc::new(table))
 }
 
+fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
+    make_timestamp_table::<TimestampNanosecondType>()
+}
+
 #[tokio::test]
 async fn to_timestamp() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp('2020-09-08T12:00:00+00:00')";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["2"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_timestamp_millis() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table(
+        "ts_data",
+        make_timestamp_table::<TimestampMillisecondType>()?,
+    )?;
+
+    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_millis('2020-09-08T12:00:00+00:00')";
     let actual = execute(&mut ctx, sql).await;
 
     let expected = vec![vec!["2"]];

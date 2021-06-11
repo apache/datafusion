@@ -925,6 +925,7 @@ pub fn create_physical_expr(
                     &DEFAULT_DATAFUSION_CAST_OPTIONS,
                 )
             },
+            Ok(DataType::Utf8) => datetime_expressions::to_timestamp_millis,
             other => {
                 return Err(DataFusionError::Internal(format!(
                     "Unsupported data type {:?} for function to_timestamp_millis",
