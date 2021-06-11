@@ -255,11 +255,12 @@ impl ExecutionPlan for QueryStageExec {
                 }
 
                 // build metadata result batch
-                let mut partition_builder = UInt32Builder::new(num_output_partitions);
-                let mut path_builder = StringBuilder::new(num_output_partitions);
-                let mut num_rows_builder = UInt64Builder::new(num_output_partitions);
-                let mut num_batches_builder = UInt64Builder::new(num_output_partitions);
-                let mut num_bytes_builder = UInt64Builder::new(num_output_partitions);
+                let num_writers = writers.iter().filter(|w| w.is_some()).count();
+                let mut partition_builder = UInt32Builder::new(num_writers);
+                let mut path_builder = StringBuilder::new(num_writers);
+                let mut num_rows_builder = UInt64Builder::new(num_writers);
+                let mut num_batches_builder = UInt64Builder::new(num_writers);
+                let mut num_bytes_builder = UInt64Builder::new(num_writers);
 
                 for i in 0..num_output_partitions {
                     match &writers[i] {
@@ -276,9 +277,9 @@ impl ExecutionPlan for QueryStageExec {
                     }
                 }
 
+                // build arrays
                 let partition_num: ArrayRef = Arc::new(partition_builder.finish());
                 let path: ArrayRef = Arc::new(path_builder.finish());
-
                 let mut field_builders = Vec::new();
                 field_builders.push(Box::new(num_rows_builder) as Box<dyn ArrayBuilder>);
                 field_builders
@@ -288,9 +289,12 @@ impl ExecutionPlan for QueryStageExec {
                     PartitionStats::default().arrow_struct_fields(),
                     field_builders,
                 );
-                stats_builder.append(true)?;
+                for _ in 0..num_writers {
+                    stats_builder.append(true)?;
+                }
                 let stats = Arc::new(stats_builder.finish());
 
+                // build result batch containing metadata
                 let schema = result_schema();
                 let batch = RecordBatch::try_new(
                     schema.clone(),
@@ -370,6 +374,7 @@ impl ShuffleWriter {
 mod tests {
     use super::*;
     use datafusion::arrow::array::{StringArray, StructArray, UInt32Array, UInt64Array};
+    use datafusion::physical_plan::expressions::Column;
     use datafusion::physical_plan::memory::MemoryExec;
     use tempfile::TempDir;
 
@@ -388,7 +393,7 @@ mod tests {
         let batches = utils::collect_stream(&mut stream)
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-        assert!(batches.len() == 1);
+        assert_eq!(1, batches.len());
         let batch = &batches[0];
         assert_eq!(3, batch.num_columns());
         assert_eq!(1, batch.num_rows());
@@ -409,6 +414,41 @@ mod tests {
             .downcast_ref::<UInt64Array>()
             .unwrap();
         assert_eq!(4, num_rows.value(0));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partitioned() -> Result<()> {
+        let input_plan = create_input_plan()?;
+        let work_dir = TempDir::new()?;
+        let query_stage = QueryStageExec::try_new(
+            "jobOne".to_owned(),
+            1,
+            input_plan,
+            work_dir.into_path().to_str().unwrap().to_owned(),
+            Some(Partitioning::Hash(vec![Arc::new(Column::new("a"))], 2)),
+        )?;
+        let mut stream = query_stage.execute(0).await?;
+        let batches = utils::collect_stream(&mut stream)
+            .await
+            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+        assert_eq!(1, batches.len());
+        let batch = &batches[0];
+        assert_eq!(3, batch.num_columns());
+        assert_eq!(2, batch.num_rows());
+        let stats = batch.columns()[2]
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let num_rows = stats
+            .column_by_name("num_rows")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        assert_eq!(2, num_rows.value(0));
+        assert_eq!(2, num_rows.value(1));
+
         Ok(())
     }
 
