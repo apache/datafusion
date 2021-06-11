@@ -341,10 +341,8 @@ pub async fn collect_partitioned(
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
-    /// Allocate rows based on a hash of one of more expressions and the specified
-    /// number of partitions
-    /// FIXME: This partitioning scheme is not yet fully supported.
-    /// See https://github.com/apache/arrow-datafusion/issues/131
+    /// Allocate rows based on a hash of one of more expressions and the specified number of
+    /// partitions
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
