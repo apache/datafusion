@@ -134,8 +134,6 @@ impl ExecutionPlan for ShuffleReaderExec {
     }
 }
 
-// TODO following code copied from ballista-client crate
-
 async fn fetch_partition(
     location: PartitionLocation,
 ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
