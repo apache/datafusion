@@ -186,7 +186,7 @@ impl DistributedPlanner {
 
 pub fn remove_unresolved_shuffles(
     stage: &dyn ExecutionPlan,
-    partition_locations: &HashMap<usize, Vec<PartitionLocation>>,
+    partition_locations: &HashMap<usize, Vec<Vec<PartitionLocation>>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
     for child in stage.children() {

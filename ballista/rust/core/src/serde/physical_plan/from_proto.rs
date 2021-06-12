@@ -25,6 +25,7 @@ use crate::error::BallistaError;
 use crate::execution_plans::{ShuffleReaderExec, UnresolvedShuffleExec};
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::protobuf::LogicalExprNode;
+use crate::serde::protobuf::ShuffleReaderPartition;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{proto_error, protobuf};
 use crate::{convert_box_required, convert_required};
@@ -327,10 +328,15 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
             }
             PhysicalPlanType::ShuffleReader(shuffle_reader) => {
                 let schema = Arc::new(convert_required!(shuffle_reader.schema)?);
-                let partition_location: Vec<PartitionLocation> = shuffle_reader
-                    .partition_location
+                let partition_location: Vec<Vec<PartitionLocation>> = shuffle_reader
+                    .partition
                     .iter()
-                    .map(|p| p.clone().try_into())
+                    .map(|p| {
+                        p.location
+                            .iter()
+                            .map(|l| l.clone().try_into())
+                            .collect::<Result<Vec<_>, _>>()
+                    })
                     .collect::<Result<Vec<_>, BallistaError>>()?;
                 let shuffle_reader =
                     ShuffleReaderExec::try_new(partition_location, schema)?;
