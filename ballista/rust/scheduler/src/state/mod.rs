@@ -234,7 +234,7 @@ impl SchedulerState {
                 let unresolved_shuffles = find_unresolved_shuffles(&plan)?;
                 let mut partition_locations: HashMap<
                     usize,
-                    Vec<ballista_core::serde::scheduler::PartitionLocation>,
+                    Vec<Vec<ballista_core::serde::scheduler::PartitionLocation>>,
                 > = HashMap::new();
                 for unresolved_shuffle in unresolved_shuffles {
                     for stage_id in unresolved_shuffle.query_stage_ids {
@@ -256,7 +256,7 @@ impl SchedulerState {
                                 let empty = vec![];
                                 let locations =
                                     partition_locations.entry(stage_id).or_insert(empty);
-                                locations.push(
+                                locations.push(vec![
                                     ballista_core::serde::scheduler::PartitionLocation {
                                         partition_id:
                                             ballista_core::serde::scheduler::PartitionId {
@@ -271,7 +271,7 @@ impl SchedulerState {
                                             .clone(),
                                         partition_stats: PartitionStats::default(),
                                     },
-                                );
+                                ]);
                             } else {
                                 continue 'tasks;
                             }
