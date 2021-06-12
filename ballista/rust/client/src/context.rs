@@ -29,21 +29,18 @@ use ballista_core::serde::protobuf::{
     execute_query_params::Query, job_status, ExecuteQueryParams, GetJobStatusParams,
     GetJobStatusResult,
 };
+use ballista_core::utils::WrappedStream;
 use ballista_core::{
     client::BallistaClient, datasource::DfTableAdapter, utils::create_datafusion_context,
 };
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::error::Result as ArrowResult;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::TableReference;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::csv::CsvReadOptions;
 use datafusion::{dataframe::DataFrame, physical_plan::RecordBatchStream};
 use futures::future;
-use futures::Stream;
 use futures::StreamExt;
 use log::{error, info};
 
@@ -71,32 +68,6 @@ impl BallistaContextState {
             tables: HashMap::new(),
             settings,
         }
-    }
-}
-
-struct WrappedStream {
-    stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send + Sync>>,
-    schema: SchemaRef,
-}
-
-impl RecordBatchStream for WrappedStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-
-impl Stream for WrappedStream {
-    type Item = ArrowResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.stream.poll_next_unpin(cx)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.stream.size_hint()
     }
 }
 
@@ -287,10 +258,10 @@ impl BallistaContext {
                     .into_iter()
                     .collect::<Result<Vec<_>>>()?;
 
-                    let result = WrappedStream {
-                        stream: Box::pin(futures::stream::iter(result).flatten()),
-                        schema: Arc::new(schema),
-                    };
+                    let result = WrappedStream::new(
+                        Box::pin(futures::stream::iter(result).flatten()),
+                        Arc::new(schema),
+                    );
                     break Ok(Box::pin(result));
                 }
             };

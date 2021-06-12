@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Formatter;
 use std::sync::Arc;
 use std::{any::Any, pin::Pin};
 
@@ -22,35 +23,35 @@ use crate::client::BallistaClient;
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionLocation;
 
+use crate::utils::WrappedStream;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::error::Result as ArrowResult;
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,
 };
+use futures::{future, Stream, StreamExt};
 use log::info;
-use std::fmt::Formatter;
 
-/// ShuffleReaderExec reads partitions that have already been materialized by an executor.
+/// ShuffleReaderExec reads partitions that have already been materialized by a query stage
+/// being executed by an executor
 #[derive(Debug, Clone)]
 pub struct ShuffleReaderExec {
-    // The query stage that is responsible for producing the shuffle partitions that
-    // this operator will read
-    pub(crate) partition_location: Vec<PartitionLocation>,
+    /// Each partition of a shuffle can read data from multiple locations
+    pub(crate) partition: Vec<Vec<PartitionLocation>>,
     pub(crate) schema: SchemaRef,
 }
 
 impl ShuffleReaderExec {
     /// Create a new ShuffleReaderExec
     pub fn try_new(
-        partition_meta: Vec<PartitionLocation>,
+        partition: Vec<Vec<PartitionLocation>>,
         schema: SchemaRef,
     ) -> Result<Self> {
-        Ok(Self {
-            partition_location: partition_meta,
-            schema,
-        })
+        Ok(Self { partition, schema })
     }
 }
 
@@ -65,7 +66,7 @@ impl ExecutionPlan for ShuffleReaderExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partition_location.len())
+        Partitioning::UnknownPartitioning(self.partition.len())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -86,23 +87,18 @@ impl ExecutionPlan for ShuffleReaderExec {
         partition: usize,
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
         info!("ShuffleReaderExec::execute({})", partition);
-        let partition_location = &self.partition_location[partition];
 
-        let mut client = BallistaClient::try_new(
-            &partition_location.executor_meta.host,
-            partition_location.executor_meta.port,
-        )
-        .await
-        .map_err(|e| DataFusionError::Execution(format!("Ballista Error: {:?}", e)))?;
-
-        client
-            .fetch_partition(
-                &partition_location.partition_id.job_id,
-                partition_location.partition_id.stage_id,
-                partition,
-            )
+        let partition_locations = &self.partition[partition];
+        let result = future::join_all(partition_locations.iter().map(fetch_partition))
             .await
-            .map_err(|e| DataFusionError::Execution(format!("Ballista Error: {:?}", e)))
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+
+        let result = WrappedStream::new(
+            Box::pin(futures::stream::iter(result).flatten()),
+            Arc::new(self.schema.as_ref().clone()),
+        );
+        Ok(Box::pin(result))
     }
 
     fn fmt_as(
@@ -113,22 +109,46 @@ impl ExecutionPlan for ShuffleReaderExec {
         match t {
             DisplayFormatType::Default => {
                 let loc_str = self
-                    .partition_location
+                    .partition
                     .iter()
-                    .map(|l| {
-                        format!(
-                            "[executor={} part={}:{}:{} stats={:?}]",
-                            l.executor_meta.id,
-                            l.partition_id.job_id,
-                            l.partition_id.stage_id,
-                            l.partition_id.partition_id,
-                            l.partition_stats
-                        )
+                    .map(|x| {
+                        x.iter()
+                            .map(|l| {
+                                format!(
+                                    "[executor={} part={}:{}:{} stats={:?}]",
+                                    l.executor_meta.id,
+                                    l.partition_id.job_id,
+                                    l.partition_id.stage_id,
+                                    l.partition_id.partition_id,
+                                    l.partition_stats
+                                )
+                            })
+                            .collect::<Vec<String>>()
+                            .join(",")
                     })
                     .collect::<Vec<String>>()
-                    .join(",");
+                    .join("\n");
                 write!(f, "ShuffleReaderExec: partition_locations={}", loc_str)
             }
         }
     }
+}
+
+async fn fetch_partition(
+    location: &PartitionLocation,
+) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
+    let metadata = &location.executor_meta;
+    let partition_id = &location.partition_id;
+    let mut ballista_client =
+        BallistaClient::try_new(metadata.host.as_str(), metadata.port as u16)
+            .await
+            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+    Ok(ballista_client
+        .fetch_partition(
+            &partition_id.job_id,
+            partition_id.stage_id as usize,
+            partition_id.partition_id as usize,
+        )
+        .await
+        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)
 }
