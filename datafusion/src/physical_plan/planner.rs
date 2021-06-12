@@ -17,8 +17,6 @@
 
 //! Physical query planner
 
-use std::sync::Arc;
-
 use super::{
     aggregates, cross_join::CrossJoinExec, empty::EmptyExec, expressions::binary,
     functions, hash_join::PartitionMode, udaf, union::UnionExec, windows,
@@ -56,6 +54,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use expressions::col;
 use log::debug;
+use std::sync::Arc;
 
 fn create_function_physical_name(
     fun: &str,
@@ -301,8 +300,8 @@ impl DefaultPhysicalPlanner {
                         tuple_err((
                             self.create_physical_expr(
                                 e,
-                                &physical_input_schema,
                                 &logical_input_schema,
+                                &physical_input_schema,
                                 ctx_state,
                             ),
                             physical_name(e, &logical_input_schema),
@@ -421,8 +420,8 @@ impl DefaultPhysicalPlanner {
                         tuple_err((
                             self.create_physical_expr(
                                 e,
-                                &input_exec.schema(),
                                 input_schema,
+                                &input_exec.schema(),
                                 &ctx_state,
                             ),
                             physical_name,
@@ -443,8 +442,8 @@ impl DefaultPhysicalPlanner {
                 let input_dfschema = input.as_ref().schema();
                 let runtime_expr = self.create_physical_expr(
                     predicate,
-                    &input_schema,
                     input_dfschema,
+                    &input_schema,
                     ctx_state,
                 )?;
                 Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
@@ -473,8 +472,8 @@ impl DefaultPhysicalPlanner {
                             .map(|e| {
                                 self.create_physical_expr(
                                     e,
-                                    &input_schema,
                                     &input_dfschema,
+                                    &input_schema,
                                     &ctx_state,
                                 )
                             })
@@ -501,8 +500,8 @@ impl DefaultPhysicalPlanner {
                             nulls_first,
                         } => self.create_physical_sort_expr(
                             expr,
-                            &input_schema,
                             &input_dfschema,
+                            &input_schema,
                             SortOptions {
                                 descending: !*asc,
                                 nulls_first: *nulls_first,
@@ -685,15 +684,15 @@ impl DefaultPhysicalPlanner {
     pub fn create_physical_expr(
         &self,
         e: &Expr,
-        input_schema: &Schema,
         input_dfschema: &DFSchema,
+        input_schema: &Schema,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         match e {
             Expr::Alias(expr, ..) => Ok(self.create_physical_expr(
                 expr,
-                input_schema,
                 input_dfschema,
+                input_schema,
                 ctx_state,
             )?),
             Expr::Column(c) => {
@@ -729,14 +728,14 @@ impl DefaultPhysicalPlanner {
             Expr::BinaryExpr { left, op, right } => {
                 let lhs = self.create_physical_expr(
                     left,
-                    input_schema,
                     input_dfschema,
+                    input_schema,
                     ctx_state,
                 )?;
                 let rhs = self.create_physical_expr(
                     right,
-                    input_schema,
                     input_dfschema,
+                    input_schema,
                     ctx_state,
                 )?;
                 binary(lhs, *op, rhs, input_schema)
@@ -750,8 +749,8 @@ impl DefaultPhysicalPlanner {
                 let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = expr {
                     Some(self.create_physical_expr(
                         e.as_ref(),
-                        input_schema,
                         input_dfschema,
+                        input_schema,
                         ctx_state,
                     )?)
                 } else {
@@ -762,8 +761,8 @@ impl DefaultPhysicalPlanner {
                     .map(|(w, _)| {
                         self.create_physical_expr(
                             w.as_ref(),
-                            input_schema,
                             input_dfschema,
+                            input_schema,
                             ctx_state,
                         )
                     })
@@ -773,8 +772,8 @@ impl DefaultPhysicalPlanner {
                     .map(|(_, t)| {
                         self.create_physical_expr(
                             t.as_ref(),
-                            input_schema,
                             input_dfschema,
+                            input_schema,
                             ctx_state,
                         )
                     })
@@ -789,8 +788,8 @@ impl DefaultPhysicalPlanner {
                 {
                     Some(self.create_physical_expr(
                         e.as_ref(),
-                        input_schema,
                         input_dfschema,
+                        input_schema,
                         ctx_state,
                     )?)
                 } else {
@@ -803,31 +802,31 @@ impl DefaultPhysicalPlanner {
                 )?))
             }
             Expr::Cast { expr, data_type } => expressions::cast(
-                self.create_physical_expr(expr, input_schema, input_dfschema, ctx_state)?,
+                self.create_physical_expr(expr, input_dfschema, input_schema, ctx_state)?,
                 input_schema,
                 data_type.clone(),
             ),
             Expr::TryCast { expr, data_type } => expressions::try_cast(
-                self.create_physical_expr(expr, input_schema, input_dfschema, ctx_state)?,
+                self.create_physical_expr(expr, input_dfschema, input_schema, ctx_state)?,
                 input_schema,
                 data_type.clone(),
             ),
             Expr::Not(expr) => expressions::not(
-                self.create_physical_expr(expr, input_schema, input_dfschema, ctx_state)?,
+                self.create_physical_expr(expr, input_dfschema, input_schema, ctx_state)?,
                 input_schema,
             ),
             Expr::Negative(expr) => expressions::negative(
-                self.create_physical_expr(expr, input_schema, input_dfschema, ctx_state)?,
+                self.create_physical_expr(expr, input_dfschema, input_schema, ctx_state)?,
                 input_schema,
             ),
             Expr::IsNull(expr) => expressions::is_null(self.create_physical_expr(
                 expr,
-                input_schema,
                 input_dfschema,
+                input_schema,
                 ctx_state,
             )?),
             Expr::IsNotNull(expr) => expressions::is_not_null(
-                self.create_physical_expr(expr, input_schema, input_dfschema, ctx_state)?,
+                self.create_physical_expr(expr, input_dfschema, input_schema, ctx_state)?,
             ),
             Expr::ScalarFunction { fun, args } => {
                 let physical_args = args
@@ -835,8 +834,8 @@ impl DefaultPhysicalPlanner {
                     .map(|e| {
                         self.create_physical_expr(
                             e,
-                            input_schema,
                             input_dfschema,
+                            input_schema,
                             ctx_state,
                         )
                     })
@@ -853,8 +852,8 @@ impl DefaultPhysicalPlanner {
                 for e in args {
                     physical_args.push(self.create_physical_expr(
                         e,
-                        input_schema,
                         input_dfschema,
+                        input_schema,
                         ctx_state,
                     )?);
                 }
@@ -873,20 +872,20 @@ impl DefaultPhysicalPlanner {
             } => {
                 let value_expr = self.create_physical_expr(
                     expr,
-                    input_schema,
                     input_dfschema,
+                    input_schema,
                     ctx_state,
                 )?;
                 let low_expr = self.create_physical_expr(
                     low,
-                    input_schema,
                     input_dfschema,
+                    input_schema,
                     ctx_state,
                 )?;
                 let high_expr = self.create_physical_expr(
                     high,
-                    input_schema,
                     input_dfschema,
+                    input_schema,
                     ctx_state,
                 )?;
 
@@ -915,8 +914,8 @@ impl DefaultPhysicalPlanner {
                 _ => {
                     let value_expr = self.create_physical_expr(
                         expr,
-                        input_schema,
                         input_dfschema,
+                        input_schema,
                         ctx_state,
                     )?;
                     let value_expr_data_type = value_expr.data_type(input_schema)?;
@@ -927,15 +926,15 @@ impl DefaultPhysicalPlanner {
                             Expr::Literal(ScalarValue::Utf8(None)) => self
                                 .create_physical_expr(
                                     expr,
-                                    input_schema,
                                     input_dfschema,
+                                    input_schema,
                                     ctx_state,
                                 ),
                             _ => {
                                 let list_expr = self.create_physical_expr(
                                     expr,
-                                    input_schema,
                                     input_dfschema,
+                                    input_schema,
                                     ctx_state,
                                 )?;
                                 let list_expr_data_type =
@@ -972,7 +971,103 @@ impl DefaultPhysicalPlanner {
         }
     }
 
-    /// Create a window expression from a logical expression
+    /// Create a window expression with a name from a logical expression
+    pub fn create_window_expr_with_name(
+        &self,
+        e: &Expr,
+        name: String,
+        logical_input_schema: &DFSchema,
+        physical_input_schema: &Schema,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn WindowExpr>> {
+        match e {
+            Expr::WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+            } => {
+                let args = args
+                    .iter()
+                    .map(|e| {
+                        self.create_physical_expr(
+                            e,
+                            logical_input_schema,
+                            physical_input_schema,
+                            ctx_state,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let partition_by = partition_by
+                    .iter()
+                    .map(|e| {
+                        self.create_physical_expr(
+                            e,
+                            logical_input_schema,
+                            physical_input_schema,
+                            ctx_state,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let order_by = order_by
+                    .iter()
+                    .map(|e| match e {
+                        Expr::Sort {
+                            expr,
+                            asc,
+                            nulls_first,
+                        } => self.create_physical_sort_expr(
+                            expr,
+                            &logical_input_schema,
+                            &physical_input_schema,
+                            SortOptions {
+                                descending: !*asc,
+                                nulls_first: *nulls_first,
+                            },
+                            &ctx_state,
+                        ),
+                        _ => Err(DataFusionError::Plan(
+                            "Sort only accepts sort expressions".to_string(),
+                        )),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if !partition_by.is_empty() {
+                    return Err(DataFusionError::NotImplemented(
+                            "window expression with non-empty partition by clause is not yet supported"
+                                .to_owned(),
+                        ));
+                }
+                if !order_by.is_empty() {
+                    return Err(DataFusionError::NotImplemented(
+                            "window expression with non-empty order by clause is not yet supported"
+                                .to_owned(),
+                        ));
+                }
+                if window_frame.is_some() {
+                    return Err(DataFusionError::NotImplemented(
+                            "window expression with window frame definition is not yet supported"
+                                .to_owned(),
+                        ));
+                }
+                windows::create_window_expr(
+                    fun,
+                    name,
+                    &args,
+                    &partition_by,
+                    &order_by,
+                    *window_frame,
+                    physical_input_schema,
+                )
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Invalid window expression '{:?}'",
+                other
+            ))),
+        }
+    }
+
+    /// Create a window expression from a logical expression or an alias
     pub fn create_window_expr(
         &self,
         e: &Expr,
@@ -985,48 +1080,24 @@ impl DefaultPhysicalPlanner {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
             _ => (physical_name(e, logical_input_schema)?, e),
         };
-
-        match e {
-            Expr::WindowFunction { fun, args, .. } => {
-                let args = args
-                    .iter()
-                    .map(|e| {
-                        self.create_physical_expr(
-                            e,
-                            physical_input_schema,
-                            logical_input_schema,
-                            ctx_state,
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                // if !order_by.is_empty() {
-                //     return Err(DataFusionError::NotImplemented(
-                //         "Window function with order by is not yet implemented".to_owned(),
-                //     ));
-                // }
-                windows::create_window_expr(fun, &args, physical_input_schema, name)
-            }
-            other => Err(DataFusionError::Internal(format!(
-                "Invalid window expression '{:?}'",
-                other
-            ))),
-        }
+        self.create_window_expr_with_name(
+            e,
+            name,
+            logical_input_schema,
+            physical_input_schema,
+            ctx_state,
+        )
     }
 
-    /// Create an aggregate expression from a logical expression
-    pub fn create_aggregate_expr(
+    /// Create an aggregate expression with a name from a logical expression
+    pub fn create_aggregate_expr_with_name(
         &self,
         e: &Expr,
+        name: String,
         logical_input_schema: &DFSchema,
         physical_input_schema: &Schema,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn AggregateExpr>> {
-        // unpack aliased logical expressions, e.g. "sum(col) as total"
-        let (name, e) = match e {
-            Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-            _ => (physical_name(e, logical_input_schema)?, e),
-        };
-
         match e {
             Expr::AggregateFunction {
                 fun,
@@ -1039,8 +1110,8 @@ impl DefaultPhysicalPlanner {
                     .map(|e| {
                         self.create_physical_expr(
                             e,
-                            physical_input_schema,
                             logical_input_schema,
+                            physical_input_schema,
                             ctx_state,
                         )
                     })
@@ -1059,8 +1130,8 @@ impl DefaultPhysicalPlanner {
                     .map(|e| {
                         self.create_physical_expr(
                             e,
-                            physical_input_schema,
                             logical_input_schema,
+                            physical_input_schema,
                             ctx_state,
                         )
                     })
@@ -1075,20 +1146,43 @@ impl DefaultPhysicalPlanner {
         }
     }
 
-    /// Create an aggregate expression from a logical expression
+    /// Create an aggregate expression from a logical expression or an alias
+    pub fn create_aggregate_expr(
+        &self,
+        e: &Expr,
+        logical_input_schema: &DFSchema,
+        physical_input_schema: &Schema,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn AggregateExpr>> {
+        // unpack aliased logical expressions, e.g. "sum(col) as total"
+        let (name, e) = match e {
+            Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
+            _ => (physical_name(e, logical_input_schema)?, e),
+        };
+
+        self.create_aggregate_expr_with_name(
+            e,
+            name,
+            logical_input_schema,
+            physical_input_schema,
+            ctx_state,
+        )
+    }
+
+    /// Create a physical sort expression from a logical expression
     pub fn create_physical_sort_expr(
         &self,
         e: &Expr,
-        input_schema: &Schema,
         input_dfschema: &DFSchema,
+        input_schema: &Schema,
         options: SortOptions,
         ctx_state: &ExecutionContextState,
     ) -> Result<PhysicalSortExpr> {
         Ok(PhysicalSortExpr {
             expr: self.create_physical_expr(
                 e,
-                input_schema,
                 input_dfschema,
+                input_schema,
                 ctx_state,
             )?,
             options,
@@ -1166,8 +1260,8 @@ mod tests {
 
         let expr = planner.create_physical_expr(
             &col("a").not(),
-            &schema,
             &dfschema,
+            &schema,
             &make_ctx_state(),
         )?;
         let expected = expressions::not(expressions::col("a", &schema)?, &schema)?;

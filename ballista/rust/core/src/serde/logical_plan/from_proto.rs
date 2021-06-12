@@ -20,14 +20,10 @@
 use crate::error::BallistaError;
 use crate::serde::{from_proto_binary_op, proto_error, protobuf};
 use crate::{convert_box_required, convert_required};
-use sqlparser::ast::{WindowFrame, WindowFrameBound, WindowFrameUnits};
-use std::{
-    convert::{From, TryInto},
-    sync::Arc,
-    unimplemented,
-};
-
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::logical_plan::window_frames::{
+    WindowFrame, WindowFrameBound, WindowFrameUnits,
+};
 use datafusion::logical_plan::{
     abs, acos, asin, atan, ceil, cos, exp, floor, ln, log10, log2, round, signum, sin,
     sqrt, tan, trunc, Column, DFField, DFSchema, Expr, JoinType, LogicalPlan,
@@ -39,6 +35,11 @@ use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 use datafusion::scalar::ScalarValue;
 use protobuf::logical_plan_node::LogicalPlanType;
 use protobuf::{logical_expr_node::ExprType, scalar_type};
+use std::{
+    convert::{From, TryInto},
+    sync::Arc,
+    unimplemented,
+};
 
 // use uuid::Uuid;
 
@@ -85,20 +86,6 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-
-                // let partition_by_expr = window
-                //     .partition_by_expr
-                //     .iter()
-                //     .map(|expr| expr.try_into())
-                //     .collect::<Result<Vec<_>, _>>()?;
-                // let order_by_expr = window
-                //     .order_by_expr
-                //     .iter()
-                //     .map(|expr| expr.try_into())
-                //     .collect::<Result<Vec<_>, _>>()?;
-                // // FIXME: add filter by expr
-                // // FIXME: parse the window_frame data
-                // let window_frame = None;
                 LogicalPlanBuilder::from(&input)
                     .window(window_expr)?
                     .build()
@@ -808,12 +795,33 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                     .window_function
                     .as_ref()
                     .ok_or_else(|| proto_error("Received empty window function"))?;
+                let partition_by = expr
+                    .partition_by
+                    .iter()
+                    .map(|e| e.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
                 let order_by = expr
                     .order_by
                     .iter()
                     .map(|e| e.try_into())
-                    .into_iter()
                     .collect::<Result<Vec<_>, _>>()?;
+                let window_frame = expr
+                    .window_frame
+                    .as_ref()
+                    .map::<Result<WindowFrame, _>, _>(|e| match e {
+                        window_expr_node::WindowFrame::Frame(frame) => {
+                            let window_frame: WindowFrame = frame.clone().try_into()?;
+                            if WindowFrameUnits::Range == window_frame.units
+                                && order_by.len() != 1
+                            {
+                                Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
+                            } else {
+                                Ok(window_frame)
+                            }
+                        }
+                    })
+                    .transpose()?;
+
                 match window_function {
                     window_expr_node::WindowFunction::AggrFunction(i) => {
                         let aggr_function = protobuf::AggregateFunction::from_i32(*i)
@@ -829,7 +837,9 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                                 AggregateFunction::from(aggr_function),
                             ),
                             args: vec![parse_required_expr(&expr.expr)?],
+                            partition_by,
                             order_by,
+                            window_frame,
                         })
                     }
                     window_expr_node::WindowFunction::BuiltInFunction(i) => {
@@ -848,7 +858,9 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                                 BuiltInWindowFunction::from(built_in_function),
                             ),
                             args: vec![parse_required_expr(&expr.expr)?],
+                            partition_by,
                             order_by,
+                            window_frame,
                         })
                     }
                 }
@@ -1196,8 +1208,15 @@ impl TryFrom<protobuf::WindowFrame> for WindowFrame {
                 )
             })?
             .try_into()?;
-        // FIXME parse end bound
-        let end_bound = None;
+        let end_bound = window
+            .end_bound
+            .map(|end_bound| match end_bound {
+                protobuf::window_frame::EndBound::Bound(end_bound) => {
+                    end_bound.try_into()
+                }
+            })
+            .transpose()?
+            .unwrap_or(WindowFrameBound::CurrentRow);
         Ok(WindowFrame {
             units,
             start_bound,

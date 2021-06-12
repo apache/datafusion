@@ -29,6 +29,7 @@ mod extension;
 mod operators;
 mod plan;
 mod registry;
+pub mod window_frames;
 pub use builder::{
     build_join_schema, union_with_alias, LogicalPlanBuilder, UNNAMED_TABLE,
 };

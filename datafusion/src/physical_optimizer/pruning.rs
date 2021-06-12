@@ -125,8 +125,8 @@ impl PruningPredicate {
         let execution_context_state = ExecutionContextState::new();
         let predicate_expr = DefaultPhysicalPlanner::default().create_physical_expr(
             &logical_predicate_expr,
-            &stat_schema,
             &stat_dfschema,
+            &stat_schema,
             &execution_context_state,
         )?;
         Ok(Self {

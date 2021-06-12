@@ -34,6 +34,7 @@ use datafusion::catalog::catalog::{
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
+use datafusion::logical_plan::{window_frames::WindowFrame, DFSchema, Expr};
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::PartitionMode;
@@ -42,8 +43,7 @@ use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
 };
-use datafusion::physical_plan::windows::create_window_expr;
-use datafusion::physical_plan::windows::WindowAggExec;
+use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     coalesce_batches::CoalesceBatchesExec,
     csv::CsvExec,
@@ -207,7 +207,6 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         )
                     })?
                     .clone();
-
                 let physical_schema: SchemaRef =
                     SchemaRef::new((&input_schema).try_into()?);
 
@@ -223,9 +222,12 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         match expr_type {
                             ExprType::WindowExpr(window_node) => Ok(create_window_expr(
                                 &convert_required!(window_node.window_function)?,
-                                &[convert_box_required!(window_node.expr)?],
-                                &physical_schema,
                                 name.to_owned(),
+                                &[convert_box_required!(window_node.expr)?],
+                                &[],
+                                &[],
+                                Some(WindowFrame::default()),
+                                &physical_schema,
                             )?),
                             _ => Err(BallistaError::General(
                                 "Invalid expression for WindowAggrExec".to_string(),
@@ -256,7 +258,6 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         AggregateMode::FinalPartitioned
                     }
                 };
-
                 let group = hash_agg
                     .group_expr
                     .iter()
