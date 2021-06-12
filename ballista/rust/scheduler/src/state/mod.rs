@@ -223,7 +223,7 @@ impl SchedulerState {
             .collect();
         let executors = self.get_executors_metadata().await?;
         'tasks: for (_key, value) in kvs.iter() {
-            let mut status: TaskStatus = decode_protobuf(&value)?;
+            let mut status: TaskStatus = decode_protobuf(value)?;
             if status.status.is_none() {
                 let partition = status.partition_id.as_ref().unwrap();
                 let plan = self

@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 async fn query(ctx: &mut ExecutionContext, sql: &str) {
     // execute the query
-    let df = ctx.sql(&sql).unwrap();
+    let df = ctx.sql(sql).unwrap();
     let results = df.collect().await.unwrap();
 
     // display the relation

@@ -139,7 +139,7 @@ impl ExecutionPlan for QueryStageExec {
                 info!("Writing results to {}", path);
 
                 // stream results to disk
-                let stats = utils::write_stream_to_disk(&mut stream, &path)
+                let stats = utils::write_stream_to_disk(&mut stream, path)
                     .await
                     .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
 

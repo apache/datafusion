@@ -204,7 +204,7 @@ impl TableProvider for CsvFile {
                 }
             }
             Source::Path(p) => {
-                CsvExec::try_new(&p, opts, projection.clone(), batch_size, limit)?
+                CsvExec::try_new(p, opts, projection.clone(), batch_size, limit)?
             }
         };
         Ok(Arc::new(exec))

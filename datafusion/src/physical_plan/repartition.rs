@@ -479,7 +479,7 @@ mod tests {
             partitions,
             Partitioning::Hash(
                 vec![Arc::new(crate::physical_plan::expressions::Column::new(
-                    &"c0",
+                    "c0",
                 ))],
                 8,
             ),

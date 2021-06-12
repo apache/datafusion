@@ -149,7 +149,7 @@ impl TableProvider for NdJsonFile {
                 }
             }
             Source::Path(p) => {
-                NdJsonExec::try_new(&p, opts, projection.clone(), batch_size, limit)?
+                NdJsonExec::try_new(p, opts, projection.clone(), batch_size, limit)?
             }
         };
         Ok(Arc::new(exec))

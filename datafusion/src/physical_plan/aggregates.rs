@@ -127,7 +127,7 @@ pub fn create_aggregate_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let return_type = return_type(&fun, &arg_types)?;
+    let return_type = return_type(fun, &arg_types)?;
 
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => {

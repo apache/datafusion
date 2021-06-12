@@ -49,7 +49,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
     fn field(&self) -> Result<Field> {
         let nullable = false;
         let data_type = DataType::UInt64;
-        Ok(Field::new(&self.name(), data_type, nullable))
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {

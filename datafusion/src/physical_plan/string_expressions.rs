@@ -299,7 +299,7 @@ pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                         ColumnarValue::Array(v) => {
                             if v.is_valid(index) {
                                 let v = v.as_any().downcast_ref::<StringArray>().unwrap();
-                                owned_string.push_str(&v.value(index));
+                                owned_string.push_str(v.value(index));
                             }
                         }
                         _ => unreachable!(),
@@ -353,10 +353,10 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
                 for arg_index in 1..args.len() {
                     let arg = &args[arg_index];
                     if !arg.is_null(index) {
-                        owned_string.push_str(&arg.value(index));
+                        owned_string.push_str(arg.value(index));
                         // if not last push separator
                         if arg_index != args.len() - 1 {
-                            owned_string.push_str(&sep);
+                            owned_string.push_str(sep);
                         }
                     }
                 }

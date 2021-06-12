@@ -325,12 +325,12 @@ impl DFField {
 
     /// Returns an immutable reference to the `DFField`'s unqualified name
     pub fn name(&self) -> &String {
-        &self.field.name()
+        self.field.name()
     }
 
     /// Returns an immutable reference to the `DFField`'s data-type
     pub fn data_type(&self) -> &DataType {
-        &self.field.data_type()
+        self.field.data_type()
     }
 
     /// Indicates whether this `DFField` supports null values

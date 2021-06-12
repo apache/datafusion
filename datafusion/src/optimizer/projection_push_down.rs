@@ -146,7 +146,7 @@ fn optimize_plan(
 
             let new_input = optimize_plan(
                 optimizer,
-                &input,
+                input,
                 &new_required_columns,
                 true,
                 execution_props,
@@ -176,14 +176,14 @@ fn optimize_plan(
             Ok(LogicalPlan::Join {
                 left: Arc::new(optimize_plan(
                     optimizer,
-                    &left,
+                    left,
                     &new_required_columns,
                     true,
                     execution_props,
                 )?),
                 right: Arc::new(optimize_plan(
                     optimizer,
-                    &right,
+                    right,
                     &new_required_columns,
                     true,
                     execution_props,
@@ -204,7 +204,7 @@ fn optimize_plan(
             let mut new_window_expr = Vec::new();
             {
                 window_expr.iter().try_for_each(|expr| {
-                    let name = &expr.name(&schema)?;
+                    let name = &expr.name(schema)?;
                     if required_columns.contains(name) {
                         new_window_expr.push(expr.clone());
                         new_required_columns.insert(name.clone());
@@ -235,7 +235,7 @@ fn optimize_plan(
                 window_expr: new_window_expr,
                 input: Arc::new(optimize_plan(
                     optimizer,
-                    &input,
+                    input,
                     &new_required_columns,
                     true,
                     execution_props,
@@ -259,7 +259,7 @@ fn optimize_plan(
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
             aggr_expr.iter().try_for_each(|expr| {
-                let name = &expr.name(&schema)?;
+                let name = &expr.name(schema)?;
 
                 if required_columns.contains(name) {
                     new_aggr_expr.push(expr.clone());
@@ -286,7 +286,7 @@ fn optimize_plan(
                 aggr_expr: new_aggr_expr,
                 input: Arc::new(optimize_plan(
                     optimizer,
-                    &input,
+                    input,
                     &new_required_columns,
                     true,
                     execution_props,
