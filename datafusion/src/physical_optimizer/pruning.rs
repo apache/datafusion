@@ -522,9 +522,8 @@ fn build_predicate_expression(
         // match !col (don't do so recursively)
         Expr::Not(input) => {
             if let Expr::Column(name) = input.as_ref() {
-                let expr =
-                    build_single_column_expr(name, schema, required_columns, true)
-                        .unwrap_or(unhandled);
+                let expr = build_single_column_expr(name, schema, required_columns, true)
+                    .unwrap_or(unhandled);
                 return Ok(expr);
             } else {
                 return Ok(unhandled);

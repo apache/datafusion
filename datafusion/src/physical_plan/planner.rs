@@ -272,11 +272,7 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .map(|e| {
                         tuple_err((
-                            self.create_physical_expr(
-                                e,
-                                &input_exec.schema(),
-                                ctx_state,
-                            ),
+                            self.create_physical_expr(e, &input_exec.schema(), ctx_state),
                             e.name(input_schema),
                         ))
                     })

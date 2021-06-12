@@ -538,15 +538,9 @@ fn build_batch(
     column_indices: &[ColumnIndex],
     random_state: &RandomState,
 ) -> ArrowResult<(RecordBatch, UInt64Array)> {
-    let (left_indices, right_indices) = build_join_indexes(
-        left_data,
-        batch,
-        join_type,
-        on_left,
-        on_right,
-        random_state,
-    )
-    .unwrap();
+    let (left_indices, right_indices) =
+        build_join_indexes(left_data, batch, join_type, on_left, on_right, random_state)
+            .unwrap();
 
     if matches!(join_type, JoinType::Semi | JoinType::Anti) {
         return Ok((
