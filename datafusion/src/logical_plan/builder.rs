@@ -195,15 +195,17 @@ impl LogicalPlanBuilder {
         let all_schemas = self.plan.all_schemas();
         let mut projected_expr = vec![];
         for e in expr {
-            let normalized_e = normalize_col(e, &all_schemas)?;
-            match normalized_e {
+            match e {
                 Expr::Wildcard => {
                     (0..input_schema.fields().len()).for_each(|i| {
                         projected_expr
                             .push(Expr::Column(input_schema.field(i).qualified_column()))
                     });
                 }
-                _ => projected_expr.push(columnize_expr(normalized_e, input_schema)),
+                _ => projected_expr.push(columnize_expr(
+                    normalize_col(e, &all_schemas)?,
+                    input_schema,
+                )),
             }
         }
 

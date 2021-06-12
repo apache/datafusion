@@ -95,11 +95,11 @@
 //! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
 //!
 //! let expected = vec![
-//!     "+---+----------------+",
-//!     "| a | MIN(example.b) |",
-//!     "+---+----------------+",
-//!     "| 1 | 2              |",
-//!     "+---+----------------+"
+//!     "+---+--------+",
+//!     "| a | MIN(b) |",
+//!     "+---+--------+",
+//!     "| 1 | 2      |",
+//!     "+---+--------+"
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);

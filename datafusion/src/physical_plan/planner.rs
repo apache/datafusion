@@ -67,6 +67,7 @@ fn create_function_physical_name(
         .iter()
         .map(|e| physical_name(e, input_schema))
         .collect::<Result<_>>()?;
+
     let distinct_str = match distinct {
         true => "DISTINCT ",
         false => "",
@@ -133,6 +134,9 @@ fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::ScalarUDF { fun, args, .. } => {
             create_function_physical_name(&fun.name, false, args, input_schema)
         }
+        Expr::WindowFunction { fun, args, .. } => {
+            create_function_physical_name(&fun.to_string(), false, args, input_schema)
+        }
         Expr::AggregateFunction {
             fun,
             distinct,
@@ -162,7 +166,7 @@ fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             }
         }
         other => Err(DataFusionError::NotImplemented(format!(
-            "Physical plan does not support logical expression {:?}",
+            "Cannot derive physical field name for logical expression {:?}",
             other
         ))),
     }
@@ -382,9 +386,38 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Projection { input, expr, .. } => {
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
                 let input_schema = input.as_ref().schema();
-                let runtime_expr = expr
+
+                let physical_exprs = expr
                     .iter()
                     .map(|e| {
+                        // For projections, SQL planner and logical plan builder may convert user
+                        // provided expressions into logical Column expressions if their results
+                        // are already provided from the input plans. Because we work with
+                        // qualified columns in logical plane, derived columns involve operators or
+                        // functions will contain qualifers as well. This will result in logical
+                        // columns with names like `SUM(t1.c1)`, `t1.c1 + t1.c2`, etc.
+                        //
+                        // If we run these logical columns through physical_name function, we will
+                        // get physical names with column qualifiers, which violates Datafusion's
+                        // field name semantics. To account for this, we need to derive the
+                        // physical name from physical input instead.
+                        //
+                        // This depends on the invariant that logical schema field index MUST match
+                        // with physical schema field index.
+                        let physical_name = if let Expr::Column(col) = e {
+                            match input_schema.index_of_column(&col) {
+                                Ok(idx) => {
+                                    // index physical field using logical field index
+                                    Ok(input_exec.schema().field(idx).name().to_string())
+                                }
+                                // logical column is not a derived column, safe to pass along to
+                                // physical_name
+                                Err(_) => physical_name(e, &input_schema),
+                            }
+                        } else {
+                            physical_name(e, &input_schema)
+                        };
+
                         tuple_err((
                             self.create_physical_expr(
                                 e,
@@ -392,11 +425,15 @@ impl DefaultPhysicalPlanner {
                                 input_schema,
                                 &ctx_state,
                             ),
-                            physical_name(e, &input_schema),
+                            physical_name,
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(Arc::new(ProjectionExec::try_new(runtime_expr, input_exec)?))
+
+                Ok(Arc::new(ProjectionExec::try_new(
+                    physical_exprs,
+                    input_exec,
+                )?))
             }
             LogicalPlan::Filter {
                 input, predicate, ..
@@ -946,7 +983,7 @@ impl DefaultPhysicalPlanner {
         // unpack aliased logical expressions, e.g. "sum(col) over () as total"
         let (name, e) = match e {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-            _ => (e.name(logical_input_schema)?, e),
+            _ => (physical_name(e, logical_input_schema)?, e),
         };
 
         match e {
