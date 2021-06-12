@@ -370,12 +370,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 // extract join keys
                 extract_join_keys(&expr, &mut keys)?;
-                // TODO: avoid two iterations
-                let left_keys: Vec<Column> =
-                    keys.iter().map(|pair| pair.0.clone()).collect();
-                let right_keys: Vec<Column> =
-                    keys.iter().map(|pair| pair.1.clone()).collect();
 
+                let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
+                    keys.into_iter().unzip();
                 // return the logical plan representing the join
                 LogicalPlanBuilder::from(&left)
                     .join(&right, join_type, left_keys, right_keys)?
@@ -483,12 +480,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         if left_schema.field_from_qualified_column(l).is_ok()
                             && right_schema.field_from_qualified_column(r).is_ok()
                         {
-                            // TODO: avoid clone here
                             join_keys.push((l.clone(), r.clone()));
                         } else if left_schema.field_from_qualified_column(r).is_ok()
                             && right_schema.field_from_qualified_column(l).is_ok()
                         {
-                            // TODO: avoid clone here
                             join_keys.push((r.clone(), l.clone()));
                         }
                     }
@@ -497,10 +492,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             LogicalPlanBuilder::from(&left).cross_join(right)?.build()?;
                     } else {
                         let left_keys: Vec<Column> =
-                            // TODO: avoid clone here
                             join_keys.iter().map(|(l, _)| l.clone()).collect();
                         let right_keys: Vec<Column> =
-                            // TODO: avoid clone here
                             join_keys.iter().map(|(_, r)| r.clone()).collect();
                         let builder = LogicalPlanBuilder::from(&left);
                         left = builder
@@ -1542,7 +1535,6 @@ fn remove_join_expressions(
     match expr {
         Expr::BinaryExpr { left, op, right } => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                // TODO: avoid clones
                 (Expr::Column(l), Expr::Column(r)) => {
                     if join_columns.contains(&(l.clone(), r.clone()))
                         || join_columns.contains(&(r.clone(), l.clone()))
