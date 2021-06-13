@@ -155,7 +155,7 @@ impl DefaultPhysicalPlanner {
                     .map(|e| {
                         self.create_window_expr(
                             e,
-                            &logical_input_schema,
+                            logical_input_schema,
                             &physical_input_schema,
                             ctx_state,
                         )
@@ -189,7 +189,7 @@ impl DefaultPhysicalPlanner {
                                 &physical_input_schema,
                                 ctx_state,
                             ),
-                            e.name(&logical_input_schema),
+                            e.name(logical_input_schema),
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -198,7 +198,7 @@ impl DefaultPhysicalPlanner {
                     .map(|e| {
                         self.create_aggregate_expr(
                             e,
-                            &logical_input_schema,
+                            logical_input_schema,
                             &physical_input_schema,
                             ctx_state,
                         )
@@ -266,12 +266,8 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .map(|e| {
                         tuple_err((
-                            self.create_physical_expr(
-                                e,
-                                &input_exec.schema(),
-                                &ctx_state,
-                            ),
-                            e.name(&input_schema),
+                            self.create_physical_expr(e, &input_exec.schema(), ctx_state),
+                            e.name(input_schema),
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -307,7 +303,7 @@ impl DefaultPhysicalPlanner {
                         let runtime_expr = expr
                             .iter()
                             .map(|e| {
-                                self.create_physical_expr(e, &input_schema, &ctx_state)
+                                self.create_physical_expr(e, &input_schema, ctx_state)
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Partitioning::Hash(runtime_expr, *n)
@@ -378,7 +374,7 @@ impl DefaultPhysicalPlanner {
                             right,
                             Partitioning::Hash(right_expr, ctx_state.config.concurrency),
                         )?),
-                        &keys,
+                        keys,
                         &physical_join_type,
                         PartitionMode::Partitioned,
                     )?))
@@ -386,7 +382,7 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(HashJoinExec::try_new(
                         left,
                         right,
-                        &keys,
+                        keys,
                         &physical_join_type,
                         PartitionMode::CollectLeft,
                     )?))
@@ -504,7 +500,7 @@ impl DefaultPhysicalPlanner {
             }
             Expr::Column(name) => {
                 // check that name exists
-                input_schema.field_with_name(&name)?;
+                input_schema.field_with_name(name)?;
                 Ok(Arc::new(Column::new(name)))
             }
             Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
@@ -762,12 +758,12 @@ impl DefaultPhysicalPlanner {
                             nulls_first,
                         } => self.create_physical_sort_expr(
                             expr,
-                            &physical_input_schema,
+                            physical_input_schema,
                             SortOptions {
                                 descending: !*asc,
                                 nulls_first: *nulls_first,
                             },
-                            &ctx_state,
+                            ctx_state,
                         ),
                         _ => Err(DataFusionError::Plan(
                             "Sort only accepts sort expressions".to_string(),

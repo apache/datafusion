@@ -145,7 +145,7 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn name(&self) -> &str {
-        &self.window.name()
+        self.window.name()
     }
 
     fn field(&self) -> Result<Field> {
@@ -191,7 +191,7 @@ impl WindowExpr for AggregateWindowExpr {
     }
 
     fn name(&self) -> &str {
-        &self.aggregate.name()
+        self.aggregate.name()
     }
 
     fn field(&self) -> Result<Field> {
@@ -351,7 +351,7 @@ fn window_aggregate_batch(
         .map(|(window_acc, expr)| {
             let values = &expr
                 .iter()
-                .map(|e| e.evaluate(&batch))
+                .map(|e| e.evaluate(batch))
                 .map(|r| r.map(|v| v.into_array(batch.num_rows())))
                 .collect::<Result<Vec<_>>>()?;
             window_acc.scan_batch(batch.num_rows(), values)
