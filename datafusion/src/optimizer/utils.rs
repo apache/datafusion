@@ -305,8 +305,10 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         }
         Expr::Cast { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
         Expr::TryCast { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
-        Expr::Column(_) | Expr::Literal(_) | Expr::ScalarVariable(_) => Ok(vec![]),
+        Expr::Column(_) => Ok(vec![]),
         Expr::Alias(expr, ..) => Ok(vec![expr.as_ref().to_owned()]),
+        Expr::Literal(_) => Ok(vec![]),
+        Expr::ScalarVariable(_) => Ok(vec![]),
         Expr::Not(expr) => Ok(vec![expr.as_ref().to_owned()]),
         Expr::Negative(expr) => Ok(vec![expr.as_ref().to_owned()]),
         Expr::Sort { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
@@ -451,6 +453,9 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
         }
         Expr::Not(_) => Ok(Expr::Not(Box::new(expressions[0].clone()))),
         Expr::Negative(_) => Ok(Expr::Negative(Box::new(expressions[0].clone()))),
+        Expr::Column(_) => Ok(expr.clone()),
+        Expr::Literal(_) => Ok(expr.clone()),
+        Expr::ScalarVariable(_) => Ok(expr.clone()),
         Expr::Sort {
             asc, nulls_first, ..
         } => Ok(Expr::Sort {
@@ -479,13 +484,10 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
                 Ok(expr)
             }
         }
+        Expr::InList { .. } => Ok(expr.clone()),
         Expr::Wildcard { .. } => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
         )),
-        Expr::InList { .. }
-        | Expr::Column(_)
-        | Expr::Literal(_)
-        | Expr::ScalarVariable(_) => Ok(expr.clone()),
     }
 }
 

@@ -37,7 +37,6 @@ impl CoalesceBatches {
         Self {}
     }
 }
-
 impl PhysicalOptimizerRule for CoalesceBatches {
     fn optimize(
         &self,

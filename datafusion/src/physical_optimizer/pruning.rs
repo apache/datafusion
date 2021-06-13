@@ -734,25 +734,25 @@ mod tests {
         let required_columns = RequiredStatColumns::from(vec![
             // min of original column s1, named s1_min
             (
-                Column::from_name("s1".to_string()),
+                "s1".into(),
                 StatisticsType::Min,
                 Field::new("s1_min", DataType::Int32, true),
             ),
             // max of original column s2, named s2_max
             (
-                Column::from_name("s2".to_string()),
+                "s2".into(),
                 StatisticsType::Max,
                 Field::new("s2_max", DataType::Int32, true),
             ),
             // max of original column s3, named s3_max
             (
-                Column::from_name("s3".to_string()),
+                "s3".into(),
                 StatisticsType::Max,
                 Field::new("s3_max", DataType::Utf8, true),
             ),
             // min of original column s3, named s3_min
             (
-                Column::from_name("s3".to_string()),
+                "s3".into(),
                 StatisticsType::Min,
                 Field::new("s3_min", DataType::Utf8, true),
             ),
@@ -804,7 +804,7 @@ mod tests {
 
         // Request a record batch with of s1_min as a timestamp
         let required_columns = RequiredStatColumns::from(vec![(
-            Column::from_name("s1".to_string()),
+            "s3".into(),
             StatisticsType::Min,
             Field::new(
                 "s1_min",
@@ -858,7 +858,7 @@ mod tests {
 
         // Request a record batch with of s1_min as a timestamp
         let required_columns = RequiredStatColumns::from(vec![(
-            Column::from_name("s1".to_string()),
+            "s3".into(),
             StatisticsType::Min,
             Field::new("s1_min", DataType::Utf8, true),
         )]);
@@ -887,7 +887,7 @@ mod tests {
     fn test_build_statistics_inconsistent_length() {
         // return an inconsistent length to the actual statistics arrays
         let required_columns = RequiredStatColumns::from(vec![(
-            Column::from_name("s1".to_string()),
+            "s1".into(),
             StatisticsType::Min,
             Field::new("s1_min", DataType::Int64, true),
         )]);
@@ -1114,30 +1114,18 @@ mod tests {
         let c1_min_field = Field::new("c1_min", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[0],
-            (
-                Column::from_name("c1".to_string()),
-                StatisticsType::Min,
-                c1_min_field
-            )
+            ("c1".into(), StatisticsType::Min, c1_min_field)
         );
         // c2 = 2 should add c2_min and c2_max
         let c2_min_field = Field::new("c2_min", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[1],
-            (
-                Column::from_name("c2".to_string()),
-                StatisticsType::Min,
-                c2_min_field
-            )
+            ("c2".into(), StatisticsType::Min, c2_min_field)
         );
         let c2_max_field = Field::new("c2_max", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[2],
-            (
-                Column::from_name("c2".to_string()),
-                StatisticsType::Max,
-                c2_max_field
-            )
+            ("c2".into(), StatisticsType::Max, c2_max_field)
         );
         // c2 = 3 shouldn't add any new statistics fields
         assert_eq!(required_columns.columns.len(), 3);
