@@ -442,7 +442,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         None,
                     )?
                     .build(),
-                    (_, None) => Err(DataFusionError::Plan(format!(
+                    (None, None) => Err(DataFusionError::Plan(format!(
                         "Table or CTE with name '{}' not found",
                         name
                     ))),
