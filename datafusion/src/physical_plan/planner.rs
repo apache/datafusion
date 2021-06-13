@@ -44,7 +44,7 @@ use crate::physical_plan::{
 };
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
-use crate::sql::utils::generate_sort_key;
+use crate::sql::utils::{generate_sort_key, window_expr_common_partition_keys};
 use crate::variable::VarType;
 use crate::{
     error::{DataFusionError, Result},
@@ -264,6 +264,38 @@ impl DefaultPhysicalPlanner {
                         "Impossibly got empty window expression".to_owned(),
                     ));
                 }
+
+                let input_exec = self.create_initial_plan(input, ctx_state)?;
+
+                // at this moment we are guaranteed by the logical planner
+                // to have all the window_expr to have equal sort key
+                let partition_keys = window_expr_common_partition_keys(window_expr)?;
+
+                let can_repartition = !partition_keys.is_empty()
+                    && ctx_state.config.concurrency > 1
+                    && ctx_state.config.repartition_windows;
+
+                let input_exec = if can_repartition {
+                    let partition_keys = partition_keys
+                        .iter()
+                        .map(|e| {
+                            self.create_physical_expr(
+                                e,
+                                input.schema(),
+                                &input_exec.schema(),
+                                ctx_state,
+                            )
+                        })
+                        .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
+                    Arc::new(RepartitionExec::try_new(
+                        input_exec,
+                        Partitioning::Hash(partition_keys, ctx_state.config.concurrency),
+                    )?)
+                } else {
+                    input_exec
+                };
+
+                // add a sort phase
                 let get_sort_keys = |expr: &Expr| match expr {
                     Expr::WindowFunction {
                         ref partition_by,
@@ -272,7 +304,6 @@ impl DefaultPhysicalPlanner {
                     } => generate_sort_key(partition_by, order_by),
                     _ => unreachable!(),
                 };
-
                 let sort_keys = get_sort_keys(&window_expr[0]);
                 if window_expr.len() > 1 {
                     debug_assert!(
@@ -283,7 +314,6 @@ impl DefaultPhysicalPlanner {
                     );
                 }
 
-                let input_exec = self.create_initial_plan(input, ctx_state)?;
                 let logical_input_schema = input.schema();
 
                 let input_exec = if sort_keys.is_empty() {
@@ -310,7 +340,11 @@ impl DefaultPhysicalPlanner {
                             _ => unreachable!(),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Arc::new(SortExec::try_new(sort_keys, input_exec)?)
+                    Arc::new(if can_repartition {
+                        SortExec::new_with_partitioning(sort_keys, input_exec, true)
+                    } else {
+                        SortExec::try_new(sort_keys, input_exec)?
+                    })
                 };
 
                 let physical_input_schema = input_exec.schema();

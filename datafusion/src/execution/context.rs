@@ -630,6 +630,9 @@ pub struct ExecutionConfig {
     /// Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel
     /// using the provided `concurrency` level
     pub repartition_aggregations: bool,
+    /// Should DataFusion repartition data using the partition keys to execute window functions in
+    /// parallel using the provided `concurrency` level
+    pub repartition_windows: bool,
 }
 
 impl Default for ExecutionConfig {
@@ -659,6 +662,7 @@ impl Default for ExecutionConfig {
             information_schema: false,
             repartition_joins: true,
             repartition_aggregations: true,
+            repartition_windows: true,
         }
     }
 }
@@ -749,9 +753,16 @@ impl ExecutionConfig {
         self.repartition_joins = enabled;
         self
     }
+
     /// Enables or disables the use of repartitioning for aggregations to improve parallelism
     pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
         self.repartition_aggregations = enabled;
+        self
+    }
+
+    /// Enables or disables the use of repartitioning for window functions to improve parallelism
+    pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
+        self.repartition_windows = enabled;
         self
     }
 }
