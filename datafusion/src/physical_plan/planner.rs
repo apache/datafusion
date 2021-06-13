@@ -775,12 +775,6 @@ impl DefaultPhysicalPlanner {
                         )),
                     })
                     .collect::<Result<Vec<_>>>()?;
-                if !partition_by.is_empty() {
-                    return Err(DataFusionError::NotImplemented(
-                            "window expression with non-empty partition by clause is not yet supported"
-                                .to_owned(),
-                        ));
-                }
                 if window_frame.is_some() {
                     return Err(DataFusionError::NotImplemented(
                             "window expression with window frame definition is not yet supported"
