@@ -420,7 +420,7 @@ impl<'a> PruningExpressionBuilder<'a> {
     fn min_column_expr(&mut self) -> Result<Expr> {
         self.required_columns.min_column_expr(
             &self.column_name,
-            &self.column_expr,
+            self.column_expr,
             self.field,
         )
     }
@@ -428,7 +428,7 @@ impl<'a> PruningExpressionBuilder<'a> {
     fn max_column_expr(&mut self) -> Result<Expr> {
         self.required_columns.max_column_expr(
             &self.column_name,
-            &self.column_expr,
+            self.column_expr,
             self.field,
         )
     }
@@ -440,7 +440,7 @@ fn rewrite_column_expr(
     column_old_name: &str,
     column_new_name: &str,
 ) -> Result<Expr> {
-    let expressions = utils::expr_sub_expressions(&expr)?;
+    let expressions = utils::expr_sub_expressions(expr)?;
     let expressions = expressions
         .iter()
         .map(|e| rewrite_column_expr(e, column_old_name, column_new_name))
@@ -451,7 +451,7 @@ fn rewrite_column_expr(
             return Ok(Expr::Column(column_new_name.to_string()));
         }
     }
-    utils::rewrite_expression(&expr, &expressions)
+    utils::rewrite_expression(expr, &expressions)
 }
 
 /// Given a column reference to `column_name`, returns a pruning
@@ -515,16 +515,15 @@ fn build_predicate_expression(
     let (left, op, right) = match expr {
         Expr::BinaryExpr { left, op, right } => (left, *op, right),
         Expr::Column(name) => {
-            let expr = build_single_column_expr(&name, schema, required_columns, false)
+            let expr = build_single_column_expr(name, schema, required_columns, false)
                 .unwrap_or(unhandled);
             return Ok(expr);
         }
         // match !col (don't do so recursively)
         Expr::Not(input) => {
             if let Expr::Column(name) = input.as_ref() {
-                let expr =
-                    build_single_column_expr(&name, schema, required_columns, true)
-                        .unwrap_or(unhandled);
+                let expr = build_single_column_expr(name, schema, required_columns, true)
+                    .unwrap_or(unhandled);
                 return Ok(expr);
             } else {
                 return Ok(unhandled);

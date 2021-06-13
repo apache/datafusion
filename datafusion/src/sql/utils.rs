@@ -146,7 +146,7 @@ where
 pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
         Expr::Column(_) => Ok(expr.clone()),
-        _ => Ok(Expr::Column(expr.name(&plan.schema())?)),
+        _ => Ok(Expr::Column(expr.name(plan.schema())?)),
     }
 }
 
@@ -448,7 +448,7 @@ fn generate_sort_key(partition_by: &[Expr], order_by: &[Expr]) -> WindowSortKey 
         }
     });
     order_by.iter().for_each(|e| {
-        if !sort_key.contains(&e) {
+        if !sort_key.contains(e) {
             sort_key.push(e.clone());
         }
     });

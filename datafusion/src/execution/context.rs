@@ -275,7 +275,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan_csv(&filename, options, None)?.build()?,
+            &LogicalPlanBuilder::scan_csv(filename, options, None)?.build()?,
         )))
     }
 
@@ -284,7 +284,7 @@ impl ExecutionContext {
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_parquet(
-                &filename,
+                filename,
                 None,
                 self.state.lock().unwrap().config.concurrency,
             )?
@@ -328,7 +328,7 @@ impl ExecutionContext {
     /// executed against this context.
     pub fn register_parquet(&mut self, name: &str, filename: &str) -> Result<()> {
         let table = ParquetTable::try_new(
-            &filename,
+            filename,
             self.state.lock().unwrap().config.concurrency,
         )?;
         self.register_table(name, Arc::new(table))?;
@@ -3205,7 +3205,7 @@ mod tests {
             .expect("Executing CREATE EXTERNAL TABLE");
 
         let sql = "SELECT * from csv_with_timestamps";
-        let result = plan_and_collect(&mut ctx, &sql).await.unwrap();
+        let result = plan_and_collect(&mut ctx, sql).await.unwrap();
         let expected = vec![
             "+--------+-------------------------+",
             "| name   | ts                      |",

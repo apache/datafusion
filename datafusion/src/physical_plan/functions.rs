@@ -344,7 +344,7 @@ pub fn return_type(
     // or the execution panics.
 
     // verify that this is a valid set of data types for this function
-    data_types(&arg_types, &signature(fun))?;
+    data_types(arg_types, &signature(fun))?;
 
     // the return type of the built in function.
     // Some built-in functions' return type depends on the incoming type.
@@ -624,7 +624,7 @@ pub fn create_physical_expr(
                 &format!("{}", fun),
                 fun_expr,
                 args,
-                &return_type(&fun, &arg_types)?,
+                &return_type(fun, &arg_types)?,
             )));
         }
         BuiltinScalarFunction::InitCap => |args| match args[0].data_type() {
@@ -953,7 +953,7 @@ pub fn create_physical_expr(
         &format!("{}", fun),
         fun_expr,
         args,
-        &return_type(&fun, &arg_types)?,
+        &return_type(fun, &arg_types)?,
     )))
 }
 
