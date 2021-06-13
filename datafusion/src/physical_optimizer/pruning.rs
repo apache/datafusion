@@ -552,6 +552,14 @@ fn build_predicate_expression(
     };
     let corrected_op = expr_builder.correct_operator(op);
     let statistics_expr = match corrected_op {
+        Operator::NotEq => {
+            // column != literal => (min, max) = literal => min > literal || literal > max
+            let min_column_expr = expr_builder.min_column_expr()?;
+            let max_column_expr = expr_builder.max_column_expr()?;
+            min_column_expr
+                .gt(expr_builder.scalar_expr().clone())
+                .or(expr_builder.scalar_expr().clone().gt(max_column_expr))
+        }
         Operator::Eq => {
             // column = literal => (min, max) = literal => min <= literal && literal <= max
             // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
@@ -922,6 +930,26 @@ mod tests {
 
         // test column on the right
         let expr = lit(1).eq(col("c1"));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_not_eq() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expected_expr = "#c1_min Gt Int32(1) Or Int32(1) Gt #c1_max";
+
+        // test column on the left
+        let expr = col("c1").not_eq(lit(1));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        // test column on the right
+        let expr = lit(1).not_eq(col("c1"));
         let predicate_expr =
             build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
         assert_eq!(format!("{:?}", predicate_expr), expected_expr);
