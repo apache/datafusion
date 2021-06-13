@@ -221,23 +221,23 @@ impl LogicalPlan {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
-            LogicalPlan::EmptyRelation { schema, .. } => &schema,
+            LogicalPlan::EmptyRelation { schema, .. } => schema,
             LogicalPlan::TableScan {
                 projected_schema, ..
-            } => &projected_schema,
-            LogicalPlan::Projection { schema, .. } => &schema,
+            } => projected_schema,
+            LogicalPlan::Projection { schema, .. } => schema,
             LogicalPlan::Filter { input, .. } => input.schema(),
-            LogicalPlan::Window { schema, .. } => &schema,
-            LogicalPlan::Aggregate { schema, .. } => &schema,
+            LogicalPlan::Window { schema, .. } => schema,
+            LogicalPlan::Aggregate { schema, .. } => schema,
             LogicalPlan::Sort { input, .. } => input.schema(),
-            LogicalPlan::Join { schema, .. } => &schema,
-            LogicalPlan::CrossJoin { schema, .. } => &schema,
+            LogicalPlan::Join { schema, .. } => schema,
+            LogicalPlan::CrossJoin { schema, .. } => schema,
             LogicalPlan::Repartition { input, .. } => input.schema(),
             LogicalPlan::Limit { input, .. } => input.schema(),
-            LogicalPlan::CreateExternalTable { schema, .. } => &schema,
-            LogicalPlan::Explain { schema, .. } => &schema,
-            LogicalPlan::Extension { node } => &node.schema(),
-            LogicalPlan::Union { schema, .. } => &schema,
+            LogicalPlan::CreateExternalTable { schema, .. } => schema,
+            LogicalPlan::Explain { schema, .. } => schema,
+            LogicalPlan::Extension { node } => node.schema(),
+            LogicalPlan::Union { schema, .. } => schema,
         }
     }
 
@@ -246,12 +246,12 @@ impl LogicalPlan {
         match self {
             LogicalPlan::TableScan {
                 projected_schema, ..
-            } => vec![&projected_schema],
+            } => vec![projected_schema],
             LogicalPlan::Window { input, schema, .. }
             | LogicalPlan::Aggregate { input, schema, .. }
             | LogicalPlan::Projection { input, schema, .. } => {
                 let mut schemas = input.all_schemas();
-                schemas.insert(0, &schema);
+                schemas.insert(0, schema);
                 schemas
             }
             LogicalPlan::Join {
@@ -267,16 +267,16 @@ impl LogicalPlan {
             } => {
                 let mut schemas = left.all_schemas();
                 schemas.extend(right.all_schemas());
-                schemas.insert(0, &schema);
+                schemas.insert(0, schema);
                 schemas
             }
             LogicalPlan::Union { schema, .. } => {
                 vec![schema]
             }
-            LogicalPlan::Extension { node } => vec![&node.schema()],
+            LogicalPlan::Extension { node } => vec![node.schema()],
             LogicalPlan::Explain { schema, .. }
             | LogicalPlan::EmptyRelation { schema, .. }
-            | LogicalPlan::CreateExternalTable { schema, .. } => vec![&schema],
+            | LogicalPlan::CreateExternalTable { schema, .. } => vec![schema],
             LogicalPlan::Limit { input, .. }
             | LogicalPlan::Repartition { input, .. }
             | LogicalPlan::Sort { input, .. }

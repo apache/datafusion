@@ -350,7 +350,7 @@ async fn execute_query(
     if debug {
         println!("Logical plan:\n{:?}", plan);
     }
-    let plan = ctx.optimize(&plan)?;
+    let plan = ctx.optimize(plan)?;
     if debug {
         println!("Optimized logical plan:\n{:?}", plan);
     }
@@ -921,9 +921,9 @@ mod tests {
                 .iter()
                 .map(|field| {
                     Field::new(
-                        Field::name(&field),
+                        Field::name(field),
                         DataType::Utf8,
-                        Field::is_nullable(&field),
+                        Field::is_nullable(field),
                     )
                 })
                 .collect::<Vec<Field>>(),
@@ -939,8 +939,8 @@ mod tests {
                 .iter()
                 .map(|field| {
                     Field::new(
-                        Field::name(&field),
-                        Field::data_type(&field).to_owned(),
+                        Field::name(field),
+                        Field::data_type(field).to_owned(),
                         true,
                     )
                 })
@@ -990,10 +990,10 @@ mod tests {
                     .map(|field| {
                         Expr::Alias(
                             Box::new(Cast {
-                                expr: Box::new(trim(col(Field::name(&field)))),
-                                data_type: Field::data_type(&field).to_owned(),
+                                expr: Box::new(trim(col(Field::name(field)))),
+                                data_type: Field::data_type(field).to_owned(),
                             }),
-                            Field::name(&field).to_string(),
+                            Field::name(field).to_string(),
                         )
                     })
                     .collect::<Vec<Expr>>(),
