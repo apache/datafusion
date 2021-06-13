@@ -18,10 +18,13 @@
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
 use crate::error::Result;
+use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
+use arrow::record_batch::RecordBatch;
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// row_number expression
@@ -54,12 +57,25 @@ impl BuiltInWindowFunctionExpr for RowNumber {
     }
 
     fn name(&self) -> &str {
-        self.name.as_str()
+        &self.name
     }
 
-    fn evaluate(&self, num_rows: usize, _values: &[ArrayRef]) -> Result<ArrayRef> {
+    fn create_evaluator(
+        &self,
+        _batch: &RecordBatch,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        Ok(Box::new(NumRowsEvaluator::default()))
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct NumRowsEvaluator {}
+
+impl PartitionEvaluator for NumRowsEvaluator {
+    fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
+        let num_rows = partition.end - partition.start;
         Ok(Arc::new(UInt64Array::from_iter_values(
-            (1..num_rows + 1).map(|i| i as u64),
+            1..(num_rows as u64) + 1,
         )))
     }
 }
@@ -79,8 +95,9 @@ mod tests {
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
         let row_number = RowNumber::new("row_number".to_owned());
-        let result = row_number.evaluate(batch.num_rows(), &[])?;
-        let result = result.as_any().downcast_ref::<UInt64Array>().unwrap();
+        let result = row_number.create_evaluator(&batch)?.evaluate(vec![0..8])?;
+        assert_eq!(1, result.len());
+        let result = result[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
         Ok(())
@@ -94,8 +111,9 @@ mod tests {
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
         let row_number = RowNumber::new("row_number".to_owned());
-        let result = row_number.evaluate(batch.num_rows(), &[])?;
-        let result = result.as_any().downcast_ref::<UInt64Array>().unwrap();
+        let result = row_number.create_evaluator(&batch)?.evaluate(vec![0..8])?;
+        assert_eq!(1, result.len());
+        let result = result[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
         Ok(())
