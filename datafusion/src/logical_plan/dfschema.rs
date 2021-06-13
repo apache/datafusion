@@ -35,7 +35,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFSchema {
     /// Fields
-    pub(crate) fields: Vec<DFField>,
+    fields: Vec<DFField>,
 }
 
 impl DFSchema {

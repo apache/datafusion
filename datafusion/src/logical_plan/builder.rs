@@ -160,17 +160,18 @@ impl LogicalPlanBuilder {
 
         let projected_schema = projection
             .as_ref()
-            .map(|p| DFSchema {
-                fields: p
-                    .iter()
-                    .map(|i| {
-                        DFField::from_qualified(table_name, schema.field(*i).clone())
-                    })
-                    .collect(),
+            .map(|p| {
+                DFSchema::new(
+                    p.iter()
+                        .map(|i| {
+                            DFField::from_qualified(table_name, schema.field(*i).clone())
+                        })
+                        .collect(),
+                )
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name, &schema).unwrap()
-            });
+                DFSchema::try_from_qualified_schema(table_name, &schema)
+            })?;
 
         let table_scan = LogicalPlan::TableScan {
             table_name: table_name.to_string(),
