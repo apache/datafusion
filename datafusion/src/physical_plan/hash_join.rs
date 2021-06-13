@@ -1387,9 +1387,10 @@ mod tests {
             ("b1", &vec![4, 5, 6]),
             ("c2", &vec![70, 80, 90]),
         );
+
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1")?),
-            Column::new("b1", right.schema().index_of("b1")?),
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
         )];
 
         let (columns, batches) =
@@ -1425,8 +1426,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1")?),
-            Column::new("b1", right.schema().index_of("b1")?),
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
         )];
 
         let (columns, batches) = partitioned_join_collect(
@@ -1466,8 +1467,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1")?),
-            Column::new("b2", right.schema().index_of("b2")?),
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b2", &right.schema())?,
         )];
 
         let (columns, batches) = join_collect(left, right, on, &JoinType::Inner).await?;
@@ -1503,12 +1504,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new("a1", left.schema().index_of("a1")?),
-                Column::new("a1", right.schema().index_of("a1")?),
+                Column::new_with_schema("a1", &left.schema())?,
+                Column::new_with_schema("a1", &right.schema())?,
             ),
             (
-                Column::new("b2", left.schema().index_of("b2")?),
-                Column::new("b2", right.schema().index_of("b2")?),
+                Column::new_with_schema("b2", &left.schema())?,
+                Column::new_with_schema("b2", &right.schema())?,
             ),
         ];
 
@@ -1555,12 +1556,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new("a1", left.schema().index_of("a1")?),
-                Column::new("a1", right.schema().index_of("a1")?),
+                Column::new_with_schema("a1", &left.schema())?,
+                Column::new_with_schema("a1", &right.schema())?,
             ),
             (
-                Column::new("b2", left.schema().index_of("b2")?),
-                Column::new("b2", right.schema().index_of("b2")?),
+                Column::new_with_schema("b2", &left.schema())?,
+                Column::new_with_schema("b2", &right.schema())?,
             ),
         ];
 
@@ -1607,8 +1608,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1")?),
-            Column::new("b1", right.schema().index_of("b1")?),
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
         )];
 
         let join = join(left, right, on, &JoinType::Inner)?;
@@ -1673,8 +1674,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1").unwrap()),
-            Column::new("b1", right.schema().index_of("b1").unwrap()),
+            Column::new_with_schema("b1", &left.schema()).unwrap(),
+            Column::new_with_schema("b1", &right.schema()).unwrap(),
         )];
 
         let join = join(left, right, on, &JoinType::Left).unwrap();
@@ -1714,8 +1715,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1").unwrap()),
-            Column::new("b2", right.schema().index_of("b2").unwrap()),
+            Column::new_with_schema("b1", &left.schema()).unwrap(),
+            Column::new_with_schema("b2", &right.schema()).unwrap(),
         )];
 
         let join = join(left, right, on, &JoinType::Full).unwrap();
@@ -1752,8 +1753,8 @@ mod tests {
         );
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1").unwrap()),
-            Column::new("b1", right.schema().index_of("b1").unwrap()),
+            Column::new_with_schema("b1", &left.schema()).unwrap(),
+            Column::new_with_schema("b1", &right.schema()).unwrap(),
         )];
         let schema = right.schema();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
@@ -1787,8 +1788,8 @@ mod tests {
         );
         let right = build_table_i32(("a2", &vec![]), ("b2", &vec![]), ("c2", &vec![]));
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1").unwrap()),
-            Column::new("b2", right.schema().index_of("b2").unwrap()),
+            Column::new_with_schema("b1", &left.schema()).unwrap(),
+            Column::new_with_schema("b2", &right.schema()).unwrap(),
         )];
         let schema = right.schema();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
@@ -1826,8 +1827,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1")?),
-            Column::new("b1", right.schema().index_of("b1")?),
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
         )];
 
         let (columns, batches) =
@@ -1862,8 +1863,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1")?),
-            Column::new("b1", right.schema().index_of("b1")?),
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
         )];
 
         let (columns, batches) = partitioned_join_collect(
@@ -1902,8 +1903,8 @@ mod tests {
             ("c2", &vec![70, 80, 90, 100]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1")?),
-            Column::new("b1", right.schema().index_of("b1")?),
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
         )];
 
         let join = join(left, right, on, &JoinType::Semi)?;
@@ -1941,8 +1942,8 @@ mod tests {
             ("c2", &vec![70, 80, 90, 100]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1")?),
-            Column::new("b1", right.schema().index_of("b1")?),
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
         )];
 
         let join = join(left, right, on, &JoinType::Anti)?;
@@ -1978,8 +1979,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1")?),
-            Column::new("b1", right.schema().index_of("b1")?),
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
         )];
 
         let (columns, batches) = join_collect(left, right, on, &JoinType::Right).await?;
@@ -2014,8 +2015,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1")?),
-            Column::new("b1", right.schema().index_of("b1")?),
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
         )];
 
         let (columns, batches) =
@@ -2051,8 +2052,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new("b1", left.schema().index_of("b1").unwrap()),
-            Column::new("b2", right.schema().index_of("b2").unwrap()),
+            Column::new_with_schema("b1", &left.schema()).unwrap(),
+            Column::new_with_schema("b2", &right.schema()).unwrap(),
         )];
 
         let join = join(left, right, on, &JoinType::Full)?;

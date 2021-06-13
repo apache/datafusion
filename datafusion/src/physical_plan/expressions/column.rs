@@ -43,6 +43,11 @@ impl Column {
         }
     }
 
+    /// Create a new column expression based on column name and schema
+    pub fn new_with_schema(name: &str, schema: &Schema) -> Result<Self> {
+        Ok(Column::new(name, schema.index_of(name)?))
+    }
+
     /// Get the column name
     pub fn name(&self) -> &str {
         &self.name
@@ -84,5 +89,5 @@ impl PhysicalExpr for Column {
 
 /// Create a column expression
 pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(Column::new(name, schema.index_of(name)?)))
+    Ok(Arc::new(Column::new_with_schema(name, schema)?))
 }
