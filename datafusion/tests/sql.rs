@@ -802,25 +802,142 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
     let sql = "select \
-    c2, \
-    sum(c3) over (), \
-    avg(c3) over (), \
-    count(c3) over (), \
-    max(c3) over (), \
-    min(c3) over (), \
-    first_value(c3) over (), \
-    last_value(c3) over (), \
-    nth_value(c3, 2) over ()
+    c9, \
+    count(c5) over (), \
+    max(c5) over (), \
+    min(c5) over (), \
+    first_value(c5) over (), \
+    last_value(c5) over (), \
+    nth_value(c5, 2) over () \
     from aggregate_test_100 \
-    order by c2
+    order by c9 \
     limit 5";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
+        vec![
+            "28774375",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "63044568",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "141047417",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "141680161",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "145294611",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_window_with_order_by() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "select \
+    c9, \
+    sum(c5) over (order by c9), \
+    avg(c5) over (order by c9), \
+    count(c5) over (order by c9), \
+    max(c5) over (order by c9), \
+    min(c5) over (order by c9), \
+    first_value(c5) over (order by c9), \
+    last_value(c5) over (order by c9), \
+    nth_value(c5, 2) over (order by c9) \
+    from aggregate_test_100 \
+    order by c9 \
+    limit 5";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec![
+            "28774375",
+            "61035129",
+            "61035129",
+            "1",
+            "61035129",
+            "61035129",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "63044568",
+            "-47938237",
+            "-23969118.5",
+            "2",
+            "61035129",
+            "-108973366",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "141047417",
+            "575165281",
+            "191721760.33333334",
+            "3",
+            "623103518",
+            "-108973366",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "141680161",
+            "-1352462829",
+            "-338115707.25",
+            "4",
+            "623103518",
+            "-1927628110",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "145294611",
+            "-3251637940",
+            "-650327588",
+            "5",
+            "623103518",
+            "-1927628110",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
     ];
     assert_eq!(expected, actual);
     Ok(())

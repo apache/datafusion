@@ -18,8 +18,7 @@
 //! Execution plan for window functions
 
 use crate::error::{DataFusionError, Result};
-
-use crate::logical_plan::window_frames::WindowFrame;
+use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::physical_plan::{
     aggregates, common,
     expressions::{Literal, NthValue, PhysicalSortExpr, RowNumber},
@@ -28,9 +27,9 @@ use crate::physical_plan::{
     window_functions::BuiltInWindowFunctionExpr,
     window_functions::{BuiltInWindowFunction, WindowFunction},
     Accumulator, AggregateExpr, Distribution, ExecutionPlan, Partitioning, PhysicalExpr,
-    RecordBatchStream, SendableRecordBatchStream, WindowAccumulator, WindowExpr,
+    RecordBatchStream, SendableRecordBatchStream, WindowExpr,
 };
-use crate::scalar::ScalarValue;
+use arrow::compute::concat;
 use arrow::{
     array::ArrayRef,
     datatypes::{Field, Schema, SchemaRef},
@@ -43,6 +42,7 @@ use futures::Future;
 use pin_project_lite::pin_project;
 use std::any::Any;
 use std::convert::TryInto;
+use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -65,12 +65,9 @@ pub fn create_window_expr(
     fun: &WindowFunction,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
-    // https://github.com/apache/arrow-datafusion/issues/299
-    _partition_by: &[Arc<dyn PhysicalExpr>],
-    // https://github.com/apache/arrow-datafusion/issues/360
-    _order_by: &[PhysicalSortExpr],
-    // https://github.com/apache/arrow-datafusion/issues/361
-    _window_frame: Option<WindowFrame>,
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    order_by: &[PhysicalSortExpr],
+    window_frame: Option<WindowFrame>,
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
@@ -82,9 +79,15 @@ pub fn create_window_expr(
                 input_schema,
                 name,
             )?,
+            partition_by: partition_by.to_vec(),
+            order_by: order_by.to_vec(),
+            window_frame,
         }),
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr {
             window: create_built_in_window_expr(fun, args, input_schema, name)?,
+            partition_by: partition_by.to_vec(),
+            order_by: order_by.to_vec(),
+            window_frame,
         }),
     })
 }
@@ -136,6 +139,9 @@ fn create_built_in_window_expr(
 #[derive(Debug)]
 pub struct BuiltInWindowExpr {
     window: Arc<dyn BuiltInWindowFunctionExpr>,
+    partition_by: Vec<Arc<dyn PhysicalExpr>>,
+    order_by: Vec<PhysicalSortExpr>,
+    window_frame: Option<WindowFrame>,
 }
 
 impl WindowExpr for BuiltInWindowExpr {
@@ -156,8 +162,20 @@ impl WindowExpr for BuiltInWindowExpr {
         self.window.expressions()
     }
 
-    fn create_accumulator(&self) -> Result<Box<dyn WindowAccumulator>> {
-        self.window.create_accumulator()
+    fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.partition_by
+    }
+
+    fn order_by(&self) -> &[PhysicalSortExpr] {
+        &self.order_by
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
+        // FIXME, for now we assume all the rows belong to the same partition, which will not be the
+        // case when partition_by is supported, in which case we'll parallelize the calls.
+        // See https://github.com/apache/arrow-datafusion/issues/299
+        let values = self.evaluate_args(batch)?;
+        self.window.evaluate(batch.num_rows(), &values)
     }
 }
 
@@ -165,22 +183,51 @@ impl WindowExpr for BuiltInWindowExpr {
 #[derive(Debug)]
 pub struct AggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
+    partition_by: Vec<Arc<dyn PhysicalExpr>>,
+    order_by: Vec<PhysicalSortExpr>,
+    window_frame: Option<WindowFrame>,
 }
 
-#[derive(Debug)]
-struct AggregateWindowAccumulator {
-    accumulator: Box<dyn Accumulator>,
-}
-
-impl WindowAccumulator for AggregateWindowAccumulator {
-    fn scan(&mut self, values: &[ScalarValue]) -> Result<Option<ScalarValue>> {
-        self.accumulator.update(values)?;
-        Ok(None)
+impl AggregateWindowExpr {
+    /// the aggregate window function operates based on window frame, and by default the mode is
+    /// "range".
+    fn evaluation_mode(&self) -> WindowFrameUnits {
+        self.window_frame.unwrap_or_default().units
     }
 
-    /// returns its value based on its current state.
-    fn evaluate(&self) -> Result<Option<ScalarValue>> {
-        Ok(Some(self.accumulator.evaluate()?))
+    /// create a new accumulator based on the underlying aggregation function
+    fn create_accumulator(&self) -> Result<AggregateWindowAccumulator> {
+        let accumulator = self.aggregate.create_accumulator()?;
+        Ok(AggregateWindowAccumulator { accumulator })
+    }
+
+    /// peer based evaluation based on the fact that batch is pre-sorted given the sort columns
+    /// and then per partition point we'll evaluate the peer group (e.g. SUM or MAX gives the same
+    /// results for peers) and concatenate the results.
+    fn peer_based_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
+        let sort_partition_points = self.evaluate_sort_partition_points(batch)?;
+        let mut window_accumulators = self.create_accumulator()?;
+        let values = self.evaluate_args(batch)?;
+        let results = sort_partition_points
+            .iter()
+            .map(|peer_range| window_accumulators.scan_peers(&values, peer_range))
+            .collect::<Result<Vec<_>>>()?;
+        let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
+        concat(&results).map_err(DataFusionError::ArrowError)
+    }
+
+    fn group_based_evaluate(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Group based evaluation for {} is not yet implemented",
+            self.name()
+        )))
+    }
+
+    fn row_based_evaluate(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Row based evaluation for {} is not yet implemented",
+            self.name()
+        )))
     }
 }
 
@@ -202,9 +249,55 @@ impl WindowExpr for AggregateWindowExpr {
         self.aggregate.expressions()
     }
 
-    fn create_accumulator(&self) -> Result<Box<dyn WindowAccumulator>> {
-        let accumulator = self.aggregate.create_accumulator()?;
-        Ok(Box::new(AggregateWindowAccumulator { accumulator }))
+    fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.partition_by
+    }
+
+    fn order_by(&self) -> &[PhysicalSortExpr] {
+        &self.order_by
+    }
+
+    /// evaluate the window function values against the batch
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
+        // FIXME, for now we assume all the rows belong to the same partition, which will not be the
+        // case when partition_by is supported, in which case we'll parallelize the calls.
+        // See https://github.com/apache/arrow-datafusion/issues/299
+        match self.evaluation_mode() {
+            WindowFrameUnits::Range => self.peer_based_evaluate(batch),
+            WindowFrameUnits::Rows => self.row_based_evaluate(batch),
+            WindowFrameUnits::Groups => self.group_based_evaluate(batch),
+        }
+    }
+}
+
+/// Aggregate window accumulator utilizes the accumulator from aggregation and do a accumulative sum
+/// across evaluation arguments based on peer equivalences.
+#[derive(Debug)]
+struct AggregateWindowAccumulator {
+    accumulator: Box<dyn Accumulator>,
+}
+
+impl AggregateWindowAccumulator {
+    /// scan one peer group of values (as arguments to window function) given by the value_range
+    /// and return evaluation result that are of the same number of rows.
+    fn scan_peers(
+        &mut self,
+        values: &[ArrayRef],
+        value_range: &Range<usize>,
+    ) -> Result<ArrayRef> {
+        if value_range.is_empty() {
+            return Err(DataFusionError::Internal(
+                "Value range cannot be empty".to_owned(),
+            ));
+        }
+        let len = value_range.end - value_range.start;
+        let values = values
+            .iter()
+            .map(|v| v.slice(value_range.start, len))
+            .collect::<Vec<_>>();
+        self.accumulator.update_batch(&values)?;
+        let value = self.accumulator.evaluate()?;
+        Ok(value.to_array_of_size(len))
     }
 }
 
@@ -329,106 +422,17 @@ pin_project! {
     }
 }
 
-type WindowAccumulatorItem = Box<dyn WindowAccumulator>;
-
-fn window_expressions(
-    window_expr: &[Arc<dyn WindowExpr>],
-) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
-    Ok(window_expr
-        .iter()
-        .map(|expr| expr.expressions())
-        .collect::<Vec<_>>())
-}
-
-fn window_aggregate_batch(
-    batch: &RecordBatch,
-    window_accumulators: &mut [WindowAccumulatorItem],
-    expressions: &[Vec<Arc<dyn PhysicalExpr>>],
-) -> Result<Vec<Option<ArrayRef>>> {
-    window_accumulators
-        .iter_mut()
-        .zip(expressions)
-        .map(|(window_acc, expr)| {
-            let values = &expr
-                .iter()
-                .map(|e| e.evaluate(batch))
-                .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-                .collect::<Result<Vec<_>>>()?;
-            window_acc.scan_batch(batch.num_rows(), values)
-        })
-        .collect::<Result<Vec<_>>>()
-}
-
-/// returns a vector of ArrayRefs, where each entry corresponds to one window expr
-fn finalize_window_aggregation(
-    window_accumulators: &[WindowAccumulatorItem],
-) -> Result<Vec<Option<ScalarValue>>> {
-    window_accumulators
-        .iter()
-        .map(|window_accumulator| window_accumulator.evaluate())
-        .collect::<Result<Vec<_>>>()
-}
-
-fn create_window_accumulators(
-    window_expr: &[Arc<dyn WindowExpr>],
-) -> Result<Vec<WindowAccumulatorItem>> {
-    window_expr
-        .iter()
-        .map(|expr| expr.create_accumulator())
-        .collect::<Result<Vec<_>>>()
-}
-
 /// Compute the window aggregate columns
-///
-/// 1. get a list of window accumulators
-/// 2. evaluate the args
-/// 3. scan args with window functions
-/// 4. concat with final aggregations
-///
-/// FIXME so far this fn does not support:
-/// 1. partition by
-/// 2. order by
-/// 3. window frame
-///
-/// which will require further work:
-/// 1. inter-partition order by using vec partition-point (https://github.com/apache/arrow-datafusion/issues/360)
-/// 2. inter-partition parallelism using one-shot channel (https://github.com/apache/arrow-datafusion/issues/299)
-/// 3. convert aggregation based window functions to be self-contain so that: (https://github.com/apache/arrow-datafusion/issues/361)
-///    a. some can be grow-only window-accumulating
-///    b. some can be grow-and-shrink window-accumulating
-///    c. some can be based on segment tree
 fn compute_window_aggregates(
     window_expr: Vec<Arc<dyn WindowExpr>>,
     batch: &RecordBatch,
 ) -> Result<Vec<ArrayRef>> {
-    let mut window_accumulators = create_window_accumulators(&window_expr)?;
-    let expressions = Arc::new(window_expressions(&window_expr)?);
-    let num_rows = batch.num_rows();
-    let window_aggregates =
-        window_aggregate_batch(batch, &mut window_accumulators, &expressions)?;
-    let final_aggregates = finalize_window_aggregation(&window_accumulators)?;
-
-    // both must equal to window_expr.len()
-    if window_aggregates.len() != final_aggregates.len() {
-        return Err(DataFusionError::Internal(
-            "Impossibly got len mismatch".to_owned(),
-        ));
-    }
-
-    window_aggregates
+    // FIXME, for now we assume all the rows belong to the same partition, which will not be the
+    // case when partition_by is supported, in which case we'll parallelize the calls.
+    // See https://github.com/apache/arrow-datafusion/issues/299
+    window_expr
         .iter()
-        .zip(final_aggregates)
-        .map(|(wa, fa)| {
-            Ok(match (wa, fa) {
-                (None, Some(fa)) => fa.to_array_of_size(num_rows),
-                (Some(wa), None) if wa.len() == num_rows => wa.clone(),
-                _ => {
-                    return Err(DataFusionError::Execution(
-                        "Invalid window function behavior".to_owned(),
-                    ))
-                }
-            })
-        })
+        .map(|window_expr| window_expr.evaluate(batch))
         .collect()
 }
 
