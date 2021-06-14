@@ -771,7 +771,6 @@ mod tests {
     }
 
 
-    /// verifies that when two limits are in place, we jump neither
     #[test]
     fn union_all() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -779,7 +778,7 @@ mod tests {
             .union(LogicalPlanBuilder::from(&table_scan).build()?)?
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
-        // filter does not just any of the limits
+        // filter appears below Union
         let expected = "\
             Union\
             \n  Filter: #a Eq Int64(1)\
