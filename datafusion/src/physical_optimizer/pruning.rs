@@ -552,6 +552,16 @@ fn build_predicate_expression(
     };
     let corrected_op = expr_builder.correct_operator(op);
     let statistics_expr = match corrected_op {
+        Operator::NotEq => {
+            // column != literal => (min, max) = literal =>
+            // !(min != literal && max != literal) ==>
+            // min != literal || literal != max
+            let min_column_expr = expr_builder.min_column_expr()?;
+            let max_column_expr = expr_builder.max_column_expr()?;
+            min_column_expr
+                .not_eq(expr_builder.scalar_expr().clone())
+                .or(expr_builder.scalar_expr().clone().not_eq(max_column_expr))
+        }
         Operator::Eq => {
             // column = literal => (min, max) = literal => min <= literal && literal <= max
             // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
@@ -930,6 +940,26 @@ mod tests {
     }
 
     #[test]
+    fn row_group_predicate_not_eq() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expected_expr = "#c1_min NotEq Int32(1) Or Int32(1) NotEq #c1_max";
+
+        // test column on the left
+        let expr = col("c1").not_eq(lit(1));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        // test column on the right
+        let expr = lit(1).not_eq(col("c1"));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
     fn row_group_predicate_gt() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         let expected_expr = "#c1_max Gt Int32(1)";
@@ -1172,29 +1202,22 @@ mod tests {
         let statistics = TestStatistics::new().with(
             "s1",
             ContainerStats::new_utf8(
-                vec![Some("A"), Some("A"), Some("N"), None, Some("A")], // min
-                vec![Some("Z"), Some("L"), Some("Z"), None, None],      // max
+                vec![Some("A"), Some("A"), Some("N"), Some("M"), None, Some("A")], // min
+                vec![Some("Z"), Some("L"), Some("Z"), Some("M"), None, None],      // max
             ),
         );
 
         // s1 [A, Z] ==> might have values that pass predicate
         // s1 [A, L] ==> all rows pass the predicate
         // s1 [N, Z] ==> all rows pass the predicate
+        // s1 [M, M] ==> all rows do not pass the predicate
         // No stats for s2 ==> some rows could pass
         // s2 [3, None] (null max) ==> some rows could pass
 
         let p = PruningPredicate::try_new(&expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap_err();
-        assert!(
-            result
-                .to_string()
-                .contains("Invalid argument error: at least one column must be defined to create a record batch"),
-            "{}",
-            result
-        );
-
-        //let expected = vec![true, true, true, true, true];
-        //assert_eq!(result, expected);
+        let result = p.prune(&statistics).unwrap();
+        let expected = vec![true, true, true, false, true, true];
+        assert_eq!(result, expected);
     }
 
     /// Creates setup for boolean chunk pruning
