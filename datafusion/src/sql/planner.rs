@@ -424,7 +424,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
         match relation {
-            TableFactor::Table { name, .. } => {
+            TableFactor::Table { name, alias, .. } => {
                 let table_name = name.to_string();
                 let cte = ctes.get(&table_name);
                 match (
@@ -432,10 +432,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     self.schema_provider.get_table_provider(name.try_into()?),
                 ) {
                     (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                    (_, Some(provider)) => {
-                        LogicalPlanBuilder::scan(&table_name, provider, None)?.build()
-                    }
-                    (_, None) => Err(DataFusionError::Plan(format!(
+                    (_, Some(provider)) => LogicalPlanBuilder::scan(
+                        // take alias into account to support `JOIN table1 as table2`
+                        alias
+                            .as_ref()
+                            .map(|a| a.name.value.as_str())
+                            .unwrap_or(&table_name),
+                        provider,
+                        None,
+                    )?
+                    .build(),
+                    (None, None) => Err(DataFusionError::Plan(format!(
                         "Table or CTE with name '{}' not found",
                         name
                     ))),
