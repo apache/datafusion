@@ -1190,6 +1190,34 @@ mod tests {
         assert_eq!(result, expected);
     }
 
+    #[test]
+    fn prune_not_eq_data() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
+
+        // Prune using s2 != 'M'
+        let expr = col("s1").not_eq(lit("M"));
+
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_utf8(
+                vec![Some("A"), Some("A"), Some("N"), None, Some("A")], // min
+                vec![Some("Z"), Some("L"), Some("Z"), None, None],      // max
+            ),
+        );
+
+        // s1 [A, Z] ==> might have values that pass predicate
+        // s1 [A, L] ==> all rows pass the predicate
+        // s1 [N, Z] ==> all rows pass the predicate
+        // No stats for s2 ==> some rows could pass
+        // s2 [3, None] (null max) ==> some rows could pass
+
+        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        let expected = vec![true, true, true, true, true];
+
+        assert_eq!(result, expected);
+    }
+
     /// Creates setup for boolean chunk pruning
     ///
     /// For predicate "b1" (boolean expr)
