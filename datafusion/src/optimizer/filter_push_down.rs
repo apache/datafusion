@@ -770,7 +770,6 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
     fn union_all() -> Result<()> {
         let table_scan = test_table_scan()?;
