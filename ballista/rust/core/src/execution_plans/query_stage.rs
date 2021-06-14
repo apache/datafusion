@@ -167,7 +167,7 @@ impl ExecutionPlan for QueryStageExec {
                 let part: ArrayRef = Arc::new(part_builder.finish());
 
                 let mut path_builder = StringBuilder::new(1);
-                path_builder.append_value(&path).unwrap();
+                path_builder.append_value(&path)?;
                 let path: ArrayRef = Arc::new(path_builder.finish());
 
                 let stats: ArrayRef = stats
