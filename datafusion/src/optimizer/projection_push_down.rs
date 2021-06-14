@@ -208,8 +208,8 @@ fn optimize_plan(
             )?);
 
             let schema = build_join_schema(
-                &optimized_left.schema(),
-                &optimized_right.schema(),
+                optimized_left.schema(),
+                optimized_right.schema(),
                 on,
                 join_type,
                 join_constraint,
@@ -336,7 +336,7 @@ fn optimize_plan(
             ..
         } => {
             let (projection, projected_schema) = get_projected_schema(
-                Some(&table_name),
+                Some(table_name),
                 &source.schema(),
                 required_columns,
                 has_projection,

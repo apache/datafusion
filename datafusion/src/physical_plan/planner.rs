@@ -300,7 +300,7 @@ impl DefaultPhysicalPlanner {
                         tuple_err((
                             self.create_physical_expr(
                                 e,
-                                &logical_input_schema,
+                                logical_input_schema,
                                 &physical_input_schema,
                                 ctx_state,
                             ),
@@ -398,17 +398,17 @@ impl DefaultPhysicalPlanner {
                         // This depends on the invariant that logical schema field index MUST match
                         // with physical schema field index.
                         let physical_name = if let Expr::Column(col) = e {
-                            match input_schema.index_of_column(&col) {
+                            match input_schema.index_of_column(col) {
                                 Ok(idx) => {
                                     // index physical field using logical field index
                                     Ok(input_exec.schema().field(idx).name().to_string())
                                 }
                                 // logical column is not a derived column, safe to pass along to
                                 // physical_name
-                                Err(_) => physical_name(e, &input_schema),
+                                Err(_) => physical_name(e, input_schema),
                             }
                         } else {
-                            physical_name(e, &input_schema)
+                            physical_name(e, input_schema)
                         };
 
                         tuple_err((
@@ -466,7 +466,7 @@ impl DefaultPhysicalPlanner {
                             .map(|e| {
                                 self.create_physical_expr(
                                     e,
-                                    &input_dfschema,
+                                    input_dfschema,
                                     &input_schema,
                                     ctx_state,
                                 )
@@ -494,7 +494,7 @@ impl DefaultPhysicalPlanner {
                             nulls_first,
                         } => self.create_physical_sort_expr(
                             expr,
-                            &input_dfschema,
+                            input_dfschema,
                             &input_schema,
                             SortOptions {
                                 descending: !*asc,
@@ -533,8 +533,8 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .map(|(l, r)| {
                         Ok((
-                            Column::new(&l.name, left_df_schema.index_of_column(&l)?),
-                            Column::new(&r.name, right_df_schema.index_of_column(&r)?),
+                            Column::new(&l.name, left_df_schema.index_of_column(l)?),
+                            Column::new(&r.name, right_df_schema.index_of_column(r)?),
                         ))
                     })
                     .collect::<Result<hash_utils::JoinOn>>()?;
@@ -691,7 +691,7 @@ impl DefaultPhysicalPlanner {
             )?),
             Expr::Column(c) => {
                 let idx = input_dfschema.index_of_column(c)?;
-                Ok(Arc::new(Column::new(c.name, idx)))
+                Ok(Arc::new(Column::new(&c.name, idx)))
             }
             Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
             Expr::ScalarVariable(variable_names) => {

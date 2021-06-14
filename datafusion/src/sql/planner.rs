@@ -831,8 +831,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .try_for_each(|col| match col {
                 Expr::Column(col) => {
                     match &col.relation {
-                        Some(r) => schema.field_with_qualified_name(r, col.name),
-                        None => schema.field_with_unqualified_name(col.name),
+                        Some(r) => schema.field_with_qualified_name(r, &col.name),
+                        None => schema.field_with_unqualified_name(&col.name),
                     }
                     .map_err(|_| {
                         DataFusionError::Plan(format!(

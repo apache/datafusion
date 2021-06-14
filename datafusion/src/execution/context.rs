@@ -404,7 +404,7 @@ impl ExecutionContext {
         match schema.table(table_ref.table()) {
             Some(ref provider) => {
                 let plan = LogicalPlanBuilder::scan(
-                    &table_ref.table(),
+                    table_ref.table(),
                     Arc::clone(provider),
                     None,
                 )?
