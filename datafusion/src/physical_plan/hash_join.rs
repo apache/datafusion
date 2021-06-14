@@ -877,13 +877,19 @@ macro_rules! hash_array_float {
             if $multi_col {
                 for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
                     *hash = combine_hashes(
-                        $ty::get_hash(&value.to_le_bytes(), $random_state),
+                        $ty::get_hash(
+                            &$ty::from_le_bytes(value.to_le_bytes()),
+                            $random_state,
+                        ),
                         *hash,
                     );
                 }
             } else {
                 for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = $ty::get_hash(&value.to_le_bytes(), $random_state)
+                    *hash = $ty::get_hash(
+                        &$ty::from_le_bytes(value.to_le_bytes()),
+                        $random_state,
+                    )
                 }
             }
         } else {
@@ -893,7 +899,10 @@ macro_rules! hash_array_float {
                 {
                     if !array.is_null(i) {
                         *hash = combine_hashes(
-                            $ty::get_hash(&value.to_le_bytes(), $random_state),
+                            $ty::get_hash(
+                                &$ty::from_le_bytes(value.to_le_bytes()),
+                                $random_state,
+                            ),
                             *hash,
                         );
                     }
@@ -903,7 +912,10 @@ macro_rules! hash_array_float {
                     $hashes.iter_mut().zip(values.iter()).enumerate()
                 {
                     if !array.is_null(i) {
-                        *hash = $ty::get_hash(&value.to_le_bytes(), $random_state);
+                        *hash = $ty::get_hash(
+                            &$ty::from_le_bytes(value.to_le_bytes()),
+                            $random_state,
+                        );
                     }
                 }
             }
@@ -1834,6 +1846,22 @@ mod tests {
             "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[test]
+    fn create_hashes_for_float_arrays() -> Result<()> {
+        let f32_arr = Arc::new(Float32Array::from(vec![0.12, 0.5, 1f32, 444.7]));
+        let f64_arr = Arc::new(Float64Array::from(vec![0.12, 0.5, 1f64, 444.7]));
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let hashes_buff = &mut vec![0; f32_arr.len()];
+        let hashes = create_hashes(&[f32_arr], &random_state, hashes_buff)?;
+        assert_eq!(hashes.len(), 4,);
+
+        let hashes = create_hashes(&[f64_arr], &random_state, hashes_buff)?;
+        assert_eq!(hashes.len(), 4,);
 
         Ok(())
     }
