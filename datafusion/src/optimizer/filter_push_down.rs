@@ -322,6 +322,10 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // sort is filter-commutable
             push_down(&state, plan)
         }
+        LogicalPlan::Union { .. } => {
+            // union all is filter-commutable
+            push_down(&state, plan)
+        }
         LogicalPlan::Limit { input, .. } => {
             // limit is _not_ filter-commutable => collect all columns from its input
             let used_columns = input
@@ -762,6 +766,24 @@ mod tests {
             \n      Limit: 20\
             \n        Projection: #a, #b\
             \n          TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn union_all() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .union(LogicalPlanBuilder::from(&table_scan).build()?)?
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+        // filter appears below Union
+        let expected = "\
+            Union\
+            \n  Filter: #a Eq Int64(1)\
+            \n    TableScan: test projection=None\
+            \n  Filter: #a Eq Int64(1)\
+            \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
