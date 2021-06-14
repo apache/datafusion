@@ -426,12 +426,12 @@ impl<'a> PruningExpressionBuilder<'a> {
 
     fn min_column_expr(&mut self) -> Result<Expr> {
         self.required_columns
-            .min_column_expr(&self.column, &self.column_expr, self.field)
+            .min_column_expr(&self.column, self.column_expr, self.field)
     }
 
     fn max_column_expr(&mut self) -> Result<Expr> {
         self.required_columns
-            .max_column_expr(&self.column, &self.column_expr, self.field)
+            .max_column_expr(&self.column, self.column_expr, self.field)
     }
 }
 
@@ -441,7 +441,7 @@ fn rewrite_column_expr(
     column_old: &Column,
     column_new: &Column,
 ) -> Result<Expr> {
-    let expressions = utils::expr_sub_expressions(&expr)?;
+    let expressions = utils::expr_sub_expressions(expr)?;
     let expressions = expressions
         .iter()
         .map(|e| rewrite_column_expr(e, column_old, column_new))
@@ -452,7 +452,7 @@ fn rewrite_column_expr(
             return Ok(Expr::Column(column_new.clone()));
         }
     }
-    utils::rewrite_expression(&expr, &expressions)
+    utils::rewrite_expression(expr, &expressions)
 }
 
 /// Given a column reference to `column`, returns a pruning
@@ -515,14 +515,14 @@ fn build_predicate_expression(
     let (left, op, right) = match expr {
         Expr::BinaryExpr { left, op, right } => (left, *op, right),
         Expr::Column(col) => {
-            let expr = build_single_column_expr(&col, schema, required_columns, false)
+            let expr = build_single_column_expr(col, schema, required_columns, false)
                 .unwrap_or(unhandled);
             return Ok(expr);
         }
         // match !col (don't do so recursively)
         Expr::Not(input) => {
             if let Expr::Column(col) = input.as_ref() {
-                let expr = build_single_column_expr(&col, schema, required_columns, true)
+                let expr = build_single_column_expr(col, schema, required_columns, true)
                     .unwrap_or(unhandled);
                 return Ok(expr);
             } else {
@@ -552,6 +552,14 @@ fn build_predicate_expression(
     };
     let corrected_op = expr_builder.correct_operator(op);
     let statistics_expr = match corrected_op {
+        Operator::NotEq => {
+            // column != literal => (min, max) = literal => min > literal || literal > max
+            let min_column_expr = expr_builder.min_column_expr()?;
+            let max_column_expr = expr_builder.max_column_expr()?;
+            min_column_expr
+                .gt(expr_builder.scalar_expr().clone())
+                .or(expr_builder.scalar_expr().clone().gt(max_column_expr))
+        }
         Operator::Eq => {
             // column = literal => (min, max) = literal => min <= literal && literal <= max
             // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
@@ -923,6 +931,26 @@ mod tests {
 
         // test column on the right
         let expr = lit(1).eq(col("c1"));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_not_eq() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expected_expr = "#c1_min Gt Int32(1) Or Int32(1) Gt #c1_max";
+
+        // test column on the left
+        let expr = col("c1").not_eq(lit(1));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        // test column on the right
+        let expr = lit(1).not_eq(col("c1"));
         let predicate_expr =
             build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
         assert_eq!(format!("{:?}", predicate_expr), expected_expr);

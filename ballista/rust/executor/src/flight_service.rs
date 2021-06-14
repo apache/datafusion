@@ -279,7 +279,7 @@ fn create_flight_iter(
     options: &IpcWriteOptions,
 ) -> Box<dyn Iterator<Item = Result<FlightData, Status>>> {
     let (flight_dictionaries, flight_batch) =
-        arrow_flight::utils::flight_data_from_arrow_batch(batch, &options);
+        arrow_flight::utils::flight_data_from_arrow_batch(batch, options);
     Box::new(
         flight_dictionaries
             .into_iter()

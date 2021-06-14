@@ -248,7 +248,7 @@ fn simplify(expr: &Expr) -> Expr {
             })
             .unwrap_or_else(|| expr.clone()),
         Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
-            left: Box::new(simplify(&left)),
+            left: Box::new(simplify(left)),
             op: *op,
             right: Box::new(simplify(right)),
         },
@@ -267,7 +267,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         .into_iter()
         .map(|x| simplify(&x))
         .collect::<Vec<_>>();
-    utils::from_plan(&plan, &expr, &new_inputs)
+    utils::from_plan(plan, &expr, &new_inputs)
 }
 
 impl OptimizerRule for SimplifyExpressions {

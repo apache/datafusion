@@ -270,7 +270,7 @@ impl DefaultPhysicalPlanner {
                     .map(|e| {
                         self.create_window_expr(
                             e,
-                            &logical_input_schema,
+                            logical_input_schema,
                             &physical_input_schema,
                             ctx_state,
                         )
@@ -304,7 +304,7 @@ impl DefaultPhysicalPlanner {
                                 &physical_input_schema,
                                 ctx_state,
                             ),
-                            physical_name(e, &logical_input_schema),
+                            physical_name(e, logical_input_schema),
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -313,7 +313,7 @@ impl DefaultPhysicalPlanner {
                     .map(|e| {
                         self.create_aggregate_expr(
                             e,
-                            &logical_input_schema,
+                            logical_input_schema,
                             &physical_input_schema,
                             ctx_state,
                         )
@@ -339,11 +339,15 @@ impl DefaultPhysicalPlanner {
                     .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
                     .any(|x| matches!(x, DataType::Dictionary(_, _)));
 
-                if !groups.is_empty()
+                let can_repartition = !groups.is_empty()
                     && ctx_state.config.concurrency > 1
                     && ctx_state.config.repartition_aggregations
-                    && !contains_dict
-                {
+                    && !contains_dict;
+
+                let (initial_aggr, next_partition_mode): (
+                    Arc<dyn ExecutionPlan>,
+                    AggregateMode,
+                ) = if can_repartition {
                     // Divide partial hash aggregates into multiple partitions by hash key
                     let hash_repartition = Arc::new(RepartitionExec::try_new(
                         initial_aggr,
@@ -352,35 +356,25 @@ impl DefaultPhysicalPlanner {
                             ctx_state.config.concurrency,
                         ),
                     )?);
-
-                    // Combine hashaggregates within the partition
-                    Ok(Arc::new(HashAggregateExec::try_new(
-                        AggregateMode::FinalPartitioned,
-                        final_group
-                            .iter()
-                            .enumerate()
-                            .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
-                            .collect(),
-                        aggregates,
-                        hash_repartition,
-                        physical_input_schema.clone(),
-                    )?))
+                    // Combine hash aggregates within the partition
+                    (hash_repartition, AggregateMode::FinalPartitioned)
                 } else {
-                    // construct a second aggregation, keeping the final column name equal to the first aggregation
-                    // and the expressions corresponding to the respective aggregate
+                    // construct a second aggregation, keeping the final column name equal to the
+                    // first aggregation and the expressions corresponding to the respective aggregate
+                    (initial_aggr, AggregateMode::Final)
+                };
 
-                    Ok(Arc::new(HashAggregateExec::try_new(
-                        AggregateMode::Final,
-                        final_group
-                            .iter()
-                            .enumerate()
-                            .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
-                            .collect(),
-                        aggregates,
-                        initial_aggr,
-                        physical_input_schema.clone(),
-                    )?))
-                }
+                Ok(Arc::new(HashAggregateExec::try_new(
+                    next_partition_mode,
+                    final_group
+                        .iter()
+                        .enumerate()
+                        .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
+                        .collect(),
+                    aggregates,
+                    initial_aggr,
+                    physical_input_schema.clone(),
+                )?))
             }
             LogicalPlan::Projection { input, expr, .. } => {
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
@@ -422,7 +416,7 @@ impl DefaultPhysicalPlanner {
                                 e,
                                 input_schema,
                                 &input_exec.schema(),
-                                &ctx_state,
+                                ctx_state,
                             ),
                             physical_name,
                         ))
@@ -474,7 +468,7 @@ impl DefaultPhysicalPlanner {
                                     e,
                                     &input_dfschema,
                                     &input_schema,
-                                    &ctx_state,
+                                    ctx_state,
                                 )
                             })
                             .collect::<Result<Vec<_>>>()?;
@@ -697,7 +691,7 @@ impl DefaultPhysicalPlanner {
             )?),
             Expr::Column(c) => {
                 let idx = input_dfschema.index_of_column(c)?;
-                Ok(Arc::new(Column::new(&c.name, idx)))
+                Ok(Arc::new(Column::new(c.name, idx)))
             }
             Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
             Expr::ScalarVariable(variable_names) => {
@@ -1019,13 +1013,13 @@ impl DefaultPhysicalPlanner {
                             nulls_first,
                         } => self.create_physical_sort_expr(
                             expr,
-                            &logical_input_schema,
-                            &physical_input_schema,
+                            logical_input_schema,
+                            physical_input_schema,
                             SortOptions {
                                 descending: !*asc,
                                 nulls_first: *nulls_first,
                             },
-                            &ctx_state,
+                            ctx_state,
                         ),
                         _ => Err(DataFusionError::Plan(
                             "Sort only accepts sort expressions".to_string(),

@@ -166,7 +166,7 @@ fn batch_project(
 ) -> ArrowResult<RecordBatch> {
     expressions
         .iter()
-        .map(|expr| expr.evaluate(&batch))
+        .map(|expr| expr.evaluate(batch))
         .map(|r| r.map(|v| v.into_array(batch.num_rows())))
         .collect::<Result<Vec<_>>>()
         .map_or_else(

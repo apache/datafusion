@@ -60,7 +60,7 @@ pub fn coerce(
     expressions
         .iter()
         .enumerate()
-        .map(|(i, expr)| try_cast(expr.clone(), &schema, new_types[i].clone()))
+        .map(|(i, expr)| try_cast(expr.clone(), schema, new_types[i].clone()))
         .collect::<Result<Vec<_>>>()
 }
 
@@ -85,7 +85,7 @@ pub fn data_types(
     }
 
     for valid_types in valid_types {
-        if let Some(types) = maybe_data_types(&valid_types, &current_types) {
+        if let Some(types) = maybe_data_types(&valid_types, current_types) {
             return Ok(types);
         }
     }
@@ -157,7 +157,7 @@ fn maybe_data_types(
             new_type.push(current_type.clone())
         } else {
             // attempt to coerce
-            if can_coerce_from(valid_type, &current_type) {
+            if can_coerce_from(valid_type, current_type) {
                 new_type.push(valid_type.clone())
             } else {
                 // not possible

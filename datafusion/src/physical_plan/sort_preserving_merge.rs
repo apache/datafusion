@@ -376,7 +376,7 @@ impl SortPreservingMergeStream {
 
                 match min_cursor {
                     None => min_cursor = Some((idx, candidate)),
-                    Some((_, ref min)) => {
+                    Some((_, min)) => {
                         if min.compare(candidate, &self.sort_options)?
                             == Ordering::Greater
                         {

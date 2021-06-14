@@ -130,7 +130,7 @@ async fn parquet_single_nan_schema() {
     ctx.register_parquet("single_nan", &format!("{}/single_nan.parquet", testdata))
         .unwrap();
     let sql = "SELECT mycol FROM single_nan";
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).unwrap();
     let results = collect(plan).await.unwrap();
@@ -165,7 +165,7 @@ async fn parquet_list_columns() {
     ]));
 
     let sql = "SELECT int64_list, utf8_list FROM list_columns";
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).unwrap();
     let results = collect(plan).await.unwrap();
@@ -647,7 +647,7 @@ async fn csv_query_error() -> Result<()> {
     let mut ctx = create_ctx()?;
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT sin(c1) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(&sql);
+    let plan = ctx.create_logical_plan(sql);
     assert!(plan.is_err());
     Ok(())
 }
@@ -748,7 +748,7 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT avg(c12) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).unwrap();
     let results = collect(plan).await.unwrap();
@@ -1615,7 +1615,7 @@ async fn csv_explain_plans() {
     // Logical plan
     // Create plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(&sql).expect(&msg);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
     //
     println!("SQL: {}", sql);
@@ -1820,7 +1820,7 @@ async fn csv_explain_verbose_plans() {
     // Logical plan
     // Create plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(&sql).expect(&msg);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
     //
     println!("SQL: {}", sql);
@@ -2096,7 +2096,7 @@ fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
 /// `result[row][column]`
 async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(&sql).expect(&msg);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
 
     let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
@@ -2569,7 +2569,7 @@ async fn query_cte_incorrect() -> Result<()> {
 
     // self reference
     let sql = "WITH t AS (SELECT * FROM t) SELECT * from u";
-    let plan = ctx.create_logical_plan(&sql);
+    let plan = ctx.create_logical_plan(sql);
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
@@ -2578,7 +2578,7 @@ async fn query_cte_incorrect() -> Result<()> {
 
     // forward referencing
     let sql = "WITH t AS (SELECT * FROM u), u AS (SELECT 1) SELECT * from u";
-    let plan = ctx.create_logical_plan(&sql);
+    let plan = ctx.create_logical_plan(sql);
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
@@ -2587,7 +2587,7 @@ async fn query_cte_incorrect() -> Result<()> {
 
     // wrapping should hide u
     let sql = "WITH t AS (WITH u as (SELECT 1) SELECT 1) SELECT * from u";
-    let plan = ctx.create_logical_plan(&sql);
+    let plan = ctx.create_logical_plan(sql);
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
@@ -3334,7 +3334,7 @@ async fn test_cast_expressions_error() -> Result<()> {
     let mut ctx = create_ctx()?;
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).unwrap();
     let result = collect(plan).await;
@@ -3363,7 +3363,7 @@ async fn test_physical_plan_display_indent() {
          GROUP BY c1 \
          ORDER BY the_min DESC \
          LIMIT 10";
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
 
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
@@ -3411,7 +3411,7 @@ async fn test_physical_plan_display_indent_multi_children() {
                  ON c1=c2\
                  ";
 
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
 
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
@@ -3451,7 +3451,7 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
-    let logical_plan = ctx.create_logical_plan(&sql)?;
+    let logical_plan = ctx.create_logical_plan(sql)?;
     let physical_plan = ctx.create_physical_plan(&logical_plan);
     let err = physical_plan.unwrap_err();
     assert_eq!(err.to_string(), "Error during planning: Invalid or wrong number of arguments passed to aggregate: 'COUNT(DISTINCT )'");
