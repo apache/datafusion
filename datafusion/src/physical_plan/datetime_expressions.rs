@@ -26,7 +26,8 @@ use crate::{
 use arrow::{
     array::{Array, ArrayRef, GenericStringArray, PrimitiveArray, StringOffsetSizeTrait},
     datatypes::{
-        ArrowPrimitiveType, DataType, TimestampMillisecondType, TimestampNanosecondType,
+        ArrowPrimitiveType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampNanosecondType, TimestampSecondType,
     },
 };
 use arrow::{
@@ -276,6 +277,24 @@ pub fn to_timestamp_millis(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         args,
         |s| string_to_timestamp_nanos(s).map(|n| n / 1_000_000),
         "to_timestamp_millis",
+    )
+}
+
+/// to_timestamp_micros SQL function
+pub fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    handle::<TimestampMicrosecondType, _, TimestampMicrosecondType>(
+        args,
+        |s| string_to_timestamp_nanos(s).map(|n| n / 1_000),
+        "to_timestamp_micros",
+    )
+}
+
+/// to_timestamp_seconds SQL function
+pub fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    handle::<TimestampSecondType, _, TimestampSecondType>(
+        args,
+        |s| string_to_timestamp_nanos(s).map(|n| n / 1_000_000_000),
+        "to_timestamp_seconds",
     )
 }
 
