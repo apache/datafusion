@@ -300,22 +300,7 @@ impl Into<Schema> for DFSchema {
 impl Into<Schema> for &DFSchema {
     /// Convert a schema into a DFSchema
     fn into(self) -> Schema {
-        Schema::new(
-            self.fields
-                .iter()
-                .map(|f| {
-                    if f.qualifier().is_some() {
-                        Field::new(
-                            f.name().as_str(),
-                            f.data_type().to_owned(),
-                            f.is_nullable(),
-                        )
-                    } else {
-                        f.field.clone()
-                    }
-                })
-                .collect(),
-        )
+        Schema::new(self.fields.iter().map(|f| f.field.clone()).collect())
     }
 }
 

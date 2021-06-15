@@ -33,7 +33,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
-/// A named reference to a qualified filed in a schema.
+/// A named reference to a qualified field in a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Column {
     /// relation/table name.
