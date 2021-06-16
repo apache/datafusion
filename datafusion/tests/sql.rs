@@ -1161,6 +1161,11 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
     let sql = "SELECT to_timestamp_micros(ts) FROM ts_secs LIMIT 3";
     let actual = execute(&mut ctx, sql).await;
     assert_eq!(expected, actual);
+
+    // to nanos
+    let sql = "SELECT to_timestamp(ts) FROM ts_secs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
     Ok(())
 }
 
@@ -1189,6 +1194,16 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
         vec!["2020-09-08 13:42:29"],
         vec!["2020-09-08 12:42:29"],
         vec!["2020-09-08 11:42:29"],
+    ];
+    assert_eq!(expected, actual);
+
+    // Original column is micros, convert to nanos and check timestamp
+    let sql = "SELECT to_timestamp(ts) FROM ts_micros LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190855"],
+        vec!["2020-09-08 12:42:29.190855"],
+        vec!["2020-09-08 11:42:29.190855"],
     ];
     assert_eq!(expected, actual);
     Ok(())
