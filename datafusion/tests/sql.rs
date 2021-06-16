@@ -1107,6 +1107,94 @@ async fn query_cast_timestamp_seconds() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
+
+    // Original column is nanos, convert to millis and check timestamp
+    let sql = "SELECT to_timestamp_millis(ts) FROM ts_data LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190"],
+        vec!["2020-09-08 12:42:29.190"],
+        vec!["2020-09-08 11:42:29.190"],
+    ];
+    assert_eq!(expected, actual);
+
+    let sql = "SELECT to_timestamp_micros(ts) FROM ts_data LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190855"],
+        vec!["2020-09-08 12:42:29.190855"],
+        vec!["2020-09-08 11:42:29.190855"],
+    ];
+    assert_eq!(expected, actual);
+
+    let sql = "SELECT to_timestamp_seconds(ts) FROM ts_data LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29"],
+        vec!["2020-09-08 12:42:29"],
+        vec!["2020-09-08 11:42:29"],
+    ];
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("ts_secs", make_timestamp_table::<TimestampSecondType>()?)?;
+
+    // Original column is seconds, convert to millis and check timestamp
+    let sql = "SELECT to_timestamp_millis(ts) FROM ts_secs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29"],
+        vec!["2020-09-08 12:42:29"],
+        vec!["2020-09-08 11:42:29"],
+    ];
+    assert_eq!(expected, actual);
+
+    // Original column is seconds, convert to micros and check timestamp
+    let sql = "SELECT to_timestamp_micros(ts) FROM ts_secs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_micros_to_others() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table(
+        "ts_micros",
+        make_timestamp_table::<TimestampMicrosecondType>()?,
+    )?;
+
+    // Original column is micros, convert to millis and check timestamp
+    let sql = "SELECT to_timestamp_millis(ts) FROM ts_micros LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190"],
+        vec!["2020-09-08 12:42:29.190"],
+        vec!["2020-09-08 11:42:29.190"],
+    ];
+    assert_eq!(expected, actual);
+
+    // Original column is micros, convert to seconds and check timestamp
+    let sql = "SELECT to_timestamp_seconds(ts) FROM ts_micros LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29"],
+        vec!["2020-09-08 12:42:29"],
+        vec!["2020-09-08 11:42:29"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn union_all() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql = "SELECT 1 as x UNION ALL SELECT 2 as x";
