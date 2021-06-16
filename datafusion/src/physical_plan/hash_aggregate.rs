@@ -500,7 +500,7 @@ fn dictionary_create_key_for_col<K: ArrowDictionaryKeyType>(
     let dict_col = col.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
 
     // look up the index in the values dictionary
-    let keys_col = dict_col.keys_array();
+    let keys_col = dict_col.keys();
     let values_index = keys_col.value(row).to_usize().ok_or_else(|| {
         DataFusionError::Internal(format!(
             "Can not convert index to usize in dictionary of type creating group by value {:?}",
@@ -1083,7 +1083,7 @@ fn dictionary_create_group_by_value<K: ArrowDictionaryKeyType>(
     let dict_col = col.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
 
     // look up the index in the values dictionary
-    let keys_col = dict_col.keys_array();
+    let keys_col = dict_col.keys();
     let values_index = keys_col.value(row).to_usize().ok_or_else(|| {
         DataFusionError::Internal(format!(
             "Can not convert index to usize in dictionary of type creating group by value {:?}",

@@ -771,7 +771,7 @@ impl ScalarValue {
         let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
 
         // look up the index in the values dictionary
-        let keys_col = dict_array.keys_array();
+        let keys_col = dict_array.keys();
         let values_index = keys_col.value(index).to_usize().ok_or_else(|| {
             DataFusionError::Internal(format!(
                 "Can not convert index to usize in dictionary of type creating group by value {:?}",
