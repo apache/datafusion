@@ -103,7 +103,7 @@ pub fn cast_column(
 ) -> Result<ColumnarValue> {
     match value {
         ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-            kernels::cast::cast_with_options(&array, cast_type, cast_options)?,
+            kernels::cast::cast_with_options(array, cast_type, cast_options)?,
         )),
         ColumnarValue::Scalar(scalar) => {
             let scalar_array = scalar.to_array();
