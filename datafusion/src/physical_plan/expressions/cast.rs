@@ -91,12 +91,12 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        cast_array(&value, &self.cast_type, &self.cast_options)
+        cast_column(&value, &self.cast_type, &self.cast_options)
     }
 }
 
 /// Internal cast function for casting ColumnarValue -> ColumnarValue for cast_type
-pub fn cast_array(
+pub fn cast_column(
     value: &ColumnarValue,
     cast_type: &DataType,
     cast_options: &CastOptions,

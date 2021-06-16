@@ -37,7 +37,7 @@ use crate::execution::context::ExecutionContextState;
 use crate::physical_plan::array_expressions;
 use crate::physical_plan::datetime_expressions;
 use crate::physical_plan::expressions::{
-    cast_array, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS, SUPPORTED_NULLIF_TYPES,
+    cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS, SUPPORTED_NULLIF_TYPES,
 };
 use crate::physical_plan::math_expressions;
 use crate::physical_plan::string_expressions;
@@ -954,6 +954,12 @@ pub fn create_physical_fun(
             ))),
         }),
         BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
+        _ => {
+            return Err(DataFusionError::Internal(format!(
+                "create_physical_fun: Unsupported scalar function {:?}",
+                fun
+            )))
+        }
     })
 }
 
@@ -973,7 +979,7 @@ pub fn create_physical_expr(
         BuiltinScalarFunction::ToTimestampMillis => {
             Arc::new(match args[0].data_type(input_schema) {
                 Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
-                    cast_array(
+                    cast_column(
                         &col_values[0],
                         &DataType::Timestamp(TimeUnit::Millisecond, None),
                         &DEFAULT_DATAFUSION_CAST_OPTIONS,
@@ -991,7 +997,7 @@ pub fn create_physical_expr(
         BuiltinScalarFunction::ToTimestampMicros => {
             Arc::new(match args[0].data_type(input_schema) {
                 Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
-                    cast_array(
+                    cast_column(
                         &col_values[0],
                         &DataType::Timestamp(TimeUnit::Microsecond, None),
                         &DEFAULT_DATAFUSION_CAST_OPTIONS,
@@ -1009,7 +1015,7 @@ pub fn create_physical_expr(
         BuiltinScalarFunction::ToTimestampSeconds => Arc::new({
             match args[0].data_type(input_schema) {
                 Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
-                    cast_array(
+                    cast_column(
                         &col_values[0],
                         &DataType::Timestamp(TimeUnit::Second, None),
                         &DEFAULT_DATAFUSION_CAST_OPTIONS,
