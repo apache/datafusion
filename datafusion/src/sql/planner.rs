@@ -703,7 +703,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut plan = input;
         let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
         // sort by sort_key len descending, so that more deeply sorted plans gets nested further
-        // down as children; to further minic the behavior of PostgreSQL, we want stable sort
+        // down as children; to further mimic the behavior of PostgreSQL, we want stable sort
         // and a reverse so that tieing sort keys are reversed in order; note that by this rule
         // if there's an empty over, it'll be at the top level
         groups.sort_by(|(key_a, _), (key_b, _)| key_a.len().cmp(&key_b.len()));

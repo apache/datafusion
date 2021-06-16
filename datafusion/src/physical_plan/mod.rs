@@ -17,17 +17,16 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
-use std::fmt;
-use std::fmt::{Debug, Display};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-
+use self::{display::DisplayableExecutionPlan, merge::MergeExec};
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::LogicalPlan;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
+use arrow::compute::kernels::partition::lexicographical_partition_ranges;
+use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -35,10 +34,13 @@ use arrow::{array::ArrayRef, datatypes::Field};
 use async_trait::async_trait;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
-use std::{any::Any, pin::Pin};
-
-use self::{display::DisplayableExecutionPlan, merge::MergeExec};
 use hashbrown::HashMap;
+use std::fmt;
+use std::fmt::{Debug, Display};
+use std::ops::Range;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::{any::Any, pin::Pin};
 
 /// Trait for types that stream [arrow::record_batch::RecordBatch]
 pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
@@ -465,15 +467,65 @@ pub trait WindowExpr: Send + Sync + Debug {
         "WindowExpr: default name"
     }
 
-    /// the accumulator used to accumulate values from the expressions.
-    /// the accumulator expects the same number of arguments as `expressions` and must
-    /// return states with the same description as `state_fields`
-    fn create_accumulator(&self) -> Result<Box<dyn WindowAccumulator>>;
-
     /// expressions that are passed to the WindowAccumulator.
     /// Functions which take a single input argument, such as `sum`, return a single [`Expr`],
     /// others (e.g. `cov`) return many.
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
+
+    /// evaluate the window function arguments against the batch and return
+    /// array ref, normally the resulting vec is a single element one.
+    fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
+        self.expressions()
+            .iter()
+            .map(|e| e.evaluate(batch))
+            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .collect()
+    }
+
+    /// evaluate the window function values against the batch
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
+
+    /// evaluate the sort partition points
+    fn evaluate_sort_partition_points(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<Vec<Range<usize>>> {
+        let sort_columns = self.sort_columns(batch)?;
+        if sort_columns.is_empty() {
+            Ok(vec![Range {
+                start: 0,
+                end: batch.num_rows(),
+            }])
+        } else {
+            lexicographical_partition_ranges(&sort_columns)
+                .map_err(DataFusionError::ArrowError)
+        }
+    }
+
+    /// expressions that's from the window function's partition by clause, empty if absent
+    fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
+
+    /// expressions that's from the window function's order by clause, empty if absent
+    fn order_by(&self) -> &[PhysicalSortExpr];
+
+    /// get sort columns that can be used for partitioning, empty if absent
+    fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
+        self.partition_by()
+            .iter()
+            .map(|expr| {
+                PhysicalSortExpr {
+                    expr: expr.clone(),
+                    options: SortOptions::default(),
+                }
+                .evaluate_to_sort_column(batch)
+            })
+            .chain(
+                self.order_by()
+                    .iter()
+                    .map(|e| e.evaluate_to_sort_column(batch)),
+            )
+            .collect()
+    }
 }
 
 /// An accumulator represents a stateful object that lives throughout the evaluation of multiple rows and
@@ -526,58 +578,6 @@ pub trait Accumulator: Send + Sync + Debug {
 
     /// returns its value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;
-}
-
-/// A window accumulator represents a stateful object that lives throughout the evaluation of multiple
-/// rows and generically accumulates values.
-///
-/// An accumulator knows how to:
-/// * update its state from inputs via `update`
-/// * convert its internal state to a vector of scalar values
-/// * update its state from multiple accumulators' states via `merge`
-/// * compute the final value from its internal state via `evaluate`
-pub trait WindowAccumulator: Send + Sync + Debug {
-    /// scans the accumulator's state from a vector of scalars, similar to Accumulator it also
-    /// optionally generates values.
-    fn scan(&mut self, values: &[ScalarValue]) -> Result<Option<ScalarValue>>;
-
-    /// scans the accumulator's state from a vector of arrays.
-    fn scan_batch(
-        &mut self,
-        num_rows: usize,
-        values: &[ArrayRef],
-    ) -> Result<Option<ArrayRef>> {
-        if values.is_empty() {
-            return Ok(None);
-        };
-        // transpose columnar to row based so that we can apply window
-        let result = (0..num_rows)
-            .map(|index| {
-                let v = values
-                    .iter()
-                    .map(|array| ScalarValue::try_from_array(array, index))
-                    .collect::<Result<Vec<_>>>()?;
-                self.scan(&v)
-            })
-            .collect::<Result<Vec<Option<ScalarValue>>>>()?
-            .into_iter()
-            .collect::<Option<Vec<ScalarValue>>>();
-
-        Ok(match result {
-            Some(arr) if num_rows == arr.len() => Some(ScalarValue::iter_to_array(arr)?),
-            None => None,
-            Some(arr) => {
-                return Err(DataFusionError::Internal(format!(
-                    "expect scan batch to return {:?} rows, but got {:?}",
-                    num_rows,
-                    arr.len()
-                )))
-            }
-        })
-    }
-
-    /// returns its value based on its current state.
-    fn evaluate(&self) -> Result<Option<ScalarValue>>;
 }
 
 pub mod aggregates;

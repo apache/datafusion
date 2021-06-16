@@ -143,7 +143,12 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Window {
                 input, window_expr, ..
             } => {
-                // Initially need to perform the aggregate and then merge the partitions
+                if window_expr.is_empty() {
+                    return Err(DataFusionError::Internal(
+                        "Impossibly got empty window expression".to_owned(),
+                    ));
+                }
+
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
                 let input_schema = input_exec.schema();
 
@@ -364,7 +369,7 @@ impl DefaultPhysicalPlanner {
                     let left_expr = keys.iter().map(|x| col(&x.0)).collect();
                     let right_expr = keys.iter().map(|x| col(&x.1)).collect();
 
-                    // Use hash partition by defualt to parallelize hash joins
+                    // Use hash partition by default to parallelize hash joins
                     Ok(Arc::new(HashJoinExec::try_new(
                         Arc::new(RepartitionExec::try_new(
                             left,
@@ -773,12 +778,6 @@ impl DefaultPhysicalPlanner {
                 if !partition_by.is_empty() {
                     return Err(DataFusionError::NotImplemented(
                             "window expression with non-empty partition by clause is not yet supported"
-                                .to_owned(),
-                        ));
-                }
-                if !order_by.is_empty() {
-                    return Err(DataFusionError::NotImplemented(
-                            "window expression with non-empty order by clause is not yet supported"
                                 .to_owned(),
                         ));
                 }

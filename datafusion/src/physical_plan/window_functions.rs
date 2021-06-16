@@ -20,11 +20,12 @@
 //!
 //! see also https://www.postgresql.org/docs/current/functions-window.html
 
+use crate::arrow::array::ArrayRef;
 use crate::arrow::datatypes::Field;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates, aggregates::AggregateFunction, functions::Signature,
-    type_coercion::data_types, PhysicalExpr, WindowAccumulator,
+    type_coercion::data_types, PhysicalExpr,
 };
 use arrow::datatypes::DataType;
 use std::any::Any;
@@ -207,7 +208,10 @@ pub(super) fn signature_for_built_in(fun: &BuiltInWindowFunction) -> Signature {
     }
 }
 
-/// A window expression that is a built-in window function
+/// A window expression that is a built-in window function.
+///
+/// Note that unlike aggregation based window functions, built-in window functions normally ignore
+/// window frame spec, with the exception of first_value, last_value, and nth_value.
 pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
@@ -226,10 +230,8 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
         "BuiltInWindowFunctionExpr: default name"
     }
 
-    /// the accumulator used to accumulate values from the expressions.
-    /// the accumulator expects the same number of arguments as `expressions` and must
-    /// return states with the same description as `state_fields`
-    fn create_accumulator(&self) -> Result<Box<dyn WindowAccumulator>>;
+    /// Evaluate the built-in window function against the number of rows and the arguments
+    fn evaluate(&self, num_rows: usize, values: &[ArrayRef]) -> Result<ArrayRef>;
 }
 
 #[cfg(test)]
