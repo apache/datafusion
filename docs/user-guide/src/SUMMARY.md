@@ -27,6 +27,7 @@
   - [SELECT](sql/select.md)
   - [DDL](sql/ddl.md)
     - [CREATE EXTERNAL TABLE](sql/ddl.md)
+  - [Datafusion Specific Functions](sql/datafusion-functions.md)
 
 - [Distributed](distributed/introduction.md)
   - [Create a Ballista Cluster](distributed/deployment.md)
