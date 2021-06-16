@@ -133,13 +133,13 @@ impl HashJoinExec {
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
-        check_join_is_valid(&left_schema, &right_schema, &on)?;
+        check_join_is_valid(&left_schema, &right_schema, on)?;
 
         let schema = Arc::new(build_join_schema(
             &left_schema,
             &right_schema,
             on,
-            &join_type,
+            join_type,
         ));
 
         let on = on
@@ -289,7 +289,7 @@ impl ExecutionPlan for HashJoinExec {
                                 hashes_buffer.resize(batch.num_rows(), 0);
                                 update_hash(
                                     &on_left,
-                                    &batch,
+                                    batch,
                                     &mut hashmap,
                                     offset,
                                     &self.random_state,
@@ -342,7 +342,7 @@ impl ExecutionPlan for HashJoinExec {
                         hashes_buffer.resize(batch.num_rows(), 0);
                         update_hash(
                             &on_left,
-                            &batch,
+                            batch,
                             &mut hashmap,
                             offset,
                             &self.random_state,
@@ -436,7 +436,7 @@ fn update_hash(
         .collect::<Result<Vec<_>>>()?;
 
     // calculate the hash values
-    let hash_values = create_hashes(&keys_values, &random_state, hashes_buffer)?;
+    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
 
     // insert hashes to key of the hashmap
     for (row, hash_value) in hash_values.iter().enumerate() {
@@ -538,15 +538,9 @@ fn build_batch(
     column_indices: &[ColumnIndex],
     random_state: &RandomState,
 ) -> ArrowResult<(RecordBatch, UInt64Array)> {
-    let (left_indices, right_indices) = build_join_indexes(
-        &left_data,
-        &batch,
-        join_type,
-        on_left,
-        on_right,
-        random_state,
-    )
-    .unwrap();
+    let (left_indices, right_indices) =
+        build_join_indexes(left_data, batch, join_type, on_left, on_right, random_state)
+            .unwrap();
 
     if matches!(join_type, JoinType::Semi | JoinType::Anti) {
         return Ok((
@@ -613,7 +607,7 @@ fn build_join_indexes(
         })
         .collect::<Result<Vec<_>>>()?;
     let hashes_buffer = &mut vec![0; keys_values[0].len()];
-    let hash_values = create_hashes(&keys_values, &random_state, hashes_buffer)?;
+    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
     let left = &left_data.0;
 
     match join_type {
@@ -883,13 +877,19 @@ macro_rules! hash_array_float {
             if $multi_col {
                 for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
                     *hash = combine_hashes(
-                        $ty::get_hash(&value.to_le_bytes(), $random_state),
+                        $ty::get_hash(
+                            &$ty::from_le_bytes(value.to_le_bytes()),
+                            $random_state,
+                        ),
                         *hash,
                     );
                 }
             } else {
                 for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = $ty::get_hash(&value.to_le_bytes(), $random_state)
+                    *hash = $ty::get_hash(
+                        &$ty::from_le_bytes(value.to_le_bytes()),
+                        $random_state,
+                    )
                 }
             }
         } else {
@@ -899,7 +899,10 @@ macro_rules! hash_array_float {
                 {
                     if !array.is_null(i) {
                         *hash = combine_hashes(
-                            $ty::get_hash(&value.to_le_bytes(), $random_state),
+                            $ty::get_hash(
+                                &$ty::from_le_bytes(value.to_le_bytes()),
+                                $random_state,
+                            ),
                             *hash,
                         );
                     }
@@ -909,7 +912,10 @@ macro_rules! hash_array_float {
                     $hashes.iter_mut().zip(values.iter()).enumerate()
                 {
                     if !array.is_null(i) {
-                        *hash = $ty::get_hash(&value.to_le_bytes(), $random_state);
+                        *hash = $ty::get_hash(
+                            &$ty::from_le_bytes(value.to_le_bytes()),
+                            $random_state,
+                        );
                     }
                 }
             }
@@ -1840,6 +1846,22 @@ mod tests {
             "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[test]
+    fn create_hashes_for_float_arrays() -> Result<()> {
+        let f32_arr = Arc::new(Float32Array::from(vec![0.12, 0.5, 1f32, 444.7]));
+        let f64_arr = Arc::new(Float64Array::from(vec![0.12, 0.5, 1f64, 444.7]));
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let hashes_buff = &mut vec![0; f32_arr.len()];
+        let hashes = create_hashes(&[f32_arr], &random_state, hashes_buff)?;
+        assert_eq!(hashes.len(), 4,);
+
+        let hashes = create_hashes(&[f64_arr], &random_state, hashes_buff)?;
+        assert_eq!(hashes.len(), 4,);
 
         Ok(())
     }

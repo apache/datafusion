@@ -143,7 +143,12 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Window {
                 input, window_expr, ..
             } => {
-                // Initially need to perform the aggregate and then merge the partitions
+                if window_expr.is_empty() {
+                    return Err(DataFusionError::Internal(
+                        "Impossibly got empty window expression".to_owned(),
+                    ));
+                }
+
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
                 let input_schema = input_exec.schema();
 
@@ -155,7 +160,7 @@ impl DefaultPhysicalPlanner {
                     .map(|e| {
                         self.create_window_expr(
                             e,
-                            &logical_input_schema,
+                            logical_input_schema,
                             &physical_input_schema,
                             ctx_state,
                         )
@@ -189,7 +194,7 @@ impl DefaultPhysicalPlanner {
                                 &physical_input_schema,
                                 ctx_state,
                             ),
-                            e.name(&logical_input_schema),
+                            e.name(logical_input_schema),
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -198,7 +203,7 @@ impl DefaultPhysicalPlanner {
                     .map(|e| {
                         self.create_aggregate_expr(
                             e,
-                            &logical_input_schema,
+                            logical_input_schema,
                             &physical_input_schema,
                             ctx_state,
                         )
@@ -222,11 +227,15 @@ impl DefaultPhysicalPlanner {
                     .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
                     .any(|x| matches!(x, DataType::Dictionary(_, _)));
 
-                if !groups.is_empty()
+                let can_repartition = !groups.is_empty()
                     && ctx_state.config.concurrency > 1
                     && ctx_state.config.repartition_aggregations
-                    && !contains_dict
-                {
+                    && !contains_dict;
+
+                let (initial_aggr, next_partition_mode): (
+                    Arc<dyn ExecutionPlan>,
+                    AggregateMode,
+                ) = if can_repartition {
                     // Divide partial hash aggregates into multiple partitions by hash key
                     let hash_repartition = Arc::new(RepartitionExec::try_new(
                         initial_aggr,
@@ -235,35 +244,25 @@ impl DefaultPhysicalPlanner {
                             ctx_state.config.concurrency,
                         ),
                     )?);
-
-                    // Combine hashaggregates within the partition
-                    Ok(Arc::new(HashAggregateExec::try_new(
-                        AggregateMode::FinalPartitioned,
-                        final_group
-                            .iter()
-                            .enumerate()
-                            .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
-                            .collect(),
-                        aggregates,
-                        hash_repartition,
-                        input_schema,
-                    )?))
+                    // Combine hash aggregates within the partition
+                    (hash_repartition, AggregateMode::FinalPartitioned)
                 } else {
-                    // construct a second aggregation, keeping the final column name equal to the first aggregation
-                    // and the expressions corresponding to the respective aggregate
+                    // construct a second aggregation, keeping the final column name equal to the
+                    // first aggregation and the expressions corresponding to the respective aggregate
+                    (initial_aggr, AggregateMode::Final)
+                };
 
-                    Ok(Arc::new(HashAggregateExec::try_new(
-                        AggregateMode::Final,
-                        final_group
-                            .iter()
-                            .enumerate()
-                            .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
-                            .collect(),
-                        aggregates,
-                        initial_aggr,
-                        input_schema,
-                    )?))
-                }
+                Ok(Arc::new(HashAggregateExec::try_new(
+                    next_partition_mode,
+                    final_group
+                        .iter()
+                        .enumerate()
+                        .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
+                        .collect(),
+                    aggregates,
+                    initial_aggr,
+                    input_schema,
+                )?))
             }
             LogicalPlan::Projection { input, expr, .. } => {
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
@@ -272,12 +271,8 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .map(|e| {
                         tuple_err((
-                            self.create_physical_expr(
-                                e,
-                                &input_exec.schema(),
-                                &ctx_state,
-                            ),
-                            e.name(&input_schema),
+                            self.create_physical_expr(e, &input_exec.schema(), ctx_state),
+                            e.name(input_schema),
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -313,7 +308,7 @@ impl DefaultPhysicalPlanner {
                         let runtime_expr = expr
                             .iter()
                             .map(|e| {
-                                self.create_physical_expr(e, &input_schema, &ctx_state)
+                                self.create_physical_expr(e, &input_schema, ctx_state)
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Partitioning::Hash(runtime_expr, *n)
@@ -374,7 +369,7 @@ impl DefaultPhysicalPlanner {
                     let left_expr = keys.iter().map(|x| col(&x.0)).collect();
                     let right_expr = keys.iter().map(|x| col(&x.1)).collect();
 
-                    // Use hash partition by defualt to parallelize hash joins
+                    // Use hash partition by default to parallelize hash joins
                     Ok(Arc::new(HashJoinExec::try_new(
                         Arc::new(RepartitionExec::try_new(
                             left,
@@ -384,7 +379,7 @@ impl DefaultPhysicalPlanner {
                             right,
                             Partitioning::Hash(right_expr, ctx_state.config.concurrency),
                         )?),
-                        &keys,
+                        keys,
                         &physical_join_type,
                         PartitionMode::Partitioned,
                     )?))
@@ -392,7 +387,7 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(HashJoinExec::try_new(
                         left,
                         right,
-                        &keys,
+                        keys,
                         &physical_join_type,
                         PartitionMode::CollectLeft,
                     )?))
@@ -510,7 +505,7 @@ impl DefaultPhysicalPlanner {
             }
             Expr::Column(name) => {
                 // check that name exists
-                input_schema.field_with_name(&name)?;
+                input_schema.field_with_name(name)?;
                 Ok(Arc::new(Column::new(name)))
             }
             Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
@@ -731,7 +726,85 @@ impl DefaultPhysicalPlanner {
         }
     }
 
-    /// Create a window expression from a logical expression
+    /// Create a window expression with a name from a logical expression
+    pub fn create_window_expr_with_name(
+        &self,
+        e: &Expr,
+        name: String,
+        physical_input_schema: &Schema,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn WindowExpr>> {
+        match e {
+            Expr::WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+            } => {
+                let args = args
+                    .iter()
+                    .map(|e| {
+                        self.create_physical_expr(e, physical_input_schema, ctx_state)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let partition_by = partition_by
+                    .iter()
+                    .map(|e| {
+                        self.create_physical_expr(e, physical_input_schema, ctx_state)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let order_by = order_by
+                    .iter()
+                    .map(|e| match e {
+                        Expr::Sort {
+                            expr,
+                            asc,
+                            nulls_first,
+                        } => self.create_physical_sort_expr(
+                            expr,
+                            physical_input_schema,
+                            SortOptions {
+                                descending: !*asc,
+                                nulls_first: *nulls_first,
+                            },
+                            ctx_state,
+                        ),
+                        _ => Err(DataFusionError::Plan(
+                            "Sort only accepts sort expressions".to_string(),
+                        )),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if !partition_by.is_empty() {
+                    return Err(DataFusionError::NotImplemented(
+                            "window expression with non-empty partition by clause is not yet supported"
+                                .to_owned(),
+                        ));
+                }
+                if window_frame.is_some() {
+                    return Err(DataFusionError::NotImplemented(
+                            "window expression with window frame definition is not yet supported"
+                                .to_owned(),
+                        ));
+                }
+                windows::create_window_expr(
+                    fun,
+                    name,
+                    &args,
+                    &partition_by,
+                    &order_by,
+                    *window_frame,
+                    physical_input_schema,
+                )
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Invalid window expression '{:?}'",
+                other
+            ))),
+        }
+    }
+
+    /// Create a window expression from a logical expression or an alias
     pub fn create_window_expr(
         &self,
         e: &Expr,
@@ -744,43 +817,17 @@ impl DefaultPhysicalPlanner {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
             _ => (e.name(logical_input_schema)?, e),
         };
-
-        match e {
-            Expr::WindowFunction { fun, args, .. } => {
-                let args = args
-                    .iter()
-                    .map(|e| {
-                        self.create_physical_expr(e, physical_input_schema, ctx_state)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                // if !order_by.is_empty() {
-                //     return Err(DataFusionError::NotImplemented(
-                //         "Window function with order by is not yet implemented".to_owned(),
-                //     ));
-                // }
-                windows::create_window_expr(fun, &args, physical_input_schema, name)
-            }
-            other => Err(DataFusionError::Internal(format!(
-                "Invalid window expression '{:?}'",
-                other
-            ))),
-        }
+        self.create_window_expr_with_name(e, name, physical_input_schema, ctx_state)
     }
 
-    /// Create an aggregate expression from a logical expression
-    pub fn create_aggregate_expr(
+    /// Create an aggregate expression with a name from a logical expression
+    pub fn create_aggregate_expr_with_name(
         &self,
         e: &Expr,
-        logical_input_schema: &DFSchema,
+        name: String,
         physical_input_schema: &Schema,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn AggregateExpr>> {
-        // unpack aliased logical expressions, e.g. "sum(col) as total"
-        let (name, e) = match e {
-            Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-            _ => (e.name(logical_input_schema)?, e),
-        };
-
         match e {
             Expr::AggregateFunction {
                 fun,
@@ -819,7 +866,23 @@ impl DefaultPhysicalPlanner {
         }
     }
 
-    /// Create an aggregate expression from a logical expression
+    /// Create an aggregate expression from a logical expression or an alias
+    pub fn create_aggregate_expr(
+        &self,
+        e: &Expr,
+        logical_input_schema: &DFSchema,
+        physical_input_schema: &Schema,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn AggregateExpr>> {
+        // unpack aliased logical expressions, e.g. "sum(col) as total"
+        let (name, e) = match e {
+            Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
+            _ => (e.name(logical_input_schema)?, e),
+        };
+        self.create_aggregate_expr_with_name(e, name, physical_input_schema, ctx_state)
+    }
+
+    /// Create a physical sort expression from a logical expression
     pub fn create_physical_sort_expr(
         &self,
         e: &Expr,

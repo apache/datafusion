@@ -57,6 +57,7 @@ use protobuf::physical_plan_node::PhysicalPlanType;
 
 use crate::execution_plans::{ShuffleReaderExec, UnresolvedShuffleExec};
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
+use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{protobuf, BallistaError};
 use datafusion::physical_plan::functions::{BuiltinScalarFunction, ScalarFunctionExpr};
 use datafusion::physical_plan::merge::MergeExec;
@@ -268,16 +269,19 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ShuffleReaderExec>() {
-            let partition_location = exec
-                .partition_location
-                .iter()
-                .map(|l| l.clone().try_into())
-                .collect::<Result<_, _>>()?;
-
+            let mut partition = vec![];
+            for location in &exec.partition {
+                partition.push(protobuf::ShuffleReaderPartition {
+                    location: location
+                        .iter()
+                        .map(|l| l.clone().try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
+                });
+            }
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ShuffleReader(
                     protobuf::ShuffleReaderExecNode {
-                        partition_location,
+                        partition,
                         schema: Some(exec.schema().as_ref().into()),
                     },
                 )),

@@ -137,7 +137,7 @@ fn get_join_predicates<'a>(
             let all_in_right = right.len() == columns.len();
             !all_in_left && !all_in_right
         })
-        .map(|((ref a, ref b), _)| (a, b))
+        .map(|((a, b), _)| (a, b))
         .unzip();
     (pushable_to_left, pushable_to_right, keep)
 }
@@ -151,7 +151,7 @@ fn push_down(state: &State, plan: &LogicalPlan) -> Result<LogicalPlan> {
         .collect::<Result<Vec<_>>>()?;
 
     let expr = plan.expressions();
-    utils::from_plan(&plan, &expr, &new_inputs)
+    utils::from_plan(plan, &expr, &new_inputs)
 }
 
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
@@ -225,8 +225,8 @@ fn split_members<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>) {
             op: Operator::And,
             left,
         } => {
-            split_members(&left, predicates);
-            split_members(&right, predicates);
+            split_members(left, predicates);
+            split_members(right, predicates);
         }
         other => predicates.push(other),
     }
@@ -297,7 +297,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // optimize inner
             let new_input = optimize(input, state)?;
 
-            utils::from_plan(&plan, &expr, &[new_input])
+            utils::from_plan(plan, expr, &[new_input])
         }
         LogicalPlan::Aggregate {
             input, aggr_expr, ..
@@ -322,6 +322,10 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // sort is filter-commutable
             push_down(&state, plan)
         }
+        LogicalPlan::Union { .. } => {
+            // union all is filter-commutable
+            push_down(&state, plan)
+        }
         LogicalPlan::Limit { input, .. } => {
             // limit is _not_ filter-commutable => collect all columns from its input
             let used_columns = input
@@ -335,7 +339,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         LogicalPlan::Join { left, right, .. }
         | LogicalPlan::CrossJoin { left, right, .. } => {
             let (pushable_to_left, pushable_to_right, keep) =
-                get_join_predicates(&state, &left.schema(), &right.schema());
+                get_join_predicates(&state, left.schema(), right.schema());
 
             let mut left_state = state.clone();
             left_state.filters = keep_filters(&left_state.filters, &pushable_to_left);
@@ -347,7 +351,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             // create a new Join with the new `left` and `right`
             let expr = plan.expressions();
-            let plan = utils::from_plan(&plan, &expr, &[left, right])?;
+            let plan = utils::from_plan(plan, &expr, &[left, right])?;
 
             if keep.0.is_empty() {
                 Ok(plan)
@@ -437,11 +441,11 @@ impl FilterPushDown {
 
 /// replaces columns by its name on the projection.
 fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
-    let expressions = utils::expr_sub_expressions(&expr)?;
+    let expressions = utils::expr_sub_expressions(expr)?;
 
     let expressions = expressions
         .iter()
-        .map(|e| rewrite(e, &projection))
+        .map(|e| rewrite(e, projection))
         .collect::<Result<Vec<_>>>()?;
 
     if let Expr::Column(name) = expr {
@@ -450,7 +454,7 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
         }
     }
 
-    utils::rewrite_expression(&expr, &expressions)
+    utils::rewrite_expression(expr, &expressions)
 }
 
 #[cfg(test)]
@@ -762,6 +766,24 @@ mod tests {
             \n      Limit: 20\
             \n        Projection: #a, #b\
             \n          TableScan: test projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn union_all() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(&table_scan)
+            .union(LogicalPlanBuilder::from(&table_scan).build()?)?
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+        // filter appears below Union
+        let expected = "\
+            Union\
+            \n  Filter: #a Eq Int64(1)\
+            \n    TableScan: test projection=None\
+            \n  Filter: #a Eq Int64(1)\
+            \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }

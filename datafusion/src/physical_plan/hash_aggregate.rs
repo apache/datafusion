@@ -120,8 +120,8 @@ fn create_schema(
     for (expr, name) in group_expr {
         fields.push(Field::new(
             name,
-            expr.data_type(&input_schema)?,
-            expr.nullable(&input_schema)?,
+            expr.data_type(input_schema)?,
+            expr.nullable(input_schema)?,
         ))
     }
 
@@ -413,7 +413,7 @@ fn group_aggregate_batch(
     let mut offset_so_far = 0;
     for key in batch_keys.iter() {
         let (_, _, indices) = accumulators.get_mut(key).unwrap();
-        batch_indices.append_slice(&indices)?;
+        batch_indices.append_slice(indices)?;
         offset_so_far += indices.len();
         offsets.push(offset_so_far);
     }
@@ -500,7 +500,7 @@ fn dictionary_create_key_for_col<K: ArrowDictionaryKeyType>(
     let dict_col = col.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
 
     // look up the index in the values dictionary
-    let keys_col = dict_col.keys_array();
+    let keys_col = dict_col.keys();
     let values_index = keys_col.value(row).to_usize().ok_or_else(|| {
         DataFusionError::Internal(format!(
             "Can not convert index to usize in dictionary of type creating group by value {:?}",
@@ -779,7 +779,7 @@ fn evaluate(
     batch: &RecordBatch,
 ) -> Result<Vec<ArrayRef>> {
     expr.iter()
-        .map(|expr| expr.evaluate(&batch))
+        .map(|expr| expr.evaluate(batch))
         .map(|r| r.map(|v| v.into_array(batch.num_rows())))
         .collect::<Result<Vec<_>>>()
 }
@@ -1083,7 +1083,7 @@ fn dictionary_create_group_by_value<K: ArrowDictionaryKeyType>(
     let dict_col = col.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
 
     // look up the index in the values dictionary
-    let keys_col = dict_col.keys_array();
+    let keys_col = dict_col.keys();
     let values_index = keys_col.value(row).to_usize().ok_or_else(|| {
         DataFusionError::Internal(format!(
             "Can not convert index to usize in dictionary of type creating group by value {:?}",

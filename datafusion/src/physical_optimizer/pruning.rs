@@ -420,7 +420,7 @@ impl<'a> PruningExpressionBuilder<'a> {
     fn min_column_expr(&mut self) -> Result<Expr> {
         self.required_columns.min_column_expr(
             &self.column_name,
-            &self.column_expr,
+            self.column_expr,
             self.field,
         )
     }
@@ -428,7 +428,7 @@ impl<'a> PruningExpressionBuilder<'a> {
     fn max_column_expr(&mut self) -> Result<Expr> {
         self.required_columns.max_column_expr(
             &self.column_name,
-            &self.column_expr,
+            self.column_expr,
             self.field,
         )
     }
@@ -440,7 +440,7 @@ fn rewrite_column_expr(
     column_old_name: &str,
     column_new_name: &str,
 ) -> Result<Expr> {
-    let expressions = utils::expr_sub_expressions(&expr)?;
+    let expressions = utils::expr_sub_expressions(expr)?;
     let expressions = expressions
         .iter()
         .map(|e| rewrite_column_expr(e, column_old_name, column_new_name))
@@ -451,7 +451,7 @@ fn rewrite_column_expr(
             return Ok(Expr::Column(column_new_name.to_string()));
         }
     }
-    utils::rewrite_expression(&expr, &expressions)
+    utils::rewrite_expression(expr, &expressions)
 }
 
 /// Given a column reference to `column_name`, returns a pruning
@@ -515,16 +515,15 @@ fn build_predicate_expression(
     let (left, op, right) = match expr {
         Expr::BinaryExpr { left, op, right } => (left, *op, right),
         Expr::Column(name) => {
-            let expr = build_single_column_expr(&name, schema, required_columns, false)
+            let expr = build_single_column_expr(name, schema, required_columns, false)
                 .unwrap_or(unhandled);
             return Ok(expr);
         }
         // match !col (don't do so recursively)
         Expr::Not(input) => {
             if let Expr::Column(name) = input.as_ref() {
-                let expr =
-                    build_single_column_expr(&name, schema, required_columns, true)
-                        .unwrap_or(unhandled);
+                let expr = build_single_column_expr(name, schema, required_columns, true)
+                    .unwrap_or(unhandled);
                 return Ok(expr);
             } else {
                 return Ok(unhandled);
@@ -553,6 +552,16 @@ fn build_predicate_expression(
     };
     let corrected_op = expr_builder.correct_operator(op);
     let statistics_expr = match corrected_op {
+        Operator::NotEq => {
+            // column != literal => (min, max) = literal =>
+            // !(min != literal && max != literal) ==>
+            // min != literal || literal != max
+            let min_column_expr = expr_builder.min_column_expr()?;
+            let max_column_expr = expr_builder.max_column_expr()?;
+            min_column_expr
+                .not_eq(expr_builder.scalar_expr().clone())
+                .or(expr_builder.scalar_expr().clone().not_eq(max_column_expr))
+        }
         Operator::Eq => {
             // column = literal => (min, max) = literal => min <= literal && literal <= max
             // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
@@ -931,6 +940,26 @@ mod tests {
     }
 
     #[test]
+    fn row_group_predicate_not_eq() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expected_expr = "#c1_min NotEq Int32(1) Or Int32(1) NotEq #c1_max";
+
+        // test column on the left
+        let expr = col("c1").not_eq(lit(1));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        // test column on the right
+        let expr = lit(1).not_eq(col("c1"));
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
     fn row_group_predicate_gt() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         let expected_expr = "#c1_max Gt Int32(1)";
@@ -1160,6 +1189,34 @@ mod tests {
         let result = p.prune(&statistics).unwrap();
         let expected = vec![false, true, true, true];
 
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn prune_not_eq_data() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
+
+        // Prune using s2 != 'M'
+        let expr = col("s1").not_eq(lit("M"));
+
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_utf8(
+                vec![Some("A"), Some("A"), Some("N"), Some("M"), None, Some("A")], // min
+                vec![Some("Z"), Some("L"), Some("Z"), Some("M"), None, None],      // max
+            ),
+        );
+
+        // s1 [A, Z] ==> might have values that pass predicate
+        // s1 [A, L] ==> all rows pass the predicate
+        // s1 [N, Z] ==> all rows pass the predicate
+        // s1 [M, M] ==> all rows do not pass the predicate
+        // No stats for s2 ==> some rows could pass
+        // s2 [3, None] (null max) ==> some rows could pass
+
+        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        let expected = vec![true, true, true, false, true, true];
         assert_eq!(result, expected);
     }
 

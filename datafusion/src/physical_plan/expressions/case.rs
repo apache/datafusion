@@ -377,7 +377,7 @@ impl CaseExpr {
             let then_value = then_value.into_array(batch.num_rows());
 
             current_value = Some(if_then_else(
-                &when_value,
+                when_value,
                 then_value,
                 current_value.unwrap(),
                 &return_type,

@@ -134,7 +134,7 @@ async fn parquet_single_nan_schema() {
     ctx.register_parquet("single_nan", &format!("{}/single_nan.parquet", testdata))
         .unwrap();
     let sql = "SELECT mycol FROM single_nan";
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).unwrap();
     let results = collect(plan).await.unwrap();
@@ -169,7 +169,7 @@ async fn parquet_list_columns() {
     ]));
 
     let sql = "SELECT int64_list, utf8_list FROM list_columns";
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).unwrap();
     let results = collect(plan).await.unwrap();
@@ -651,7 +651,7 @@ async fn csv_query_error() -> Result<()> {
     let mut ctx = create_ctx()?;
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT sin(c1) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(&sql);
+    let plan = ctx.create_logical_plan(sql);
     assert!(plan.is_err());
     Ok(())
 }
@@ -752,7 +752,7 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT avg(c12) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).unwrap();
     let results = collect(plan).await.unwrap();
@@ -806,25 +806,142 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
     let sql = "select \
-    c2, \
-    sum(c3) over (), \
-    avg(c3) over (), \
-    count(c3) over (), \
-    max(c3) over (), \
-    min(c3) over (), \
-    first_value(c3) over (), \
-    last_value(c3) over (), \
-    nth_value(c3, 2) over ()
+    c9, \
+    count(c5) over (), \
+    max(c5) over (), \
+    min(c5) over (), \
+    first_value(c5) over (), \
+    last_value(c5) over (), \
+    nth_value(c5, 2) over () \
     from aggregate_test_100 \
-    order by c2
+    order by c9 \
     limit 5";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
+        vec![
+            "28774375",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "63044568",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "141047417",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "141680161",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "145294611",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_window_with_order_by() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "select \
+    c9, \
+    sum(c5) over (order by c9), \
+    avg(c5) over (order by c9), \
+    count(c5) over (order by c9), \
+    max(c5) over (order by c9), \
+    min(c5) over (order by c9), \
+    first_value(c5) over (order by c9), \
+    last_value(c5) over (order by c9), \
+    nth_value(c5, 2) over (order by c9) \
+    from aggregate_test_100 \
+    order by c9 \
+    limit 5";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec![
+            "28774375",
+            "61035129",
+            "61035129",
+            "1",
+            "61035129",
+            "61035129",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "63044568",
+            "-47938237",
+            "-23969118.5",
+            "2",
+            "61035129",
+            "-108973366",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "141047417",
+            "575165281",
+            "191721760.33333334",
+            "3",
+            "623103518",
+            "-108973366",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "141680161",
+            "-1352462829",
+            "-338115707.25",
+            "4",
+            "623103518",
+            "-1927628110",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "145294611",
+            "-3251637940",
+            "-650327588",
+            "5",
+            "623103518",
+            "-1927628110",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
     ];
     assert_eq!(expected, actual);
     Ok(())
@@ -1698,7 +1815,7 @@ async fn csv_explain_plans() {
     // Logical plan
     // Create plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(&sql).expect(&msg);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
     //
     println!("SQL: {}", sql);
@@ -1895,7 +2012,7 @@ async fn csv_explain_verbose_plans() {
     // Logical plan
     // Create plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(&sql).expect(&msg);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
     //
     println!("SQL: {}", sql);
@@ -2171,7 +2288,7 @@ fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
 /// `result[row][column]`
 async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(&sql).expect(&msg);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
 
     let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
@@ -2419,7 +2536,7 @@ where
     let nanotimestamps = vec![
         1599572549190855000i64, // 2020-09-08T13:42:29.190855+00:00
         1599568949190855000,    // 2020-09-08T12:42:29.190855+00:00
-        1599565349190855000, //2020-09-08T11:42:29.190855+00:00
+        1599565349190855000,    //2020-09-08T11:42:29.190855+00:00
     ]; // 2020-09-08T11:42:29.190855+00:00
     let divisor = match A::get_time_unit() {
         TimeUnit::Nanosecond => 1,
@@ -2709,7 +2826,7 @@ async fn query_cte_incorrect() -> Result<()> {
 
     // self reference
     let sql = "WITH t AS (SELECT * FROM t) SELECT * from u";
-    let plan = ctx.create_logical_plan(&sql);
+    let plan = ctx.create_logical_plan(sql);
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
@@ -2718,7 +2835,7 @@ async fn query_cte_incorrect() -> Result<()> {
 
     // forward referencing
     let sql = "WITH t AS (SELECT * FROM u), u AS (SELECT 1) SELECT * from u";
-    let plan = ctx.create_logical_plan(&sql);
+    let plan = ctx.create_logical_plan(sql);
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
@@ -2727,7 +2844,7 @@ async fn query_cte_incorrect() -> Result<()> {
 
     // wrapping should hide u
     let sql = "WITH t AS (WITH u as (SELECT 1) SELECT 1) SELECT * from u";
-    let plan = ctx.create_logical_plan(&sql);
+    let plan = ctx.create_logical_plan(sql);
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
@@ -3474,7 +3591,7 @@ async fn test_cast_expressions_error() -> Result<()> {
     let mut ctx = create_ctx()?;
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).unwrap();
     let result = collect(plan).await;
@@ -3503,7 +3620,7 @@ async fn test_physical_plan_display_indent() {
          GROUP BY c1 \
          ORDER BY the_min DESC \
          LIMIT 10";
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
 
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
@@ -3551,7 +3668,7 @@ async fn test_physical_plan_display_indent_multi_children() {
                  ON c1=c2\
                  ";
 
-    let plan = ctx.create_logical_plan(&sql).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
 
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
@@ -3591,7 +3708,7 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
-    let logical_plan = ctx.create_logical_plan(&sql)?;
+    let logical_plan = ctx.create_logical_plan(sql)?;
     let physical_plan = ctx.create_physical_plan(&logical_plan);
     let err = physical_plan.unwrap_err();
     assert_eq!(err.to_string(), "Error during planning: Invalid or wrong number of arguments passed to aggregate: 'COUNT(DISTINCT )'");

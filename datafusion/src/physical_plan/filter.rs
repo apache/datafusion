@@ -151,7 +151,7 @@ fn batch_filter(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> ArrowResult<RecordBatch> {
     predicate
-        .evaluate(&batch)
+        .evaluate(batch)
         .map(|v| v.into_array(batch.num_rows()))
         .map_err(DataFusionError::into_arrow_external_error)
         .and_then(|array| {

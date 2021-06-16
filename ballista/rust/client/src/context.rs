@@ -24,13 +24,14 @@ use std::{collections::HashMap, convert::TryInto};
 use std::{fs, time::Duration};
 
 use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
+use ballista_core::serde::protobuf::PartitionLocation;
 use ballista_core::serde::protobuf::{
     execute_query_params::Query, job_status, ExecuteQueryParams, GetJobStatusParams,
     GetJobStatusResult,
 };
+use ballista_core::utils::WrappedStream;
 use ballista_core::{
-    client::BallistaClient, datasource::DfTableAdapter, memory_stream::MemoryStream,
-    utils::create_datafusion_context,
+    client::BallistaClient, datasource::DfTableAdapter, utils::create_datafusion_context,
 };
 
 use datafusion::arrow::datatypes::Schema;
@@ -39,6 +40,8 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::csv::CsvReadOptions;
 use datafusion::{dataframe::DataFrame, physical_plan::RecordBatchStream};
+use futures::future;
+use futures::StreamExt;
 use log::{error, info};
 
 #[allow(dead_code)]
@@ -155,6 +158,29 @@ impl BallistaContext {
         ctx.sql(sql)
     }
 
+    async fn fetch_partition(
+        location: PartitionLocation,
+    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
+        let metadata = location.executor_meta.ok_or_else(|| {
+            DataFusionError::Internal("Received empty executor metadata".to_owned())
+        })?;
+        let partition_id = location.partition_id.ok_or_else(|| {
+            DataFusionError::Internal("Received empty partition id".to_owned())
+        })?;
+        let mut ballista_client =
+            BallistaClient::try_new(metadata.host.as_str(), metadata.port as u16)
+                .await
+                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+        Ok(ballista_client
+            .fetch_partition(
+                &partition_id.job_id,
+                partition_id.stage_id as usize,
+                partition_id.partition_id as usize,
+            )
+            .await
+            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)
+    }
+
     pub async fn collect(
         &self,
         plan: &LogicalPlan,
@@ -222,45 +248,21 @@ impl BallistaContext {
                     break Err(DataFusionError::Execution(msg));
                 }
                 job_status::Status::Completed(completed) => {
-                    // TODO: use streaming. Probably need to change the signature of fetch_partition to achieve that
-                    let mut result = vec![];
-                    for location in completed.partition_location {
-                        let metadata = location.executor_meta.ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "Received empty executor metadata".to_owned(),
-                            )
-                        })?;
-                        let partition_id = location.partition_id.ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "Received empty partition id".to_owned(),
-                            )
-                        })?;
-                        let mut ballista_client = BallistaClient::try_new(
-                            metadata.host.as_str(),
-                            metadata.port as u16,
-                        )
-                        .await
-                        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-                        let stream = ballista_client
-                            .fetch_partition(
-                                &partition_id.job_id,
-                                partition_id.stage_id as usize,
-                                partition_id.partition_id as usize,
-                            )
-                            .await
-                            .map_err(|e| {
-                                DataFusionError::Execution(format!("{:?}", e))
-                            })?;
-                        result.append(
-                            &mut datafusion::physical_plan::common::collect(stream)
-                                .await?,
-                        );
-                    }
-                    break Ok(Box::pin(MemoryStream::try_new(
-                        result,
+                    let result = future::join_all(
+                        completed
+                            .partition_location
+                            .into_iter()
+                            .map(BallistaContext::fetch_partition),
+                    )
+                    .await
+                    .into_iter()
+                    .collect::<Result<Vec<_>>>()?;
+
+                    let result = WrappedStream::new(
+                        Box::pin(futures::stream::iter(result).flatten()),
                         Arc::new(schema),
-                        None,
-                    )?));
+                    );
+                    break Ok(Box::pin(result));
                 }
             };
         }
