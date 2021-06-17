@@ -20,13 +20,14 @@
 //!
 //! see also https://www.postgresql.org/docs/current/functions-window.html
 
-use crate::arrow::array::ArrayRef;
 use crate::arrow::datatypes::Field;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates, aggregates::AggregateFunction, functions::Signature,
     type_coercion::data_types, PhysicalExpr,
 };
+use crate::scalar::ScalarValue;
+use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use std::any::Any;
 use std::sync::Arc;
@@ -231,7 +232,11 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     }
 
     /// Evaluate the built-in window function against the number of rows and the arguments
-    fn evaluate(&self, num_rows: usize, values: &[ArrayRef]) -> Result<ArrayRef>;
+    fn evaluate(
+        &self,
+        num_rows: usize,
+        values: &[ArrayRef],
+    ) -> Result<Box<dyn Iterator<Item = ScalarValue>>>;
 }
 
 #[cfg(test)]

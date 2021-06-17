@@ -20,9 +20,11 @@
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
-use arrow::array::{new_empty_array, new_null_array, ArrayRef};
+use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
+use std::convert::TryFrom;
+use std::iter;
 use std::sync::Arc;
 
 /// nth_value kind
@@ -111,7 +113,11 @@ impl BuiltInWindowFunctionExpr for NthValue {
         &self.name
     }
 
-    fn evaluate(&self, num_rows: usize, values: &[ArrayRef]) -> Result<ArrayRef> {
+    fn evaluate(
+        &self,
+        num_rows: usize,
+        values: &[ArrayRef],
+    ) -> Result<Box<dyn Iterator<Item = ScalarValue>>> {
         if values.is_empty() {
             return Err(DataFusionError::Execution(format!(
                 "No arguments supplied to {}",
@@ -128,19 +134,20 @@ impl BuiltInWindowFunctionExpr for NthValue {
             )));
         }
         if num_rows == 0 {
-            return Ok(new_empty_array(value.data_type()));
+            return Ok(Box::new(iter::empty()));
         }
         let index: usize = match self.kind {
             NthValueKind::First => 0,
             NthValueKind::Last => (num_rows as usize) - 1,
             NthValueKind::Nth(n) => (n as usize) - 1,
         };
-        Ok(if index >= num_rows {
-            new_null_array(value.data_type(), num_rows)
+        let scalar = if index >= num_rows {
+            let data_type: &DataType = value.data_type();
+            ScalarValue::try_from(data_type)
         } else {
-            let value = ScalarValue::try_from_array(value, index)?;
-            value.to_array_of_size(num_rows)
-        })
+            ScalarValue::try_from_array(value, index)
+        }?;
+        Ok(Box::new(iter::repeat(scalar).take(num_rows)))
     }
 }
 

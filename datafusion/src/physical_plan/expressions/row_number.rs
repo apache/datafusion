@@ -19,7 +19,8 @@
 
 use crate::error::Result;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
-use arrow::array::{ArrayRef, UInt64Array};
+use crate::scalar::ScalarValue;
+use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
@@ -57,10 +58,12 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         self.name.as_str()
     }
 
-    fn evaluate(&self, num_rows: usize, _values: &[ArrayRef]) -> Result<ArrayRef> {
-        Ok(Arc::new(UInt64Array::from_iter_values(
-            (1..num_rows + 1).map(|i| i as u64),
-        )))
+    fn evaluate(
+        &self,
+        num_rows: usize,
+        _values: &[ArrayRef],
+    ) -> Result<Box<dyn Iterator<Item = ScalarValue>>> {
+        Ok(Box::new((1..(num_rows as u64) + 1).map(|i| i.into())))
     }
 }
 
