@@ -29,7 +29,6 @@ use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, SQLMe
 use arrow::record_batch::RecordBatch;
 use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
-use log::debug;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use super::{hash_join::create_hashes, RecordBatchStream, SendableRecordBatchStream};
@@ -278,10 +277,6 @@ impl RepartitionExec {
                     if let Some(tx) = txs.get_mut(&output_partition) {
                         if tx.send(Some(result)).is_err() {
                             // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                            debug!(
-                                "Repartition RoundRobinBatch receiver {} hung up",
-                                output_partition
-                            );
                             txs.remove(&output_partition);
                         }
                     }
@@ -331,10 +326,6 @@ impl RepartitionExec {
                         if let Some(tx) = txs.get_mut(&num_output_partition) {
                             if tx.send(Some(output_batch)).is_err() {
                                 // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                                debug!(
-                                    "Repartition Hash receiver {} hung up",
-                                    num_output_partition
-                                );
                                 txs.remove(&num_output_partition);
                             }
                         }
