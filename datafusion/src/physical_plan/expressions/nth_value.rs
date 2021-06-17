@@ -164,8 +164,7 @@ mod tests {
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
-        let result =
-            ScalarValue::iter_to_array(expr.evaluate(batch.num_rows(), &values)?)?;
+        let result = expr.evaluate(batch.num_rows(), &values)?;
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
         let result = result.values();
         assert_eq!(expected, result);

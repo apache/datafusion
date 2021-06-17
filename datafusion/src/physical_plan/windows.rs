@@ -177,22 +177,17 @@ impl WindowExpr for BuiltInWindowExpr {
             batch.num_rows(),
             &self.partition_columns(batch)?,
         )?;
-        ScalarValue::iter_to_array(
-            partition_points
+        let mut results = Vec::with_capacity(batch.num_rows());
+        for partition_range in partition_points {
+            let start = partition_range.start;
+            let len = partition_range.end - start;
+            let values = values
                 .iter()
-                .map(|partition_range| {
-                    let start = partition_range.start;
-                    let len = partition_range.end - start;
-                    let values = values
-                        .iter()
-                        .map(|arr| arr.slice(start, len))
-                        .collect::<Vec<_>>();
-                    self.window.evaluate(len, &values)
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten(),
-        )
+                .map(|arr| arr.slice(start, len))
+                .collect::<Vec<_>>();
+            results.extend(self.window.evaluate(len, &values)?);
+        }
+        ScalarValue::iter_to_array(results.into_iter())
     }
 }
 
@@ -245,23 +240,16 @@ impl AggregateWindowExpr {
         let sort_partition_points =
             self.evaluate_partition_points(num_rows, &self.sort_columns(batch)?)?;
         let values = self.evaluate_args(batch)?;
-        ScalarValue::iter_to_array(
-            partition_points
-                .iter()
-                .map::<Result<_>, _>(|partition_range| {
-                    let sort_partition_points =
-                        find_ranges_in_range(partition_range, &sort_partition_points);
-                    let mut window_accumulators = self.create_accumulator()?;
-                    sort_partition_points
-                        .iter()
-                        .map(|range| window_accumulators.scan_peers(&values, range))
-                        .collect::<Result<Vec<_>>>()
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .flatten(),
-        )
+        let mut result = Vec::with_capacity(num_rows);
+        for partition_range in partition_points {
+            let sort_partition_points =
+                find_ranges_in_range(&partition_range, &sort_partition_points);
+            let mut window_accumulators = self.create_accumulator()?;
+            for range in sort_partition_points {
+                result.extend(window_accumulators.scan_peers(&values, range)?);
+            }
+        }
+        ScalarValue::iter_to_array(result.into_iter())
     }
 
     fn group_based_evaluate(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
