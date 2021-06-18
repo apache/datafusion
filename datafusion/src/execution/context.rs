@@ -642,9 +642,8 @@ pub struct ExecutionConfig {
     pub repartition_aggregations: bool,
 }
 
-impl ExecutionConfig {
-    /// Create an execution config with default setting
-    pub fn new() -> Self {
+impl Default for ExecutionConfig {
+    fn default() -> Self {
         Self {
             concurrency: num_cpus::get(),
             batch_size: 8192,
@@ -670,6 +669,13 @@ impl ExecutionConfig {
             repartition_joins: true,
             repartition_aggregations: true,
         }
+    }
+}
+
+impl ExecutionConfig {
+    /// Create an execution config with default setting
+    pub fn new() -> Self {
+        Default::default()
     }
 
     /// Customize max_concurrency
