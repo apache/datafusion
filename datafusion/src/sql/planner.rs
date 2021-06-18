@@ -1653,7 +1653,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                r#"Plan("Invalid identifier \'doesnotexist\' for schema {}")"#,
+                r#"Plan("Invalid identifier 'doesnotexist' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -1714,7 +1714,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                r#"Plan("Invalid identifier \'doesnotexist\' for schema {}")"#,
+                r#"Plan("Invalid identifier 'doesnotexist' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -1727,7 +1727,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                r#"Plan("Invalid identifier \'x\' for schema {}")"#,
+                r#"Plan("Invalid identifier 'x' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -2200,7 +2200,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                r#"Plan("Invalid identifier \'doesnotexist\' for schema {}")"#,
+                r#"Plan("Invalid identifier 'doesnotexist' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -2293,7 +2293,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                r#"Plan("Invalid identifier \'doesnotexist\' for schema {}")"#,
+                r#"Plan("Invalid identifier 'doesnotexist' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -2306,7 +2306,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                r#"Plan("Invalid identifier \'doesnotexist\' for schema {}")"#,
+                r#"Plan("Invalid identifier 'doesnotexist' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
