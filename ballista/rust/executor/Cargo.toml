@@ -32,7 +32,6 @@ snmalloc = ["snmalloc-rs"]
 anyhow = "1"
 async-trait = "0.1.36"
 ballista-core = { path = "../core" }
-ballista-scheduler = { path = "../scheduler" }
 configure_me = "0.4.0"
 env_logger = "0.8"
 futures = "0.3"

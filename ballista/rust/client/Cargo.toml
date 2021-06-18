@@ -27,8 +27,14 @@ edition = "2018"
 
 [dependencies]
 ballista-core = { path = "../core" }
+ballista-executor = { path = "../executor", optional = true }
+ballista-scheduler = { path = "../scheduler", optional = true }
 futures = "0.3"
 log = "0.4"
 tokio = "1.0"
 
 datafusion = { path = "../../../datafusion" }
+
+[features]
+default = []
+standalone = ["ballista-executor", "ballista-scheduler"]
