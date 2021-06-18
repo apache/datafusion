@@ -23,6 +23,7 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
+use tokio::sync::Barrier;
 
 use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
@@ -223,6 +224,95 @@ impl Stream for DelayedStream {
 impl RecordBatchStream for DelayedStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
+    }
+}
+
+/// A Mock ExecutionPlan that does not start producing input until a
+/// barrier is called
+///
+#[derive(Debug)]
+pub struct BarrierExec {
+    /// partitions to send back
+    data: Vec<Vec<RecordBatch>>,
+    schema: SchemaRef,
+
+    /// all streams wait on this barrier to produce
+    barrier: Arc<Barrier>,
+}
+
+impl BarrierExec {
+    /// Create a new exec with some number of partitions.
+    pub fn new(data: Vec<Vec<RecordBatch>>, schema: SchemaRef) -> Self {
+        // wait for all streams and the input
+        let barrier = Arc::new(Barrier::new(data.len() + 1));
+        Self {
+            data,
+            schema,
+            barrier,
+        }
+    }
+
+    /// wait until all the input streams and this function is ready
+    pub async fn wait(&self) {
+        println!("BarrierExec::wait waiting on barrier");
+        self.barrier.wait().await;
+        println!("BarrierExec::wait done waiting");
+    }
+}
+
+#[async_trait]
+impl ExecutionPlan for BarrierExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.data.len())
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        unimplemented!()
+    }
+
+    fn with_new_children(
+        &self,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        unimplemented!()
+    }
+
+    /// Returns a stream which yields data
+    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+        assert!(partition < self.data.len());
+
+        let schema = self.schema();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+
+        // task simply sends data in order after barrier is reached
+        let data = self.data[partition].clone();
+        let b = self.barrier.clone();
+        tokio::task::spawn(async move {
+            println!("Partition {} waiting on barrier", partition);
+            b.wait().await;
+            for batch in data {
+                println!("Partition {} sending batch", partition);
+                if let Err(e) = tx.send(Ok(batch)).await {
+                    println!("ERROR batch via barrier stream stream: {}", e);
+                }
+            }
+        });
+
+        // returned stream simply reads off the rx stream
+        let stream = DelayedStream {
+            schema,
+            inner: ReceiverStream::new(rx),
+        };
+        Ok(Box::pin(stream))
     }
 }
 
