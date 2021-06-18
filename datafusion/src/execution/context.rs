@@ -1125,7 +1125,7 @@ mod tests {
         let ctx = create_ctx(&tmp_dir, 1)?;
 
         let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
-        assert_eq!(schema.field_with_name("c1")?.is_nullable(), false);
+        assert!(!schema.field_with_name("c1")?.is_nullable());
 
         let plan = LogicalPlanBuilder::scan_empty("", &schema, None)?
             .project(vec![col("c1")])?
@@ -1133,10 +1133,7 @@ mod tests {
 
         let plan = ctx.optimize(&plan)?;
         let physical_plan = ctx.create_physical_plan(&Arc::new(plan))?;
-        assert_eq!(
-            physical_plan.schema().field_with_name("c1")?.is_nullable(),
-            false
-        );
+        assert!(!physical_plan.schema().field_with_name("c1")?.is_nullable());
         Ok(())
     }
 
