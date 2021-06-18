@@ -684,11 +684,10 @@ fn build_join_indexes(
                                 &keys_values,
                             )? {
                                 left_indices.append_value(i)?;
-                                right_indices.append_value(row as u32)?;
                             } else {
                                 left_indices.append_null()?;
-                                right_indices.append_value(row as u32)?;
                             }
+                            right_indices.append_value(row as u32)?;
                         }
                     }
                     None => {
