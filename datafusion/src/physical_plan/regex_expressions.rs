@@ -62,7 +62,7 @@ pub fn regexp_match<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<Array
 /// used by regexp_replace
 fn regex_replace_posix_groups(replacement: &str) -> String {
     lazy_static! {
-        static ref CAPTURE_GROUPS_RE: Regex = Regex::new("(\\\\)(\\d*)").unwrap();
+        static ref CAPTURE_GROUPS_RE: Regex = Regex::new(r"(\\)(\d*)").unwrap();
     }
     CAPTURE_GROUPS_RE
         .replace_all(replacement, "$${$2}")

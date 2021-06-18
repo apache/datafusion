@@ -1653,7 +1653,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'doesnotexist\\\' for schema {}\")",
+                r#"Plan("Invalid identifier 'doesnotexist' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -1665,7 +1665,7 @@ mod tests {
         let sql = "SELECT age, age FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"#age\\\" at position 0 and \\\"#age\\\" at position 1 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"#age\" at position 0 and \"#age\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -1675,7 +1675,7 @@ mod tests {
         let sql = "SELECT *, age FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"#age\\\" at position 3 and \\\"#age\\\" at position 8 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"#age\" at position 3 and \"#age\" at position 8 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -1714,7 +1714,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'doesnotexist\\\' for schema {}\")",
+                r#"Plan("Invalid identifier 'doesnotexist' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -1727,7 +1727,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'x\\\' for schema {}\")",
+                r#"Plan("Invalid identifier 'x' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -2200,7 +2200,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'doesnotexist\\\' for schema {}\")",
+                r#"Plan("Invalid identifier 'doesnotexist' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -2212,7 +2212,7 @@ mod tests {
         let sql = "SELECT MIN(age), MIN(age) FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"#MIN(age)\\\" at position 0 and \\\"#MIN(age)\\\" at position 1 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"#MIN(age)\" at position 0 and \"#MIN(age)\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -2242,7 +2242,7 @@ mod tests {
         let sql = "SELECT MIN(age) AS a, MIN(age) AS a FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"#MIN(age) AS a\\\" at position 0 and \\\"#MIN(age) AS a\\\" at position 1 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"#MIN(age) AS a\" at position 0 and \"#MIN(age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -2272,7 +2272,7 @@ mod tests {
         let sql = "SELECT state AS a, MIN(age) AS a FROM person GROUP BY state";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"#state AS a\\\" at position 0 and \\\"#MIN(age) AS a\\\" at position 1 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"#state AS a\" at position 0 and \"#MIN(age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -2293,7 +2293,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'doesnotexist\\\' for schema {}\")",
+                r#"Plan("Invalid identifier 'doesnotexist' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -2306,7 +2306,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'doesnotexist\\\' for schema {}\")",
+                r#"Plan("Invalid identifier 'doesnotexist' for schema {}")"#,
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -2318,7 +2318,7 @@ mod tests {
         let sql = "SELECT INTERVAL '100000000000000000 day'";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "NotImplemented(\"Interval field value out of range: \\\"100000000000000000 day\\\"\")",
+            r#"NotImplemented("Interval field value out of range: \"100000000000000000 day\"")"#,
             format!("{:?}", err)
         );
     }
@@ -2328,7 +2328,7 @@ mod tests {
         let sql = "SELECT INTERVAL '1 year 1 day'";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "NotImplemented(\"DF does not support intervals that have both a Year/Month part as well as Days/Hours/Mins/Seconds: \\\"1 year 1 day\\\". Hint: try breaking the interval into two parts, one with Year/Month and the other with Days/Hours/Mins/Seconds - e.g. (NOW() + INTERVAL \\\'1 year\\\') + INTERVAL \\\'1 day\\\'\")",
+            r#"NotImplemented("DF does not support intervals that have both a Year/Month part as well as Days/Hours/Mins/Seconds: \"1 year 1 day\". Hint: try breaking the interval into two parts, one with Year/Month and the other with Days/Hours/Mins/Seconds - e.g. (NOW() + INTERVAL '1 year') + INTERVAL '1 day'")"#,
             format!("{:?}", err)
         );
     }
@@ -2391,7 +2391,7 @@ mod tests {
         let sql = "SELECT state, MIN(age), MIN(age) FROM person GROUP BY state";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"#MIN(age)\\\" at position 1 and \\\"#MIN(age)\\\" at position 2 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"#MIN(age)\" at position 1 and \"#MIN(age)\" at position 2 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -2451,7 +2451,7 @@ mod tests {
             "SELECT ((age + 1) / 2) * (age + 9), MIN(first_name) FROM person GROUP BY age + 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projection references non-aggregate values\")",
+            r#"Plan("Projection references non-aggregate values")"#,
             format!("{:?}", err)
         );
     }
@@ -2462,7 +2462,7 @@ mod tests {
         let sql = "SELECT age, MIN(first_name) FROM person GROUP BY age + 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projection references non-aggregate values\")",
+            r#"Plan("Projection references non-aggregate values")"#,
             format!("{:?}", err)
         );
     }
