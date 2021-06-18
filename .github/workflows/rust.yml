@@ -349,9 +349,7 @@ jobs:
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
 
-          # 2020-11-15: There is a cargo-tarpaulin regression in 0.17.0
-          # see https://github.com/xd009642/tarpaulin/issues/618
-          cargo install --version 0.16.0 cargo-tarpaulin
+          cargo install --version 0.18.0-alpha3 cargo-tarpaulin
           cargo tarpaulin --out Xml
         env:
           CARGO_HOME: "/home/runner/.cargo"
