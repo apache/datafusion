@@ -51,13 +51,13 @@ impl DFSchema {
             if let Some(qualifier) = field.qualifier() {
                 if !qualified_names.insert((qualifier, field.name())) {
                     return Err(DataFusionError::Plan(format!(
-                        "Schema contains duplicate qualified field name '{}'",
+                        "Schema contains duplicate qualified field name ‘{}’",
                         field.qualified_name()
                     )));
                 }
             } else if !unqualified_names.insert(field.name()) {
                 return Err(DataFusionError::Plan(format!(
-                    "Schema contains duplicate unqualified field name '{}'",
+                    "Schema contains duplicate unqualified field name ‘{}’",
                     field.name()
                 )));
             }
@@ -79,7 +79,7 @@ impl DFSchema {
             if unqualified_names.contains(name) {
                 return Err(DataFusionError::Plan(format!(
                     "Schema contains qualified field name '{}.{}' \
-                    and unqualified field name '{}' which would be ambiguous",
+                    and unqualified field name ‘{}’ which would be ambiguous",
                     qualifier, name, name
                 )));
             }
@@ -126,7 +126,7 @@ impl DFSchema {
                 return Ok(i);
             }
         }
-        Err(DataFusionError::Plan(format!("No field named '{}'", name)))
+        Err(DataFusionError::Plan(format!("No field named ‘{}’", name)))
     }
 
     /// Find the field with the given name
@@ -150,10 +150,10 @@ impl DFSchema {
             .filter(|field| field.name() == name)
             .collect();
         match matches.len() {
-            0 => Err(DataFusionError::Plan(format!("No field named '{}'", name))),
+            0 => Err(DataFusionError::Plan(format!("No field named ‘{}’", name))),
             1 => Ok(matches[0].to_owned()),
             _ => Err(DataFusionError::Plan(format!(
-                "Ambiguous reference to field named '{}'",
+                "Ambiguous reference to field named ‘{}’",
                 name
             ))),
         }

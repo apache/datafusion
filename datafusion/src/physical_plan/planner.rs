@@ -1041,7 +1041,7 @@ mod tests {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
-                "Error '{}' did not contain expected error '{}'",
+                "Error ‘{}’ did not contain expected error ‘{}’",
                 e.to_string(),
                 expected_error
             ),
@@ -1086,7 +1086,7 @@ mod tests {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
-                "Error '{}' did not contain expected error '{}'",
+                "Error ‘{}’ did not contain expected error ‘{}’",
                 e.to_string(),
                 expected_error
             ),
@@ -1132,7 +1132,7 @@ mod tests {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
-                "Error '{}' did not contain expected error '{}'",
+                "Error ‘{}’ did not contain expected error ‘{}’",
                 e.to_string(),
                 expected_error
             ),

@@ -443,7 +443,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     )?
                     .build(),
                     (None, None) => Err(DataFusionError::Plan(format!(
-                        "Table or CTE with name '{}' not found",
+                        "Table or CTE with name ‘{}’ not found",
                         name
                     ))),
                 }
@@ -845,7 +845,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Expr::Column(name) => {
                     schema.field_with_unqualified_name(name).map_err(|_| {
                         DataFusionError::Plan(format!(
-                            "Invalid identifier '{}' for schema {}",
+                            "Invalid identifier ‘{}’ for schema {}",
                             name,
                             schema.to_string()
                         ))
@@ -1209,7 +1209,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Ok(Expr::AggregateUDF { fun: fm, args })
                         }
                         _ => Err(DataFusionError::Plan(format!(
-                            "Invalid function '{}'",
+                            "Invalid function ‘{}’",
                             name
                         ))),
                     },
@@ -1486,7 +1486,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .rev()
             .zip(columns)
             .map(|(ident, column_name)| {
-                format!(r#"{} = '{}'"#, column_name, ident.to_string())
+                format!(r#"{} = ‘{}’"#, column_name, ident.to_string())
             })
             .collect::<Vec<_>>()
             .join(" AND ");
@@ -1653,7 +1653,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'doesnotexist\\\' for schema {}\")",
+                "Plan(\"Invalid identifier ‘doesnotexist’ for schema {}\")",
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -1714,7 +1714,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'doesnotexist\\\' for schema {}\")",
+                "Plan(\"Invalid identifier ‘doesnotexist’ for schema {}\")",
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -1727,7 +1727,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'x\\\' for schema {}\")",
+                "Plan(\"Invalid identifier ‘x’ for schema {}\")",
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -2200,7 +2200,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'doesnotexist\\\' for schema {}\")",
+                "Plan(\"Invalid identifier ‘doesnotexist’ for schema {}\")",
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -2293,7 +2293,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'doesnotexist\\\' for schema {}\")",
+                "Plan(\"Invalid identifier ‘doesnotexist’ for schema {}\")",
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)
@@ -2306,7 +2306,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             format!(
-                "Plan(\"Invalid identifier \\\'doesnotexist\\\' for schema {}\")",
+                "Plan(\"Invalid identifier ‘doesnotexist’ for schema {}\")",
                 PERSON_COLUMN_NAMES
             ),
             format!("{:?}", err)

@@ -428,7 +428,7 @@ impl ExecutionContext {
                 )))
             }
             _ => Err(DataFusionError::Plan(format!(
-                "No table named '{}'",
+                "No table named ‘{}’",
                 table_ref.table()
             ))),
         }
@@ -3248,7 +3248,7 @@ mod tests {
                   ts TIMESTAMP
               )
               STORED AS CSV
-              LOCATION '{}'
+              LOCATION ‘{}’
               ",
             file_path.to_str().expect("path is utf8")
         );

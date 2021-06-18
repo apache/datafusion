@@ -214,14 +214,14 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
             opt.concurrency,
         )?;
         if opt.mem_table {
-            println!("Loading table '{}' into memory", table);
+            println!("Loading table ‘{}’ into memory", table);
             let start = Instant::now();
 
             let memtable =
                 MemTable::load(table_provider, opt.batch_size, Some(opt.partitions))
                     .await?;
             println!(
-                "Loaded table '{}' into memory in {} ms",
+                "Loaded table ‘{}’ into memory in {} ms",
                 table,
                 start.elapsed().as_millis()
             );
@@ -288,7 +288,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
                     .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))?;
             }
             other => {
-                unimplemented!("Invalid file format '{}'", other);
+                unimplemented!("Invalid file format ‘{}’", other);
             }
         }
     }
@@ -400,7 +400,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
         let output_path = output_path.to_str().unwrap().to_owned();
 
         println!(
-            "Converting '{}' to {} files in directory '{}'",
+            "Converting ‘{}’ to {} files in directory ‘{}’",
             &input_path, &opt.file_format, &output_path
         );
         match opt.file_format.as_str() {
@@ -470,7 +470,7 @@ fn get_table(
             Ok(Arc::new(ParquetTable::try_new(&path, max_concurrency)?))
         }
         other => {
-            unimplemented!("Invalid file format '{}'", other);
+            unimplemented!("Invalid file format ‘{}’", other);
         }
     }
 }

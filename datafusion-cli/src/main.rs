@@ -209,7 +209,7 @@ fn is_valid_file(dir: String) -> std::result::Result<(), String> {
     if Path::new(&dir).is_file() {
         Ok(())
     } else {
-        Err(format!("Invalid file '{}'", dir))
+        Err(format!("Invalid file ‘{}’", dir))
     }
 }
 
@@ -217,14 +217,14 @@ fn is_valid_data_dir(dir: String) -> std::result::Result<(), String> {
     if Path::new(&dir).is_dir() {
         Ok(())
     } else {
-        Err(format!("Invalid data directory '{}'", dir))
+        Err(format!("Invalid data directory ‘{}’", dir))
     }
 }
 
 fn is_valid_batch_size(size: String) -> std::result::Result<(), String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(()),
-        _ => Err(format!("Invalid batch size '{}'", size)),
+        _ => Err(format!("Invalid batch size ‘{}’", size)),
     }
 }
 

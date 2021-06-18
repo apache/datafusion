@@ -315,7 +315,7 @@ mod tests {
         match DFParser::parse_sql(sql) {
             Ok(statements) => {
                 panic!(
-                    "Expected parse error for '{}', but was successful: {:?}",
+                    "Expected parse error for ‘{}’, but was successful: {:?}",
                     sql, statements
                 );
             }
@@ -323,7 +323,7 @@ mod tests {
                 let error_message = e.to_string();
                 assert!(
                     error_message.contains(expected_error),
-                    "Expected error '{}' not found in actual error '{}'",
+                    "Expected error ‘{}’ not found in actual error ‘{}’",
                     expected_error,
                     error_message
                 );

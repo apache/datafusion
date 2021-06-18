@@ -150,7 +150,7 @@ fn string_to_timestamp_nanos(s: &str) -> Result<i64> {
     // match. Ths any of the specific error messages is likely to be
     // be more confusing than helpful
     Err(DataFusionError::Execution(format!(
-        "Error parsing '{}' as timestamp",
+        "Error parsing ‘{}’ as timestamp",
         s
     )))
 }
@@ -162,7 +162,7 @@ fn naive_datetime_to_timestamp(s: &str, datetime: NaiveDateTime) -> Result<i64> 
 
     match l.from_local_datetime(&datetime) {
         LocalResult::None => Err(DataFusionError::Execution(format!(
-            "Error parsing '{}' as timestamp: local time representation is invalid",
+            "Error parsing ‘{}’ as timestamp: local time representation is invalid",
             s
         ))),
         LocalResult::Single(local_datetime) => {
@@ -441,7 +441,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         "hour" => extract_date_part!(array, temporal::hour),
         "year" => extract_date_part!(array, temporal::year),
         _ => Err(DataFusionError::Execution(format!(
-            "Date part '{}' not supported",
+            "Date part ‘{}’ not supported",
             date_part
         ))),
     }?;
@@ -565,7 +565,7 @@ mod tests {
             Err(e) => {
                 assert!(
                     e.to_string().contains(expected_err),
-                    "Can not find expected error '{}'. Actual error '{}'",
+                    "Can not find expected error ‘{}’. Actual error ‘{}’",
                     expected_err,
                     e
                 );

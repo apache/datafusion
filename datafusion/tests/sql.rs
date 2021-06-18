@@ -1731,7 +1731,7 @@ async fn csv_explain_plans() {
 
     // Logical plan
     // Create plan
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for ‘{}’", sql);
     let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
     //
@@ -1806,7 +1806,7 @@ async fn csv_explain_plans() {
 
     // Optimized logical plan
     //
-    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Optimizing logical plan for ‘{}’: {:?}", sql, plan);
     let plan = ctx.optimize(&plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
@@ -1881,21 +1881,21 @@ async fn csv_explain_plans() {
 
     // Physical plan
     // Create plan
-    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Creating physical plan for ‘{}’: {:?}", sql, plan);
     let plan = ctx.create_physical_plan(&plan).expect(&msg);
     //
     // Execute plan
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Executing physical plan for ‘{}’: {:?}", sql, plan);
     let results = collect(plan).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
     // Since the plan contains path that are environmentally dependant (e.g. full path of the test file), only verify important content
-    assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
-    assert!(actual.contains("Projection: #c1"), "Actual: '{}'", actual);
+    assert!(actual.contains("logical_plan"), "Actual: ‘{}’", actual);
+    assert!(actual.contains("Projection: #c1"), "Actual: ‘{}’", actual);
     assert!(
         actual.contains("Filter: #c2 Gt Int64(10)"),
-        "Actual: '{}'",
+        "Actual: ‘{}’",
         actual
     );
 }
@@ -1913,9 +1913,9 @@ async fn csv_explain_verbose() {
     // Don't actually test the contents of the debuging output (as
     // that may change and keeping this test updated will be a
     // pain). Instead just check for a few key pieces.
-    assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
-    assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
-    assert!(actual.contains("#c2 Gt Int64(10)"), "Actual: '{}'", actual);
+    assert!(actual.contains("logical_plan"), "Actual: ‘{}’", actual);
+    assert!(actual.contains("physical_plan"), "Actual: ‘{}’", actual);
+    assert!(actual.contains("#c2 Gt Int64(10)"), "Actual: ‘{}’", actual);
 }
 
 #[tokio::test]
@@ -1928,7 +1928,7 @@ async fn csv_explain_verbose_plans() {
 
     // Logical plan
     // Create plan
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for ‘{}’", sql);
     let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
     //
@@ -2004,7 +2004,7 @@ async fn csv_explain_verbose_plans() {
 
     // Optimized logical plan
     //
-    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Optimizing logical plan for ‘{}’: {:?}", sql, plan);
     let plan = ctx.optimize(&plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
@@ -2079,11 +2079,11 @@ async fn csv_explain_verbose_plans() {
 
     // Physical plan
     // Create plan
-    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Creating physical plan for ‘{}’: {:?}", sql, plan);
     let plan = ctx.create_physical_plan(&plan).expect(&msg);
     //
     // Execute plan
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Executing physical plan for ‘{}’: {:?}", sql, plan);
     let results = collect(plan).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
@@ -2091,18 +2091,18 @@ async fn csv_explain_verbose_plans() {
     // Since the plan contains path that are environmentally dependant(e.g. full path of the test file), only verify important content
     assert!(
         actual.contains("logical_plan after projection_push_down"),
-        "Actual: '{}'",
+        "Actual: ‘{}’",
         actual
     );
-    assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
+    assert!(actual.contains("physical_plan"), "Actual: ‘{}’", actual);
     assert!(
         actual.contains("FilterExec: CAST(c2 AS Int64) > 10"),
-        "Actual: '{}'",
+        "Actual: ‘{}’",
         actual
     );
     assert!(
         actual.contains("ProjectionExec: expr=[c1]"),
-        "Actual: '{}'",
+        "Actual: ‘{}’",
         actual
     );
 }
@@ -2204,18 +2204,18 @@ fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
 /// Execute query and return result set as 2-d table of Vecs
 /// `result[row][column]`
 async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for ‘{}’", sql);
     let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
 
-    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Optimizing logical plan for ‘{}’: {:?}", sql, plan);
     let plan = ctx.optimize(&plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
 
-    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Creating physical plan for ‘{}’: {:?}", sql, plan);
     let plan = ctx.create_physical_plan(&plan).expect(&msg);
 
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Executing physical plan for ‘{}’: {:?}", sql, plan);
     let results = collect(plan).await.expect(&msg);
 
     assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
@@ -3403,13 +3403,13 @@ async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
     let ctx = ExecutionContext::new();
     let sql = "SELECT NOW(), NOW() as t2";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for ‘{}’", sql);
     let plan = ctx.create_logical_plan(sql).expect(&msg);
 
-    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Creating physical plan for ‘{}’: {:?}", sql, plan);
     let plan = ctx.create_physical_plan(&plan).expect(&msg);
 
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Executing physical plan for ‘{}’: {:?}", sql, plan);
     let res = collect(plan).await.expect(&msg);
     let actual = result_vec(&res);
 
