@@ -642,9 +642,8 @@ pub struct ExecutionConfig {
     pub repartition_aggregations: bool,
 }
 
-impl ExecutionConfig {
-    /// Create an execution config with default setting
-    pub fn new() -> Self {
+impl Default for ExecutionConfig {
+    fn default() -> Self {
         Self {
             concurrency: num_cpus::get(),
             batch_size: 8192,
@@ -670,6 +669,13 @@ impl ExecutionConfig {
             repartition_joins: true,
             repartition_aggregations: true,
         }
+    }
+}
+
+impl ExecutionConfig {
+    /// Create an execution config with default setting
+    pub fn new() -> Self {
+        Default::default()
     }
 
     /// Customize max_concurrency
@@ -1125,7 +1131,7 @@ mod tests {
         let ctx = create_ctx(&tmp_dir, 1)?;
 
         let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
-        assert_eq!(schema.field_with_name("c1")?.is_nullable(), false);
+        assert!(!schema.field_with_name("c1")?.is_nullable());
 
         let plan = LogicalPlanBuilder::scan_empty("", &schema, None)?
             .project(vec![col("c1")])?
@@ -1133,10 +1139,7 @@ mod tests {
 
         let plan = ctx.optimize(&plan)?;
         let physical_plan = ctx.create_physical_plan(&Arc::new(plan))?;
-        assert_eq!(
-            physical_plan.schema().field_with_name("c1")?.is_nullable(),
-            false
-        );
+        assert!(!physical_plan.schema().field_with_name("c1")?.is_nullable());
         Ok(())
     }
 

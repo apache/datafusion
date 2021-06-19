@@ -551,7 +551,7 @@ mod tests {
                 stringified_plans,
                 ..
             } => {
-                assert_eq!(*verbose, true);
+                assert!(*verbose);
 
                 let expected_stringified_plans = vec![
                     StringifiedPlan::new(PlanType::LogicalPlan, "..."),

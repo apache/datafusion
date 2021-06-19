@@ -27,7 +27,11 @@ extern crate datafusion;
 use arrow::{array::*, datatypes::TimeUnit};
 use arrow::{datatypes::Int32Type, datatypes::Int64Type, record_batch::RecordBatch};
 use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
+    datatypes::{
+        ArrowNativeType, ArrowPrimitiveType, ArrowTimestampType, DataType, Field, Schema,
+        SchemaRef, TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampNanosecondType, TimestampSecondType,
+    },
     util::display::array_value_to_string,
 };
 
@@ -1018,6 +1022,188 @@ async fn csv_query_cast_literal() -> Result<()> {
     let expected = vec![
         vec!["0.9294097332465232", "1"],
         vec!["0.3114712539863804", "1"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_millis() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema.clone(),
+        vec![Arc::new(Int64Array::from(vec![
+            1235865600000,
+            1235865660000,
+            1238544000000,
+        ]))],
+    )?;
+    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let sql = "SELECT to_timestamp_millis(ts) FROM t1 LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2009-03-01 00:00:00"],
+        vec!["2009-03-01 00:01:00"],
+        vec!["2009-04-01 00:00:00"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_micros() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema.clone(),
+        vec![Arc::new(Int64Array::from(vec![
+            1235865600000000,
+            1235865660000000,
+            1238544000000000,
+        ]))],
+    )?;
+    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let sql = "SELECT to_timestamp_micros(ts) FROM t1 LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2009-03-01 00:00:00"],
+        vec!["2009-03-01 00:01:00"],
+        vec!["2009-04-01 00:00:00"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_seconds() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema.clone(),
+        vec![Arc::new(Int64Array::from(vec![
+            1235865600, 1235865660, 1238544000,
+        ]))],
+    )?;
+    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let sql = "SELECT to_timestamp_seconds(ts) FROM t1 LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2009-03-01 00:00:00"],
+        vec!["2009-03-01 00:01:00"],
+        vec!["2009-04-01 00:00:00"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
+
+    // Original column is nanos, convert to millis and check timestamp
+    let sql = "SELECT to_timestamp_millis(ts) FROM ts_data LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190"],
+        vec!["2020-09-08 12:42:29.190"],
+        vec!["2020-09-08 11:42:29.190"],
+    ];
+    assert_eq!(expected, actual);
+
+    let sql = "SELECT to_timestamp_micros(ts) FROM ts_data LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190855"],
+        vec!["2020-09-08 12:42:29.190855"],
+        vec!["2020-09-08 11:42:29.190855"],
+    ];
+    assert_eq!(expected, actual);
+
+    let sql = "SELECT to_timestamp_seconds(ts) FROM ts_data LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29"],
+        vec!["2020-09-08 12:42:29"],
+        vec!["2020-09-08 11:42:29"],
+    ];
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("ts_secs", make_timestamp_table::<TimestampSecondType>()?)?;
+
+    // Original column is seconds, convert to millis and check timestamp
+    let sql = "SELECT to_timestamp_millis(ts) FROM ts_secs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29"],
+        vec!["2020-09-08 12:42:29"],
+        vec!["2020-09-08 11:42:29"],
+    ];
+    assert_eq!(expected, actual);
+
+    // Original column is seconds, convert to micros and check timestamp
+    let sql = "SELECT to_timestamp_micros(ts) FROM ts_secs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
+
+    // to nanos
+    let sql = "SELECT to_timestamp(ts) FROM ts_secs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_micros_to_others() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table(
+        "ts_micros",
+        make_timestamp_table::<TimestampMicrosecondType>()?,
+    )?;
+
+    // Original column is micros, convert to millis and check timestamp
+    let sql = "SELECT to_timestamp_millis(ts) FROM ts_micros LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190"],
+        vec!["2020-09-08 12:42:29.190"],
+        vec!["2020-09-08 11:42:29.190"],
+    ];
+    assert_eq!(expected, actual);
+
+    // Original column is micros, convert to seconds and check timestamp
+    let sql = "SELECT to_timestamp_seconds(ts) FROM ts_micros LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29"],
+        vec!["2020-09-08 12:42:29"],
+        vec!["2020-09-08 11:42:29"],
+    ];
+    assert_eq!(expected, actual);
+
+    // Original column is micros, convert to nanos and check timestamp
+    let sql = "SELECT to_timestamp(ts) FROM ts_micros LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190855"],
+        vec!["2020-09-08 12:42:29.190855"],
+        vec!["2020-09-08 11:42:29.190855"],
     ];
     assert_eq!(expected, actual);
     Ok(())
@@ -2439,17 +2625,33 @@ async fn like() -> Result<()> {
     Ok(())
 }
 
-fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
+fn make_timestamp_table<A>() -> Result<Arc<MemTable>>
+where
+    A: ArrowTimestampType,
+{
     let schema = Arc::new(Schema::new(vec![
-        Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), false),
+        Field::new("ts", DataType::Timestamp(A::get_time_unit(), None), false),
         Field::new("value", DataType::Int32, true),
     ]));
 
-    let mut builder = TimestampNanosecondArray::builder(3);
+    let mut builder = PrimitiveBuilder::<A>::new(3);
 
-    builder.append_value(1599572549190855000)?; // 2020-09-08T13:42:29.190855+00:00
-    builder.append_value(1599568949190855000)?; // 2020-09-08T12:42:29.190855+00:00
-    builder.append_value(1599565349190855000)?; // 2020-09-08T11:42:29.190855+00:00
+    let nanotimestamps = vec![
+        1599572549190855000i64, // 2020-09-08T13:42:29.190855+00:00
+        1599568949190855000,    // 2020-09-08T12:42:29.190855+00:00
+        1599565349190855000,    //2020-09-08T11:42:29.190855+00:00
+    ]; // 2020-09-08T11:42:29.190855+00:00
+    let divisor = match A::get_time_unit() {
+        TimeUnit::Nanosecond => 1,
+        TimeUnit::Microsecond => 1000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Second => 1_000_000_000,
+    };
+    for ts in nanotimestamps {
+        builder.append_value(
+            <A as ArrowPrimitiveType>::Native::from_i64(ts / divisor).unwrap(),
+        )?;
+    }
 
     let data = RecordBatch::try_new(
         schema.clone(),
@@ -2462,12 +2664,61 @@ fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
     Ok(Arc::new(table))
 }
 
+fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
+    make_timestamp_table::<TimestampNanosecondType>()
+}
+
 #[tokio::test]
 async fn to_timestamp() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp('2020-09-08T12:00:00+00:00')";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["2"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_timestamp_millis() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table(
+        "ts_data",
+        make_timestamp_table::<TimestampMillisecondType>()?,
+    )?;
+
+    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_millis('2020-09-08T12:00:00+00:00')";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["2"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_timestamp_micros() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table(
+        "ts_data",
+        make_timestamp_table::<TimestampMicrosecondType>()?,
+    )?;
+
+    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_micros('2020-09-08T12:00:00+00:00')";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["2"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_timestamp_seconds() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
+
+    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')";
     let actual = execute(&mut ctx, sql).await;
 
     let expected = vec![vec!["2"]];

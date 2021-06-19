@@ -255,12 +255,15 @@ impl RepartitionExec {
         let mut counter = 0;
         let hashes_buf = &mut vec![];
 
-        loop {
+        // While there are still outputs to send to, keep
+        // pulling inputs
+        while !txs.is_empty() {
             // fetch the next batch
             let now = Instant::now();
             let result = stream.next().await;
             metrics.fetch_nanos.add_elapsed(now);
 
+            // Input is done
             if result.is_none() {
                 break;
             }
@@ -270,9 +273,13 @@ impl RepartitionExec {
                 Partitioning::RoundRobinBatch(_) => {
                     let now = Instant::now();
                     let output_partition = counter % num_output_partitions;
-                    let tx = txs.get_mut(&output_partition).unwrap();
-                    tx.send(Some(result))
-                        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+                    // if there is still a receiver, send to it
+                    if let Some(tx) = txs.get_mut(&output_partition) {
+                        if tx.send(Some(result)).is_err() {
+                            // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                            txs.remove(&output_partition);
+                        }
+                    }
                     metrics.send_nanos.add_elapsed(now);
                 }
                 Partitioning::Hash(exprs, _) => {
@@ -315,9 +322,13 @@ impl RepartitionExec {
                             RecordBatch::try_new(input_batch.schema(), columns);
                         metrics.repart_nanos.add_elapsed(now);
                         let now = Instant::now();
-                        let tx = txs.get_mut(&num_output_partition).unwrap();
-                        tx.send(Some(output_batch))
-                            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+                        // if there is still a receiver, send to it
+                        if let Some(tx) = txs.get_mut(&num_output_partition) {
+                            if tx.send(Some(output_batch)).is_err() {
+                                // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                                txs.remove(&num_output_partition);
+                            }
+                        }
                         metrics.send_nanos.add_elapsed(now);
                     }
                 }
@@ -425,7 +436,7 @@ mod tests {
     use crate::{
         assert_batches_sorted_eq,
         physical_plan::memory::MemoryExec,
-        test::exec::{ErrorExec, MockExec},
+        test::exec::{BarrierExec, ErrorExec, MockExec},
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -722,5 +733,106 @@ mod tests {
             .unwrap();
 
         assert_batches_sorted_eq!(&expected, &batches);
+    }
+
+    #[tokio::test]
+    async fn repartition_with_dropping_output_stream() {
+        #[derive(Debug)]
+        struct Case<'a> {
+            partitioning: Partitioning,
+            expected: Vec<&'a str>,
+        }
+
+        let cases = vec![
+            Case {
+                partitioning: Partitioning::RoundRobinBatch(2),
+                expected: vec![
+                    "+------------------+",
+                    "| my_awesome_field |",
+                    "+------------------+",
+                    "| baz              |",
+                    "| frob             |",
+                    "| gaz              |",
+                    "| grob             |",
+                    "+------------------+",
+                ],
+            },
+            Case {
+                partitioning: Partitioning::Hash(
+                    vec![Arc::new(crate::physical_plan::expressions::Column::new(
+                        "my_awesome_field",
+                    ))],
+                    2,
+                ),
+                expected: vec![
+                    "+------------------+",
+                    "| my_awesome_field |",
+                    "+------------------+",
+                    "| frob             |",
+                    "+------------------+",
+                ],
+            },
+        ];
+
+        for case in cases {
+            println!("Running case {:?}", case.partitioning);
+
+            // The barrier exec waits to be pinged
+            // requires the input to wait at least once)
+            let input = Arc::new(make_barrier_exec());
+
+            // partition into two output streams
+            let exec =
+                RepartitionExec::try_new(input.clone(), case.partitioning).unwrap();
+
+            let output_stream0 = exec.execute(0).await.unwrap();
+            let output_stream1 = exec.execute(1).await.unwrap();
+
+            // now, purposely drop output stream 0
+            // *before* any outputs are produced
+            std::mem::drop(output_stream0);
+
+            // Now, start sending input
+            input.wait().await;
+
+            // output stream 1 should *not* error and have one of the input batches
+            let batches = crate::physical_plan::common::collect(output_stream1)
+                .await
+                .unwrap();
+
+            assert_batches_sorted_eq!(&case.expected, &batches);
+        }
+    }
+
+    /// Create a BarrierExec that returns two partitions of two batches each
+    fn make_barrier_exec() -> BarrierExec {
+        let batch1 = RecordBatch::try_from_iter(vec![(
+            "my_awesome_field",
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
+        )])
+        .unwrap();
+
+        let batch2 = RecordBatch::try_from_iter(vec![(
+            "my_awesome_field",
+            Arc::new(StringArray::from(vec!["frob", "baz"])) as ArrayRef,
+        )])
+        .unwrap();
+
+        let batch3 = RecordBatch::try_from_iter(vec![(
+            "my_awesome_field",
+            Arc::new(StringArray::from(vec!["goo", "gar"])) as ArrayRef,
+        )])
+        .unwrap();
+
+        let batch4 = RecordBatch::try_from_iter(vec![(
+            "my_awesome_field",
+            Arc::new(StringArray::from(vec!["grob", "gaz"])) as ArrayRef,
+        )])
+        .unwrap();
+
+        // The barrier exec waits to be pinged
+        // requires the input to wait at least once)
+        let schema = batch1.schema();
+        BarrierExec::new(vec![vec![batch1, batch2], vec![batch3, batch4]], schema)
     }
 }

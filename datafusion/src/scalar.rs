@@ -900,7 +900,10 @@ impl TryFrom<ScalarValue> for i64 {
     fn try_from(value: ScalarValue) -> Result<Self> {
         match value {
             ScalarValue::Int64(Some(inner_value))
-            | ScalarValue::TimestampNanosecond(Some(inner_value)) => Ok(inner_value),
+            | ScalarValue::TimestampNanosecond(Some(inner_value))
+            | ScalarValue::TimestampMicrosecond(Some(inner_value))
+            | ScalarValue::TimestampMillisecond(Some(inner_value))
+            | ScalarValue::TimestampSecond(Some(inner_value)) => Ok(inner_value),
             _ => Err(DataFusionError::Internal(format!(
                 "Cannot convert {:?} to {}",
                 value,
@@ -1123,7 +1126,7 @@ mod tests {
         let array = value.to_array();
         let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
         assert_eq!(array.len(), 1);
-        assert_eq!(false, array.is_null(0));
+        assert!(!array.is_null(0));
         assert_eq!(array.value(0), 13);
 
         let value = ScalarValue::UInt64(None);
@@ -1139,7 +1142,7 @@ mod tests {
         let array = value.to_array();
         let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
         assert_eq!(array.len(), 1);
-        assert_eq!(false, array.is_null(0));
+        assert!(!array.is_null(0));
         assert_eq!(array.value(0), 13);
 
         let value = ScalarValue::UInt32(None);

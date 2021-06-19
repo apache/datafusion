@@ -248,12 +248,14 @@ where
 }
 
 impl ToDFSchema for Schema {
+    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema> {
         DFSchema::try_from(self)
     }
 }
 
 impl ToDFSchema for SchemaRef {
+    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema> {
         // Attempt to use the Schema directly if there are no other
         // references, otherwise clone
