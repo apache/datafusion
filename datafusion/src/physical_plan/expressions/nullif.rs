@@ -21,11 +21,7 @@ use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::scalar::ScalarValue;
 use arrow::array::Array;
-use arrow::array::{
-    ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, StringArray, TimestampNanosecondArray,
-    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-};
+use arrow::array::*;
 use arrow::compute::kernels::boolean::nullif;
 use arrow::compute::kernels::comparison::{eq, eq_scalar, eq_utf8, eq_utf8_scalar};
 use arrow::datatypes::{DataType, TimeUnit};
