@@ -33,6 +33,13 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 - `cargo test` to test
 - etc.
 
+Testing setup:
+
+- `git submodule init`
+- `git submodule update`
+- `export PARQUET_TEST_DATA=parquet_testing/`
+- `export ARROW_TEST_DATA=testing/data/`
+
 ## How to add a new scalar function
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
@@ -47,7 +54,7 @@ Below is a checklist of what you need to do to add a new scalar function to Data
   - a new entry to `FromStr` with the name of the function as called by SQL
   - a new line in `return_type` with the expected return type of the function, given an incoming type
   - a new line in `signature` with the signature of the function (number and types of its arguments)
-  - a new line in `create_physical_expr` mapping the built-in to the implementation
+  - a new line in `create_physical_expr`/`create_physical_fun` mapping the built-in to the implementation
   - tests to the function.
 - In [tests/sql.rs](datafusion/tests/sql.rs), add a new test where the function is called through SQL against well known data and returns the expected result.
 - In [src/logical_plan/expr](datafusion/src/logical_plan/expr.rs), add:

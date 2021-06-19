@@ -197,6 +197,10 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
   - [ ] Basic date functions
   - [ ] Basic time functions
   - [x] Basic timestamp functions
+    - [x] [to_timestamp](docs/user-guide/book/sql/datafusion-functions.html#to_timestamp)
+    - [x] [to_timestamp_millis](docs/user-guide/book/sql/datafusion-functions.html#to_timestamp_millis)
+    - [x] [to_timestamp_micros](docs/user-guide/book/sql/datafusion-functions.html#to_timestamp_micros)
+    - [x] [to_timestamp_seconds](docs/user-guide/book/sql/datafusion-functions.html#to_timestamp_seconds)
 - nested functions
   - [x] Array of columns
 - [x] Schema Queries
@@ -320,31 +324,31 @@ execution. The SQL types from
 [sqlparser-rs](https://github.com/ballista-compute/sqlparser-rs/blob/main/src/ast/data_type.rs#L57)
 are mapped to Arrow types according to the following table
 
-| SQL Data Type | Arrow DataType                  |
-| ------------- | ------------------------------- |
-| `CHAR`        | `Utf8`                          |
-| `VARCHAR`     | `Utf8`                          |
-| `UUID`        | _Not yet supported_             |
-| `CLOB`        | _Not yet supported_             |
-| `BINARY`      | _Not yet supported_             |
-| `VARBINARY`   | _Not yet supported_             |
-| `DECIMAL`     | `Float64`                       |
-| `FLOAT`       | `Float32`                       |
-| `SMALLINT`    | `Int16`                         |
-| `INT`         | `Int32`                         |
-| `BIGINT`      | `Int64`                         |
-| `REAL`        | `Float64`                       |
-| `DOUBLE`      | `Float64`                       |
-| `BOOLEAN`     | `Boolean`                       |
-| `DATE`        | `Date32`                        |
-| `TIME`        | `Time64(TimeUnit::Millisecond)` |
-| `TIMESTAMP`   | `Date64`                        |
-| `INTERVAL`    | _Not yet supported_             |
-| `REGCLASS`    | _Not yet supported_             |
-| `TEXT`        | _Not yet supported_             |
-| `BYTEA`       | _Not yet supported_             |
-| `CUSTOM`      | _Not yet supported_             |
-| `ARRAY`       | _Not yet supported_             |
+| SQL Data Type | Arrow DataType                    |
+| ------------- | --------------------------------- |
+| `CHAR`        | `Utf8`                            |
+| `VARCHAR`     | `Utf8`                            |
+| `UUID`        | _Not yet supported_               |
+| `CLOB`        | _Not yet supported_               |
+| `BINARY`      | _Not yet supported_               |
+| `VARBINARY`   | _Not yet supported_               |
+| `DECIMAL`     | `Float64`                         |
+| `FLOAT`       | `Float32`                         |
+| `SMALLINT`    | `Int16`                           |
+| `INT`         | `Int32`                           |
+| `BIGINT`      | `Int64`                           |
+| `REAL`        | `Float64`                         |
+| `DOUBLE`      | `Float64`                         |
+| `BOOLEAN`     | `Boolean`                         |
+| `DATE`        | `Date32`                          |
+| `TIME`        | `Time64(TimeUnit::Millisecond)`   |
+| `TIMESTAMP`   | `Timestamp(TimeUnit::Nanosecond)` |
+| `INTERVAL`    | _Not yet supported_               |
+| `REGCLASS`    | _Not yet supported_               |
+| `TEXT`        | _Not yet supported_               |
+| `BYTEA`       | _Not yet supported_               |
+| `CUSTOM`      | _Not yet supported_               |
+| `ARRAY`       | _Not yet supported_               |
 
 # Architecture Overview
 

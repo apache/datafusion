@@ -900,7 +900,10 @@ impl TryFrom<ScalarValue> for i64 {
     fn try_from(value: ScalarValue) -> Result<Self> {
         match value {
             ScalarValue::Int64(Some(inner_value))
-            | ScalarValue::TimestampNanosecond(Some(inner_value)) => Ok(inner_value),
+            | ScalarValue::TimestampNanosecond(Some(inner_value))
+            | ScalarValue::TimestampMicrosecond(Some(inner_value))
+            | ScalarValue::TimestampMillisecond(Some(inner_value))
+            | ScalarValue::TimestampSecond(Some(inner_value)) => Ok(inner_value),
             _ => Err(DataFusionError::Internal(format!(
                 "Cannot convert {:?} to {}",
                 value,
