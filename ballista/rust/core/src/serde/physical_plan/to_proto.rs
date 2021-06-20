@@ -26,6 +26,7 @@ use std::{
     sync::Arc,
 };
 
+use datafusion::logical_plan::{JoinConstraint, JoinType};
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::csv::CsvExec;
 use datafusion::physical_plan::expressions::{
@@ -35,7 +36,6 @@ use datafusion::physical_plan::expressions::{CastExpr, TryCastExpr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::AggregateMode;
 use datafusion::physical_plan::hash_join::HashJoinExec;
-use datafusion::physical_plan::hash_utils::JoinType;
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::parquet::ParquetExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -135,14 +135,9 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                     }),
                 })
                 .collect();
-            let join_type = match exec.join_type() {
-                JoinType::Inner => protobuf::JoinType::Inner,
-                JoinType::Left => protobuf::JoinType::Left,
-                JoinType::Right => protobuf::JoinType::Right,
-                JoinType::Full => protobuf::JoinType::Full,
-                JoinType::Semi => protobuf::JoinType::Semi,
-                JoinType::Anti => protobuf::JoinType::Anti,
-            };
+            let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+            let join_constraint: protobuf::JoinConstraint = exec.join_constraint().into();
+
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
                     protobuf::HashJoinExecNode {
@@ -150,6 +145,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                         right: Some(Box::new(right)),
                         on,
                         join_type: join_type.into(),
+                        join_constraint: join_constraint.into(),
                     },
                 ))),
             })

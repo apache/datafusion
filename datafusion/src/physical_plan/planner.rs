@@ -42,7 +42,6 @@ use crate::physical_plan::{hash_utils, Partitioning};
 use crate::physical_plan::{
     AggregateExpr, ExecutionPlan, PhysicalExpr, PhysicalPlanner, WindowExpr,
 };
-use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::sql::utils::generate_sort_key;
 use crate::variable::VarType;
@@ -564,20 +563,13 @@ impl DefaultPhysicalPlanner {
                 right,
                 on: keys,
                 join_type,
+                join_constraint,
                 ..
             } => {
                 let left_df_schema = left.schema();
                 let physical_left = self.create_initial_plan(left, ctx_state)?;
                 let right_df_schema = right.schema();
                 let physical_right = self.create_initial_plan(right, ctx_state)?;
-                let physical_join_type = match join_type {
-                    JoinType::Inner => hash_utils::JoinType::Inner,
-                    JoinType::Left => hash_utils::JoinType::Left,
-                    JoinType::Right => hash_utils::JoinType::Right,
-                    JoinType::Full => hash_utils::JoinType::Full,
-                    JoinType::Semi => hash_utils::JoinType::Semi,
-                    JoinType::Anti => hash_utils::JoinType::Anti,
-                };
                 let join_on = keys
                     .iter()
                     .map(|(l, r)| {
@@ -611,7 +603,8 @@ impl DefaultPhysicalPlanner {
                             Partitioning::Hash(right_expr, ctx_state.config.concurrency),
                         )?),
                         join_on,
-                        &physical_join_type,
+                        join_type,
+                        *join_constraint,
                         PartitionMode::Partitioned,
                     )?))
                 } else {
@@ -619,7 +612,8 @@ impl DefaultPhysicalPlanner {
                         physical_left,
                         physical_right,
                         join_on,
-                        &physical_join_type,
+                        join_type,
+                        *join_constraint,
                         PartitionMode::CollectLeft,
                     )?))
                 }
@@ -1395,7 +1389,7 @@ mod tests {
         let expected_error: &str = "Error during planning: \
         Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
         LogicalPlan schema: DFSchema { fields: [\
-            DFField { qualifier: None, field: Field { \
+            DFField { qualifier: None, shared_qualifiers: None, field: Field { \
                 name: \"a\", \
                 data_type: Int32, \
                 nullable: false, \

@@ -96,12 +96,21 @@ fn get_join_predicates<'a>(
     let left_columns = &left
         .fields()
         .iter()
-        .map(|f| f.qualified_column())
+        .map(|f| {
+            std::iter::once(f.qualified_column())
+                // we need to push down filter using unqualified column as well
+                .chain(std::iter::once(f.unqualified_column()))
+        })
+        .flatten()
         .collect::<HashSet<_>>();
     let right_columns = &right
         .fields()
         .iter()
-        .map(|f| f.qualified_column())
+        .map(|f| {
+            std::iter::once(f.qualified_column())
+                .chain(std::iter::once(f.unqualified_column()))
+        })
+        .flatten()
         .collect::<HashSet<_>>();
 
     let filters = state
@@ -882,15 +891,15 @@ mod tests {
     #[test]
     fn filter_join_on_common_independent() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan.clone()).build()?;
-        let right = LogicalPlanBuilder::from(table_scan)
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
             .project(vec![col("a")])?
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
-            .join(
+            .join_using(
                 &right,
                 JoinType::Inner,
-                vec![Column::from_name("a".to_string())],
                 vec![Column::from_name("a".to_string())],
             )?
             .filter(col("a").lt_eq(lit(1i64)))?
@@ -900,21 +909,21 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "\
-            Filter: #test.a LtEq Int64(1)\
-            \n  Join: #test.a = #test.a\
+            Filter: #a LtEq Int64(1)\
+            \n  Join: Using #test.a = #test2.a\
             \n    TableScan: test projection=None\
-            \n    Projection: #test.a\
-            \n      TableScan: test projection=None"
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
         );
 
         // filter sent to side before the join
         let expected = "\
-        Join: #test.a = #test.a\
-        \n  Filter: #test.a LtEq Int64(1)\
+        Join: Using #test.a = #test2.a\
+        \n  Filter: #a LtEq Int64(1)\
         \n    TableScan: test projection=None\
-        \n  Projection: #test.a\
-        \n    Filter: #test.a LtEq Int64(1)\
-        \n      TableScan: test projection=None";
+        \n  Projection: #test2.a\
+        \n    Filter: #a LtEq Int64(1)\
+        \n      TableScan: test2 projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -923,10 +932,11 @@ mod tests {
     #[test]
     fn filter_join_on_common_dependent() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan.clone())
+        let left = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("c")])?
             .build()?;
-        let right = LogicalPlanBuilder::from(table_scan)
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
             .project(vec![col("a"), col("b")])?
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
@@ -944,12 +954,12 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "\
-            Filter: #test.c LtEq #test.b\
-            \n  Join: #test.a = #test.a\
+            Filter: #test.c LtEq #test2.b\
+            \n  Join: #test.a = #test2.a\
             \n    Projection: #test.a, #test.c\
             \n      TableScan: test projection=None\
-            \n    Projection: #test.a, #test.b\
-            \n      TableScan: test projection=None"
+            \n    Projection: #test2.a, #test2.b\
+            \n      TableScan: test2 projection=None"
         );
 
         // expected is equal: no push-down
@@ -962,12 +972,14 @@ mod tests {
     #[test]
     fn filter_join_on_one_side() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan.clone())
+        let left = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("b")])?
             .build()?;
-        let right = LogicalPlanBuilder::from(table_scan)
+        let table_scan_right = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(table_scan_right)
             .project(vec![col("a"), col("c")])?
             .build()?;
+
         let plan = LogicalPlanBuilder::from(left)
             .join(
                 &right,
@@ -983,20 +995,20 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test.b LtEq Int64(1)\
-            \n  Join: #test.a = #test.a\
+            \n  Join: #test.a = #test2.a\
             \n    Projection: #test.a, #test.b\
             \n      TableScan: test projection=None\
-            \n    Projection: #test.a, #test.c\
-            \n      TableScan: test projection=None"
+            \n    Projection: #test2.a, #test2.c\
+            \n      TableScan: test2 projection=None"
         );
 
         let expected = "\
-        Join: #test.a = #test.a\
+        Join: #test.a = #test2.a\
         \n  Projection: #test.a, #test.b\
         \n    Filter: #test.b LtEq Int64(1)\
         \n      TableScan: test projection=None\
-        \n  Projection: #test.a, #test.c\
-        \n    TableScan: test projection=None";
+        \n  Projection: #test2.a, #test2.c\
+        \n    TableScan: test2 projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }

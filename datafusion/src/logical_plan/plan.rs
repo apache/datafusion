@@ -709,10 +709,21 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
-                    LogicalPlan::Join { on: ref keys, .. } => {
+                    LogicalPlan::Join {
+                        on: ref keys,
+                        join_constraint,
+                        ..
+                    } => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
-                        write!(f, "Join: {}", join_expr.join(", "))
+                        match join_constraint {
+                            JoinConstraint::On => {
+                                write!(f, "Join: {}", join_expr.join(", "))
+                            }
+                            JoinConstraint::Using => {
+                                write!(f, "Join: Using {}", join_expr.join(", "))
+                            }
+                        }
                     }
                     LogicalPlan::CrossJoin { .. } => {
                         write!(f, "CrossJoin:")

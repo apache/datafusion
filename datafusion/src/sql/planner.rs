@@ -477,12 +477,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let right_schema = right.schema();
                     let mut join_keys = vec![];
                     for (l, r) in &possible_join_keys {
-                        if left_schema.field_from_qualified_column(l).is_ok()
-                            && right_schema.field_from_qualified_column(r).is_ok()
+                        if left_schema.field_from_column(l).is_ok()
+                            && right_schema.field_from_column(r).is_ok()
                         {
                             join_keys.push((l.clone(), r.clone()));
-                        } else if left_schema.field_from_qualified_column(r).is_ok()
-                            && right_schema.field_from_qualified_column(l).is_ok()
+                        } else if left_schema.field_from_column(r).is_ok()
+                            && right_schema.field_from_column(l).is_ok()
                         {
                             join_keys.push((r.clone(), l.clone()));
                         }
@@ -818,10 +818,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .try_for_each(|col| match col {
                 Expr::Column(col) => {
                     match &col.relation {
-                        Some(r) => schema.field_with_qualified_name(r, &col.name),
-                        None => schema.field_with_unqualified_name(&col.name),
+                        Some(r) => {
+                            Ok(schema.field_with_qualified_name(r, &col.name)?.to_owned())
+                        }
+                        None => {
+                            Ok(schema.field_with_unqualified_name(&col.name)?.to_owned())
+                        }
                     }
-                    .map_err(|_| {
+                    .map_err(|_: DataFusionError| {
                         DataFusionError::Plan(format!(
                             "Invalid identifier '{}' for schema {}",
                             col,
@@ -2720,8 +2724,8 @@ mod tests {
             FROM person \
             JOIN person as person2 \
             USING (id)";
-        let expected = "Projection: #person.first_name, #person.id\
-        \n  Join: #person.id = #person2.id\
+        let expected = "Projection: #person.first_name, #id\
+        \n  Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
         \n    TableScan: person2 projection=None";
         quick_test(sql, expected);

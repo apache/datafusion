@@ -441,59 +441,52 @@ pub fn build_join_schema(
     join_constraint: &JoinConstraint,
 ) -> Result<DFSchema> {
     let fields: Vec<DFField> = match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Full => {
-            let duplicate_keys = match join_constraint {
-                JoinConstraint::On => on
-                    .iter()
-                    .filter(|(l, r)| l == r)
-                    .map(|on| on.1.clone())
-                    .collect::<HashSet<_>>(),
-                // using join requires unique join columns in the output schema, so we mark all
-                // right join keys as duplicate
-                JoinConstraint::Using => {
-                    on.iter().map(|on| on.1.clone()).collect::<HashSet<_>>()
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+            match join_constraint {
+                JoinConstraint::On => {
+                    let right_fields = right.fields().iter();
+                    let left_fields = left.fields().iter();
+                    // left then right
+                    left_fields.chain(right_fields).cloned().collect()
                 }
-            };
+                JoinConstraint::Using => {
+                    // using join requires unique join column in the output schema, so we mark all
+                    // right join keys as duplicate
+                    let duplicate_join_names =
+                        on.iter().map(|on| &on.1.name).collect::<HashSet<_>>();
 
-            let left_fields = left.fields().iter();
+                    let right_fields = right
+                        .fields()
+                        .iter()
+                        .filter(|f| !duplicate_join_names.contains(f.name()))
+                        .cloned();
 
-            // remove right-side join keys if they have the same names as the left-side
-            let right_fields = right
-                .fields()
-                .iter()
-                .filter(|f| !duplicate_keys.contains(&f.qualified_column()));
+                    let left_fields = left.fields().iter().map(|f| {
+                        for key in on.iter() {
+                            // update qualifiers for shared fields
+                            if duplicate_join_names.contains(f.name()) {
+                                let mut hs = HashSet::new();
+                                if let Some(q) = &key.0.relation {
+                                    hs.insert(q.to_string());
+                                }
+                                if let Some(q) = &key.1.relation {
+                                    hs.insert(q.to_string());
+                                }
+                                return f.clone().set_shared_qualifiers(hs);
+                            }
+                        }
 
-            // left then right
-            left_fields.chain(right_fields).cloned().collect()
+                        f.clone()
+                    });
+
+                    // left then right
+                    left_fields.chain(right_fields).collect()
+                }
+            }
         }
         JoinType::Semi | JoinType::Anti => {
             // Only use the left side for the schema
             left.fields().clone()
-        }
-        JoinType::Right => {
-            let duplicate_keys = match join_constraint {
-                JoinConstraint::On => on
-                    .iter()
-                    .filter(|(l, r)| l == r)
-                    .map(|on| on.1.clone())
-                    .collect::<HashSet<_>>(),
-                // using join requires unique join columns in the output schema, so we mark all
-                // left join keys as duplicate
-                JoinConstraint::Using => {
-                    on.iter().map(|on| on.0.clone()).collect::<HashSet<_>>()
-                }
-            };
-
-            // remove left-side join keys if they have the same names as the right-side
-            let left_fields = left
-                .fields()
-                .iter()
-                .filter(|f| !duplicate_keys.contains(&f.qualified_column()));
-
-            let right_fields = right.fields().iter();
-
-            // left then right
-            left_fields.chain(right_fields).cloned().collect()
         }
     };
 

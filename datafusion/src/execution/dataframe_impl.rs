@@ -264,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn join() -> Result<()> {
         let left = test_table()?.select_columns(&["c1", "c2"])?;
-        let right = test_table()?.select_columns(&["c1", "c3"])?;
+        let right = test_table_with_name("c2")?.select_columns(&["c1", "c3"])?;
         let left_rows = left.collect().await?;
         let right_rows = right.collect().await?;
         let join = left.join(right, JoinType::Inner, &["c1"], &["c1"])?;
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn registry() -> Result<()> {
         let mut ctx = ExecutionContext::new();
-        register_aggregate_csv(&mut ctx)?;
+        register_aggregate_csv(&mut ctx, "aggregate_test_100")?;
 
         // declare the udf
         let my_fn: ScalarFunctionImplementation =
@@ -366,21 +366,28 @@ mod tests {
     /// Create a logical plan from a SQL query
     fn create_plan(sql: &str) -> Result<LogicalPlan> {
         let mut ctx = ExecutionContext::new();
-        register_aggregate_csv(&mut ctx)?;
+        register_aggregate_csv(&mut ctx, "aggregate_test_100")?;
         ctx.create_logical_plan(sql)
     }
 
-    fn test_table() -> Result<Arc<dyn DataFrame + 'static>> {
+    fn test_table_with_name(name: &str) -> Result<Arc<dyn DataFrame + 'static>> {
         let mut ctx = ExecutionContext::new();
-        register_aggregate_csv(&mut ctx)?;
-        ctx.table("aggregate_test_100")
+        register_aggregate_csv(&mut ctx, name)?;
+        ctx.table(name)
     }
 
-    fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
+    fn test_table() -> Result<Arc<dyn DataFrame + 'static>> {
+        test_table_with_name("aggregate_test_100")
+    }
+
+    fn register_aggregate_csv(
+        ctx: &mut ExecutionContext,
+        table_name: &str,
+    ) -> Result<()> {
         let schema = test::aggr_test_schema();
         let testdata = crate::test_util::arrow_test_data();
         ctx.register_csv(
-            "aggregate_test_100",
+            table_name,
             &format!("{}/csv/aggregate_test_100.csv", testdata),
             CsvReadOptions::new().schema(schema.as_ref()),
         )?;
