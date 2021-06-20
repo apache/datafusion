@@ -265,10 +265,8 @@ impl DefaultPhysicalPlanner {
                 }
 
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
-                let input_schema = input_exec.schema();
-
+                let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
-                let physical_input_schema = input_exec.as_ref().schema();
 
                 let window_expr = window_expr
                     .iter()
@@ -285,7 +283,7 @@ impl DefaultPhysicalPlanner {
                 Ok(Arc::new(WindowAggExec::try_new(
                     window_expr,
                     input_exec.clone(),
-                    input_schema,
+                    physical_input_schema,
                 )?))
             }
             LogicalPlan::Aggregate {

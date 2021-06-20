@@ -320,7 +320,7 @@ impl WindowAggExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let schema = create_schema(&input.schema(), &window_expr)?;
+        let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
         Ok(WindowAggExec {
             input,

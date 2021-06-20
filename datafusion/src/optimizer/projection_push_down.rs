@@ -21,7 +21,8 @@
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
-    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan, ToDFSchema,
+    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
+    LogicalPlanBuilder, ToDFSchema,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -253,26 +254,15 @@ fn optimize_plan(
                 &mut new_required_columns,
             )?;
 
-            let new_schema = DFSchema::new(
-                schema
-                    .fields()
-                    .iter()
-                    .filter(|f| new_required_columns.contains(&f.qualified_column()))
-                    .cloned()
-                    .collect(),
-            )?;
-
-            Ok(LogicalPlan::Window {
-                window_expr: new_window_expr,
-                input: Arc::new(optimize_plan(
-                    optimizer,
-                    input,
-                    &new_required_columns,
-                    true,
-                    execution_props,
-                )?),
-                schema: DFSchemaRef::new(new_schema),
-            })
+            LogicalPlanBuilder::from(&optimize_plan(
+                optimizer,
+                input,
+                &new_required_columns,
+                true,
+                execution_props,
+            )?)
+            .window(new_window_expr)?
+            .build()
         }
         LogicalPlan::Aggregate {
             schema,
