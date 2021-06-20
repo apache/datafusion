@@ -91,24 +91,26 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        match value {
-            ColumnarValue::Array(array) => {
-                Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
-                    &array,
-                    &self.cast_type,
-                    &self.cast_options,
-                )?))
-            }
-            ColumnarValue::Scalar(scalar) => {
-                let scalar_array = scalar.to_array();
-                let cast_array = kernels::cast::cast_with_options(
-                    &scalar_array,
-                    &self.cast_type,
-                    &self.cast_options,
-                )?;
-                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::Scalar(cast_scalar))
-            }
+        cast_column(&value, &self.cast_type, &self.cast_options)
+    }
+}
+
+/// Internal cast function for casting ColumnarValue -> ColumnarValue for cast_type
+pub fn cast_column(
+    value: &ColumnarValue,
+    cast_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<ColumnarValue> {
+    match value {
+        ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
+            kernels::cast::cast_with_options(array, cast_type, cast_options)?,
+        )),
+        ColumnarValue::Scalar(scalar) => {
+            let scalar_array = scalar.to_array();
+            let cast_array =
+                kernels::cast::cast_with_options(&scalar_array, cast_type, cast_options)?;
+            let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
+            Ok(ColumnarValue::Scalar(cast_scalar))
         }
     }
 }

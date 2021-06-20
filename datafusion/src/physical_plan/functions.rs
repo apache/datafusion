@@ -36,7 +36,9 @@ use super::{
 use crate::execution::context::ExecutionContextState;
 use crate::physical_plan::array_expressions;
 use crate::physical_plan::datetime_expressions;
-use crate::physical_plan::expressions::{nullif_func, SUPPORTED_NULLIF_TYPES};
+use crate::physical_plan::expressions::{
+    cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS, SUPPORTED_NULLIF_TYPES,
+};
 use crate::physical_plan::math_expressions;
 use crate::physical_plan::string_expressions;
 use crate::{
@@ -205,6 +207,12 @@ pub enum BuiltinScalarFunction {
     ToHex,
     /// to_timestamp
     ToTimestamp,
+    /// to_timestamp_millis
+    ToTimestampMillis,
+    /// to_timestamp_micros
+    ToTimestampMicros,
+    /// to_timestamp_seconds
+    ToTimestampSeconds,
     ///now
     Now,
     /// translate
@@ -298,6 +306,9 @@ impl FromStr for BuiltinScalarFunction {
             "substr" => BuiltinScalarFunction::Substr,
             "to_hex" => BuiltinScalarFunction::ToHex,
             "to_timestamp" => BuiltinScalarFunction::ToTimestamp,
+            "to_timestamp_millis" => BuiltinScalarFunction::ToTimestampMillis,
+            "to_timestamp_micros" => BuiltinScalarFunction::ToTimestampMicros,
+            "to_timestamp_seconds" => BuiltinScalarFunction::ToTimestampSeconds,
             "now" => BuiltinScalarFunction::Now,
             "translate" => BuiltinScalarFunction::Translate,
             "trim" => BuiltinScalarFunction::Trim,
@@ -411,6 +422,15 @@ pub fn return_type(
         }),
         BuiltinScalarFunction::ToTimestamp => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+        }
+        BuiltinScalarFunction::ToTimestampMillis => {
+            Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+        }
+        BuiltinScalarFunction::ToTimestampMicros => {
+            Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+        }
+        BuiltinScalarFunction::ToTimestampSeconds => {
+            Ok(DataType::Timestamp(TimeUnit::Second, None))
         }
         BuiltinScalarFunction::Now => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         BuiltinScalarFunction::Translate => utf8_to_str_type(&arg_types[0], "translate"),
@@ -896,9 +916,6 @@ pub fn create_physical_fun(
                 other,
             ))),
         }),
-        BuiltinScalarFunction::ToTimestamp => {
-            Arc::new(datetime_expressions::to_timestamp)
-        }
         BuiltinScalarFunction::Translate => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(
@@ -934,6 +951,12 @@ pub fn create_physical_fun(
             ))),
         }),
         BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
+        _ => {
+            return Err(DataFusionError::Internal(format!(
+                "create_physical_fun: Unsupported scalar function {:?}",
+                fun
+            )))
+        }
     })
 }
 
@@ -945,7 +968,94 @@ pub fn create_physical_expr(
     input_schema: &Schema,
     ctx_state: &ExecutionContextState,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let fun_expr = create_physical_fun(fun, ctx_state)?;
+    let fun_expr: ScalarFunctionImplementation = match fun {
+        // These functions need args and input schema to pick an implementation
+        // Unlike the string functions, which actually figure out the function to use with each array,
+        // here we return either a cast fn or string timestamp translation based on the expression data type
+        // so we don't have to pay a per-array/batch cost.
+        BuiltinScalarFunction::ToTimestamp => {
+            Arc::new(match args[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp,
+                other => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function to_timestamp",
+                        other,
+                    )))
+                }
+            })
+        }
+        BuiltinScalarFunction::ToTimestampMillis => {
+            Arc::new(match args[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Millisecond, None),
+                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_millis,
+                other => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function to_timestamp_millis",
+                        other,
+                    )))
+                }
+            })
+        }
+        BuiltinScalarFunction::ToTimestampMicros => {
+            Arc::new(match args[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Microsecond, None),
+                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_micros,
+                other => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function to_timestamp_micros",
+                        other,
+                    )))
+                }
+            })
+        }
+        BuiltinScalarFunction::ToTimestampSeconds => Arc::new({
+            match args[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Second, None),
+                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_seconds,
+                other => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function to_timestamp_seconds",
+                        other,
+                    )))
+                }
+            }
+        }),
+        // These don't need args and input schema
+        _ => create_physical_fun(fun, ctx_state)?,
+    };
     let args = coerce(args, input_schema, &signature(fun))?;
 
     let arg_types = args
@@ -1026,7 +1136,46 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
             Signature::Exact(vec![DataType::Utf8, DataType::Int64]),
             Signature::Exact(vec![DataType::LargeUtf8, DataType::Int64]),
         ]),
-        BuiltinScalarFunction::ToTimestamp => Signature::Uniform(1, vec![DataType::Utf8]),
+        BuiltinScalarFunction::ToTimestamp => Signature::Uniform(
+            1,
+            vec![
+                DataType::Utf8,
+                DataType::Int64,
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Timestamp(TimeUnit::Second, None),
+            ],
+        ),
+        BuiltinScalarFunction::ToTimestampMillis => Signature::Uniform(
+            1,
+            vec![
+                DataType::Utf8,
+                DataType::Int64,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Timestamp(TimeUnit::Second, None),
+            ],
+        ),
+        BuiltinScalarFunction::ToTimestampMicros => Signature::Uniform(
+            1,
+            vec![
+                DataType::Utf8,
+                DataType::Int64,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Timestamp(TimeUnit::Second, None),
+            ],
+        ),
+        BuiltinScalarFunction::ToTimestampSeconds => Signature::Uniform(
+            1,
+            vec![
+                DataType::Utf8,
+                DataType::Int64,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+            ],
+        ),
         BuiltinScalarFunction::DateTrunc => Signature::Exact(vec![
             DataType::Utf8,
             DataType::Timestamp(TimeUnit::Nanosecond, None),

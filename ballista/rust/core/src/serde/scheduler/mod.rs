@@ -142,7 +142,7 @@ impl PartitionStats {
         ]
     }
 
-    pub fn to_arrow_arrayref(&self) -> Result<Arc<StructArray>, BallistaError> {
+    pub fn to_arrow_arrayref(self) -> Result<Arc<StructArray>, BallistaError> {
         let mut field_builders = Vec::new();
 
         let mut num_rows_builder = UInt64Builder::new(1);

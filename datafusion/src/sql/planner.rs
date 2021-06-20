@@ -690,7 +690,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut plan = input;
         let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
         // sort by sort_key len descending, so that more deeply sorted plans gets nested further
-        // down as children; to further minic the behavior of PostgreSQL, we want stable sort
+        // down as children; to further mimic the behavior of PostgreSQL, we want stable sort
         // and a reverse so that tieing sort keys are reversed in order; note that by this rule
         // if there's an empty over, it'll be at the top level
         groups.sort_by(|(key_a, _), (key_b, _)| key_a.len().cmp(&key_b.len()));
@@ -1672,7 +1672,7 @@ mod tests {
         let sql = "SELECT age, age FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"#person.age\\\" at position 0 and \\\"#person.age\\\" at position 1 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"#person.age\" at position 0 and \"#person.age\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -1682,7 +1682,7 @@ mod tests {
         let sql = "SELECT *, age FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"#person.age\\\" at position 3 and \\\"#person.age\\\" at position 8 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"#person.age\" at position 3 and \"#person.age\" at position 8 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -2211,7 +2211,7 @@ mod tests {
         let sql = "SELECT MIN(age), MIN(age) FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"MIN(#person.age)\\\" at position 0 and \\\"MIN(#person.age)\\\" at position 1 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"MIN(#person.age)\" at position 0 and \"MIN(#person.age)\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -2241,7 +2241,7 @@ mod tests {
         let sql = "SELECT MIN(age) AS a, MIN(age) AS a FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"MIN(#person.age) AS a\\\" at position 0 and \\\"MIN(#person.age) AS a\\\" at position 1 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"MIN(#person.age) AS a\" at position 0 and \"MIN(#person.age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -2271,7 +2271,7 @@ mod tests {
         let sql = "SELECT state AS a, MIN(age) AS a FROM person GROUP BY state";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"#person.state AS a\\\" at position 0 and \\\"MIN(#person.age) AS a\\\" at position 1 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"#person.state AS a\" at position 0 and \"MIN(#person.age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -2311,7 +2311,7 @@ mod tests {
         let sql = "SELECT INTERVAL '100000000000000000 day'";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "NotImplemented(\"Interval field value out of range: \\\"100000000000000000 day\\\"\")",
+            r#"NotImplemented("Interval field value out of range: \"100000000000000000 day\"")"#,
             format!("{:?}", err)
         );
     }
@@ -2384,7 +2384,7 @@ mod tests {
         let sql = "SELECT state, MIN(age), MIN(age) FROM person GROUP BY state";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projections require unique expression names but the expression \\\"MIN(#person.age)\\\" at position 1 and \\\"MIN(#person.age)\\\" at position 2 have the same name. Consider aliasing (\\\"AS\\\") one of them.\")",
+            r##"Plan("Projections require unique expression names but the expression \"MIN(#person.age)\" at position 1 and \"MIN(#person.age)\" at position 2 have the same name. Consider aliasing (\"AS\") one of them.")"##,
             format!("{:?}", err)
         );
     }
@@ -2444,7 +2444,7 @@ mod tests {
             "SELECT ((age + 1) / 2) * (age + 9), MIN(first_name) FROM person GROUP BY age + 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projection references non-aggregate values\")",
+            r#"Plan("Projection references non-aggregate values")"#,
             format!("{:?}", err)
         );
     }
@@ -2455,7 +2455,7 @@ mod tests {
         let sql = "SELECT age, MIN(first_name) FROM person GROUP BY age + 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projection references non-aggregate values\")",
+            r#"Plan("Projection references non-aggregate values")"#,
             format!("{:?}", err)
         );
     }

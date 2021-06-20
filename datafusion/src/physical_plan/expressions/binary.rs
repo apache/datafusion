@@ -17,6 +17,7 @@
 
 use std::{any::Any, sync::Arc};
 
+use arrow::array::TimestampMillisecondArray;
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
     add, divide, divide_scalar, multiply, subtract,
@@ -256,6 +257,15 @@ macro_rules! binary_array_op_scalar {
             DataType::Timestamp(TimeUnit::Nanosecond, None) => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
+            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+                compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+                compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
+            }
+            DataType::Timestamp(TimeUnit::Second, None) => {
+                compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampSecondArray)
+            }
             DataType::Date32 => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, Date32Array)
             }
@@ -287,6 +297,15 @@ macro_rules! binary_array_op {
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
             DataType::Timestamp(TimeUnit::Nanosecond, None) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+                compute_op!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+                compute_op!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
+            }
+            DataType::Timestamp(TimeUnit::Second, None) => {
+                compute_op!($LEFT, $RIGHT, $OP, TimestampSecondArray)
             }
             DataType::Date32 => {
                 compute_op!($LEFT, $RIGHT, $OP, Date32Array)
