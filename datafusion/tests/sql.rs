@@ -869,6 +869,70 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_window_with_partition_by() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "select \
+    c9, \
+    sum(cast(c4 as Int)) over (partition by c3), \
+    avg(cast(c4 as Int)) over (partition by c3), \
+    count(cast(c4 as Int)) over (partition by c3), \
+    max(cast(c4 as Int)) over (partition by c3), \
+    min(cast(c4 as Int)) over (partition by c3), \
+    first_value(cast(c4 as Int)) over (partition by c3), \
+    last_value(cast(c4 as Int)) over (partition by c3), \
+    nth_value(cast(c4 as Int), 2) over (partition by c3) \
+    from aggregate_test_100 \
+    order by c9 \
+    limit 5";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec![
+            "28774375", "-16110", "-16110", "1", "-16110", "-16110", "-16110", "-16110",
+            "NULL",
+        ],
+        vec![
+            "63044568", "3917", "3917", "1", "3917", "3917", "3917", "3917", "NULL",
+        ],
+        vec![
+            "141047417",
+            "-38455",
+            "-19227.5",
+            "2",
+            "-16974",
+            "-21481",
+            "-16974",
+            "-21481",
+            "-21481",
+        ],
+        vec![
+            "141680161",
+            "-1114",
+            "-1114",
+            "1",
+            "-1114",
+            "-1114",
+            "-1114",
+            "-1114",
+            "NULL",
+        ],
+        vec![
+            "145294611",
+            "15673",
+            "15673",
+            "1",
+            "15673",
+            "15673",
+            "15673",
+            "15673",
+            "NULL",
+        ],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_window_with_order_by() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;

@@ -1356,6 +1356,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn window_partition_by() -> Result<()> {
+        let results = execute(
+            "SELECT \
+            c1, \
+            c2, \
+            SUM(c2) OVER (PARTITION BY c2), \
+            COUNT(c2) OVER (PARTITION BY c2), \
+            MAX(c2) OVER (PARTITION BY c2), \
+            MIN(c2) OVER (PARTITION BY c2), \
+            AVG(c2) OVER (PARTITION BY c2) \
+            FROM test \
+            ORDER BY c1, c2 \
+            LIMIT 5",
+            4,
+        )
+        .await?;
+
+        let expected = vec![
+            "+----+----+---------+-----------+---------+---------+---------+",
+            "| c1 | c2 | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
+            "+----+----+---------+-----------+---------+---------+---------+",
+            "| 0  | 1  | 4       | 4         | 1       | 1       | 1       |",
+            "| 0  | 2  | 8       | 4         | 2       | 2       | 2       |",
+            "| 0  | 3  | 12      | 4         | 3       | 3       | 3       |",
+            "| 0  | 4  | 16      | 4         | 4       | 4       | 4       |",
+            "| 0  | 5  | 20      | 4         | 5       | 5       | 5       |",
+            "+----+----+---------+-----------+---------+---------+---------+",
+        ];
+
+        // window function shall respect ordering
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_partition_by_order_by() -> Result<()> {
+        let results = execute(
+            "SELECT \
+            c1, \
+            c2, \
+            ROW_NUMBER() OVER (PARTITION BY c2 ORDER BY c1), \
+            FIRST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
+            LAST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
+            NTH_VALUE(c2 + c1, 2) OVER (PARTITION BY c2 ORDER BY c1), \
+            SUM(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            COUNT(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            MAX(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            MIN(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            AVG(c2) OVER (PARTITION BY c2 ORDER BY c1) \
+            FROM test \
+            ORDER BY c1, c2 \
+            LIMIT 5",
+            4,
+        )
+        .await?;
+
+        let expected = vec![
+            "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
+            "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(c2 Plus c1) | LAST_VALUE(c2 Plus c1) | NTH_VALUE(c2 Plus c1,Int64(2)) | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
+            "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
+            "| 0  | 1  | 1            | 1                       | 4                      | 2                              | 1       | 1         | 1       | 1       | 1       |",
+            "| 0  | 2  | 1            | 2                       | 5                      | 3                              | 2       | 1         | 2       | 2       | 2       |",
+            "| 0  | 3  | 1            | 3                       | 6                      | 4                              | 3       | 1         | 3       | 3       | 3       |",
+            "| 0  | 4  | 1            | 4                       | 7                      | 5                              | 4       | 1         | 4       | 4       | 4       |",
+            "| 0  | 5  | 1            | 5                       | 8                      | 6                              | 5       | 1         | 5       | 5       | 5       |",
+            "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
+        ];
+
+        // window function shall respect ordering
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn aggregate() -> Result<()> {
         let results = execute("SELECT SUM(c1), SUM(c2) FROM test", 4).await?;
         assert_eq!(results.len(), 1);
