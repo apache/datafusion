@@ -485,19 +485,20 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// evaluate the window function values against the batch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
 
-    /// evaluate the sort partition points
-    fn evaluate_sort_partition_points(
+    /// evaluate the partition points given the sort columns; if the sort columns are
+    /// empty then the result will be a single element vec of the whole column rows.
+    fn evaluate_partition_points(
         &self,
-        batch: &RecordBatch,
+        num_rows: usize,
+        partition_columns: &[SortColumn],
     ) -> Result<Vec<Range<usize>>> {
-        let sort_columns = self.sort_columns(batch)?;
-        if sort_columns.is_empty() {
+        if partition_columns.is_empty() {
             Ok(vec![Range {
                 start: 0,
-                end: batch.num_rows(),
+                end: num_rows,
             }])
         } else {
-            lexicographical_partition_ranges(&sort_columns)
+            lexicographical_partition_ranges(partition_columns)
                 .map_err(DataFusionError::ArrowError)
         }
     }
@@ -508,8 +509,8 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// expressions that's from the window function's order by clause, empty if absent
     fn order_by(&self) -> &[PhysicalSortExpr];
 
-    /// get sort columns that can be used for partitioning, empty if absent
-    fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
+    /// get partition columns that can be used for partitioning, empty if absent
+    fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
         self.partition_by()
             .iter()
             .map(|expr| {
@@ -519,12 +520,19 @@ pub trait WindowExpr: Send + Sync + Debug {
                 }
                 .evaluate_to_sort_column(batch)
             })
-            .chain(
-                self.order_by()
-                    .iter()
-                    .map(|e| e.evaluate_to_sort_column(batch)),
-            )
             .collect()
+    }
+
+    /// get sort columns that can be used for peer evaluation, empty if absent
+    fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
+        let mut sort_columns = self.partition_columns(batch)?;
+        let order_by_columns = self
+            .order_by()
+            .iter()
+            .map(|e| e.evaluate_to_sort_column(batch))
+            .collect::<Result<Vec<SortColumn>>>()?;
+        sort_columns.extend(order_by_columns);
+        Ok(sort_columns)
     }
 }
 
