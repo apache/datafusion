@@ -129,7 +129,7 @@ mod tests {
 
         let expr = not(col("a"), &schema)?;
         assert_eq!(expr.data_type(&schema)?, DataType::Boolean);
-        assert_eq!(expr.nullable(&schema)?, true);
+        assert!(expr.nullable(&schema)?);
 
         let input = BooleanArray::from(vec![Some(true), None, Some(false)]);
         let expected = &BooleanArray::from(vec![Some(false), None, Some(true)]);

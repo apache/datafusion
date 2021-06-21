@@ -642,9 +642,8 @@ pub struct ExecutionConfig {
     pub repartition_aggregations: bool,
 }
 
-impl ExecutionConfig {
-    /// Create an execution config with default setting
-    pub fn new() -> Self {
+impl Default for ExecutionConfig {
+    fn default() -> Self {
         Self {
             concurrency: num_cpus::get(),
             batch_size: 8192,
@@ -670,6 +669,13 @@ impl ExecutionConfig {
             repartition_joins: true,
             repartition_aggregations: true,
         }
+    }
+}
+
+impl ExecutionConfig {
+    /// Create an execution config with default setting
+    pub fn new() -> Self {
+        Default::default()
     }
 
     /// Customize max_concurrency
@@ -1125,7 +1131,7 @@ mod tests {
         let ctx = create_ctx(&tmp_dir, 1)?;
 
         let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
-        assert_eq!(schema.field_with_name("c1")?.is_nullable(), false);
+        assert!(!schema.field_with_name("c1")?.is_nullable());
 
         let plan = LogicalPlanBuilder::scan_empty("", &schema, None)?
             .project(vec![col("c1")])?
@@ -1133,10 +1139,7 @@ mod tests {
 
         let plan = ctx.optimize(&plan)?;
         let physical_plan = ctx.create_physical_plan(&Arc::new(plan))?;
-        assert_eq!(
-            physical_plan.schema().field_with_name("c1")?.is_nullable(),
-            false
-        );
+        assert!(!physical_plan.schema().field_with_name("c1")?.is_nullable());
         Ok(())
     }
 
@@ -1345,6 +1348,80 @@ mod tests {
             "| 0  | 4  | 4            | 1               | 10             | 2                      | 10      | 4         | 4       | 1       | 2.5     |",
             "| 0  | 5  | 5            | 1               | 10             | 2                      | 15      | 5         | 5       | 1       | 3       |",
             "+----+----+--------------+-----------------+----------------+------------------------+---------+-----------+---------+---------+---------+",
+        ];
+
+        // window function shall respect ordering
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_partition_by() -> Result<()> {
+        let results = execute(
+            "SELECT \
+            c1, \
+            c2, \
+            SUM(c2) OVER (PARTITION BY c2), \
+            COUNT(c2) OVER (PARTITION BY c2), \
+            MAX(c2) OVER (PARTITION BY c2), \
+            MIN(c2) OVER (PARTITION BY c2), \
+            AVG(c2) OVER (PARTITION BY c2) \
+            FROM test \
+            ORDER BY c1, c2 \
+            LIMIT 5",
+            4,
+        )
+        .await?;
+
+        let expected = vec![
+            "+----+----+---------+-----------+---------+---------+---------+",
+            "| c1 | c2 | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
+            "+----+----+---------+-----------+---------+---------+---------+",
+            "| 0  | 1  | 4       | 4         | 1       | 1       | 1       |",
+            "| 0  | 2  | 8       | 4         | 2       | 2       | 2       |",
+            "| 0  | 3  | 12      | 4         | 3       | 3       | 3       |",
+            "| 0  | 4  | 16      | 4         | 4       | 4       | 4       |",
+            "| 0  | 5  | 20      | 4         | 5       | 5       | 5       |",
+            "+----+----+---------+-----------+---------+---------+---------+",
+        ];
+
+        // window function shall respect ordering
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_partition_by_order_by() -> Result<()> {
+        let results = execute(
+            "SELECT \
+            c1, \
+            c2, \
+            ROW_NUMBER() OVER (PARTITION BY c2 ORDER BY c1), \
+            FIRST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
+            LAST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
+            NTH_VALUE(c2 + c1, 2) OVER (PARTITION BY c2 ORDER BY c1), \
+            SUM(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            COUNT(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            MAX(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            MIN(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            AVG(c2) OVER (PARTITION BY c2 ORDER BY c1) \
+            FROM test \
+            ORDER BY c1, c2 \
+            LIMIT 5",
+            4,
+        )
+        .await?;
+
+        let expected = vec![
+            "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
+            "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(c2 Plus c1) | LAST_VALUE(c2 Plus c1) | NTH_VALUE(c2 Plus c1,Int64(2)) | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
+            "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
+            "| 0  | 1  | 1            | 1                       | 4                      | 2                              | 1       | 1         | 1       | 1       | 1       |",
+            "| 0  | 2  | 1            | 2                       | 5                      | 3                              | 2       | 1         | 2       | 2       | 2       |",
+            "| 0  | 3  | 1            | 3                       | 6                      | 4                              | 3       | 1         | 3       | 3       | 3       |",
+            "| 0  | 4  | 1            | 4                       | 7                      | 5                              | 4       | 1         | 4       | 4       | 4       |",
+            "| 0  | 5  | 1            | 5                       | 8                      | 6                              | 5       | 1         | 5       | 5       | 5       |",
+            "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
         ];
 
         // window function shall respect ordering
