@@ -20,7 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
-use arrow::array::{new_empty_array, ArrayRef};
+use arrow::array::{new_empty_array, new_null_array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
@@ -135,8 +135,12 @@ impl BuiltInWindowFunctionExpr for NthValue {
             NthValueKind::Last => (num_rows as usize) - 1,
             NthValueKind::Nth(n) => (n as usize) - 1,
         };
-        let value = ScalarValue::try_from_array(value, index)?;
-        Ok(value.to_array_of_size(num_rows))
+        Ok(if index >= num_rows {
+            new_null_array(value.data_type(), num_rows)
+        } else {
+            let value = ScalarValue::try_from_array(value, index)?;
+            value.to_array_of_size(num_rows)
+        })
     }
 }
 

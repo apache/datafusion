@@ -175,8 +175,43 @@ impl WindowExpr for BuiltInWindowExpr {
         // case when partition_by is supported, in which case we'll parallelize the calls.
         // See https://github.com/apache/arrow-datafusion/issues/299
         let values = self.evaluate_args(batch)?;
-        self.window.evaluate(batch.num_rows(), &values)
+        let partition_points = self.evaluate_partition_points(
+            batch.num_rows(),
+            &self.partition_columns(batch)?,
+        )?;
+        let results = partition_points
+            .iter()
+            .map(|partition_range| {
+                let start = partition_range.start;
+                let len = partition_range.end - start;
+                let values = values
+                    .iter()
+                    .map(|arr| arr.slice(start, len))
+                    .collect::<Vec<_>>();
+                self.window.evaluate(len, &values)
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .collect::<Vec<ArrayRef>>();
+        let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
+        concat(&results).map_err(DataFusionError::ArrowError)
     }
+}
+
+/// Given a partition range, and the full list of sort partition points, given that the sort
+/// partition points are sorted using [partition columns..., order columns...], the split
+/// boundaries would align (what's sorted on [partition columns...] would definitely be sorted
+/// on finer columns), so this will use binary search to find ranges that are within the
+/// partition range and return the valid slice.
+fn find_ranges_in_range<'a>(
+    partition_range: &Range<usize>,
+    sort_partition_points: &'a [Range<usize>],
+) -> &'a [Range<usize>] {
+    let start_idx = sort_partition_points
+        .partition_point(|sort_range| sort_range.start < partition_range.start);
+    let end_idx = sort_partition_points
+        .partition_point(|sort_range| sort_range.end <= partition_range.end);
+    &sort_partition_points[start_idx..end_idx]
 }
 
 /// A window expr that takes the form of an aggregate function
@@ -205,13 +240,27 @@ impl AggregateWindowExpr {
     /// and then per partition point we'll evaluate the peer group (e.g. SUM or MAX gives the same
     /// results for peers) and concatenate the results.
     fn peer_based_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let sort_partition_points = self.evaluate_sort_partition_points(batch)?;
-        let mut window_accumulators = self.create_accumulator()?;
+        let num_rows = batch.num_rows();
+        let partition_points =
+            self.evaluate_partition_points(num_rows, &self.partition_columns(batch)?)?;
+        let sort_partition_points =
+            self.evaluate_partition_points(num_rows, &self.sort_columns(batch)?)?;
         let values = self.evaluate_args(batch)?;
-        let results = sort_partition_points
+        let results = partition_points
             .iter()
-            .map(|peer_range| window_accumulators.scan_peers(&values, peer_range))
-            .collect::<Result<Vec<_>>>()?;
+            .map(|partition_range| {
+                let sort_partition_points =
+                    find_ranges_in_range(partition_range, &sort_partition_points);
+                let mut window_accumulators = self.create_accumulator()?;
+                sort_partition_points
+                    .iter()
+                    .map(|range| window_accumulators.scan_peers(&values, range))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<Vec<ArrayRef>>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<ArrayRef>>();
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
         concat(&results).map_err(DataFusionError::ArrowError)
     }
