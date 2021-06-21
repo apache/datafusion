@@ -29,7 +29,6 @@ use tonic::transport::Server;
 
 use crate::{state::StandaloneClient, SchedulerServer};
 
-#[cfg(feature = "sled")]
 pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
     let client = StandaloneClient::try_new_temporary()?;
 

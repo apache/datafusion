@@ -19,6 +19,7 @@
 
 pub mod api;
 pub mod planner;
+#[cfg(feature = "sled")]
 mod standalone;
 pub mod state;
 #[cfg(feature = "sled")]
