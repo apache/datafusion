@@ -1178,10 +1178,12 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
             }
             protobuf::WindowFrameBoundType::Preceding => {
                 // FIXME implement bound value parsing
+                // https://github.com/apache/arrow-datafusion/issues/361
                 Ok(WindowFrameBound::Preceding(Some(1)))
             }
             protobuf::WindowFrameBoundType::Following => {
                 // FIXME implement bound value parsing
+                // https://github.com/apache/arrow-datafusion/issues/361
                 Ok(WindowFrameBound::Following(Some(1)))
             }
         }
