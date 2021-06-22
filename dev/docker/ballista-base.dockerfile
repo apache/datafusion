@@ -96,4 +96,6 @@ RUN cargo install cargo-build-deps
 
 # prepare toolchain
 RUN rustup update && \
+    rustup toolchain install nightly-2021-05-10 && \
+    rustup default nightly-2021-05-10 && \
     rustup component add rustfmt
