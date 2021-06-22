@@ -708,6 +708,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_q7() -> Result<()> {
+        run_query(7).await
+    }
+
+    #[tokio::test]
+    async fn run_q8() -> Result<()> {
+        run_query(8).await
+    }
+
+    #[tokio::test]
     async fn run_q9() -> Result<()> {
         run_query(9).await
     }

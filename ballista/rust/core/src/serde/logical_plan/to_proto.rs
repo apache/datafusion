@@ -26,7 +26,7 @@ use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUn
 use datafusion::datasource::CsvFile;
 use datafusion::logical_plan::{
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Expr, JoinType, LogicalPlan,
+    Column, Expr, JoinType, LogicalPlan,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -816,8 +816,8 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     JoinType::Semi => protobuf::JoinType::Semi,
                     JoinType::Anti => protobuf::JoinType::Anti,
                 };
-                let left_join_column = on.iter().map(|on| on.0.to_owned()).collect();
-                let right_join_column = on.iter().map(|on| on.1.to_owned()).collect();
+                let (left_join_column, right_join_column) =
+                    on.iter().map(|(l, r)| (l.into(), r.into())).unzip();
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Join(Box::new(
                         protobuf::JoinNode {
@@ -908,13 +908,6 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 schema: df_schema,
             } => {
                 use datafusion::sql::parser::FileType;
-                let schema: Schema = df_schema.as_ref().clone().into();
-                let pb_schema: protobuf::Schema = (&schema).try_into().map_err(|e| {
-                    BallistaError::General(format!(
-                        "Could not convert schema into protobuf: {:?}",
-                        e
-                    ))
-                })?;
 
                 let pb_file_type: protobuf::FileType = match file_type {
                     FileType::NdJson => protobuf::FileType::NdJson,
@@ -929,7 +922,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                             location: location.clone(),
                             file_type: pb_file_type as i32,
                             has_header: *has_header,
-                            schema: Some(pb_schema),
+                            schema: Some(df_schema.into()),
                         },
                     )),
                 })
@@ -971,9 +964,9 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
         use datafusion::scalar::ScalarValue;
         use protobuf::scalar_value::Value;
         match self {
-            Expr::Column(name) => {
+            Expr::Column(c) => {
                 let expr = protobuf::LogicalExprNode {
-                    expr_type: Some(ExprType::ColumnName(name.clone())),
+                    expr_type: Some(ExprType::Column(c.into())),
                 };
                 Ok(expr)
             }
@@ -1214,6 +1207,23 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
     }
 }
 
+impl From<Column> for protobuf::Column {
+    fn from(c: Column) -> protobuf::Column {
+        protobuf::Column {
+            relation: c
+                .relation
+                .map(|relation| protobuf::ColumnRelation { relation }),
+            name: c.name,
+        }
+    }
+}
+
+impl From<&Column> for protobuf::Column {
+    fn from(c: &Column) -> protobuf::Column {
+        c.clone().into()
+    }
+}
+
 #[allow(clippy::from_over_into)]
 impl Into<protobuf::Schema> for &Schema {
     fn into(self) -> protobuf::Schema {
@@ -1224,6 +1234,24 @@ impl Into<protobuf::Schema> for &Schema {
                 .map(protobuf::Field::from)
                 .collect::<Vec<_>>(),
         }
+    }
+}
+
+impl From<&datafusion::logical_plan::DFField> for protobuf::DfField {
+    fn from(f: &datafusion::logical_plan::DFField) -> protobuf::DfField {
+        protobuf::DfField {
+            field: Some(f.field().into()),
+            qualifier: f.qualifier().map(|r| protobuf::ColumnRelation {
+                relation: r.to_string(),
+            }),
+        }
+    }
+}
+
+impl From<&datafusion::logical_plan::DFSchemaRef> for protobuf::DfSchema {
+    fn from(s: &datafusion::logical_plan::DFSchemaRef) -> protobuf::DfSchema {
+        let columns = s.fields().iter().map(|f| f.into()).collect::<Vec<_>>();
+        protobuf::DfSchema { columns }
     }
 }
 

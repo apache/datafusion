@@ -127,7 +127,7 @@ mod tests {
     fn neg_op() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
 
-        let expr = not(col("a"), &schema)?;
+        let expr = not(col("a", &schema)?, &schema)?;
         assert_eq!(expr.data_type(&schema)?, DataType::Boolean);
         assert!(expr.nullable(&schema)?);
 
@@ -152,7 +152,7 @@ mod tests {
     fn neg_op_not_null() {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
 
-        let expr = not(col("a"), &schema);
+        let expr = not(col("a", &schema).unwrap(), &schema);
         assert!(expr.is_err());
     }
 }

@@ -3651,7 +3651,7 @@ mod tests {
 
         let expr = create_physical_expr(
             &BuiltinScalarFunction::Array,
-            &[col("a"), col("b")],
+            &[col("a", &schema)?, col("b", &schema)?],
             &schema,
             &ctx_state,
         )?;
@@ -3718,7 +3718,7 @@ mod tests {
         let columns: Vec<ArrayRef> = vec![col_value];
         let expr = create_physical_expr(
             &BuiltinScalarFunction::RegexpMatch,
-            &[col("a"), pattern],
+            &[col("a", &schema)?, pattern],
             &schema,
             &ctx_state,
         )?;

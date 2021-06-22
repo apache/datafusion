@@ -23,6 +23,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
+use crate::logical_plan::Column;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use std::fmt::{Display, Formatter};
@@ -88,7 +89,7 @@ impl DFSchema {
     }
 
     /// Create a `DFSchema` from an Arrow schema
-    pub fn try_from_qualified(qualifier: &str, schema: &Schema) -> Result<Self> {
+    pub fn try_from_qualified_schema(qualifier: &str, schema: &Schema) -> Result<Self> {
         Self::new(
             schema
                 .fields()
@@ -108,6 +109,21 @@ impl DFSchema {
         Self::new(fields)
     }
 
+    /// Merge a schema into self
+    pub fn merge(&mut self, other_schema: &DFSchema) {
+        for field in other_schema.fields() {
+            // skip duplicate columns
+            let duplicated_field = match field.qualifier() {
+                Some(q) => self.field_with_name(Some(q.as_str()), field.name()).is_ok(),
+                // for unqualifed columns, check as unqualified name
+                None => self.field_with_unqualified_name(field.name()).is_ok(),
+            };
+            if !duplicated_field {
+                self.fields.push(field.clone());
+            }
+        }
+    }
+
     /// Get a list of fields
     pub fn fields(&self) -> &Vec<DFField> {
         &self.fields
@@ -119,7 +135,7 @@ impl DFSchema {
         &self.fields[i]
     }
 
-    /// Find the index of the column with the given name
+    /// Find the index of the column with the given unqualifed name
     pub fn index_of(&self, name: &str) -> Result<usize> {
         for i in 0..self.fields.len() {
             if self.fields[i].name() == name {
@@ -127,6 +143,20 @@ impl DFSchema {
             }
         }
         Err(DataFusionError::Plan(format!("No field named '{}'", name)))
+    }
+
+    /// Find the index of the column with the given qualifer and name
+    pub fn index_of_column(&self, col: &Column) -> Result<usize> {
+        for i in 0..self.fields.len() {
+            let field = &self.fields[i];
+            if field.qualifier() == col.relation.as_ref() && field.name() == &col.name {
+                return Ok(i);
+            }
+        }
+        Err(DataFusionError::Plan(format!(
+            "No field matches column '{}'",
+            col,
+        )))
     }
 
     /// Find the field with the given name
@@ -150,7 +180,10 @@ impl DFSchema {
             .filter(|field| field.name() == name)
             .collect();
         match matches.len() {
-            0 => Err(DataFusionError::Plan(format!("No field named '{}'", name))),
+            0 => Err(DataFusionError::Plan(format!(
+                "No field with unqualified name '{}'",
+                name
+            ))),
             1 => Ok(matches[0].to_owned()),
             _ => Err(DataFusionError::Plan(format!(
                 "Ambiguous reference to field named '{}'",
@@ -184,6 +217,62 @@ impl DFSchema {
             ))),
         }
     }
+
+    /// Find the field with the given qualified column
+    pub fn field_from_qualified_column(&self, column: &Column) -> Result<DFField> {
+        match &column.relation {
+            Some(r) => self.field_with_qualified_name(r, &column.name),
+            None => self.field_with_unqualified_name(&column.name),
+        }
+    }
+
+    /// Check to see if unqualified field names matches field names in Arrow schema
+    pub fn matches_arrow_schema(&self, arrow_schema: &Schema) -> bool {
+        self.fields
+            .iter()
+            .zip(arrow_schema.fields().iter())
+            .all(|(dffield, arrowfield)| dffield.name() == arrowfield.name())
+    }
+
+    /// Strip all field qualifier in schema
+    pub fn strip_qualifiers(self) -> Self {
+        DFSchema {
+            fields: self
+                .fields
+                .into_iter()
+                .map(|f| {
+                    if f.qualifier().is_some() {
+                        DFField::new(
+                            None,
+                            f.name(),
+                            f.data_type().to_owned(),
+                            f.is_nullable(),
+                        )
+                    } else {
+                        f
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// Replace all field qualifier with new value in schema
+    pub fn replace_qualifier(self, qualifer: &str) -> Self {
+        DFSchema {
+            fields: self
+                .fields
+                .into_iter()
+                .map(|f| {
+                    DFField::new(
+                        Some(qualifer),
+                        f.name(),
+                        f.data_type().to_owned(),
+                        f.is_nullable(),
+                    )
+                })
+                .collect(),
+        }
+    }
 }
 
 impl Into<Schema> for DFSchema {
@@ -195,7 +284,7 @@ impl Into<Schema> for DFSchema {
                 .map(|f| {
                     if f.qualifier().is_some() {
                         Field::new(
-                            f.qualified_name().as_str(),
+                            f.name().as_str(),
                             f.data_type().to_owned(),
                             f.is_nullable(),
                         )
@@ -205,6 +294,13 @@ impl Into<Schema> for DFSchema {
                 })
                 .collect(),
         )
+    }
+}
+
+impl Into<Schema> for &DFSchema {
+    /// Convert a schema into a DFSchema
+    fn into(self) -> Schema {
+        Schema::new(self.fields.iter().map(|f| f.field.clone()).collect())
     }
 }
 
@@ -340,7 +436,7 @@ impl DFField {
         self.field.is_nullable()
     }
 
-    /// Returns a reference to the `DFField`'s qualified name
+    /// Returns a string to the `DFField`'s qualified name
     pub fn qualified_name(&self) -> String {
         if let Some(relation_name) = &self.qualifier {
             format!("{}.{}", relation_name, self.field.name())
@@ -349,9 +445,22 @@ impl DFField {
         }
     }
 
+    /// Builds a qualified column based on self
+    pub fn qualified_column(&self) -> Column {
+        Column {
+            relation: self.qualifier.clone(),
+            name: self.field.name().to_string(),
+        }
+    }
+
     /// Get the optional qualifier
     pub fn qualifier(&self) -> Option<&String> {
         self.qualifier.as_ref()
+    }
+
+    /// Get the arrow field
+    pub fn field(&self) -> &Field {
+        &self.field
     }
 }
 
@@ -385,25 +494,25 @@ mod tests {
 
     #[test]
     fn from_qualified_schema() -> Result<()> {
-        let schema = DFSchema::try_from_qualified("t1", &test_schema_1())?;
+        let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         assert_eq!("t1.c0, t1.c1", schema.to_string());
         Ok(())
     }
 
     #[test]
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {
-        let schema = DFSchema::try_from_qualified("t1", &test_schema_1())?;
+        let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let arrow_schema: Schema = schema.into();
-        let expected = "Field { name: \"t1.c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }, \
-        Field { name: \"t1.c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }";
+        let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }, \
+        Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }";
         assert_eq!(expected, arrow_schema.to_string());
         Ok(())
     }
 
     #[test]
     fn join_qualified() -> Result<()> {
-        let left = DFSchema::try_from_qualified("t1", &test_schema_1())?;
-        let right = DFSchema::try_from_qualified("t2", &test_schema_1())?;
+        let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+        let right = DFSchema::try_from_qualified_schema("t2", &test_schema_1())?;
         let join = left.join(&right)?;
         assert_eq!("t1.c0, t1.c1, t2.c0, t2.c1", join.to_string());
         // test valid access
@@ -418,8 +527,8 @@ mod tests {
 
     #[test]
     fn join_qualified_duplicate() -> Result<()> {
-        let left = DFSchema::try_from_qualified("t1", &test_schema_1())?;
-        let right = DFSchema::try_from_qualified("t1", &test_schema_1())?;
+        let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+        let right = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let join = left.join(&right);
         assert!(join.is_err());
         assert_eq!(
@@ -446,7 +555,7 @@ mod tests {
 
     #[test]
     fn join_mixed() -> Result<()> {
-        let left = DFSchema::try_from_qualified("t1", &test_schema_1())?;
+        let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_2())?;
         let join = left.join(&right)?;
         assert_eq!("t1.c0, t1.c1, c100, c101", join.to_string());
@@ -464,7 +573,7 @@ mod tests {
 
     #[test]
     fn join_mixed_duplicate() -> Result<()> {
-        let left = DFSchema::try_from_qualified("t1", &test_schema_1())?;
+        let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
         assert!(join.is_err());

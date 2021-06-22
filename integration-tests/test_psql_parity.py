@@ -83,7 +83,7 @@ class PsqlParityTest(unittest.TestCase):
                 psql_output = pd.read_csv(io.BytesIO(generate_csv_from_psql(fname)))
                 self.assertTrue(
                     np.allclose(datafusion_output, psql_output),
-                    msg=f"data fusion output={datafusion_output}, psql_output={psql_output}",
+                    msg=f"datafusion output=\n{datafusion_output}, psql_output=\n{psql_output}",
                 )
 
 

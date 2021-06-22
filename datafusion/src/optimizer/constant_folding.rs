@@ -293,7 +293,7 @@ mod tests {
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::UInt32, false),
         ]);
-        LogicalPlanBuilder::scan_empty("test", &schema, None)?.build()
+        LogicalPlanBuilder::scan_empty(Some("test"), &schema, None)?.build()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
@@ -551,9 +551,9 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Projection: #a\
-        \n  Filter: NOT #c\
-        \n    Filter: #b\
+        Projection: #test.a\
+        \n  Filter: NOT #test.c\
+        \n    Filter: #test.b\
         \n      TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -571,10 +571,10 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Projection: #a\
+        Projection: #test.a\
         \n  Limit: 1\
-        \n    Filter: #c\
-        \n      Filter: NOT #b\
+        \n    Filter: #test.c\
+        \n      Filter: NOT #test.b\
         \n        TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -590,8 +590,8 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Projection: #a\
-        \n  Filter: NOT #b And #c\
+        Projection: #test.a\
+        \n  Filter: NOT #test.b And #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -607,8 +607,8 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Projection: #a\
-        \n  Filter: NOT #b Or NOT #c\
+        Projection: #test.a\
+        \n  Filter: NOT #test.b Or NOT #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -624,8 +624,8 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Projection: #a\
-        \n  Filter: #b\
+        Projection: #test.a\
+        \n  Filter: #test.b\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -640,7 +640,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Projection: #a, #d, NOT #b\
+        Projection: #test.a, #test.d, NOT #test.b\
         \n  TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -659,8 +659,8 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Aggregate: groupBy=[[#a, #c]], aggr=[[MAX(#b), MIN(#b)]]\
-        \n  Projection: #a, #c, #b\
+        Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b), MIN(#test.b)]]\
+        \n  Projection: #test.a, #test.c, #test.b\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);

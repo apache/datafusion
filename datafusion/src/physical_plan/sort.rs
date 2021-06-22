@@ -343,17 +343,17 @@ mod tests {
             vec![
                 // c1 string column
                 PhysicalSortExpr {
-                    expr: col("c1"),
+                    expr: col("c1", &schema)?,
                     options: SortOptions::default(),
                 },
                 // c2 uin32 column
                 PhysicalSortExpr {
-                    expr: col("c2"),
+                    expr: col("c2", &schema)?,
                     options: SortOptions::default(),
                 },
                 // c7 uin8 column
                 PhysicalSortExpr {
-                    expr: col("c7"),
+                    expr: col("c7", &schema)?,
                     options: SortOptions::default(),
                 },
             ],
@@ -417,14 +417,14 @@ mod tests {
         let sort_exec = Arc::new(SortExec::try_new(
             vec![
                 PhysicalSortExpr {
-                    expr: col("a"),
+                    expr: col("a", &schema)?,
                     options: SortOptions {
                         descending: true,
                         nulls_first: true,
                     },
                 },
                 PhysicalSortExpr {
-                    expr: col("b"),
+                    expr: col("b", &schema)?,
                     options: SortOptions {
                         descending: false,
                         nulls_first: false,

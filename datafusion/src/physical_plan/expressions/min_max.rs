@@ -278,7 +278,7 @@ macro_rules! min_max {
             }
             e => {
                 return Err(DataFusionError::Internal(format!(
-                    "MIN/MAX is not expected to receive a scalar {:?}",
+                    "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
                     e
                 )))
             }

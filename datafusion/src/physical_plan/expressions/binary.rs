@@ -611,11 +611,12 @@ mod tests {
         ]);
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
+
+        // expression: "a < b"
+        let lt = binary_simple(col("a", &schema)?, Operator::Lt, col("b", &schema)?);
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
 
-        // expression: "a < b"
-        let lt = binary_simple(col("a"), Operator::Lt, col("b"));
         let result = lt.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.len(), 5);
 
@@ -639,16 +640,17 @@ mod tests {
         ]);
         let a = Int32Array::from(vec![2, 4, 6, 8, 10]);
         let b = Int32Array::from(vec![2, 5, 4, 8, 8]);
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
 
         // expression: "a < b OR a == b"
         let expr = binary_simple(
-            binary_simple(col("a"), Operator::Lt, col("b")),
+            binary_simple(col("a", &schema)?, Operator::Lt, col("b", &schema)?),
             Operator::Or,
-            binary_simple(col("a"), Operator::Eq, col("b")),
+            binary_simple(col("a", &schema)?, Operator::Eq, col("b", &schema)?),
         );
-        assert_eq!("a < b OR a = b", format!("{}", expr));
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
+
+        assert_eq!("a@0 < b@1 OR a@0 = b@1", format!("{}", expr));
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.len(), 5);
@@ -680,13 +682,14 @@ mod tests {
             ]);
             let a = $A_ARRAY::from($A_VEC);
             let b = $B_ARRAY::from($B_VEC);
+
+            // verify that we can construct the expression
+            let expression =
+                binary(col("a", &schema)?, $OP, col("b", &schema)?, &schema)?;
             let batch = RecordBatch::try_new(
                 Arc::new(schema.clone()),
                 vec![Arc::new(a), Arc::new(b)],
             )?;
-
-            // verify that we can construct the expression
-            let expression = binary(col("a"), $OP, col("b"), &schema)?;
 
             // verify that the expression's type is correct
             assert_eq!(expression.data_type(&schema)?, $C_TYPE);
@@ -863,7 +866,12 @@ mod tests {
         // Test 1: dict = str
 
         // verify that we can construct the expression
-        let expression = binary(col("dict"), Operator::Eq, col("str"), &schema)?;
+        let expression = binary(
+            col("dict", &schema)?,
+            Operator::Eq,
+            col("str", &schema)?,
+            &schema,
+        )?;
         assert_eq!(expression.data_type(&schema)?, DataType::Boolean);
 
         // evaluate and verify the result type matched
@@ -877,7 +885,12 @@ mod tests {
         // str = dict
 
         // verify that we can construct the expression
-        let expression = binary(col("str"), Operator::Eq, col("dict"), &schema)?;
+        let expression = binary(
+            col("str", &schema)?,
+            Operator::Eq,
+            col("dict", &schema)?,
+            &schema,
+        )?;
         assert_eq!(expression.data_type(&schema)?, DataType::Boolean);
 
         // evaluate and verify the result type matched
@@ -989,7 +1002,7 @@ mod tests {
         op: Operator,
         expected: PrimitiveArray<T>,
     ) -> Result<()> {
-        let arithmetic_op = binary_simple(col("a"), op, col("b"));
+        let arithmetic_op = binary_simple(col("a", &schema)?, op, col("b", &schema)?);
         let batch = RecordBatch::try_new(schema, data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
 
@@ -1004,7 +1017,7 @@ mod tests {
         op: Operator,
         expected: BooleanArray,
     ) -> Result<()> {
-        let arithmetic_op = binary_simple(col("a"), op, col("b"));
+        let arithmetic_op = binary_simple(col("a", &schema)?, op, col("b", &schema)?);
         let data: Vec<ArrayRef> = vec![Arc::new(left), Arc::new(right)];
         let batch = RecordBatch::try_new(schema, data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
