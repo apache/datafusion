@@ -19,8 +19,7 @@
 
 use crate::error::Result;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
-use crate::scalar::ScalarValue;
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
@@ -58,12 +57,10 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         self.name.as_str()
     }
 
-    fn evaluate(
-        &self,
-        num_rows: usize,
-        _values: &[ArrayRef],
-    ) -> Result<Box<dyn Iterator<Item = ScalarValue>>> {
-        Ok(Box::new((1..(num_rows as u64) + 1).map(|i| i.into())))
+    fn evaluate(&self, num_rows: usize, _values: &[ArrayRef]) -> Result<ArrayRef> {
+        Ok(Arc::new(UInt64Array::from_iter_values(
+            1..(num_rows as u64) + 1,
+        )))
     }
 }
 
@@ -82,8 +79,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
         let row_number = RowNumber::new("row_number".to_owned());
-        let result =
-            ScalarValue::iter_to_array(row_number.evaluate(batch.num_rows(), &[])?)?;
+        let result = row_number.evaluate(batch.num_rows(), &[])?;
         let result = result.as_any().downcast_ref::<UInt64Array>().unwrap();
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
@@ -98,8 +94,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
         let row_number = RowNumber::new("row_number".to_owned());
-        let result =
-            ScalarValue::iter_to_array(row_number.evaluate(batch.num_rows(), &[])?)?;
+        let result = row_number.evaluate(batch.num_rows(), &[])?;
         let result = result.as_any().downcast_ref::<UInt64Array>().unwrap();
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);

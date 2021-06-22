@@ -26,7 +26,6 @@ use crate::physical_plan::{
     aggregates, aggregates::AggregateFunction, functions::Signature,
     type_coercion::data_types, PhysicalExpr,
 };
-use crate::scalar::ScalarValue;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use std::any::Any;
@@ -232,11 +231,7 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     }
 
     /// Evaluate the built-in window function against the number of rows and the arguments
-    fn evaluate(
-        &self,
-        num_rows: usize,
-        values: &[ArrayRef],
-    ) -> Result<Box<dyn Iterator<Item = ScalarValue>>>;
+    fn evaluate(&self, num_rows: usize, values: &[ArrayRef]) -> Result<ArrayRef>;
 }
 
 #[cfg(test)]

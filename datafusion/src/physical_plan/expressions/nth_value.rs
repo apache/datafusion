@@ -20,11 +20,9 @@
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
-use arrow::array::ArrayRef;
+use arrow::array::{new_null_array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
-use std::convert::TryFrom;
-use std::iter;
 use std::sync::Arc;
 
 /// nth_value kind
@@ -113,11 +111,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
         &self.name
     }
 
-    fn evaluate(
-        &self,
-        num_rows: usize,
-        values: &[ArrayRef],
-    ) -> Result<Box<dyn Iterator<Item = ScalarValue>>> {
+    fn evaluate(&self, num_rows: usize, values: &[ArrayRef]) -> Result<ArrayRef> {
         if values.is_empty() {
             return Err(DataFusionError::Execution(format!(
                 "No arguments supplied to {}",
@@ -133,21 +127,20 @@ impl BuiltInWindowFunctionExpr for NthValue {
                 value.len()
             )));
         }
-        if num_rows == 0 {
-            return Ok(Box::new(iter::empty()));
-        }
+        assert!(num_rows > 0, "Impossibly got empty values");
         let index: usize = match self.kind {
             NthValueKind::First => 0,
             NthValueKind::Last => (num_rows as usize) - 1,
             NthValueKind::Nth(n) => (n as usize) - 1,
         };
-        let scalar = if index >= num_rows {
+
+        Ok(if index >= num_rows {
             let data_type: &DataType = value.data_type();
-            ScalarValue::try_from(data_type)
+            new_null_array(data_type, num_rows)
         } else {
-            ScalarValue::try_from_array(value, index)
-        }?;
-        Ok(Box::new(iter::repeat(scalar).take(num_rows)))
+            let scalar = ScalarValue::try_from_array(value, num_rows)?;
+            scalar.to_array_of_size(num_rows)
+        })
     }
 }
 
@@ -164,8 +157,7 @@ mod tests {
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
-        let result =
-            ScalarValue::iter_to_array(expr.evaluate(batch.num_rows(), &values)?)?;
+        let result = expr.evaluate(batch.num_rows(), &values)?;
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
         let result = result.values();
         assert_eq!(expected, result);

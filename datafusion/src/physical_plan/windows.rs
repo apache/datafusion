@@ -30,6 +30,7 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream, WindowExpr,
 };
 use crate::scalar::ScalarValue;
+use arrow::compute::concat;
 use arrow::{
     array::ArrayRef,
     datatypes::{Field, Schema, SchemaRef},
@@ -177,22 +178,24 @@ impl WindowExpr for BuiltInWindowExpr {
             batch.num_rows(),
             &self.partition_columns(batch)?,
         )?;
-        ScalarValue::iter_to_array(
-            partition_points
-                .iter()
-                .map(|partition_range| {
-                    let start = partition_range.start;
-                    let len = partition_range.end - start;
-                    let values = values
-                        .iter()
-                        .map(|arr| arr.slice(start, len))
-                        .collect::<Vec<_>>();
-                    self.window.evaluate(len, &values)
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten(),
-        )
+        let results = partition_points
+            .iter()
+            .map(|partition_range| {
+                let start = partition_range.start;
+                let len = partition_range.end - start;
+                let values = values
+                    .iter()
+                    .map(|arr| arr.slice(start, len))
+                    .collect::<Vec<_>>();
+                self.window.evaluate(len, &values)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if results.len() == 1 {
+            Ok(results[0].clone())
+        } else {
+            let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
+            concat(&results).map_err(DataFusionError::ArrowError)
+        }
     }
 }
 
@@ -245,23 +248,27 @@ impl AggregateWindowExpr {
         let sort_partition_points =
             self.evaluate_partition_points(num_rows, &self.sort_columns(batch)?)?;
         let values = self.evaluate_args(batch)?;
-        ScalarValue::iter_to_array(
-            partition_points
-                .iter()
-                .map::<Result<_>, _>(|partition_range| {
-                    let sort_partition_points =
-                        find_ranges_in_range(partition_range, &sort_partition_points);
-                    let mut window_accumulators = self.create_accumulator()?;
-                    sort_partition_points
-                        .iter()
-                        .map(|range| window_accumulators.scan_peers(&values, range))
-                        .collect::<Result<Vec<_>>>()
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .flatten(),
-        )
+        let results = partition_points
+            .iter()
+            .map::<Result<_>, _>(|partition_range| {
+                let sort_partition_points =
+                    find_ranges_in_range(partition_range, &sort_partition_points);
+                let mut window_accumulators = self.create_accumulator()?;
+                let result = sort_partition_points
+                    .iter()
+                    .map(|range| window_accumulators.scan_peers(&values, range))
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .flatten();
+                ScalarValue::iter_to_array(result)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if results.len() == 1 {
+            Ok(results[0].clone())
+        } else {
+            let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
+            concat(&results).map_err(DataFusionError::ArrowError)
+        }
     }
 
     fn group_based_evaluate(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
