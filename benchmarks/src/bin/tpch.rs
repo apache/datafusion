@@ -18,7 +18,6 @@
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
 use std::{
-    collections::HashMap,
     fs,
     iter::Iterator,
     path::{Path, PathBuf},
@@ -252,11 +251,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
 async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     println!("Running benchmarks with the following options: {:?}", opt);
 
-    let mut settings = HashMap::new();
-    settings.insert("batch.size".to_owned(), format!("{}", opt.batch_size));
-
-    let ctx =
-        BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), settings);
+    let ctx = BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap());
 
     // register tables with Ballista context
     let path = opt.path.to_str().unwrap();
