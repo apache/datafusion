@@ -69,7 +69,7 @@ jobs:
         run: |
           cd ballista/rust
           # snmalloc requires cmake so build without default features
-          cargo build --no-default-features
+          cargo build --no-default-features --features sled
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
@@ -131,7 +131,7 @@ jobs:
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           cd ballista/rust
           # snmalloc requires cmake so build without default features
-          cargo test --no-default-features
+          cargo test --no-default-features --features sled
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"

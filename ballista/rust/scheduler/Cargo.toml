@@ -28,7 +28,7 @@ edition = "2018"
 [features]
 default = ["etcd", "sled"]
 etcd = ["etcd-client"]
-sled = ["sled_package"]
+sled = ["sled_package", "tokio-stream"]
 
 [dependencies]
 anyhow = "1"
@@ -48,6 +48,7 @@ rand = "0.8"
 serde = {version = "1", features = ["derive"]}
 sled_package = { package = "sled", version = "0.34", optional = true }
 tokio = { version = "1.0", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["net"], optional = true }
 tonic = "0.4"
 tower = { version = "0.4" }
 warp = "0.3"

@@ -29,9 +29,7 @@ use datafusion::scalar::ScalarValue;
 pub type MaybeColumnarBatch = Result<Option<ColumnarBatch>>;
 
 /// Batch of columnar data.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
-
 pub struct ColumnarBatch {
     schema: Arc<Schema>,
     columns: HashMap<String, ColumnarValue>,
@@ -112,9 +110,7 @@ impl ColumnarBatch {
 }
 
 /// A columnar value can either be a scalar value or an Arrow array.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
-
 pub enum ColumnarValue {
     Scalar(ScalarValue, usize),
     Columnar(ArrayRef),
