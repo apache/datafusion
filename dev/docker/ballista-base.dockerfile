@@ -23,7 +23,7 @@
 
 
 # Base image extends debian:buster-slim
-FROM rust:1.51.0-buster AS builder
+FROM rust:1.53.0-buster AS builder
 
 RUN apt update && apt -y install musl musl-dev musl-tools libssl-dev openssl
 
@@ -96,6 +96,4 @@ RUN cargo install cargo-build-deps
 
 # prepare toolchain
 RUN rustup update && \
-    rustup toolchain install nightly-2021-05-10 && \
-    rustup default nightly-2021-05-10 && \
     rustup component add rustfmt
