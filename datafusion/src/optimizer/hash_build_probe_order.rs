@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use crate::logical_plan::LogicalPlan;
+use crate::logical_plan::{Expr, LogicalPlan, LogicalPlanBuilder};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::{error::Result, prelude::JoinType};
 
@@ -131,6 +131,7 @@ impl OptimizerRule for HashBuildProbeOrder {
                 right,
                 on,
                 join_type,
+                join_constraint,
                 schema,
             } => {
                 let left = self.optimize(left, execution_props)?;
@@ -140,11 +141,9 @@ impl OptimizerRule for HashBuildProbeOrder {
                     Ok(LogicalPlan::Join {
                         left: Arc::new(right),
                         right: Arc::new(left),
-                        on: on
-                            .iter()
-                            .map(|(l, r)| (r.to_string(), l.to_string()))
-                            .collect(),
+                        on: on.iter().map(|(l, r)| (r.clone(), l.clone())).collect(),
                         join_type: swap_join_type(*join_type),
+                        join_constraint: *join_constraint,
                         schema: schema.clone(),
                     })
                 } else {
@@ -154,6 +153,7 @@ impl OptimizerRule for HashBuildProbeOrder {
                         right: Arc::new(right),
                         on: on.clone(),
                         join_type: *join_type,
+                        join_constraint: *join_constraint,
                         schema: schema.clone(),
                     })
                 }
@@ -166,12 +166,19 @@ impl OptimizerRule for HashBuildProbeOrder {
                 let left = self.optimize(left, execution_props)?;
                 let right = self.optimize(right, execution_props)?;
                 if should_swap_join_order(&left, &right) {
-                    // Swap left and right
-                    Ok(LogicalPlan::CrossJoin {
-                        left: Arc::new(right),
-                        right: Arc::new(left),
-                        schema: schema.clone(),
-                    })
+                    let swapped = LogicalPlanBuilder::from(&right).cross_join(&left)?;
+                    // wrap plan with projection to maintain column order
+                    let left_cols = left
+                        .schema()
+                        .fields()
+                        .iter()
+                        .map(|f| Expr::Column(f.qualified_column()));
+                    let right_cols = right
+                        .schema()
+                        .fields()
+                        .iter()
+                        .map(|f| Expr::Column(f.qualified_column()));
+                    swapped.project(left_cols.chain(right_cols))?.build()
                 } else {
                     // Keep join as is
                     Ok(LogicalPlan::CrossJoin {

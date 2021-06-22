@@ -125,8 +125,14 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 .on()
                 .iter()
                 .map(|tuple| protobuf::JoinOn {
-                    left: tuple.0.to_owned(),
-                    right: tuple.1.to_owned(),
+                    left: Some(protobuf::PhysicalColumn {
+                        name: tuple.0.name().to_string(),
+                        index: tuple.0.index() as u32,
+                    }),
+                    right: Some(protobuf::PhysicalColumn {
+                        name: tuple.1.name().to_string(),
+                        index: tuple.1.index() as u32,
+                    }),
                 })
                 .collect();
             let join_type = match exec.join_type() {
@@ -300,7 +306,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
 
             let pb_partition_method = match exec.partitioning() {
                 Partitioning::Hash(exprs, partition_count) => {
-                    PartitionMethod::Hash(protobuf::HashRepartition {
+                    PartitionMethod::Hash(protobuf::PhysicalHashRepartition {
                         hash_expr: exprs
                             .iter()
                             .map(|expr| expr.clone().try_into())
@@ -330,13 +336,13 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 .expr()
                 .iter()
                 .map(|expr| {
-                    let sort_expr = Box::new(protobuf::SortExprNode {
+                    let sort_expr = Box::new(protobuf::PhysicalSortExprNode {
                         expr: Some(Box::new(expr.expr.to_owned().try_into()?)),
                         asc: !expr.options.descending,
                         nulls_first: expr.options.nulls_first,
                     });
-                    Ok(protobuf::LogicalExprNode {
-                        expr_type: Some(protobuf::logical_expr_node::ExprType::Sort(
+                    Ok(protobuf::PhysicalExprNode {
+                        expr_type: Some(protobuf::physical_expr_node::ExprType::Sort(
                             sort_expr,
                         )),
                     })
@@ -373,10 +379,10 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
     }
 }
 
-impl TryInto<protobuf::LogicalExprNode> for Arc<dyn AggregateExpr> {
+impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
     type Error = BallistaError;
 
-    fn try_into(self) -> Result<protobuf::LogicalExprNode, Self::Error> {
+    fn try_into(self) -> Result<protobuf::PhysicalExprNode, Self::Error> {
         let aggr_function = if self.as_any().downcast_ref::<Avg>().is_some() {
             Ok(protobuf::AggregateFunction::Avg.into())
         } else if self.as_any().downcast_ref::<Sum>().is_some() {
@@ -389,14 +395,14 @@ impl TryInto<protobuf::LogicalExprNode> for Arc<dyn AggregateExpr> {
                 self
             )))
         }?;
-        let expressions: Vec<protobuf::LogicalExprNode> = self
+        let expressions: Vec<protobuf::PhysicalExprNode> = self
             .expressions()
             .iter()
             .map(|e| e.clone().try_into())
             .collect::<Result<Vec<_>, BallistaError>>()?;
-        Ok(protobuf::LogicalExprNode {
-            expr_type: Some(protobuf::logical_expr_node::ExprType::AggregateExpr(
-                Box::new(protobuf::AggregateExprNode {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
+                Box::new(protobuf::PhysicalAggregateExprNode {
                     aggr_function,
                     expr: Some(Box::new(expressions[0].clone())),
                 }),
@@ -405,90 +411,100 @@ impl TryInto<protobuf::LogicalExprNode> for Arc<dyn AggregateExpr> {
     }
 }
 
-impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::LogicalExprNode {
+impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
     type Error = BallistaError;
 
     fn try_from(value: Arc<dyn PhysicalExpr>) -> Result<Self, Self::Error> {
         let expr = value.as_any();
 
         if let Some(expr) = expr.downcast_ref::<Column>() {
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::ColumnName(
-                    expr.name().to_owned(),
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
+                    protobuf::PhysicalColumn {
+                        name: expr.name().to_string(),
+                        index: expr.index() as u32,
+                    },
                 )),
             })
         } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
-            let binary_expr = Box::new(protobuf::BinaryExprNode {
+            let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
                 l: Some(Box::new(expr.left().to_owned().try_into()?)),
                 r: Some(Box::new(expr.right().to_owned().try_into()?)),
                 op: format!("{:?}", expr.op()),
             });
 
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::BinaryExpr(
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::BinaryExpr(
                     binary_expr,
                 )),
             })
         } else if let Some(expr) = expr.downcast_ref::<CaseExpr>() {
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::Case(Box::new(
-                    protobuf::CaseNode {
-                        expr: expr
-                            .expr()
-                            .as_ref()
-                            .map(|exp| exp.clone().try_into().map(Box::new))
-                            .transpose()?,
-                        when_then_expr: expr
-                            .when_then_expr()
-                            .iter()
-                            .map(|(when_expr, then_expr)| {
-                                try_parse_when_then_expr(when_expr, then_expr)
-                            })
-                            .collect::<Result<Vec<protobuf::WhenThen>, Self::Error>>()?,
-                        else_expr: expr
-                            .else_expr()
-                            .map(|a| a.clone().try_into().map(Box::new))
-                            .transpose()?,
-                    },
-                ))),
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(
+                    protobuf::physical_expr_node::ExprType::Case(
+                        Box::new(
+                            protobuf::PhysicalCaseNode {
+                                expr: expr
+                                    .expr()
+                                    .as_ref()
+                                    .map(|exp| exp.clone().try_into().map(Box::new))
+                                    .transpose()?,
+                                when_then_expr: expr
+                                    .when_then_expr()
+                                    .iter()
+                                    .map(|(when_expr, then_expr)| {
+                                        try_parse_when_then_expr(when_expr, then_expr)
+                                    })
+                                    .collect::<Result<
+                                        Vec<protobuf::PhysicalWhenThen>,
+                                        Self::Error,
+                                    >>()?,
+                                else_expr: expr
+                                    .else_expr()
+                                    .map(|a| a.clone().try_into().map(Box::new))
+                                    .transpose()?,
+                            },
+                        ),
+                    ),
+                ),
             })
         } else if let Some(expr) = expr.downcast_ref::<NotExpr>() {
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::NotExpr(
-                    Box::new(protobuf::Not {
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(
+                    Box::new(protobuf::PhysicalNot {
                         expr: Some(Box::new(expr.arg().to_owned().try_into()?)),
                     }),
                 )),
             })
         } else if let Some(expr) = expr.downcast_ref::<IsNullExpr>() {
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::IsNullExpr(
-                    Box::new(protobuf::IsNull {
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
+                    Box::new(protobuf::PhysicalIsNull {
                         expr: Some(Box::new(expr.arg().to_owned().try_into()?)),
                     }),
                 )),
             })
         } else if let Some(expr) = expr.downcast_ref::<IsNotNullExpr>() {
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::IsNotNullExpr(
-                    Box::new(protobuf::IsNotNull {
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::IsNotNullExpr(
+                    Box::new(protobuf::PhysicalIsNotNull {
                         expr: Some(Box::new(expr.arg().to_owned().try_into()?)),
                     }),
                 )),
             })
         } else if let Some(expr) = expr.downcast_ref::<InListExpr>() {
-            Ok(protobuf::LogicalExprNode {
+            Ok(protobuf::PhysicalExprNode {
                 expr_type: Some(
-                    protobuf::logical_expr_node::ExprType::InList(
+                    protobuf::physical_expr_node::ExprType::InList(
                         Box::new(
-                            protobuf::InListNode {
+                            protobuf::PhysicalInListNode {
                                 expr: Some(Box::new(expr.expr().to_owned().try_into()?)),
                                 list: expr
                                     .list()
                                     .iter()
                                     .map(|a| a.clone().try_into())
                                     .collect::<Result<
-                                    Vec<protobuf::LogicalExprNode>,
+                                    Vec<protobuf::PhysicalExprNode>,
                                     Self::Error,
                                 >>()?,
                                 negated: expr.negated(),
@@ -498,32 +514,32 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::LogicalExprNode {
                 ),
             })
         } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::Negative(
-                    Box::new(protobuf::NegativeNode {
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(
+                    Box::new(protobuf::PhysicalNegativeNode {
                         expr: Some(Box::new(expr.arg().to_owned().try_into()?)),
                     }),
                 )),
             })
         } else if let Some(lit) = expr.downcast_ref::<Literal>() {
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::Literal(
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
                     lit.value().try_into()?,
                 )),
             })
         } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::Cast(Box::new(
-                    protobuf::CastNode {
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
+                    protobuf::PhysicalCastNode {
                         expr: Some(Box::new(cast.expr().clone().try_into()?)),
                         arrow_type: Some(cast.cast_type().into()),
                     },
                 ))),
             })
         } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::TryCast(
-                    Box::new(protobuf::TryCastNode {
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(
+                    Box::new(protobuf::PhysicalTryCastNode {
                         expr: Some(Box::new(cast.expr().clone().try_into()?)),
                         arrow_type: Some(cast.cast_type().into()),
                     }),
@@ -533,16 +549,18 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::LogicalExprNode {
             let fun: BuiltinScalarFunction =
                 BuiltinScalarFunction::from_str(expr.name())?;
             let fun: protobuf::ScalarFunction = (&fun).try_into()?;
-            let expr: Vec<protobuf::LogicalExprNode> = expr
+            let args: Vec<protobuf::PhysicalExprNode> = expr
                 .args()
                 .iter()
                 .map(|e| e.to_owned().try_into())
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(protobuf::LogicalExprNode {
-                expr_type: Some(protobuf::logical_expr_node::ExprType::ScalarFunction(
-                    protobuf::ScalarFunctionNode {
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarFunction(
+                    protobuf::PhysicalScalarFunctionNode {
+                        name: expr.name().to_string(),
                         fun: fun.into(),
-                        expr,
+                        args,
+                        return_type: Some(expr.return_type().into()),
                     },
                 )),
             })
@@ -558,8 +576,8 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::LogicalExprNode {
 fn try_parse_when_then_expr(
     when_expr: &Arc<dyn PhysicalExpr>,
     then_expr: &Arc<dyn PhysicalExpr>,
-) -> Result<protobuf::WhenThen, BallistaError> {
-    Ok(protobuf::WhenThen {
+) -> Result<protobuf::PhysicalWhenThen, BallistaError> {
+    Ok(protobuf::PhysicalWhenThen {
         when_expr: Some(when_expr.clone().try_into()?),
         then_expr: Some(then_expr.clone().try_into()?),
     })

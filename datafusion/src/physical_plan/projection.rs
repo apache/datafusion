@@ -233,8 +233,10 @@ mod tests {
         )?;
 
         // pick column c1 and name it column c1 in the output schema
-        let projection =
-            ProjectionExec::try_new(vec![(col("c1"), "c1".to_string())], Arc::new(csv))?;
+        let projection = ProjectionExec::try_new(
+            vec![(col("c1", &schema)?, "c1".to_string())],
+            Arc::new(csv),
+        )?;
 
         let mut partition_count = 0;
         let mut row_count = 0;

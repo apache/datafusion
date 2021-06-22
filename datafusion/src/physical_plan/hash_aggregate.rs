@@ -663,9 +663,12 @@ async fn compute_grouped_hash_aggregate(
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     mut input: SendableRecordBatchStream,
 ) -> ArrowResult<RecordBatch> {
-    // the expressions to evaluate the batch, one vec of expressions per aggregation
-    let aggregate_expressions = aggregate_expressions(&aggr_expr, &mode)
-        .map_err(DataFusionError::into_arrow_external_error)?;
+    // The expressions to evaluate the batch, one vec of expressions per aggregation.
+    // Assume create_schema() always put group columns in front of aggr columns, we set
+    // col_idx_base to group expression count.
+    let aggregate_expressions =
+        aggregate_expressions(&aggr_expr, &mode, group_expr.len())
+            .map_err(DataFusionError::into_arrow_external_error)?;
 
     // mapping key -> (set of accumulators, indices of the key in the batch)
     // * the indexes are updated at each row
@@ -794,14 +797,21 @@ fn evaluate_many(
         .collect::<Result<Vec<_>>>()
 }
 
-/// uses `state_fields` to build a vec of expressions required to merge the AggregateExpr' accumulator's state.
+/// uses `state_fields` to build a vec of physical column expressions required to merge the
+/// AggregateExpr' accumulator's state.
+///
+/// `index_base` is the starting physical column index for the next expanded state field.
 fn merge_expressions(
+    index_base: usize,
     expr: &Arc<dyn AggregateExpr>,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
     Ok(expr
         .state_fields()?
         .iter()
-        .map(|f| Arc::new(Column::new(f.name())) as Arc<dyn PhysicalExpr>)
+        .enumerate()
+        .map(|(idx, f)| {
+            Arc::new(Column::new(f.name(), index_base + idx)) as Arc<dyn PhysicalExpr>
+        })
         .collect::<Vec<_>>())
 }
 
@@ -809,22 +819,27 @@ fn merge_expressions(
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateExpr::expressions
 /// * Final: columns of `AggregateExpr::state_fields()`
-/// The return value is to be understood as:
-/// * index 0 is the aggregation
-/// * index 1 is the expression i of the aggregation
 fn aggregate_expressions(
     aggr_expr: &[Arc<dyn AggregateExpr>],
     mode: &AggregateMode,
+    col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
         AggregateMode::Partial => {
             Ok(aggr_expr.iter().map(|agg| agg.expressions()).collect())
         }
         // in this mode, we build the merge expressions of the aggregation
-        AggregateMode::Final | AggregateMode::FinalPartitioned => Ok(aggr_expr
-            .iter()
-            .map(|agg| merge_expressions(agg))
-            .collect::<Result<Vec<_>>>()?),
+        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+            let mut col_idx_base = col_idx_base;
+            Ok(aggr_expr
+                .iter()
+                .map(|agg| {
+                    let exprs = merge_expressions(col_idx_base, agg)?;
+                    col_idx_base += exprs.len();
+                    Ok(exprs)
+                })
+                .collect::<Result<Vec<_>>>()?)
+        }
     }
 }
 
@@ -846,10 +861,8 @@ async fn compute_hash_aggregate(
 ) -> ArrowResult<RecordBatch> {
     let mut accumulators = create_accumulators(&aggr_expr)
         .map_err(DataFusionError::into_arrow_external_error)?;
-
-    let expressions = aggregate_expressions(&aggr_expr, &mode)
+    let expressions = aggregate_expressions(&aggr_expr, &mode, 0)
         .map_err(DataFusionError::into_arrow_external_error)?;
-
     let expressions = Arc::new(expressions);
 
     // 1 for each batch, update / merge accumulators with the expressions' values
@@ -1253,16 +1266,17 @@ mod tests {
 
     /// build the aggregates on the data from some_data() and check the results
     async fn check_aggregates(input: Arc<dyn ExecutionPlan>) -> Result<()> {
+        let input_schema = input.schema();
+
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
-            vec![(col("a"), "a".to_string())];
+            vec![(col("a", &input_schema)?, "a".to_string())];
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-            col("b"),
+            col("b", &input_schema)?,
             "AVG(b)".to_string(),
             DataType::Float64,
         ))];
 
-        let input_schema = input.schema();
         let partial_aggregate = Arc::new(HashAggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
@@ -1286,8 +1300,9 @@ mod tests {
 
         let merge = Arc::new(MergeExec::new(partial_aggregate));
 
-        let final_group: Vec<Arc<dyn PhysicalExpr>> =
-            (0..groups.len()).map(|i| col(&groups[i].1)).collect();
+        let final_group: Vec<Arc<dyn PhysicalExpr>> = (0..groups.len())
+            .map(|i| col(&groups[i].1, &input_schema))
+            .collect::<Result<_>>()?;
 
         let merged_aggregate = Arc::new(HashAggregateExec::try_new(
             AggregateMode::Final,

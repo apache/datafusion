@@ -451,6 +451,7 @@ mod tests {
     #[test]
     fn case_with_expr() -> Result<()> {
         let batch = case_test_batch()?;
+        let schema = batch.schema();
 
         // CASE a WHEN 'foo' THEN 123 WHEN 'bar' THEN 456 END
         let when1 = lit(ScalarValue::Utf8(Some("foo".to_string())));
@@ -458,7 +459,11 @@ mod tests {
         let when2 = lit(ScalarValue::Utf8(Some("bar".to_string())));
         let then2 = lit(ScalarValue::Int32(Some(456)));
 
-        let expr = case(Some(col("a")), &[(when1, then1), (when2, then2)], None)?;
+        let expr = case(
+            Some(col("a", &schema)?),
+            &[(when1, then1), (when2, then2)],
+            None,
+        )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = result
             .as_any()
@@ -475,6 +480,7 @@ mod tests {
     #[test]
     fn case_with_expr_else() -> Result<()> {
         let batch = case_test_batch()?;
+        let schema = batch.schema();
 
         // CASE a WHEN 'foo' THEN 123 WHEN 'bar' THEN 456 ELSE 999 END
         let when1 = lit(ScalarValue::Utf8(Some("foo".to_string())));
@@ -484,7 +490,7 @@ mod tests {
         let else_value = lit(ScalarValue::Int32(Some(999)));
 
         let expr = case(
-            Some(col("a")),
+            Some(col("a", &schema)?),
             &[(when1, then1), (when2, then2)],
             Some(else_value),
         )?;
@@ -505,17 +511,18 @@ mod tests {
     #[test]
     fn case_without_expr() -> Result<()> {
         let batch = case_test_batch()?;
+        let schema = batch.schema();
 
         // CASE WHEN a = 'foo' THEN 123 WHEN a = 'bar' THEN 456 END
         let when1 = binary(
-            col("a"),
+            col("a", &schema)?,
             Operator::Eq,
             lit(ScalarValue::Utf8(Some("foo".to_string()))),
             &batch.schema(),
         )?;
         let then1 = lit(ScalarValue::Int32(Some(123)));
         let when2 = binary(
-            col("a"),
+            col("a", &schema)?,
             Operator::Eq,
             lit(ScalarValue::Utf8(Some("bar".to_string()))),
             &batch.schema(),
@@ -539,17 +546,18 @@ mod tests {
     #[test]
     fn case_without_expr_else() -> Result<()> {
         let batch = case_test_batch()?;
+        let schema = batch.schema();
 
         // CASE WHEN a = 'foo' THEN 123 WHEN a = 'bar' THEN 456 ELSE 999 END
         let when1 = binary(
-            col("a"),
+            col("a", &schema)?,
             Operator::Eq,
             lit(ScalarValue::Utf8(Some("foo".to_string()))),
             &batch.schema(),
         )?;
         let then1 = lit(ScalarValue::Int32(Some(123)));
         let when2 = binary(
-            col("a"),
+            col("a", &schema)?,
             Operator::Eq,
             lit(ScalarValue::Utf8(Some("bar".to_string()))),
             &batch.schema(),

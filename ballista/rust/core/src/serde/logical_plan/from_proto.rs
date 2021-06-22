@@ -18,7 +18,7 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use crate::error::BallistaError;
-use crate::serde::{proto_error, protobuf};
+use crate::serde::{from_proto_binary_op, proto_error, protobuf};
 use crate::{convert_box_required, convert_required};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::logical_plan::window_frames::{
@@ -26,7 +26,8 @@ use datafusion::logical_plan::window_frames::{
 };
 use datafusion::logical_plan::{
     abs, acos, asin, atan, ceil, cos, exp, floor, ln, log10, log2, round, signum, sin,
-    sqrt, tan, trunc, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
+    sqrt, tan, trunc, Column, DFField, DFSchema, Expr, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Operator,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::csv::CsvReadOptions;
@@ -36,6 +37,7 @@ use protobuf::logical_plan_node::LogicalPlanType;
 use protobuf::{logical_expr_node::ExprType, scalar_type};
 use std::{
     convert::{From, TryInto},
+    sync::Arc,
     unimplemented,
 };
 
@@ -115,8 +117,8 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .has_header(scan.has_header);
 
                 let mut projection = None;
-                if let Some(column_names) = &scan.projection {
-                    let column_indices = column_names
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
                         .columns
                         .iter()
                         .map(|name| schema.index_of(name))
@@ -234,10 +236,10 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Join(join) => {
-                let left_keys: Vec<&str> =
-                    join.left_join_column.iter().map(|i| i.as_str()).collect();
-                let right_keys: Vec<&str> =
-                    join.right_join_column.iter().map(|i| i.as_str()).collect();
+                let left_keys: Vec<Column> =
+                    join.left_join_column.iter().map(|i| i.into()).collect();
+                let right_keys: Vec<Column> =
+                    join.right_join_column.iter().map(|i| i.into()).collect();
                 let join_type =
                     protobuf::JoinType::from_i32(join.join_type).ok_or_else(|| {
                         proto_error(format!(
@@ -257,8 +259,8 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .join(
                         &convert_box_required!(join.right)?,
                         join_type,
-                        &left_keys,
-                        &right_keys,
+                        left_keys,
+                        right_keys,
                     )?
                     .build()
                     .map_err(|e| e.into())
@@ -267,22 +269,48 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
     }
 }
 
-impl TryInto<datafusion::logical_plan::DFSchema> for protobuf::Schema {
-    type Error = BallistaError;
-    fn try_into(self) -> Result<datafusion::logical_plan::DFSchema, Self::Error> {
-        let schema: Schema = (&self).try_into()?;
-        schema.try_into().map_err(BallistaError::DataFusionError)
+impl From<&protobuf::Column> for Column {
+    fn from(c: &protobuf::Column) -> Column {
+        let c = c.clone();
+        Column {
+            relation: c.relation.map(|r| r.relation),
+            name: c.name,
+        }
     }
 }
 
-impl TryInto<datafusion::logical_plan::DFSchemaRef> for protobuf::Schema {
+impl TryInto<DFSchema> for &protobuf::DfSchema {
     type Error = BallistaError;
+
+    fn try_into(self) -> Result<DFSchema, BallistaError> {
+        let fields = self
+            .columns
+            .iter()
+            .map(|c| c.try_into())
+            .collect::<Result<Vec<DFField>, _>>()?;
+        Ok(DFSchema::new(fields)?)
+    }
+}
+
+impl TryInto<datafusion::logical_plan::DFSchemaRef> for protobuf::DfSchema {
+    type Error = BallistaError;
+
     fn try_into(self) -> Result<datafusion::logical_plan::DFSchemaRef, Self::Error> {
-        use datafusion::logical_plan::ToDFSchema;
-        let schema: Schema = (&self).try_into()?;
-        schema
-            .to_dfschema_ref()
-            .map_err(BallistaError::DataFusionError)
+        let dfschema: DFSchema = (&self).try_into()?;
+        Ok(Arc::new(dfschema))
+    }
+}
+
+impl TryInto<DFField> for &protobuf::DfField {
+    type Error = BallistaError;
+
+    fn try_into(self) -> Result<DFField, Self::Error> {
+        let field: Field = convert_required!(self.field)?;
+
+        Ok(match &self.qualifier {
+            Some(q) => DFField::from_qualified(&q.relation, field),
+            None => DFField::from(field),
+        })
     }
 }
 
@@ -336,149 +364,6 @@ impl TryInto<DataType> for &protobuf::scalar_type::Datatype {
                 scalar_type
             }
         })
-    }
-}
-
-impl TryInto<DataType> for &protobuf::arrow_type::ArrowTypeEnum {
-    type Error = BallistaError;
-    fn try_into(self) -> Result<DataType, Self::Error> {
-        use protobuf::arrow_type;
-        Ok(match self {
-            arrow_type::ArrowTypeEnum::None(_) => DataType::Null,
-            arrow_type::ArrowTypeEnum::Bool(_) => DataType::Boolean,
-            arrow_type::ArrowTypeEnum::Uint8(_) => DataType::UInt8,
-            arrow_type::ArrowTypeEnum::Int8(_) => DataType::Int8,
-            arrow_type::ArrowTypeEnum::Uint16(_) => DataType::UInt16,
-            arrow_type::ArrowTypeEnum::Int16(_) => DataType::Int16,
-            arrow_type::ArrowTypeEnum::Uint32(_) => DataType::UInt32,
-            arrow_type::ArrowTypeEnum::Int32(_) => DataType::Int32,
-            arrow_type::ArrowTypeEnum::Uint64(_) => DataType::UInt64,
-            arrow_type::ArrowTypeEnum::Int64(_) => DataType::Int64,
-            arrow_type::ArrowTypeEnum::Float16(_) => DataType::Float16,
-            arrow_type::ArrowTypeEnum::Float32(_) => DataType::Float32,
-            arrow_type::ArrowTypeEnum::Float64(_) => DataType::Float64,
-            arrow_type::ArrowTypeEnum::Utf8(_) => DataType::Utf8,
-            arrow_type::ArrowTypeEnum::LargeUtf8(_) => DataType::LargeUtf8,
-            arrow_type::ArrowTypeEnum::Binary(_) => DataType::Binary,
-            arrow_type::ArrowTypeEnum::FixedSizeBinary(size) => {
-                DataType::FixedSizeBinary(*size)
-            }
-            arrow_type::ArrowTypeEnum::LargeBinary(_) => DataType::LargeBinary,
-            arrow_type::ArrowTypeEnum::Date32(_) => DataType::Date32,
-            arrow_type::ArrowTypeEnum::Date64(_) => DataType::Date64,
-            arrow_type::ArrowTypeEnum::Duration(time_unit) => {
-                DataType::Duration(protobuf::TimeUnit::from_i32_to_arrow(*time_unit)?)
-            }
-            arrow_type::ArrowTypeEnum::Timestamp(protobuf::Timestamp {
-                time_unit,
-                timezone,
-            }) => DataType::Timestamp(
-                protobuf::TimeUnit::from_i32_to_arrow(*time_unit)?,
-                match timezone.len() {
-                    0 => None,
-                    _ => Some(timezone.to_owned()),
-                },
-            ),
-            arrow_type::ArrowTypeEnum::Time32(time_unit) => {
-                DataType::Time32(protobuf::TimeUnit::from_i32_to_arrow(*time_unit)?)
-            }
-            arrow_type::ArrowTypeEnum::Time64(time_unit) => {
-                DataType::Time64(protobuf::TimeUnit::from_i32_to_arrow(*time_unit)?)
-            }
-            arrow_type::ArrowTypeEnum::Interval(interval_unit) => DataType::Interval(
-                protobuf::IntervalUnit::from_i32_to_arrow(*interval_unit)?,
-            ),
-            arrow_type::ArrowTypeEnum::Decimal(protobuf::Decimal {
-                whole,
-                fractional,
-            }) => DataType::Decimal(*whole as usize, *fractional as usize),
-            arrow_type::ArrowTypeEnum::List(list) => {
-                let list_type: &protobuf::Field = list
-                    .as_ref()
-                    .field_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: List message missing required field 'field_type'"))?
-                    .as_ref();
-                DataType::List(Box::new(list_type.try_into()?))
-            }
-            arrow_type::ArrowTypeEnum::LargeList(list) => {
-                let list_type: &protobuf::Field = list
-                    .as_ref()
-                    .field_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: List message missing required field 'field_type'"))?
-                    .as_ref();
-                DataType::LargeList(Box::new(list_type.try_into()?))
-            }
-            arrow_type::ArrowTypeEnum::FixedSizeList(list) => {
-                let list_type: &protobuf::Field = list
-                    .as_ref()
-                    .field_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: List message missing required field 'field_type'"))?
-                    .as_ref();
-                let list_size = list.list_size;
-                DataType::FixedSizeList(Box::new(list_type.try_into()?), list_size)
-            }
-            arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
-                strct
-                    .sub_field_types
-                    .iter()
-                    .map(|field| field.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            arrow_type::ArrowTypeEnum::Union(union) => DataType::Union(
-                union
-                    .union_types
-                    .iter()
-                    .map(|field| field.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            arrow_type::ArrowTypeEnum::Dictionary(dict) => {
-                let pb_key_datatype = dict
-                    .as_ref()
-                    .key
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: Dictionary message missing required field 'key'"))?;
-                let pb_value_datatype = dict
-                    .as_ref()
-                    .value
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: Dictionary message missing required field 'key'"))?;
-                let key_datatype: DataType = pb_key_datatype.as_ref().try_into()?;
-                let value_datatype: DataType = pb_value_datatype.as_ref().try_into()?;
-                DataType::Dictionary(Box::new(key_datatype), Box::new(value_datatype))
-            }
-        })
-    }
-}
-
-#[allow(clippy::from_over_into)]
-impl Into<DataType> for protobuf::PrimitiveScalarType {
-    fn into(self) -> DataType {
-        match self {
-            protobuf::PrimitiveScalarType::Bool => DataType::Boolean,
-            protobuf::PrimitiveScalarType::Uint8 => DataType::UInt8,
-            protobuf::PrimitiveScalarType::Int8 => DataType::Int8,
-            protobuf::PrimitiveScalarType::Uint16 => DataType::UInt16,
-            protobuf::PrimitiveScalarType::Int16 => DataType::Int16,
-            protobuf::PrimitiveScalarType::Uint32 => DataType::UInt32,
-            protobuf::PrimitiveScalarType::Int32 => DataType::Int32,
-            protobuf::PrimitiveScalarType::Uint64 => DataType::UInt64,
-            protobuf::PrimitiveScalarType::Int64 => DataType::Int64,
-            protobuf::PrimitiveScalarType::Float32 => DataType::Float32,
-            protobuf::PrimitiveScalarType::Float64 => DataType::Float64,
-            protobuf::PrimitiveScalarType::Utf8 => DataType::Utf8,
-            protobuf::PrimitiveScalarType::LargeUtf8 => DataType::LargeUtf8,
-            protobuf::PrimitiveScalarType::Date32 => DataType::Date32,
-            protobuf::PrimitiveScalarType::TimeMicrosecond => {
-                DataType::Time64(TimeUnit::Microsecond)
-            }
-            protobuf::PrimitiveScalarType::TimeNanosecond => {
-                DataType::Time64(TimeUnit::Nanosecond)
-            }
-            protobuf::PrimitiveScalarType::Null => DataType::Null,
-        }
     }
 }
 
@@ -899,7 +784,7 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                 op: from_proto_binary_op(&binary_expr.op)?,
                 right: Box::new(parse_required_expr(&binary_expr.r)?),
             }),
-            ExprType::ColumnName(column_name) => Ok(Expr::Column(column_name.to_owned())),
+            ExprType::Column(column) => Ok(Expr::Column(column.into())),
             ExprType::Literal(literal) => {
                 use datafusion::scalar::ScalarValue;
                 let scalar_value: datafusion::scalar::ScalarValue = literal.try_into()?;
@@ -1164,28 +1049,6 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
     }
 }
 
-fn from_proto_binary_op(op: &str) -> Result<Operator, BallistaError> {
-    match op {
-        "And" => Ok(Operator::And),
-        "Or" => Ok(Operator::Or),
-        "Eq" => Ok(Operator::Eq),
-        "NotEq" => Ok(Operator::NotEq),
-        "LtEq" => Ok(Operator::LtEq),
-        "Lt" => Ok(Operator::Lt),
-        "Gt" => Ok(Operator::Gt),
-        "GtEq" => Ok(Operator::GtEq),
-        "Plus" => Ok(Operator::Plus),
-        "Minus" => Ok(Operator::Minus),
-        "Multiply" => Ok(Operator::Multiply),
-        "Divide" => Ok(Operator::Divide),
-        "Like" => Ok(Operator::Like),
-        other => Err(proto_error(format!(
-            "Unsupported binary operator '{:?}'",
-            other
-        ))),
-    }
-}
-
 impl TryInto<DataType> for &protobuf::ScalarType {
     type Error = BallistaError;
     fn try_into(self) -> Result<DataType, Self::Error> {
@@ -1359,45 +1222,5 @@ impl TryFrom<protobuf::WindowFrame> for WindowFrame {
             start_bound,
             end_bound,
         })
-    }
-}
-
-impl From<protobuf::AggregateFunction> for AggregateFunction {
-    fn from(aggr_function: protobuf::AggregateFunction) -> Self {
-        match aggr_function {
-            protobuf::AggregateFunction::Min => AggregateFunction::Min,
-            protobuf::AggregateFunction::Max => AggregateFunction::Max,
-            protobuf::AggregateFunction::Sum => AggregateFunction::Sum,
-            protobuf::AggregateFunction::Avg => AggregateFunction::Avg,
-            protobuf::AggregateFunction::Count => AggregateFunction::Count,
-        }
-    }
-}
-
-impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
-    fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
-        match built_in_function {
-            protobuf::BuiltInWindowFunction::RowNumber => {
-                BuiltInWindowFunction::RowNumber
-            }
-            protobuf::BuiltInWindowFunction::Rank => BuiltInWindowFunction::Rank,
-            protobuf::BuiltInWindowFunction::PercentRank => {
-                BuiltInWindowFunction::PercentRank
-            }
-            protobuf::BuiltInWindowFunction::DenseRank => {
-                BuiltInWindowFunction::DenseRank
-            }
-            protobuf::BuiltInWindowFunction::Lag => BuiltInWindowFunction::Lag,
-            protobuf::BuiltInWindowFunction::Lead => BuiltInWindowFunction::Lead,
-            protobuf::BuiltInWindowFunction::FirstValue => {
-                BuiltInWindowFunction::FirstValue
-            }
-            protobuf::BuiltInWindowFunction::CumeDist => BuiltInWindowFunction::CumeDist,
-            protobuf::BuiltInWindowFunction::Ntile => BuiltInWindowFunction::Ntile,
-            protobuf::BuiltInWindowFunction::NthValue => BuiltInWindowFunction::NthValue,
-            protobuf::BuiltInWindowFunction::LastValue => {
-                BuiltInWindowFunction::LastValue
-            }
-        }
     }
 }

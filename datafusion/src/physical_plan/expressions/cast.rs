@@ -180,10 +180,14 @@ mod tests {
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
             // verify that we can construct the expression
-            let expression = cast_with_options(col("a"), &schema, $TYPE, $CAST_OPTIONS)?;
+            let expression =
+                cast_with_options(col("a", &schema)?, &schema, $TYPE, $CAST_OPTIONS)?;
 
             // verify that its display is correct
-            assert_eq!(format!("CAST(a AS {:?})", $TYPE), format!("{}", expression));
+            assert_eq!(
+                format!("CAST(a@0 AS {:?})", $TYPE),
+                format!("{}", expression)
+            );
 
             // verify that the expression's type is correct
             assert_eq!(expression.data_type(&schema)?, $TYPE);
@@ -272,7 +276,7 @@ mod tests {
         // Ensure a useful error happens at plan time if invalid casts are used
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
-        let result = cast(col("a"), &schema, DataType::LargeBinary);
+        let result = cast(col("a", &schema).unwrap(), &schema, DataType::LargeBinary);
         result.expect_err("expected Invalid CAST");
     }
 
@@ -283,7 +287,7 @@ mod tests {
         let a = StringArray::from(vec!["9.1"]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
         let expression = cast_with_options(
-            col("a"),
+            col("a", &schema)?,
             &schema,
             DataType::Int32,
             DEFAULT_DATAFUSION_CAST_OPTIONS,
