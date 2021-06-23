@@ -83,9 +83,10 @@ fn get_projected_schema(
         .collect();
 
     if projection.is_empty() {
-        if has_projection {
+        if has_projection && !schema.fields().is_empty() {
             // Ensure that we are reading at least one column from the table in case the query
-            // does not reference any columns directly such as "SELECT COUNT(1) FROM table"
+            // does not reference any columns directly such as "SELECT COUNT(1) FROM table",
+            // except when the table is empty (no column)
             projection.push(0);
         } else {
             // for table scan without projection, we default to return all columns

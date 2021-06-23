@@ -893,7 +893,7 @@ mod tests {
         logical_plan::{col, create_udf, sum, Expr},
     };
     use crate::{
-        datasource::{MemTable, TableType},
+        datasource::{empty::EmptyTable, MemTable, TableType},
         logical_plan::create_udaf,
         physical_plan::expressions::AvgAccumulator,
     };
@@ -3330,6 +3330,19 @@ mod tests {
             "| Jorge  | 2018-12-13 12:12:10.011 |",
             "+--------+-------------------------+",
         ];
+        assert_batches_sorted_eq!(expected, &result);
+    }
+
+    #[tokio::test]
+    async fn query_empty_table() {
+        let mut ctx = ExecutionContext::new();
+        let empty_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())));
+        ctx.register_table("test_tbl", empty_table).unwrap();
+        let sql = "SELECT * FROM test_tbl";
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("Query empty table");
+        let expected = vec!["++", "++"];
         assert_batches_sorted_eq!(expected, &result);
     }
 
