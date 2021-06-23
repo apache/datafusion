@@ -635,21 +635,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // window function
         let window_func_exprs = find_window_exprs(&select_exprs_post_aggr);
 
-        let (plan, exprs) = if window_func_exprs.is_empty() {
-            (plan, select_exprs_post_aggr)
+        let plan = if window_func_exprs.is_empty() {
+            plan
         } else {
-            self.window(plan, window_func_exprs, &select_exprs_post_aggr)?
+            self.window(plan, window_func_exprs)?
         };
 
         let plan = if select.distinct {
             return LogicalPlanBuilder::from(&plan)
-                .aggregate(exprs, vec![])?
+                .aggregate(select_exprs_post_aggr, vec![])?
                 .build();
         } else {
             plan
         };
 
-        self.project(&plan, exprs)
+        self.project(&plan, select_exprs_post_aggr)
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
@@ -678,12 +678,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Wrap a plan in a window
-    fn window(
-        &self,
-        input: LogicalPlan,
-        window_exprs: Vec<Expr>,
-        select_exprs: &[Expr],
-    ) -> Result<(LogicalPlan, Vec<Expr>)> {
+    fn window(&self, input: LogicalPlan, window_exprs: Vec<Expr>) -> Result<LogicalPlan> {
         let mut plan = input;
         let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
         // sort by sort_key len descending, so that more deeply sorted plans gets nested further
@@ -700,11 +695,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .window(window_exprs)?
                 .build()?;
         }
-        let select_exprs = select_exprs
-            .iter()
-            .map(|expr| rebase_expr(expr, &window_exprs, &plan))
-            .collect::<Result<Vec<_>>>()?;
-        Ok((plan, select_exprs))
+
+        Ok(plan)
     }
 
     /// Wrap a plan in an aggregate
@@ -2816,6 +2808,16 @@ mod tests {
         let sql = "SELECT order_id oid, MAX(order_id) OVER () max_oid from orders";
         let expected = "\
         Projection: #orders.order_id AS oid, #MAX(orders.order_id) AS max_oid\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.order_id)]]\
+        \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn empty_over_dup_with_alias() {
+        let sql = "SELECT order_id oid, MAX(order_id) OVER () max_oid, MAX(order_id) OVER () max_oid_dup from orders";
+        let expected = "\
+        Projection: #orders.order_id AS oid, #MAX(orders.order_id) AS max_oid, #MAX(orders.order_id) AS max_oid_dup\
         \n  WindowAggr: windowExpr=[[MAX(#orders.order_id)]]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
