@@ -535,6 +535,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut combined_schema = (**projected_plan.schema()).clone();
         combined_schema.merge(plan.schema());
 
+        // this alias map is resolved and looked up in both having exprs and group by exprs
+        let alias_map = extract_aliases(&select_exprs);
+
         // Optionally the HAVING expression.
         let having_expr_opt = select
             .having
@@ -542,7 +545,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map::<Result<Expr>, _>(|having_expr| {
                 let having_expr =
                     self.sql_expr_to_logical_expr(having_expr, &combined_schema)?;
-
                 // This step "dereferences" any aliases in the HAVING clause.
                 //
                 // This is how we support queries with HAVING expressions that
@@ -558,12 +560,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 //   SELECT c1 AS m FROM t HAVING c1 > 10;
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
-                let having_expr = resolve_aliases_to_exprs(
-                    &having_expr,
-                    &extract_aliases(&select_exprs),
-                )?;
-
-                Ok(having_expr)
+                resolve_aliases_to_exprs(&having_expr, &alias_map)
             })
             .transpose()?;
 
@@ -578,7 +575,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // All of the aggregate expressions (deduplicated).
         let aggr_exprs = find_aggregate_exprs(&aggr_expr_haystack);
 
-        let alias_map = extract_aliases(&select_exprs);
         let group_by_exprs = select
             .group_by
             .iter()
@@ -586,7 +582,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let group_by_expr = self.sql_expr_to_logical_expr(e, &combined_schema)?;
                 let group_by_expr = resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
                 let group_by_expr =
-                    resolve_positions_to_exprs(&group_by_expr, &select_exprs)?;
+                    resolve_positions_to_exprs(&group_by_expr, &select_exprs)
+                        .unwrap_or(group_by_expr);
                 self.validate_schema_satisfies_exprs(
                     plan.schema(),
                     &[group_by_expr.clone()],

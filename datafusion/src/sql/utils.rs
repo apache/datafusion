@@ -398,10 +398,13 @@ pub(crate) fn extract_aliases(exprs: &[Expr]) -> HashMap<String, Expr> {
         .collect::<HashMap<String, Expr>>()
 }
 
+/// Given an expression that's literal int encoding position, lookup the corresponding expression
+/// in the select_exprs list, if the index is within the bounds and it is indeed a position literal;
+/// Otherwise, return None
 pub(crate) fn resolve_positions_to_exprs(
     expr: &Expr,
     select_exprs: &[Expr],
-) -> Result<Expr> {
+) -> Option<Expr> {
     match expr {
         // sql_expr_to_logical_expr maps number to i64
         // https://github.com/apache/arrow-datafusion/blob/8d175c759e17190980f270b5894348dc4cff9bbf/datafusion/src/sql/planner.rs#L882-L887
@@ -410,12 +413,12 @@ pub(crate) fn resolve_positions_to_exprs(
         {
             let index = (position - 1) as usize;
             let select_expr = &select_exprs[index];
-            match select_expr {
-                Expr::Alias(nested_expr, _alias_name) => Ok(*nested_expr.clone()),
-                _ => Ok(select_expr.clone()),
-            }
+            Some(match select_expr {
+                Expr::Alias(nested_expr, _alias_name) => *nested_expr.clone(),
+                _ => select_expr.clone(),
+            })
         }
-        _ => Ok(expr.clone()),
+        _ => None,
     }
 }
 
