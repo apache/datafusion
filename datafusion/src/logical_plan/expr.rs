@@ -1594,14 +1594,25 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             fun,
             args,
             window_frame,
-            ..
+            partition_by,
+            order_by,
         } => {
-            let fun_name =
-                create_function_name(&fun.to_string(), false, args, input_schema)?;
-            Ok(match window_frame {
-                Some(window_frame) => format!("{} {}", fun_name, window_frame),
-                None => fun_name,
-            })
+            let mut parts: Vec<String> = vec![create_function_name(
+                &fun.to_string(),
+                false,
+                args,
+                input_schema,
+            )?];
+            if !partition_by.is_empty() {
+                parts.push(format!("PARTITION BY {:?}", partition_by));
+            }
+            if !order_by.is_empty() {
+                parts.push(format!("ORDER BY {:?}", order_by));
+            }
+            if let Some(window_frame) = window_frame {
+                parts.push(format!("{}", window_frame));
+            }
+            Ok(parts.join(" "))
         }
         Expr::AggregateFunction {
             fun,
