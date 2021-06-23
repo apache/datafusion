@@ -209,8 +209,9 @@ fn find_ranges_in_range<'a>(
 ) -> &'a [Range<usize>] {
     let start_idx = sort_partition_points
         .partition_point(|sort_range| sort_range.start < partition_range.start);
-    let end_idx = sort_partition_points
-        .partition_point(|sort_range| sort_range.end <= partition_range.end);
+    let end_idx = start_idx
+        + sort_partition_points[start_idx..]
+            .partition_point(|sort_range| sort_range.end <= partition_range.end);
     &sort_partition_points[start_idx..end_idx]
 }
 
