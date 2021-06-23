@@ -267,7 +267,9 @@ mod tests {
         let expressions = |t: Vec<DataType>, schema| -> Result<Vec<_>> {
             t.iter()
                 .enumerate()
-                .map(|(i, t)| try_cast(col(&format!("c{}", i)), &schema, t.clone()))
+                .map(|(i, t)| {
+                    try_cast(col(&format!("c{}", i), &schema)?, &schema, t.clone())
+                })
                 .collect::<Result<Vec<_>>>()
         };
 

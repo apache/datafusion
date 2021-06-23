@@ -66,6 +66,7 @@ pub use nullif::{nullif_func, SUPPORTED_NULLIF_TYPES};
 pub use row_number::RowNumber;
 pub use sum::{sum_return_type, Sum};
 pub use try_cast::{try_cast, TryCastExpr};
+
 /// returns the name of the state
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{}[{}]", name, state_name)
@@ -126,8 +127,11 @@ mod tests {
 
             let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
 
-            let agg =
-                Arc::new(<$OP>::new(col("a"), "bla".to_string(), $EXPECTED_DATATYPE));
+            let agg = Arc::new(<$OP>::new(
+                col("a", &schema)?,
+                "bla".to_string(),
+                $EXPECTED_DATATYPE,
+            ));
             let actual = aggregate(&batch, agg)?;
             let expected = ScalarValue::from($EXPECTED);
 

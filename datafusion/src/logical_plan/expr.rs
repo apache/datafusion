@@ -20,7 +20,7 @@
 
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{window_frames, DFField, DFSchema};
+use crate::logical_plan::{window_frames, DFField, DFSchema, DFSchemaRef};
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
     window_functions,
@@ -32,6 +32,90 @@ use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
+
+/// A named reference to a qualified field in a schema.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Column {
+    /// relation/table name.
+    pub relation: Option<String>,
+    /// field/column name.
+    pub name: String,
+}
+
+impl Column {
+    /// Create Column from unqualified name.
+    pub fn from_name(name: String) -> Self {
+        Self {
+            relation: None,
+            name,
+        }
+    }
+
+    /// Deserialize a fully qualified name string into a column
+    pub fn from_qualified_name(flat_name: &str) -> Self {
+        use sqlparser::tokenizer::Token;
+
+        let dialect = sqlparser::dialect::GenericDialect {};
+        let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, flat_name);
+        if let Ok(tokens) = tokenizer.tokenize() {
+            if let [Token::Word(relation), Token::Period, Token::Word(name)] =
+                tokens.as_slice()
+            {
+                return Column {
+                    relation: Some(relation.value.clone()),
+                    name: name.value.clone(),
+                };
+            }
+        }
+        // any expression that's not in the form of `foo.bar` will be treated as unqualified column
+        // name
+        Column {
+            relation: None,
+            name: String::from(flat_name),
+        }
+    }
+
+    /// Serialize column into a flat name string
+    pub fn flat_name(&self) -> String {
+        match &self.relation {
+            Some(r) => format!("{}.{}", r, self.name),
+            None => self.name.clone(),
+        }
+    }
+
+    /// Normalize Column with qualifier based on provided dataframe schemas.
+    pub fn normalize(self, schemas: &[&DFSchemaRef]) -> Result<Self> {
+        if self.relation.is_some() {
+            return Ok(self);
+        }
+
+        for schema in schemas {
+            if let Ok(field) = schema.field_with_unqualified_name(&self.name) {
+                return Ok(field.qualified_column());
+            }
+        }
+
+        Err(DataFusionError::Plan(format!(
+            "Column {} not found in provided schemas",
+            self
+        )))
+    }
+}
+
+impl From<&str> for Column {
+    fn from(c: &str) -> Self {
+        Self::from_qualified_name(c)
+    }
+}
+
+impl fmt::Display for Column {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.relation {
+            Some(r) => write!(f, "#{}.{}", r, self.name),
+            None => write!(f, "#{}", self.name),
+        }
+    }
+}
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -47,7 +131,7 @@ use std::sync::Arc;
 /// ```
 /// # use datafusion::logical_plan::*;
 /// let expr = col("c1");
-/// assert_eq!(expr, Expr::Column("c1".to_string()));
+/// assert_eq!(expr, Expr::Column(Column::from_name("c1".to_string())));
 /// ```
 ///
 /// ## Create the expression `c1 + c2` to add columns "c1" and "c2" together
@@ -81,8 +165,8 @@ use std::sync::Arc;
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Box<Expr>, String),
-    /// A named reference to a field in a schema.
-    Column(String),
+    /// A named reference to a qualified filed in a schema.
+    Column(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(Vec<String>),
     /// A constant value.
@@ -232,10 +316,9 @@ impl Expr {
     pub fn get_type(&self, schema: &DFSchema) -> Result<DataType> {
         match self {
             Expr::Alias(expr, _) => expr.get_type(schema),
-            Expr::Column(name) => Ok(schema
-                .field_with_unqualified_name(name)?
-                .data_type()
-                .clone()),
+            Expr::Column(c) => {
+                Ok(schema.field_from_qualified_column(c)?.data_type().clone())
+            }
             Expr::ScalarVariable(_) => Ok(DataType::Utf8),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case { when_then_expr, .. } => when_then_expr[0].1.get_type(schema),
@@ -307,9 +390,9 @@ impl Expr {
     pub fn nullable(&self, input_schema: &DFSchema) -> Result<bool> {
         match self {
             Expr::Alias(expr, _) => expr.nullable(input_schema),
-            Expr::Column(name) => Ok(input_schema
-                .field_with_unqualified_name(name)?
-                .is_nullable()),
+            Expr::Column(c) => {
+                Ok(input_schema.field_from_qualified_column(c)?.is_nullable())
+            }
             Expr::Literal(value) => Ok(value.is_null()),
             Expr::ScalarVariable(_) => Ok(true),
             Expr::Case {
@@ -355,7 +438,7 @@ impl Expr {
         }
     }
 
-    /// Returns the name of this expression based on [arrow::datatypes::Schema].
+    /// Returns the name of this expression based on [crate::logical_plan::DFSchema].
     ///
     /// This represents how a column with this expression is named when no alias is chosen
     pub fn name(&self, input_schema: &DFSchema) -> Result<String> {
@@ -364,12 +447,20 @@ impl Expr {
 
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
     pub fn to_field(&self, input_schema: &DFSchema) -> Result<DFField> {
-        Ok(DFField::new(
-            None, //TODO  qualifier
-            &self.name(input_schema)?,
-            self.get_type(input_schema)?,
-            self.nullable(input_schema)?,
-        ))
+        match self {
+            Expr::Column(c) => Ok(DFField::new(
+                c.relation.as_deref(),
+                &c.name,
+                self.get_type(input_schema)?,
+                self.nullable(input_schema)?,
+            )),
+            _ => Ok(DFField::new(
+                None,
+                &self.name(input_schema)?,
+                self.get_type(input_schema)?,
+                self.nullable(input_schema)?,
+            )),
+        }
     }
 
     /// Wraps this expression in a cast to a target [arrow::datatypes::DataType].
@@ -540,7 +631,7 @@ impl Expr {
         // recurse (and cover all expression types)
         let visitor = match self {
             Expr::Alias(expr, _) => expr.accept(visitor),
-            Expr::Column(..) => Ok(visitor),
+            Expr::Column(_) => Ok(visitor),
             Expr::ScalarVariable(..) => Ok(visitor),
             Expr::Literal(..) => Ok(visitor),
             Expr::BinaryExpr { left, right, .. } => {
@@ -668,7 +759,7 @@ impl Expr {
         // recurse into all sub expressions(and cover all expression types)
         let expr = match self {
             Expr::Alias(expr, name) => Expr::Alias(rewrite_boxed(expr, rewriter)?, name),
-            Expr::Column(name) => Expr::Column(name),
+            Expr::Column(_) => self.clone(),
             Expr::ScalarVariable(names) => Expr::ScalarVariable(names),
             Expr::Literal(value) => Expr::Literal(value),
             Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
@@ -985,9 +1076,72 @@ pub fn or(left: Expr, right: Expr) -> Expr {
     }
 }
 
-/// Create a column expression based on a column name
-pub fn col(name: &str) -> Expr {
-    Expr::Column(name.to_owned())
+/// Create a column expression based on a qualified or unqualified column name
+pub fn col(ident: &str) -> Expr {
+    Expr::Column(ident.into())
+}
+
+/// Convert an expression into Column expression if it's already provided as input plan.
+///
+/// For example, it rewrites:
+///
+/// ```ignore
+/// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+/// .project(vec![col("c1"), sum(col("c2"))?
+/// ```
+///
+/// Into:
+///
+/// ```ignore
+/// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+/// .project(vec![col("c1"), col("SUM(#c2)")?
+/// ```
+pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
+    match e {
+        Expr::Column(_) => e,
+        Expr::Alias(inner_expr, name) => {
+            Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
+        }
+        _ => match e.name(input_schema) {
+            Ok(name) => match input_schema.field_with_unqualified_name(&name) {
+                Ok(field) => Expr::Column(field.qualified_column()),
+                // expression not provided as input, do not convert to a column reference
+                Err(_) => e,
+            },
+            Err(_) => e,
+        },
+    }
+}
+
+/// Recursively normalize all Column expressions in a given expression tree
+pub fn normalize_col(e: Expr, schemas: &[&DFSchemaRef]) -> Result<Expr> {
+    struct ColumnNormalizer<'a, 'b> {
+        schemas: &'a [&'b DFSchemaRef],
+    }
+
+    impl<'a, 'b> ExprRewriter for ColumnNormalizer<'a, 'b> {
+        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+            if let Expr::Column(c) = expr {
+                Ok(Expr::Column(c.normalize(self.schemas)?))
+            } else {
+                Ok(expr)
+            }
+        }
+    }
+
+    e.rewrite(&mut ColumnNormalizer { schemas })
+}
+
+/// Recursively normalize all Column expressions in a list of expression trees
+#[inline]
+pub fn normalize_cols(
+    exprs: impl IntoIterator<Item = Expr>,
+    schemas: &[&DFSchemaRef],
+) -> Result<Vec<Expr>> {
+    exprs
+        .into_iter()
+        .map(|e| normalize_col(e, schemas))
+        .collect()
 }
 
 /// Create an expression to represent the min() aggregate function
@@ -1240,7 +1394,7 @@ impl fmt::Debug for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Expr::Alias(expr, alias) => write!(f, "{:?} AS {}", expr, alias),
-            Expr::Column(name) => write!(f, "#{}", name),
+            Expr::Column(c) => write!(f, "{}", c),
             Expr::ScalarVariable(var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{:?}", v),
             Expr::Case {
@@ -1373,7 +1527,7 @@ fn create_function_name(
 fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
     match e {
         Expr::Alias(_, name) => Ok(name.clone()),
-        Expr::Column(name) => Ok(name.clone()),
+        Expr::Column(c) => Ok(c.flat_name()),
         Expr::ScalarVariable(variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
         Expr::BinaryExpr { left, op, right } => {
@@ -1524,8 +1678,8 @@ mod tests {
 
     #[test]
     fn filter_is_null_and_is_not_null() {
-        let col_null = Expr::Column("col1".to_string());
-        let col_not_null = Expr::Column("col2".to_string());
+        let col_null = col("col1");
+        let col_not_null = col("col2");
         assert_eq!(format!("{:?}", col_null.is_null()), "#col1 IS NULL");
         assert_eq!(
             format!("{:?}", col_not_null.is_not_null()),

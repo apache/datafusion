@@ -211,9 +211,9 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 /// let displayable_plan = displayable(physical_plan.as_ref());
 /// let plan_string = format!("{}", displayable_plan.indent());
 ///
-/// assert_eq!("ProjectionExec: expr=[a]\
+/// assert_eq!("ProjectionExec: expr=[a@0 as a]\
 ///            \n  CoalesceBatchesExec: target_batch_size=4096\
-///            \n    FilterExec: a < 5\
+///            \n    FilterExec: a@0 < 5\
 ///            \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
 ///            \n        CsvExec: source=Path(tests/example.csv: [tests/example.csv]), has_header=true",
 ///             plan_string.trim());

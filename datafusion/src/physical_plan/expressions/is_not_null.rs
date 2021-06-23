@@ -100,10 +100,10 @@ mod tests {
     fn is_not_null_op() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let a = StringArray::from(vec![Some("foo"), None]);
+        let expr = is_not_null(col("a", &schema)?).unwrap();
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
 
         // expression: "a is not null"
-        let expr = is_not_null(col("a")).unwrap();
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = result
             .as_any()

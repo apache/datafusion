@@ -148,7 +148,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
 mod tests {
     use super::*;
     use crate::error::Result;
-    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::expressions::Column;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
@@ -166,32 +166,46 @@ mod tests {
 
     #[test]
     fn first_value() -> Result<()> {
-        let first_value =
-            NthValue::first_value("first_value".to_owned(), col("arr"), DataType::Int32);
+        let first_value = NthValue::first_value(
+            "first_value".to_owned(),
+            Arc::new(Column::new("arr", 0)),
+            DataType::Int32,
+        );
         test_i32_result(first_value, vec![1; 8])?;
         Ok(())
     }
 
     #[test]
     fn last_value() -> Result<()> {
-        let last_value =
-            NthValue::last_value("last_value".to_owned(), col("arr"), DataType::Int32);
+        let last_value = NthValue::last_value(
+            "last_value".to_owned(),
+            Arc::new(Column::new("arr", 0)),
+            DataType::Int32,
+        );
         test_i32_result(last_value, vec![8; 8])?;
         Ok(())
     }
 
     #[test]
     fn nth_value_1() -> Result<()> {
-        let nth_value =
-            NthValue::nth_value("nth_value".to_owned(), col("arr"), DataType::Int32, 1)?;
+        let nth_value = NthValue::nth_value(
+            "nth_value".to_owned(),
+            Arc::new(Column::new("arr", 0)),
+            DataType::Int32,
+            1,
+        )?;
         test_i32_result(nth_value, vec![1; 8])?;
         Ok(())
     }
 
     #[test]
     fn nth_value_2() -> Result<()> {
-        let nth_value =
-            NthValue::nth_value("nth_value".to_owned(), col("arr"), DataType::Int32, 2)?;
+        let nth_value = NthValue::nth_value(
+            "nth_value".to_owned(),
+            Arc::new(Column::new("arr", 0)),
+            DataType::Int32,
+            2,
+        )?;
         test_i32_result(nth_value, vec![-2; 8])?;
         Ok(())
     }
