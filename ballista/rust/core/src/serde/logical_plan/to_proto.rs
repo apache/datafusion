@@ -1002,7 +1002,6 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                 ref partition_by,
                 ref order_by,
                 ref window_frame,
-                ..
             } => {
                 let window_function = match fun {
                     WindowFunction::AggregateFunction(fun) => {

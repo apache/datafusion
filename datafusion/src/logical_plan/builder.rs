@@ -351,23 +351,14 @@ impl LogicalPlanBuilder {
         }))
     }
 
-    /// Apply a window
-    ///
-    /// NOTE: this feature is under development and this API will be changing
-    ///
-    /// - https://github.com/apache/arrow-datafusion/issues/359 basic structure
-    /// - https://github.com/apache/arrow-datafusion/issues/298 empty over clause
-    /// - https://github.com/apache/arrow-datafusion/issues/299 with partition clause
-    /// - https://github.com/apache/arrow-datafusion/issues/360 with order by
-    /// - https://github.com/apache/arrow-datafusion/issues/361 with window frame
-    pub fn window(&self, window_expr: Vec<Expr>) -> Result<Self> {
+    /// Apply a window functions to extend the schema
+    pub fn window(&self, window_expr: impl IntoIterator<Item = Expr>) -> Result<Self> {
+        let window_expr = window_expr.into_iter().collect::<Vec<Expr>>();
         let all_expr = window_expr.iter();
         validate_unique_names("Windows", all_expr.clone(), self.plan.schema())?;
-
         let mut window_fields: Vec<DFField> =
             exprlist_to_fields(all_expr, self.plan.schema())?;
         window_fields.extend_from_slice(self.plan.schema().fields());
-
         Ok(Self::from(&LogicalPlan::Window {
             input: Arc::new(self.plan.clone()),
             window_expr,
