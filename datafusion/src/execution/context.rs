@@ -1073,7 +1073,7 @@ mod tests {
         let ctx = create_ctx(&tmp_dir, partition_count)?;
 
         let table = ctx.table("test")?;
-        let logical_plan = LogicalPlanBuilder::from(&table.to_logical_plan())
+        let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
             .project(vec![col("c2")])?
             .build()?;
 
@@ -2566,7 +2566,7 @@ mod tests {
 
         let t = ctx.table("t")?;
 
-        let plan = LogicalPlanBuilder::from(&t.to_logical_plan())
+        let plan = LogicalPlanBuilder::from(t.to_logical_plan())
             .project(vec![
                 col("a"),
                 col("b"),

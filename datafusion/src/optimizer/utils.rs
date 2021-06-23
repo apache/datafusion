@@ -232,7 +232,7 @@ pub fn from_plan(
             })
         }
         LogicalPlan::CrossJoin { .. } => {
-            let left = &inputs[0];
+            let left = inputs[0].clone();
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }

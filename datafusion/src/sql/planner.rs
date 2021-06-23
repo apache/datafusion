@@ -143,9 +143,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
         let plan = self.set_expr_to_plan(set_expr, alias, ctes)?;
 
-        let plan = self.order_by(&plan, &query.order_by)?;
+        let plan = self.order_by(plan, &query.order_by)?;
 
-        self.limit(&plan, &query.limit)
+        self.limit(plan, &query.limit)
     }
 
     fn set_expr_to_plan(
@@ -309,9 +309,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match t.joins.len() {
             0 => Ok(left),
             n => {
-                let mut left = self.parse_relation_join(&left, &t.joins[0], ctes)?;
+                let mut left = self.parse_relation_join(left, &t.joins[0], ctes)?;
                 for i in 1..n {
-                    left = self.parse_relation_join(&left, &t.joins[i], ctes)?;
+                    left = self.parse_relation_join(left, &t.joins[i], ctes)?;
                 }
                 Ok(left)
             }
@@ -320,7 +320,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn parse_relation_join(
         &self,
-        left: &LogicalPlan,
+        left: LogicalPlan,
         join: &Join,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
@@ -347,7 +347,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
     fn parse_cross_join(
         &self,
-        left: &LogicalPlan,
+        left: LogicalPlan,
         right: &LogicalPlan,
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left).cross_join(right)?.build()
@@ -355,7 +355,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn parse_join(
         &self,
-        left: &LogicalPlan,
+        left: LogicalPlan,
         right: &LogicalPlan,
         constraint: &JoinConstraint,
         join_type: JoinType,
@@ -489,13 +489,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     if join_keys.is_empty() {
                         left =
-                            LogicalPlanBuilder::from(&left).cross_join(right)?.build()?;
+                            LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
                     } else {
                         let left_keys: Vec<Column> =
                             join_keys.iter().map(|(l, _)| l.clone()).collect();
                         let right_keys: Vec<Column> =
                             join_keys.iter().map(|(_, r)| r.clone()).collect();
-                        let builder = LogicalPlanBuilder::from(&left);
+                        let builder = LogicalPlanBuilder::from(left);
                         left = builder
                             .join(right, JoinType::Inner, left_keys, right_keys)?
                             .build()?;
@@ -507,7 +507,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // remove join expressions from filter
                 match remove_join_expressions(&filter_expr, &all_join_keys)? {
                     Some(filter_expr) => {
-                        LogicalPlanBuilder::from(&left).filter(filter_expr)?.build()
+                        LogicalPlanBuilder::from(left).filter(filter_expr)?.build()
                     }
                     _ => Ok(left),
                 }
@@ -519,7 +519,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let mut left = plans[0].clone();
                     for right in plans.iter().skip(1) {
                         left =
-                            LogicalPlanBuilder::from(&left).cross_join(right)?.build()?;
+                            LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
                     }
                     Ok(left)
                 }
@@ -531,7 +531,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let select_exprs = self.prepare_select_exprs(&plan, &select.projection)?;
 
         // having and group by clause may reference aliases defined in select projection
-        let projected_plan = self.project(&plan, select_exprs.clone())?;
+        let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
         let mut combined_schema = (**projected_plan.schema()).clone();
         combined_schema.merge(plan.schema());
 
@@ -597,7 +597,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             || !aggr_exprs.is_empty()
         {
             self.aggregate(
-                &plan,
+                plan,
                 &select_exprs,
                 &having_expr_opt,
                 group_by_exprs,
@@ -625,7 +625,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr_opt {
-            LogicalPlanBuilder::from(&plan)
+            LogicalPlanBuilder::from(plan)
                 .filter(having_expr_post_aggr)?
                 .build()?
         } else {
@@ -642,14 +642,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         let plan = if select.distinct {
-            return LogicalPlanBuilder::from(&plan)
+            return LogicalPlanBuilder::from(plan)
                 .aggregate(select_exprs_post_aggr, vec![])?
                 .build();
         } else {
             plan
         };
 
-        self.project(&plan, select_exprs_post_aggr)
+        self.project(plan, select_exprs_post_aggr)
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
@@ -672,7 +672,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Wrap a plan in a projection
-    fn project(&self, input: &LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
+    fn project(&self, input: LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(input.schema(), &expr)?;
         LogicalPlanBuilder::from(input).project(expr)?.build()
     }
@@ -691,7 +691,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
             // the partition and sort itself is done at physical level, see physical_planner's
             // fn create_initial_plan
-            plan = LogicalPlanBuilder::from(&plan)
+            plan = LogicalPlanBuilder::from(plan)
                 .window(window_exprs)?
                 .build()?;
         }
@@ -702,7 +702,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Wrap a plan in an aggregate
     fn aggregate(
         &self,
-        input: &LogicalPlan,
+        input: LogicalPlan,
         select_exprs: &[Expr],
         having_expr_opt: &Option<Expr>,
         group_by_exprs: Vec<Expr>,
@@ -714,7 +714,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .cloned()
             .collect::<Vec<Expr>>();
 
-        let plan = LogicalPlanBuilder::from(input)
+        let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs, aggr_exprs)?
             .build()?;
 
@@ -722,14 +722,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // available to next phases of planning.
         let column_exprs_post_aggr = aggr_projection_exprs
             .iter()
-            .map(|expr| expr_as_column_expr(expr, input))
+            .map(|expr| expr_as_column_expr(expr, &input))
             .collect::<Result<Vec<Expr>>>()?;
 
         // Rewrite the SELECT expression to use the columns produced by the
         // aggregation.
         let select_exprs_post_aggr = select_exprs
             .iter()
-            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
+            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, &input))
             .collect::<Result<Vec<Expr>>>()?;
 
         if !can_columns_satisfy_exprs(&column_exprs_post_aggr, &select_exprs_post_aggr)? {
@@ -742,7 +742,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // aggregation.
         let having_expr_post_aggr_opt = if let Some(having_expr) = having_expr_opt {
             let having_expr_post_aggr =
-                rebase_expr(having_expr, &aggr_projection_exprs, input)?;
+                rebase_expr(having_expr, &aggr_projection_exprs, &input)?;
 
             if !can_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
@@ -762,7 +762,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Wrap a plan in a limit
-    fn limit(&self, input: &LogicalPlan, limit: &Option<SQLExpr>) -> Result<LogicalPlan> {
+    fn limit(&self, input: LogicalPlan, limit: &Option<SQLExpr>) -> Result<LogicalPlan> {
         match *limit {
             Some(ref limit_expr) => {
                 let n = match self.sql_to_rex(limit_expr, input.schema())? {
@@ -774,18 +774,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 LogicalPlanBuilder::from(input).limit(n)?.build()
             }
-            _ => Ok(input.clone()),
+            _ => Ok(input),
         }
     }
 
     /// Wrap the logical in a sort
     fn order_by(
         &self,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         order_by: &[OrderByExpr],
     ) -> Result<LogicalPlan> {
         if order_by.is_empty() {
-            return Ok(plan.clone());
+            return Ok(plan);
         }
 
         let order_by_rex = order_by

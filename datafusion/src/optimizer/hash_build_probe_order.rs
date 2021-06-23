@@ -166,7 +166,8 @@ impl OptimizerRule for HashBuildProbeOrder {
                 let left = self.optimize(left, execution_props)?;
                 let right = self.optimize(right, execution_props)?;
                 if should_swap_join_order(&left, &right) {
-                    let swapped = LogicalPlanBuilder::from(&right).cross_join(&left)?;
+                    let swapped =
+                        LogicalPlanBuilder::from(right.clone()).cross_join(&left)?;
                     // wrap plan with projection to maintain column order
                     let left_cols = left
                         .schema()

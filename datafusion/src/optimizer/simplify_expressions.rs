@@ -502,7 +502,7 @@ mod tests {
     #[test]
     fn test_simplify_optimized_plan() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
             .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))?
             .build()?;
@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn test_simplify_optimized_plan_with_composed_and() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
             .filter(and(
                 and(col("a").gt(lit(5)), col("b").lt(lit(6))),
