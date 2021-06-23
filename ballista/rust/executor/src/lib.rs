@@ -18,5 +18,9 @@
 //! Core executor logic for executing queries and storing results in memory.
 
 pub mod collect;
+pub mod execution_loop;
 pub mod executor;
 pub mod flight_service;
+
+mod standalone;
+pub use standalone::new_standalone_executor;

@@ -29,8 +29,9 @@ use ballista_core::serde::protobuf::{
     self, scheduler_grpc_client::SchedulerGrpcClient, task_status, FailedTask,
     PartitionId, PollWorkParams, PollWorkResult, TaskDefinition, TaskStatus,
 };
-use ballista_executor::executor::Executor;
 use protobuf::CompletedTask;
+
+use crate::executor::Executor;
 
 pub async fn poll_loop(
     mut scheduler: SchedulerGrpcClient<Channel>,

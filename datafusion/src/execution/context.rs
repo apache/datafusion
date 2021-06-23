@@ -52,7 +52,7 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::execution::dataframe_impl::DataFrameImpl;
 use crate::logical_plan::{
-    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, ToDFSchema,
+    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::constant_folding::ConstantFolding;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -297,18 +297,9 @@ impl ExecutionContext {
         &mut self,
         provider: Arc<dyn TableProvider>,
     ) -> Result<Arc<dyn DataFrame>> {
-        let schema = provider.schema();
-        let table_scan = LogicalPlan::TableScan {
-            table_name: "".to_string(),
-            source: provider,
-            projected_schema: schema.to_dfschema_ref()?,
-            projection: None,
-            filters: vec![],
-            limit: None,
-        };
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
-            &LogicalPlanBuilder::from(&table_scan).build()?,
+            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
         )))
     }
 
@@ -410,22 +401,15 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let table_ref = table_ref.into();
         let schema = self.state.lock().unwrap().schema_for_ref(table_ref)?;
-
         match schema.table(table_ref.table()) {
             Some(ref provider) => {
-                let schema = provider.schema();
-                let table_scan = LogicalPlan::TableScan {
-                    table_name: table_ref.table().to_owned(),
-                    source: Arc::clone(provider),
-                    projected_schema: schema.to_dfschema_ref()?,
-                    projection: None,
-                    filters: vec![],
-                    limit: None,
-                };
-                Ok(Arc::new(DataFrameImpl::new(
-                    self.state.clone(),
-                    &LogicalPlanBuilder::from(&table_scan).build()?,
-                )))
+                let plan = LogicalPlanBuilder::scan(
+                    table_ref.table(),
+                    Arc::clone(provider),
+                    None,
+                )?
+                .build()?;
+                Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
             }
             _ => Err(DataFusionError::Plan(format!(
                 "No table named '{}'",
@@ -642,9 +626,8 @@ pub struct ExecutionConfig {
     pub repartition_aggregations: bool,
 }
 
-impl ExecutionConfig {
-    /// Create an execution config with default setting
-    pub fn new() -> Self {
+impl Default for ExecutionConfig {
+    fn default() -> Self {
         Self {
             concurrency: num_cpus::get(),
             batch_size: 8192,
@@ -670,6 +653,13 @@ impl ExecutionConfig {
             repartition_joins: true,
             repartition_aggregations: true,
         }
+    }
+}
+
+impl ExecutionConfig {
+    /// Create an execution config with default setting
+    pub fn new() -> Self {
+        Default::default()
     }
 
     /// Customize max_concurrency
@@ -1032,7 +1022,6 @@ mod tests {
         let logical_plan = ctx.optimize(&logical_plan)?;
 
         let physical_plan = ctx.create_physical_plan(&logical_plan)?;
-        println!("{:?}", physical_plan);
 
         let results = collect_partitioned(physical_plan).await?;
 
@@ -1104,7 +1093,7 @@ mod tests {
             _ => panic!("expect optimized_plan to be projection"),
         }
 
-        let expected = "Projection: #c2\
+        let expected = "Projection: #test.c2\
         \n  TableScan: test projection=Some([1])";
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
@@ -1125,18 +1114,15 @@ mod tests {
         let ctx = create_ctx(&tmp_dir, 1)?;
 
         let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
-        assert_eq!(schema.field_with_name("c1")?.is_nullable(), false);
+        assert!(!schema.field_with_name("c1")?.is_nullable());
 
-        let plan = LogicalPlanBuilder::scan_empty("", &schema, None)?
+        let plan = LogicalPlanBuilder::scan_empty(None, &schema, None)?
             .project(vec![col("c1")])?
             .build()?;
 
         let plan = ctx.optimize(&plan)?;
         let physical_plan = ctx.create_physical_plan(&Arc::new(plan))?;
-        assert_eq!(
-            physical_plan.schema().field_with_name("c1")?.is_nullable(),
-            false
-        );
+        assert!(!physical_plan.schema().field_with_name("c1")?.is_nullable());
         Ok(())
     }
 
@@ -1180,8 +1166,11 @@ mod tests {
             _ => panic!("expect optimized_plan to be projection"),
         }
 
-        let expected = "Projection: #b\
-        \n  TableScan: projection=Some([1])";
+        let expected = format!(
+            "Projection: #{}.b\
+        \n  TableScan: {} projection=Some([1])",
+            UNNAMED_TABLE, UNNAMED_TABLE
+        );
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
         let physical_plan = ctx.create_physical_plan(&optimized_plan)?;
@@ -1273,7 +1262,17 @@ mod tests {
     #[tokio::test]
     async fn window() -> Result<()> {
         let results = execute(
-            "SELECT c1, c2, SUM(c2) OVER (), COUNT(c2) OVER (), MAX(c2) OVER (), MIN(c2) OVER (), AVG(c2) OVER () FROM test ORDER BY c1, c2 LIMIT 5",
+            "SELECT \
+            c1, \
+            c2, \
+            SUM(c2) OVER (), \
+            COUNT(c2) OVER (), \
+            MAX(c2) OVER (), \
+            MIN(c2) OVER (), \
+            AVG(c2) OVER () \
+            FROM test \
+            ORDER BY c1, c2 \
+            LIMIT 5",
             4,
         )
         .await?;
@@ -1292,6 +1291,123 @@ mod tests {
             "| 0  | 4  | 220     | 40        | 10      | 1       | 5.5     |",
             "| 0  | 5  | 220     | 40        | 10      | 1       | 5.5     |",
             "+----+----+---------+-----------+---------+---------+---------+",
+        ];
+
+        // window function shall respect ordering
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_order_by() -> Result<()> {
+        let results = execute(
+            "SELECT \
+            c1, \
+            c2, \
+            ROW_NUMBER() OVER (ORDER BY c1, c2), \
+            FIRST_VALUE(c2) OVER (ORDER BY c1, c2), \
+            LAST_VALUE(c2) OVER (ORDER BY c1, c2), \
+            NTH_VALUE(c2, 2) OVER (ORDER BY c1, c2), \
+            SUM(c2) OVER (ORDER BY c1, c2), \
+            COUNT(c2) OVER (ORDER BY c1, c2), \
+            MAX(c2) OVER (ORDER BY c1, c2), \
+            MIN(c2) OVER (ORDER BY c1, c2), \
+            AVG(c2) OVER (ORDER BY c1, c2) \
+            FROM test \
+            ORDER BY c1, c2 \
+            LIMIT 5",
+            4,
+        )
+        .await?;
+        // result in one batch, although e.g. having 2 batches do not change
+        // result semantics, having a len=1 assertion upfront keeps surprises
+        // at bay
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+--------------+-----------------+----------------+------------------------+---------+-----------+---------+---------+---------+",
+            "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(c2) | LAST_VALUE(c2) | NTH_VALUE(c2,Int64(2)) | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
+            "+----+----+--------------+-----------------+----------------+------------------------+---------+-----------+---------+---------+---------+",
+            "| 0  | 1  | 1            | 1               | 10             | 2                      | 1       | 1         | 1       | 1       | 1       |",
+            "| 0  | 2  | 2            | 1               | 10             | 2                      | 3       | 2         | 2       | 1       | 1.5     |",
+            "| 0  | 3  | 3            | 1               | 10             | 2                      | 6       | 3         | 3       | 1       | 2       |",
+            "| 0  | 4  | 4            | 1               | 10             | 2                      | 10      | 4         | 4       | 1       | 2.5     |",
+            "| 0  | 5  | 5            | 1               | 10             | 2                      | 15      | 5         | 5       | 1       | 3       |",
+            "+----+----+--------------+-----------------+----------------+------------------------+---------+-----------+---------+---------+---------+",
+        ];
+
+        // window function shall respect ordering
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_partition_by() -> Result<()> {
+        let results = execute(
+            "SELECT \
+            c1, \
+            c2, \
+            SUM(c2) OVER (PARTITION BY c2), \
+            COUNT(c2) OVER (PARTITION BY c2), \
+            MAX(c2) OVER (PARTITION BY c2), \
+            MIN(c2) OVER (PARTITION BY c2), \
+            AVG(c2) OVER (PARTITION BY c2) \
+            FROM test \
+            ORDER BY c1, c2 \
+            LIMIT 5",
+            4,
+        )
+        .await?;
+
+        let expected = vec![
+            "+----+----+---------+-----------+---------+---------+---------+",
+            "| c1 | c2 | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
+            "+----+----+---------+-----------+---------+---------+---------+",
+            "| 0  | 1  | 4       | 4         | 1       | 1       | 1       |",
+            "| 0  | 2  | 8       | 4         | 2       | 2       | 2       |",
+            "| 0  | 3  | 12      | 4         | 3       | 3       | 3       |",
+            "| 0  | 4  | 16      | 4         | 4       | 4       | 4       |",
+            "| 0  | 5  | 20      | 4         | 5       | 5       | 5       |",
+            "+----+----+---------+-----------+---------+---------+---------+",
+        ];
+
+        // window function shall respect ordering
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_partition_by_order_by() -> Result<()> {
+        let results = execute(
+            "SELECT \
+            c1, \
+            c2, \
+            ROW_NUMBER() OVER (PARTITION BY c2 ORDER BY c1), \
+            FIRST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
+            LAST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
+            NTH_VALUE(c2 + c1, 2) OVER (PARTITION BY c2 ORDER BY c1), \
+            SUM(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            COUNT(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            MAX(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            MIN(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+            AVG(c2) OVER (PARTITION BY c2 ORDER BY c1) \
+            FROM test \
+            ORDER BY c1, c2 \
+            LIMIT 5",
+            4,
+        )
+        .await?;
+
+        let expected = vec![
+            "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
+            "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(c2 Plus c1) | LAST_VALUE(c2 Plus c1) | NTH_VALUE(c2 Plus c1,Int64(2)) | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
+            "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
+            "| 0  | 1  | 1            | 1                       | 4                      | 2                              | 1       | 1         | 1       | 1       | 1       |",
+            "| 0  | 2  | 1            | 2                       | 5                      | 3                              | 2       | 1         | 2       | 2       | 2       |",
+            "| 0  | 3  | 1            | 3                       | 6                      | 4                              | 3       | 1         | 3       | 3       | 3       |",
+            "| 0  | 4  | 1            | 4                       | 7                      | 5                              | 4       | 1         | 4       | 4       | 4       |",
+            "| 0  | 5  | 1            | 5                       | 8                      | 6                              | 5       | 1         | 5       | 5       | 5       |",
+            "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
         ];
 
         // window function shall respect ordering
@@ -2008,9 +2124,9 @@ mod tests {
             Field::new("c2", DataType::UInt32, false),
         ]));
 
-        let plan = LogicalPlanBuilder::scan_empty("", schema.as_ref(), None)?
+        let plan = LogicalPlanBuilder::scan_empty(None, schema.as_ref(), None)?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .project(vec![col("c1"), col("SUM(c2)").alias("total_salary")])?
+            .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
             .build()?;
 
         let plan = ctx.optimize(&plan)?;
@@ -2460,7 +2576,7 @@ mod tests {
 
         assert_eq!(
             format!("{:?}", plan),
-            "Projection: #a, #b, my_add(#a, #b)\n  TableScan: t projection=None"
+            "Projection: #t.a, #t.b, my_add(#t.a, #t.b)\n  TableScan: t projection=None"
         );
 
         let plan = ctx.optimize(&plan)?;

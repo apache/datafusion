@@ -510,8 +510,8 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-	        Filter: #b Gt Int32(1)\
-            \n  Projection: #a\
+	        Filter: #test.b Gt Int32(1)\
+            \n  Projection: #test.a\
             \n    TableScan: test projection=None",
         );
         Ok(())
@@ -532,8 +532,8 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-            Filter: #a Gt Int32(5) And #b Lt Int32(6)\
-            \n  Projection: #a\
+            Filter: #test.a Gt Int32(5) And #test.b Lt Int32(6)\
+            \n  Projection: #test.a\
 	        \n    TableScan: test projection=None",
         );
         Ok(())

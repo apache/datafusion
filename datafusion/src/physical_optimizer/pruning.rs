@@ -28,6 +28,7 @@
 //! https://github.com/apache/arrow-datafusion/issues/363 it will
 //! be genericized.
 
+use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
 
 use arrow::{
@@ -39,7 +40,7 @@ use arrow::{
 use crate::{
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,
-    logical_plan::{Expr, Operator},
+    logical_plan::{Column, DFSchema, Expr, Operator},
     optimizer::utils,
     physical_plan::{planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr},
 };
@@ -65,11 +66,11 @@ use crate::{
 pub trait PruningStatistics {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
-    fn min_values(&self, column: &str) -> Option<ArrayRef>;
+    fn min_values(&self, column: &Column) -> Option<ArrayRef>;
 
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
-    fn max_values(&self, column: &str) -> Option<ArrayRef>;
+    fn max_values(&self, column: &Column) -> Option<ArrayRef>;
 
     /// return the number of containers (e.g. row groups) being
     /// pruned with these statistics
@@ -120,9 +121,11 @@ impl PruningPredicate {
             .map(|(_, _, f)| f.clone())
             .collect::<Vec<_>>();
         let stat_schema = Schema::new(stat_fields);
+        let stat_dfschema = DFSchema::try_from(stat_schema.clone())?;
         let execution_context_state = ExecutionContextState::new();
         let predicate_expr = DefaultPhysicalPlanner::default().create_physical_expr(
             &logical_predicate_expr,
+            &stat_dfschema,
             &stat_schema,
             &execution_context_state,
         )?;
@@ -196,11 +199,11 @@ impl PruningPredicate {
 #[derive(Debug, Default, Clone)]
 struct RequiredStatColumns {
     /// The statistics required to evaluate this predicate:
-    /// * The column name in the input schema
+    /// * The unqualified column in the input schema
     /// * Statistics type (e.g. Min or Max)
     /// * The field the statistics value should be placed in for
     ///   pruning predicate evaluation
-    columns: Vec<(String, StatisticsType, Field)>,
+    columns: Vec<(Column, StatisticsType, Field)>,
 }
 
 impl RequiredStatColumns {
@@ -210,22 +213,22 @@ impl RequiredStatColumns {
 
     /// Retur an iterator over items in columns (see doc on
     /// `self.columns` for details)
-    fn iter(&self) -> impl Iterator<Item = &(String, StatisticsType, Field)> {
+    fn iter(&self) -> impl Iterator<Item = &(Column, StatisticsType, Field)> {
         self.columns.iter()
     }
 
     fn is_stat_column_missing(
         &self,
-        column_name: &str,
+        column: &Column,
         statistics_type: StatisticsType,
     ) -> bool {
         !self
             .columns
             .iter()
-            .any(|(c, t, _f)| c == column_name && t == &statistics_type)
+            .any(|(c, t, _f)| c == column && t == &statistics_type)
     }
 
-    /// Rewrites column_expr so that all appearances of column_name
+    /// Rewrites column_expr so that all appearances of column
     /// are replaced with a reference to either the min or max
     /// statistics column, while keeping track that a reference to the statistics
     /// column is required
@@ -235,49 +238,53 @@ impl RequiredStatColumns {
     /// 5` with the approprate entry noted in self.columns
     fn stat_column_expr(
         &mut self,
-        column_name: &str,
+        column: &Column,
         column_expr: &Expr,
         field: &Field,
         stat_type: StatisticsType,
         suffix: &str,
     ) -> Result<Expr> {
-        let stat_column_name = format!("{}_{}", column_name, suffix);
+        let stat_column = Column {
+            relation: column.relation.clone(),
+            name: format!("{}_{}", column.flat_name(), suffix),
+        };
+
         let stat_field = Field::new(
-            stat_column_name.as_str(),
+            stat_column.flat_name().as_str(),
             field.data_type().clone(),
             field.is_nullable(),
         );
-        if self.is_stat_column_missing(column_name, stat_type) {
+
+        if self.is_stat_column_missing(column, stat_type) {
             // only add statistics column if not previously added
-            self.columns
-                .push((column_name.to_string(), stat_type, stat_field));
+            self.columns.push((column.clone(), stat_type, stat_field));
         }
-        rewrite_column_expr(column_expr, column_name, stat_column_name.as_str())
+        rewrite_column_expr(column_expr, column, &stat_column)
     }
 
     /// rewrite col --> col_min
     fn min_column_expr(
         &mut self,
-        column_name: &str,
+        column: &Column,
         column_expr: &Expr,
         field: &Field,
     ) -> Result<Expr> {
-        self.stat_column_expr(column_name, column_expr, field, StatisticsType::Min, "min")
+        self.stat_column_expr(column, column_expr, field, StatisticsType::Min, "min")
     }
 
     /// rewrite col --> col_max
     fn max_column_expr(
         &mut self,
-        column_name: &str,
+        column: &Column,
         column_expr: &Expr,
         field: &Field,
     ) -> Result<Expr> {
-        self.stat_column_expr(column_name, column_expr, field, StatisticsType::Max, "max")
+        self.stat_column_expr(column, column_expr, field, StatisticsType::Max, "max")
     }
 }
 
-impl From<Vec<(String, StatisticsType, Field)>> for RequiredStatColumns {
-    fn from(columns: Vec<(String, StatisticsType, Field)>) -> Self {
+impl From<Vec<(Column, StatisticsType, Field)>> for RequiredStatColumns {
+    fn from(columns: Vec<(Column, StatisticsType, Field)>) -> Self {
         Self { columns }
     }
 }
@@ -314,14 +321,14 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     let mut fields = Vec::<Field>::new();
     let mut arrays = Vec::<ArrayRef>::new();
     // For each needed statistics column:
-    for (column_name, statistics_type, stat_field) in required_columns.iter() {
+    for (column, statistics_type, stat_field) in required_columns.iter() {
         let data_type = stat_field.data_type();
 
         let num_containers = statistics.num_containers();
 
         let array = match statistics_type {
-            StatisticsType::Min => statistics.min_values(column_name),
-            StatisticsType::Max => statistics.max_values(column_name),
+            StatisticsType::Min => statistics.min_values(column),
+            StatisticsType::Max => statistics.max_values(column),
         };
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
@@ -347,7 +354,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
 }
 
 struct PruningExpressionBuilder<'a> {
-    column_name: String,
+    column: Column,
     column_expr: &'a Expr,
     scalar_expr: &'a Expr,
     field: &'a Field,
@@ -363,11 +370,11 @@ impl<'a> PruningExpressionBuilder<'a> {
         required_columns: &'a mut RequiredStatColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
-        let mut left_columns = HashSet::<String>::new();
-        utils::expr_to_column_names(left, &mut left_columns)?;
-        let mut right_columns = HashSet::<String>::new();
-        utils::expr_to_column_names(right, &mut right_columns)?;
-        let (column_expr, scalar_expr, column_names, reverse_operator) =
+        let mut left_columns = HashSet::<Column>::new();
+        utils::expr_to_columns(left, &mut left_columns)?;
+        let mut right_columns = HashSet::<Column>::new();
+        utils::expr_to_columns(right, &mut right_columns)?;
+        let (column_expr, scalar_expr, columns, reverse_operator) =
             match (left_columns.len(), right_columns.len()) {
                 (1, 0) => (left, right, left_columns, false),
                 (0, 1) => (right, left, right_columns, true),
@@ -379,8 +386,8 @@ impl<'a> PruningExpressionBuilder<'a> {
                     ));
                 }
             };
-        let column_name = column_names.iter().next().unwrap().clone();
-        let field = match schema.column_with_name(&column_name) {
+        let column = columns.iter().next().unwrap().clone();
+        let field = match schema.column_with_name(&column.flat_name()) {
             Some((_, f)) => f,
             _ => {
                 return Err(DataFusionError::Plan(
@@ -390,7 +397,7 @@ impl<'a> PruningExpressionBuilder<'a> {
         };
 
         Ok(Self {
-            column_name,
+            column,
             column_expr,
             scalar_expr,
             field,
@@ -418,63 +425,56 @@ impl<'a> PruningExpressionBuilder<'a> {
     }
 
     fn min_column_expr(&mut self) -> Result<Expr> {
-        self.required_columns.min_column_expr(
-            &self.column_name,
-            self.column_expr,
-            self.field,
-        )
+        self.required_columns
+            .min_column_expr(&self.column, self.column_expr, self.field)
     }
 
     fn max_column_expr(&mut self) -> Result<Expr> {
-        self.required_columns.max_column_expr(
-            &self.column_name,
-            self.column_expr,
-            self.field,
-        )
+        self.required_columns
+            .max_column_expr(&self.column, self.column_expr, self.field)
     }
 }
 
 /// replaces a column with an old name with a new name in an expression
 fn rewrite_column_expr(
     expr: &Expr,
-    column_old_name: &str,
-    column_new_name: &str,
+    column_old: &Column,
+    column_new: &Column,
 ) -> Result<Expr> {
     let expressions = utils::expr_sub_expressions(expr)?;
     let expressions = expressions
         .iter()
-        .map(|e| rewrite_column_expr(e, column_old_name, column_new_name))
+        .map(|e| rewrite_column_expr(e, column_old, column_new))
         .collect::<Result<Vec<_>>>()?;
 
-    if let Expr::Column(name) = expr {
-        if name == column_old_name {
-            return Ok(Expr::Column(column_new_name.to_string()));
+    if let Expr::Column(c) = expr {
+        if c == column_old {
+            return Ok(Expr::Column(column_new.clone()));
         }
     }
     utils::rewrite_expression(expr, &expressions)
 }
 
-/// Given a column reference to `column_name`, returns a pruning
+/// Given a column reference to `column`, returns a pruning
 /// expression in terms of the min and max that will evaluate to true
 /// if the column may contain values, and false if definitely does not
 /// contain values
 fn build_single_column_expr(
-    column_name: &str,
+    column: &Column,
     schema: &Schema,
     required_columns: &mut RequiredStatColumns,
     is_not: bool, // if true, treat as !col
 ) -> Option<Expr> {
-    use crate::logical_plan;
-    let field = schema.field_with_name(column_name).ok()?;
+    let field = schema.field_with_name(&column.name).ok()?;
 
     if matches!(field.data_type(), &DataType::Boolean) {
-        let col_ref = logical_plan::col(column_name);
+        let col_ref = Expr::Column(column.clone());
 
         let min = required_columns
-            .min_column_expr(column_name, &col_ref, field)
+            .min_column_expr(column, &col_ref, field)
             .ok()?;
         let max = required_columns
-            .max_column_expr(column_name, &col_ref, field)
+            .max_column_expr(column, &col_ref, field)
             .ok()?;
 
         // remember -- we want an expression that is:
@@ -514,15 +514,15 @@ fn build_predicate_expression(
     // predicate expression can only be a binary expression
     let (left, op, right) = match expr {
         Expr::BinaryExpr { left, op, right } => (left, *op, right),
-        Expr::Column(name) => {
-            let expr = build_single_column_expr(name, schema, required_columns, false)
+        Expr::Column(col) => {
+            let expr = build_single_column_expr(col, schema, required_columns, false)
                 .unwrap_or(unhandled);
             return Ok(expr);
         }
         // match !col (don't do so recursively)
         Expr::Not(input) => {
-            if let Expr::Column(name) = input.as_ref() {
-                let expr = build_single_column_expr(name, schema, required_columns, true)
+            if let Expr::Column(col) = input.as_ref() {
+                let expr = build_single_column_expr(col, schema, required_columns, true)
                     .unwrap_or(unhandled);
                 return Ok(expr);
             } else {
@@ -674,7 +674,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct TestStatistics {
         // key: column name
-        stats: HashMap<String, ContainerStats>,
+        stats: HashMap<Column, ContainerStats>,
     }
 
     impl TestStatistics {
@@ -687,20 +687,21 @@ mod tests {
             name: impl Into<String>,
             container_stats: ContainerStats,
         ) -> Self {
-            self.stats.insert(name.into(), container_stats);
+            self.stats
+                .insert(Column::from_name(name.into()), container_stats);
             self
         }
     }
 
     impl PruningStatistics for TestStatistics {
-        fn min_values(&self, column: &str) -> Option<ArrayRef> {
+        fn min_values(&self, column: &Column) -> Option<ArrayRef> {
             self.stats
                 .get(column)
                 .map(|container_stats| container_stats.min())
                 .unwrap_or(None)
         }
 
-        fn max_values(&self, column: &str) -> Option<ArrayRef> {
+        fn max_values(&self, column: &Column) -> Option<ArrayRef> {
             self.stats
                 .get(column)
                 .map(|container_stats| container_stats.max())
@@ -724,11 +725,11 @@ mod tests {
     }
 
     impl PruningStatistics for OneContainerStats {
-        fn min_values(&self, _column: &str) -> Option<ArrayRef> {
+        fn min_values(&self, _column: &Column) -> Option<ArrayRef> {
             self.min_values.clone()
         }
 
-        fn max_values(&self, _column: &str) -> Option<ArrayRef> {
+        fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
             self.max_values.clone()
         }
 
@@ -743,25 +744,25 @@ mod tests {
         let required_columns = RequiredStatColumns::from(vec![
             // min of original column s1, named s1_min
             (
-                "s1".to_string(),
+                "s1".into(),
                 StatisticsType::Min,
                 Field::new("s1_min", DataType::Int32, true),
             ),
             // max of original column s2, named s2_max
             (
-                "s2".to_string(),
+                "s2".into(),
                 StatisticsType::Max,
                 Field::new("s2_max", DataType::Int32, true),
             ),
             // max of original column s3, named s3_max
             (
-                "s3".to_string(),
+                "s3".into(),
                 StatisticsType::Max,
                 Field::new("s3_max", DataType::Utf8, true),
             ),
             // min of original column s3, named s3_min
             (
-                "s3".to_string(),
+                "s3".into(),
                 StatisticsType::Min,
                 Field::new("s3_min", DataType::Utf8, true),
             ),
@@ -813,7 +814,7 @@ mod tests {
 
         // Request a record batch with of s1_min as a timestamp
         let required_columns = RequiredStatColumns::from(vec![(
-            "s1".to_string(),
+            "s3".into(),
             StatisticsType::Min,
             Field::new(
                 "s1_min",
@@ -867,7 +868,7 @@ mod tests {
 
         // Request a record batch with of s1_min as a timestamp
         let required_columns = RequiredStatColumns::from(vec![(
-            "s1".to_string(),
+            "s3".into(),
             StatisticsType::Min,
             Field::new("s1_min", DataType::Utf8, true),
         )]);
@@ -896,7 +897,7 @@ mod tests {
     fn test_build_statistics_inconsistent_length() {
         // return an inconsistent length to the actual statistics arrays
         let required_columns = RequiredStatColumns::from(vec![(
-            "s1".to_string(),
+            "s1".into(),
             StatisticsType::Min,
             Field::new("s1_min", DataType::Int64, true),
         )]);
@@ -1143,18 +1144,18 @@ mod tests {
         let c1_min_field = Field::new("c1_min", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[0],
-            ("c1".to_owned(), StatisticsType::Min, c1_min_field)
+            ("c1".into(), StatisticsType::Min, c1_min_field)
         );
         // c2 = 2 should add c2_min and c2_max
         let c2_min_field = Field::new("c2_min", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[1],
-            ("c2".to_owned(), StatisticsType::Min, c2_min_field)
+            ("c2".into(), StatisticsType::Min, c2_min_field)
         );
         let c2_max_field = Field::new("c2_max", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[2],
-            ("c2".to_owned(), StatisticsType::Max, c2_max_field)
+            ("c2".into(), StatisticsType::Max, c2_max_field)
         );
         // c2 = 3 shouldn't add any new statistics fields
         assert_eq!(required_columns.columns.len(), 3);
