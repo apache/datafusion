@@ -19,7 +19,11 @@
 
 pub mod api;
 pub mod planner;
+#[cfg(feature = "sled")]
+mod standalone;
 pub mod state;
+#[cfg(feature = "sled")]
+pub use standalone::new_standalone_scheduler;
 
 #[cfg(test)]
 pub mod test_utils;

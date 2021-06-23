@@ -26,7 +26,9 @@ mod roundtrip_tests {
     use core::panic;
     use datafusion::{
         arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit},
-        logical_plan::{Expr, LogicalPlan, LogicalPlanBuilder, Partitioning, ToDFSchema},
+        logical_plan::{
+            col, Expr, LogicalPlan, LogicalPlanBuilder, Partitioning, ToDFSchema,
+        },
         physical_plan::{csv::CsvReadOptions, functions::BuiltinScalarFunction::Sqrt},
         prelude::*,
         scalar::ScalarValue,
@@ -61,10 +63,8 @@ mod roundtrip_tests {
 
         let test_batch_sizes = [usize::MIN, usize::MAX, 43256];
 
-        let test_expr: Vec<Expr> = vec![
-            Expr::Column("c1".to_string()) + Expr::Column("c2".to_string()),
-            Expr::Literal((4.0).into()),
-        ];
+        let test_expr: Vec<Expr> =
+            vec![col("c1") + col("c2"), Expr::Literal((4.0).into())];
 
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -688,15 +688,20 @@ mod roundtrip_tests {
             Field::new("salary", DataType::Int32, false),
         ]);
 
-        let scan_plan = LogicalPlanBuilder::empty(false)
-            .build()
-            .map_err(BallistaError::DataFusionError)?;
-        let plan = LogicalPlanBuilder::scan_csv(
-            "employee.csv",
+        let scan_plan = LogicalPlanBuilder::scan_csv(
+            "employee1",
             CsvReadOptions::new().schema(&schema).has_header(true),
-            Some(vec![3, 4]),
+            Some(vec![0, 3, 4]),
+        )?
+        .build()
+        .map_err(BallistaError::DataFusionError)?;
+
+        let plan = LogicalPlanBuilder::scan_csv(
+            "employee2",
+            CsvReadOptions::new().schema(&schema).has_header(true),
+            Some(vec![0, 3, 4]),
         )
-        .and_then(|plan| plan.join(&scan_plan, JoinType::Inner, &["id"], &["id"]))
+        .and_then(|plan| plan.join(&scan_plan, JoinType::Inner, vec!["id"], vec!["id"]))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
@@ -779,7 +784,7 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_is_null() -> Result<()> {
-        let test_expr = Expr::IsNull(Box::new(Expr::Column("id".into())));
+        let test_expr = Expr::IsNull(Box::new(col("id")));
 
         roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
 
@@ -788,7 +793,7 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_is_not_null() -> Result<()> {
-        let test_expr = Expr::IsNotNull(Box::new(Expr::Column("id".into())));
+        let test_expr = Expr::IsNotNull(Box::new(col("id")));
 
         roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
 

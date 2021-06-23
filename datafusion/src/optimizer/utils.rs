@@ -24,8 +24,8 @@ use arrow::datatypes::Schema;
 use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
-    Expr, LogicalPlan, Operator, Partitioning, PlanType, Recursion, StringifiedPlan,
-    ToDFSchema,
+    build_join_schema, Column, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder,
+    Operator, Partitioning, PlanType, Recursion, StringifiedPlan, ToDFSchema,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
@@ -39,14 +39,11 @@ const CASE_ELSE_MARKER: &str = "__DATAFUSION_CASE_ELSE__";
 const WINDOW_PARTITION_MARKER: &str = "__DATAFUSION_WINDOW_PARTITION__";
 const WINDOW_SORT_MARKER: &str = "__DATAFUSION_WINDOW_SORT__";
 
-/// Recursively walk a list of expression trees, collecting the unique set of column
-/// names referenced in the expression
-pub fn exprlist_to_column_names(
-    expr: &[Expr],
-    accum: &mut HashSet<String>,
-) -> Result<()> {
+/// Recursively walk a list of expression trees, collecting the unique set of columns
+/// referenced in the expression
+pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result<()> {
     for e in expr {
-        expr_to_column_names(e, accum)?;
+        expr_to_columns(e, accum)?;
     }
     Ok(())
 }
@@ -54,17 +51,17 @@ pub fn exprlist_to_column_names(
 /// Recursively walk an expression tree, collecting the unique set of column names
 /// referenced in the expression
 struct ColumnNameVisitor<'a> {
-    accum: &'a mut HashSet<String>,
+    accum: &'a mut HashSet<Column>,
 }
 
 impl ExpressionVisitor for ColumnNameVisitor<'_> {
     fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
         match expr {
-            Expr::Column(name) => {
-                self.accum.insert(name.clone());
+            Expr::Column(qc) => {
+                self.accum.insert(qc.clone());
             }
             Expr::ScalarVariable(var_names) => {
-                self.accum.insert(var_names.join("."));
+                self.accum.insert(Column::from_name(var_names.join(".")));
             }
             Expr::Alias(_, _) => {}
             Expr::Literal(_) => {}
@@ -90,9 +87,9 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
     }
 }
 
-/// Recursively walk an expression tree, collecting the unique set of column names
+/// Recursively walk an expression tree, collecting the unique set of columns
 /// referenced in the expression
-pub fn expr_to_column_names(expr: &Expr, accum: &mut HashSet<String>) -> Result<()> {
+pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
     expr.accept(ColumnNameVisitor { accum })?;
     Ok(())
 }
@@ -214,21 +211,31 @@ pub fn from_plan(
         }),
         LogicalPlan::Join {
             join_type,
+            join_constraint,
             on,
-            schema,
             ..
-        } => Ok(LogicalPlan::Join {
-            left: Arc::new(inputs[0].clone()),
-            right: Arc::new(inputs[1].clone()),
-            join_type: *join_type,
-            on: on.clone(),
-            schema: schema.clone(),
-        }),
-        LogicalPlan::CrossJoin { schema, .. } => Ok(LogicalPlan::CrossJoin {
-            left: Arc::new(inputs[0].clone()),
-            right: Arc::new(inputs[1].clone()),
-            schema: schema.clone(),
-        }),
+        } => {
+            let schema = build_join_schema(
+                inputs[0].schema(),
+                inputs[1].schema(),
+                on,
+                join_type,
+                join_constraint,
+            )?;
+            Ok(LogicalPlan::Join {
+                left: Arc::new(inputs[0].clone()),
+                right: Arc::new(inputs[1].clone()),
+                join_type: *join_type,
+                join_constraint: *join_constraint,
+                on: on.clone(),
+                schema: DFSchemaRef::new(schema),
+            })
+        }
+        LogicalPlan::CrossJoin { .. } => {
+            let left = &inputs[0];
+            let right = &inputs[1];
+            LogicalPlanBuilder::from(left).cross_join(right)?.build()
+        }
         LogicalPlan::Limit { n, .. } => Ok(LogicalPlan::Limit {
             n: *n,
             input: Arc::new(inputs[0].clone()),
@@ -493,15 +500,15 @@ mod tests {
 
     #[test]
     fn test_collect_expr() -> Result<()> {
-        let mut accum: HashSet<String> = HashSet::new();
-        expr_to_column_names(
+        let mut accum: HashSet<Column> = HashSet::new();
+        expr_to_columns(
             &Expr::Cast {
                 expr: Box::new(col("a")),
                 data_type: DataType::Float64,
             },
             &mut accum,
         )?;
-        expr_to_column_names(
+        expr_to_columns(
             &Expr::Cast {
                 expr: Box::new(col("a")),
                 data_type: DataType::Float64,
@@ -509,7 +516,7 @@ mod tests {
             &mut accum,
         )?;
         assert_eq!(1, accum.len());
-        assert!(accum.contains("a"));
+        assert!(accum.contains(&Column::from_name("a".to_string())));
         Ok(())
     }
 

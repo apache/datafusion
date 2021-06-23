@@ -36,10 +36,6 @@ type = "u16"
 default = "50050"
 doc = "scheduler port"
 
-[[switch]]
-name = "local"
-doc = "Running in local mode will launch a standalone scheduler inside the executor process. This will create a single-executor cluster, and is useful for development scenarios."
-
 [[param]]
 name = "bind_host"
 type = "String"
@@ -69,8 +65,3 @@ name = "concurrent_tasks"
 type = "usize"
 default = "4"
 doc = "Max concurrent tasks."
-
-[[param]]
-name = "scheduler_data_path"
-type = "String"
-doc = "Path for standalone data"

@@ -369,7 +369,7 @@ impl WindowAggExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let schema = create_schema(&input.schema(), &window_expr)?;
+        let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
         Ok(WindowAggExec {
             input,
@@ -599,7 +599,7 @@ mod tests {
             vec![create_window_expr(
                 &WindowFunction::AggregateFunction(AggregateFunction::Count),
                 "count".to_owned(),
-                &[col("c3")],
+                &[col("c3", &schema)?],
                 &[],
                 &[],
                 Some(WindowFrame::default()),
@@ -632,7 +632,7 @@ mod tests {
                 create_window_expr(
                     &WindowFunction::AggregateFunction(AggregateFunction::Count),
                     "count".to_owned(),
-                    &[col("c3")],
+                    &[col("c3", &schema)?],
                     &[],
                     &[],
                     Some(WindowFrame::default()),
@@ -641,7 +641,7 @@ mod tests {
                 create_window_expr(
                     &WindowFunction::AggregateFunction(AggregateFunction::Max),
                     "max".to_owned(),
-                    &[col("c3")],
+                    &[col("c3", &schema)?],
                     &[],
                     &[],
                     Some(WindowFrame::default()),
@@ -650,7 +650,7 @@ mod tests {
                 create_window_expr(
                     &WindowFunction::AggregateFunction(AggregateFunction::Min),
                     "min".to_owned(),
-                    &[col("c3")],
+                    &[col("c3", &schema)?],
                     &[],
                     &[],
                     Some(WindowFrame::default()),

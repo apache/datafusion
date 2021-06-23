@@ -44,7 +44,6 @@ use futures::future;
 use futures::StreamExt;
 use log::{error, info};
 
-#[allow(dead_code)]
 struct BallistaContextState {
     /// Scheduler host
     scheduler_host: String,
@@ -52,26 +51,48 @@ struct BallistaContextState {
     scheduler_port: u16,
     /// Tables that have been registered with this context
     tables: HashMap<String, LogicalPlan>,
-    /// General purpose settings
-    settings: HashMap<String, String>,
 }
 
 impl BallistaContextState {
-    pub fn new(
-        scheduler_host: String,
-        scheduler_port: u16,
-        settings: HashMap<String, String>,
-    ) -> Self {
+    pub fn new(scheduler_host: String, scheduler_port: u16) -> Self {
         Self {
             scheduler_host,
             scheduler_port,
             tables: HashMap::new(),
-            settings,
         }
     }
-}
 
-#[allow(dead_code)]
+    #[cfg(feature = "standalone")]
+    pub async fn new_standalone(
+        concurrent_tasks: usize,
+    ) -> ballista_core::error::Result<Self> {
+        info!("Running in local mode. Scheduler will be run in-proc");
+
+        let addr = ballista_scheduler::new_standalone_scheduler().await?;
+
+        let scheduler = loop {
+            match SchedulerGrpcClient::connect(format!(
+                "http://localhost:{}",
+                addr.port()
+            ))
+            .await
+            {
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    info!("Attempting to connect to in-proc scheduler...");
+                }
+                Ok(scheduler) => break scheduler,
+            }
+        };
+
+        ballista_executor::new_standalone_executor(scheduler, concurrent_tasks).await?;
+        Ok(Self {
+            scheduler_host: "localhost".to_string(),
+            scheduler_port: addr.port(),
+            tables: HashMap::new(),
+        })
+    }
+}
 
 pub struct BallistaContext {
     state: Arc<Mutex<BallistaContextState>>,
@@ -79,12 +100,23 @@ pub struct BallistaContext {
 
 impl BallistaContext {
     /// Create a context for executing queries against a remote Ballista scheduler instance
-    pub fn remote(host: &str, port: u16, settings: HashMap<String, String>) -> Self {
-        let state = BallistaContextState::new(host.to_owned(), port, settings);
+    pub fn remote(host: &str, port: u16) -> Self {
+        let state = BallistaContextState::new(host.to_owned(), port);
 
         Self {
             state: Arc::new(Mutex::new(state)),
         }
+    }
+
+    #[cfg(feature = "standalone")]
+    pub async fn standalone(
+        concurrent_tasks: usize,
+    ) -> ballista_core::error::Result<Self> {
+        let state = BallistaContextState::new_standalone(concurrent_tasks).await?;
+
+        Ok(Self {
+            state: Arc::new(Mutex::new(state)),
+        })
     }
 
     /// Create a DataFrame representing a Parquet table scan
@@ -266,5 +298,17 @@ impl BallistaContext {
                 }
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    #[cfg(feature = "standalone")]
+    async fn test_standalone_mode() {
+        use super::*;
+        let context = BallistaContext::standalone(1).await.unwrap();
+        let df = context.sql("SELECT 1;").unwrap();
+        context.collect(&df.to_logical_plan()).await.unwrap();
     }
 }

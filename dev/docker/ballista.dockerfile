@@ -91,4 +91,4 @@ COPY benchmarks/queries/ /queries/
 ENV RUST_LOG=info
 ENV RUST_BACKTRACE=full
 
-CMD ["/executor", "--local"]
+CMD ["/executor"]

@@ -52,7 +52,7 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::execution::dataframe_impl::DataFrameImpl;
 use crate::logical_plan::{
-    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, ToDFSchema,
+    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::constant_folding::ConstantFolding;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -297,18 +297,9 @@ impl ExecutionContext {
         &mut self,
         provider: Arc<dyn TableProvider>,
     ) -> Result<Arc<dyn DataFrame>> {
-        let schema = provider.schema();
-        let table_scan = LogicalPlan::TableScan {
-            table_name: "".to_string(),
-            source: provider,
-            projected_schema: schema.to_dfschema_ref()?,
-            projection: None,
-            filters: vec![],
-            limit: None,
-        };
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
-            &LogicalPlanBuilder::from(&table_scan).build()?,
+            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
         )))
     }
 
@@ -410,22 +401,15 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let table_ref = table_ref.into();
         let schema = self.state.lock().unwrap().schema_for_ref(table_ref)?;
-
         match schema.table(table_ref.table()) {
             Some(ref provider) => {
-                let schema = provider.schema();
-                let table_scan = LogicalPlan::TableScan {
-                    table_name: table_ref.table().to_owned(),
-                    source: Arc::clone(provider),
-                    projected_schema: schema.to_dfschema_ref()?,
-                    projection: None,
-                    filters: vec![],
-                    limit: None,
-                };
-                Ok(Arc::new(DataFrameImpl::new(
-                    self.state.clone(),
-                    &LogicalPlanBuilder::from(&table_scan).build()?,
-                )))
+                let plan = LogicalPlanBuilder::scan(
+                    table_ref.table(),
+                    Arc::clone(provider),
+                    None,
+                )?
+                .build()?;
+                Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
             }
             _ => Err(DataFusionError::Plan(format!(
                 "No table named '{}'",
@@ -1038,7 +1022,6 @@ mod tests {
         let logical_plan = ctx.optimize(&logical_plan)?;
 
         let physical_plan = ctx.create_physical_plan(&logical_plan)?;
-        println!("{:?}", physical_plan);
 
         let results = collect_partitioned(physical_plan).await?;
 
@@ -1110,7 +1093,7 @@ mod tests {
             _ => panic!("expect optimized_plan to be projection"),
         }
 
-        let expected = "Projection: #c2\
+        let expected = "Projection: #test.c2\
         \n  TableScan: test projection=Some([1])";
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
@@ -1133,7 +1116,7 @@ mod tests {
         let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
         assert!(!schema.field_with_name("c1")?.is_nullable());
 
-        let plan = LogicalPlanBuilder::scan_empty("", &schema, None)?
+        let plan = LogicalPlanBuilder::scan_empty(None, &schema, None)?
             .project(vec![col("c1")])?
             .build()?;
 
@@ -1183,8 +1166,11 @@ mod tests {
             _ => panic!("expect optimized_plan to be projection"),
         }
 
-        let expected = "Projection: #b\
-        \n  TableScan: projection=Some([1])";
+        let expected = format!(
+            "Projection: #{}.b\
+        \n  TableScan: {} projection=Some([1])",
+            UNNAMED_TABLE, UNNAMED_TABLE
+        );
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
         let physical_plan = ctx.create_physical_plan(&optimized_plan)?;
@@ -2138,9 +2124,9 @@ mod tests {
             Field::new("c2", DataType::UInt32, false),
         ]));
 
-        let plan = LogicalPlanBuilder::scan_empty("", schema.as_ref(), None)?
+        let plan = LogicalPlanBuilder::scan_empty(None, schema.as_ref(), None)?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .project(vec![col("c1"), col("SUM(c2)").alias("total_salary")])?
+            .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
             .build()?;
 
         let plan = ctx.optimize(&plan)?;
@@ -2590,7 +2576,7 @@ mod tests {
 
         assert_eq!(
             format!("{:?}", plan),
-            "Projection: #a, #b, my_add(#a, #b)\n  TableScan: t projection=None"
+            "Projection: #t.a, #t.b, my_add(#t.a, #t.b)\n  TableScan: t projection=None"
         );
 
         let plan = ctx.optimize(&plan)?;

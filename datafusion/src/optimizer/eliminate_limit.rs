@@ -122,7 +122,7 @@ mod tests {
         // Left side is removed
         let expected = "Union\
             \n  EmptyRelation\
-            \n  Aggregate: groupBy=[[#a]], aggr=[[SUM(#b)]]\
+            \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
             \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
     }
