@@ -972,11 +972,12 @@ impl DefaultPhysicalPlanner {
     pub fn create_window_expr_with_name(
         &self,
         e: &Expr,
-        name: String,
+        name: impl Into<String>,
         logical_input_schema: &DFSchema,
         physical_input_schema: &Schema,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn WindowExpr>> {
+        let name = name.into();
         match e {
             Expr::WindowFunction {
                 fun,
@@ -1078,7 +1079,7 @@ impl DefaultPhysicalPlanner {
     pub fn create_aggregate_expr_with_name(
         &self,
         e: &Expr,
-        name: String,
+        name: impl Into<String>,
         logical_input_schema: &DFSchema,
         physical_input_schema: &Schema,
         ctx_state: &ExecutionContextState,
@@ -1217,7 +1218,7 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = LogicalPlanBuilder::scan_csv(&path, options, None)?
+        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
             // filter clause needs the type coercion rule applied
             .filter(col("c7").lt(lit(5_u8)))?
             .project(vec![col("c1"), col("c2")])?
@@ -1262,7 +1263,7 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = LogicalPlanBuilder::scan_csv(&path, options, None)?
+        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
             .filter(col("c7").lt(col("c12")))?
             .build()?;
 
@@ -1403,7 +1404,7 @@ mod tests {
             Expr::Literal(ScalarValue::Boolean(Some(true))),
             Expr::Literal(ScalarValue::Utf8(Some("a".to_string()))),
         ];
-        let logical_plan = LogicalPlanBuilder::scan_csv(&path, options, None)?
+        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
             // filter clause needs the type coercion rule applied
             .filter(col("c12").lt(lit(0.05)))?
             .project(vec![col("c12").lt_eq(lit(0.025)).in_list(list, false)])?
@@ -1430,7 +1431,7 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = LogicalPlanBuilder::scan_csv(&path, options, None)?
+        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
             .build()?;
 
@@ -1453,7 +1454,7 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = LogicalPlanBuilder::scan_csv(&path, options, None)?
+        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
             .build()?;
 

@@ -115,21 +115,23 @@ impl LogicalPlanBuilder {
 
     /// Scan a CSV data source
     pub fn scan_csv(
-        path: &str,
+        path: impl Into<String>,
         options: CsvReadOptions,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        let provider = Arc::new(CsvFile::try_new(path, options)?);
+        let path = path.into();
+        let provider = Arc::new(CsvFile::try_new(&path, options)?);
         Self::scan(path, provider, projection)
     }
 
     /// Scan a Parquet data source
     pub fn scan_parquet(
-        path: &str,
+        path: impl Into<String>,
         projection: Option<Vec<usize>>,
         max_concurrency: usize,
     ) -> Result<Self> {
-        let provider = Arc::new(ParquetTable::try_new(path, max_concurrency)?);
+        let path = path.into();
+        let provider = Arc::new(ParquetTable::try_new(&path, max_concurrency)?);
         Self::scan(path, provider, projection)
     }
 
@@ -146,10 +148,12 @@ impl LogicalPlanBuilder {
 
     /// Convert a table provider into a builder with a TableScan
     pub fn scan(
-        table_name: &str,
+        table_name: impl Into<String>,
         provider: Arc<dyn TableProvider>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
+        let table_name = table_name.into();
+
         if table_name.is_empty() {
             return Err(DataFusionError::Plan(
                 "table_name cannot be empty".to_string(),
@@ -164,17 +168,17 @@ impl LogicalPlanBuilder {
                 DFSchema::new(
                     p.iter()
                         .map(|i| {
-                            DFField::from_qualified(table_name, schema.field(*i).clone())
+                            DFField::from_qualified(&table_name, schema.field(*i).clone())
                         })
                         .collect(),
                 )
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name, &schema)
+                DFSchema::try_from_qualified_schema(&table_name, &schema)
             })?;
 
         let table_scan = LogicalPlan::TableScan {
-            table_name: table_name.to_string(),
+            table_name,
             source: provider,
             projected_schema: Arc::new(projected_schema),
             projection,

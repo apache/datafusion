@@ -270,7 +270,7 @@ impl ExecutionContext {
     /// Creates a DataFrame for reading a CSV data source.
     pub fn read_csv(
         &mut self,
-        filename: &str,
+        filename: impl Into<String>,
         options: CsvReadOptions,
     ) -> Result<Arc<dyn DataFrame>> {
         Ok(Arc::new(DataFrameImpl::new(
@@ -280,7 +280,10 @@ impl ExecutionContext {
     }
 
     /// Creates a DataFrame for reading a Parquet data source.
-    pub fn read_parquet(&mut self, filename: &str) -> Result<Arc<dyn DataFrame>> {
+    pub fn read_parquet(
+        &mut self,
+        filename: impl Into<String>,
+    ) -> Result<Arc<dyn DataFrame>> {
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_parquet(
@@ -474,8 +477,9 @@ impl ExecutionContext {
     pub async fn write_csv(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        path: String,
+        path: impl Into<String>,
     ) -> Result<()> {
+        let path = path.into();
         // create directory to contain the CSV files (one per partition)
         let fs_path = Path::new(&path);
         match fs::create_dir(fs_path) {
@@ -511,9 +515,10 @@ impl ExecutionContext {
     pub async fn write_parquet(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        path: String,
+        path: impl Into<String>,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
+        let path = path.into();
         // create directory to contain the Parquet files (one per partition)
         let fs_path = Path::new(&path);
         match fs::create_dir(fs_path) {

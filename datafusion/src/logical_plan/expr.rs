@@ -44,10 +44,10 @@ pub struct Column {
 
 impl Column {
     /// Create Column from unqualified name.
-    pub fn from_name(name: String) -> Self {
+    pub fn from_name(name: impl Into<String>) -> Self {
         Self {
             relation: None,
-            name,
+            name: name.into(),
         }
     }
 
@@ -131,7 +131,7 @@ impl fmt::Display for Column {
 /// ```
 /// # use datafusion::logical_plan::*;
 /// let expr = col("c1");
-/// assert_eq!(expr, Expr::Column(Column::from_name("c1".to_string())));
+/// assert_eq!(expr, Expr::Column(Column::from_name("c1")));
 /// ```
 ///
 /// ## Create the expression `c1 + c2` to add columns "c1" and "c2" together
