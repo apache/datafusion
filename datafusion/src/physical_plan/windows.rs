@@ -411,7 +411,15 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn required_child_distribution(&self) -> Distribution {
-        Distribution::UnspecifiedDistribution
+        if self
+            .window_expr()
+            .iter()
+            .all(|expr| expr.partition_by().is_empty())
+        {
+            Distribution::SinglePartition
+        } else {
+            Distribution::UnspecifiedDistribution
+        }
     }
 
     fn with_new_children(
