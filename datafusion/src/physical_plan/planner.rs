@@ -44,6 +44,7 @@ use crate::physical_plan::{
 };
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
+use crate::sql::utils::generate_sort_key;
 use crate::variable::VarType;
 use crate::{
     error::{DataFusionError, Result},
@@ -263,11 +264,56 @@ impl DefaultPhysicalPlanner {
                         "Impossibly got empty window expression".to_owned(),
                     ));
                 }
+                let get_sort_keys = |expr: &Expr| match expr {
+                    Expr::WindowFunction {
+                        ref partition_by,
+                        ref order_by,
+                        ..
+                    } => generate_sort_key(partition_by, order_by),
+                    _ => unreachable!(),
+                };
+
+                let sort_keys = get_sort_keys(&window_expr[0]);
+                if window_expr.len() > 1 {
+                    debug_assert!(
+                        window_expr[1..]
+                            .iter()
+                            .all(|expr| get_sort_keys(expr) == sort_keys),
+                        "all window expressions shall have the same sort keys, as guaranteed by logical planning"
+                    );
+                }
 
                 let input_exec = self.create_initial_plan(input, ctx_state)?;
-                let physical_input_schema = input_exec.schema();
-                let logical_input_schema = input.as_ref().schema();
+                let logical_input_schema = input.schema();
 
+                let input_exec = if sort_keys.is_empty() {
+                    input_exec
+                } else {
+                    let physical_input_schema = input_exec.schema();
+                    let sort_keys = sort_keys
+                        .iter()
+                        .map(|e| match e {
+                            Expr::Sort {
+                                expr,
+                                asc,
+                                nulls_first,
+                            } => self.create_physical_sort_expr(
+                                expr,
+                                logical_input_schema,
+                                &physical_input_schema,
+                                SortOptions {
+                                    descending: !*asc,
+                                    nulls_first: *nulls_first,
+                                },
+                                ctx_state,
+                            ),
+                            _ => unreachable!(),
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Arc::new(SortExec::try_new(sort_keys, input_exec)?)
+                };
+
+                let physical_input_schema = input_exec.schema();
                 let window_expr = window_expr
                     .iter()
                     .map(|e| {
@@ -282,7 +328,7 @@ impl DefaultPhysicalPlanner {
 
                 Ok(Arc::new(WindowAggExec::try_new(
                     window_expr,
-                    input_exec.clone(),
+                    input_exec,
                     physical_input_schema,
                 )?))
             }

@@ -695,12 +695,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // if there's an empty over, it'll be at the top level
         groups.sort_by(|(key_a, _), (key_b, _)| key_a.len().cmp(&key_b.len()));
         groups.reverse();
-        for (sort_keys, exprs) in groups {
-            if !sort_keys.is_empty() {
-                let sort_keys: Vec<Expr> = sort_keys.to_vec();
-                plan = LogicalPlanBuilder::from(&plan).sort(sort_keys)?.build()?;
-            }
-            let window_exprs: Vec<Expr> = exprs.into_iter().cloned().collect();
+        for (_, exprs) in groups {
+            let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
+            // the partition and sort itself is done at physical level, see physical_planner's
+            // fn create_initial_plan
             plan = LogicalPlanBuilder::from(&plan)
                 .window(window_exprs)?
                 .build()?;
@@ -2861,9 +2859,8 @@ mod tests {
         let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id) from orders";
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty)]]\
-        \n    Sort: #orders.order_id ASC NULLS FIRST\
-        \n      TableScan: orders projection=None";
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id]]]\
+        \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -2884,11 +2881,9 @@ mod tests {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty), #MIN(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty)]]\
-        \n    Sort: #orders.order_id ASC NULLS FIRST\
-        \n      WindowAggr: windowExpr=[[MIN(#orders.qty)]]\
-        \n        Sort: #orders.order_id DESC NULLS FIRST\
-        \n          TableScan: orders projection=None";
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
+        \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -2897,11 +2892,9 @@ mod tests {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS BETWEEN 3 PRECEDING and 3 FOLLOWING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty) ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING, #MIN(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING]]\
-        \n    Sort: #orders.order_id ASC NULLS FIRST\
-        \n      WindowAggr: windowExpr=[[MIN(#orders.qty)]]\
-        \n        Sort: #orders.order_id DESC NULLS FIRST\
-        \n          TableScan: orders projection=None";
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING]]\
+        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
+        \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -2910,11 +2903,9 @@ mod tests {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty) ROWS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ROWS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
-        \n    Sort: #orders.order_id ASC NULLS FIRST\
-        \n      WindowAggr: windowExpr=[[MIN(#orders.qty)]]\
-        \n        Sort: #orders.order_id DESC NULLS FIRST\
-        \n          TableScan: orders projection=None";
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
+        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
+        \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -2955,11 +2946,9 @@ mod tests {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id GROUPS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty) GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
-        \n    Sort: #orders.order_id ASC NULLS FIRST\
-        \n      WindowAggr: windowExpr=[[MIN(#orders.qty)]]\
-        \n        Sort: #orders.order_id DESC NULLS FIRST\
-        \n          TableScan: orders projection=None";
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
+        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
+        \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -2980,11 +2969,9 @@ mod tests {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY (order_id + 1)) from orders";
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty), #MIN(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty)]]\
-        \n    Sort: #orders.order_id ASC NULLS FIRST\
-        \n      WindowAggr: windowExpr=[[MIN(#orders.qty)]]\
-        \n        Sort: #orders.order_id Plus Int64(1) ASC NULLS FIRST\
-        \n          TableScan: orders projection=None";
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id Plus Int64(1) ASC NULLS FIRST]]]\
+        \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3007,11 +2994,9 @@ mod tests {
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty), #SUM(orders.qty), #MIN(orders.qty)\
         \n  WindowAggr: windowExpr=[[SUM(#orders.qty)]]\
-        \n    WindowAggr: windowExpr=[[MAX(#orders.qty)]]\
-        \n      Sort: #orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST\
-        \n        WindowAggr: windowExpr=[[MIN(#orders.qty)]]\
-        \n          Sort: #orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST\
-        \n            TableScan: orders projection=None";
+        \n    WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST]]]\
+        \n      WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]]]\
+        \n        TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3034,11 +3019,9 @@ mod tests {
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty), #SUM(orders.qty), #MIN(orders.qty)\
         \n  WindowAggr: windowExpr=[[SUM(#orders.qty)]]\
-        \n    WindowAggr: windowExpr=[[MAX(#orders.qty)]]\
-        \n      Sort: #orders.order_id ASC NULLS FIRST\
-        \n        WindowAggr: windowExpr=[[MIN(#orders.qty)]]\
-        \n          Sort: #orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST\
-        \n            TableScan: orders projection=None";
+        \n    WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
+        \n      WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]]]\
+        \n        TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3065,11 +3048,9 @@ mod tests {
         Sort: #orders.order_id ASC NULLS FIRST\
         \n  Projection: #orders.order_id, #MAX(orders.qty), #SUM(orders.qty), #MIN(orders.qty)\
         \n    WindowAggr: windowExpr=[[SUM(#orders.qty)]]\
-        \n      WindowAggr: windowExpr=[[MAX(#orders.qty)]]\
-        \n        Sort: #orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST\
-        \n          WindowAggr: windowExpr=[[MIN(#orders.qty)]]\
-        \n            Sort: #orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST\
-        \n              TableScan: orders projection=None";
+        \n      WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST]]]\
+        \n        WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]]]\
+        \n          TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3088,9 +3069,8 @@ mod tests {
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty) from orders";
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty)]]\
-        \n    Sort: #orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST\
-        \n      TableScan: orders projection=None";
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
+        \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3109,9 +3089,8 @@ mod tests {
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty) from orders";
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty)]]\
-        \n    Sort: #orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST\
-        \n      TableScan: orders projection=None";
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
+        \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3133,11 +3112,9 @@ mod tests {
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty), MIN(qty) OVER (PARTITION BY qty ORDER BY order_id) from orders";
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty), #MIN(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty)]]\
-        \n    Sort: #orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST\
-        \n      WindowAggr: windowExpr=[[MIN(#orders.qty)]]\
-        \n        Sort: #orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST\
-        \n          TableScan: orders projection=None";
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.qty] ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
+        \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
@@ -3158,11 +3135,9 @@ mod tests {
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty), MIN(qty) OVER (PARTITION BY order_id, qty ORDER BY price) from orders";
         let expected = "\
         Projection: #orders.order_id, #MAX(orders.qty), #MIN(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty)]]\
-        \n    Sort: #orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST\
-        \n      WindowAggr: windowExpr=[[MIN(#orders.qty)]]\
-        \n        Sort: #orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST, #orders.price ASC NULLS FIRST\
-        \n          TableScan: orders projection=None";
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.price ASC NULLS FIRST]]]\
+        \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
