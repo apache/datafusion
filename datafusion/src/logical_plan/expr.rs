@@ -1452,11 +1452,18 @@ impl fmt::Debug for Expr {
             }
             Expr::WindowFunction {
                 fun,
-                ref args,
+                args,
+                partition_by,
+                order_by,
                 window_frame,
-                ..
             } => {
                 fmt_function(f, &fun.to_string(), false, args)?;
+                if !partition_by.is_empty() {
+                    write!(f, " PARTITION BY {:?}", partition_by)?;
+                }
+                if !order_by.is_empty() {
+                    write!(f, " ORDER BY {:?}", order_by)?;
+                }
                 if let Some(window_frame) = window_frame {
                     write!(
                         f,

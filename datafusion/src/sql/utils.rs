@@ -439,7 +439,11 @@ pub(crate) fn resolve_aliases_to_exprs(
 
 type WindowSortKey = Vec<Expr>;
 
-fn generate_sort_key(partition_by: &[Expr], order_by: &[Expr]) -> WindowSortKey {
+/// Generate a sort key for a given window expr's partition_by and order_bu expr
+pub(crate) fn generate_sort_key(
+    partition_by: &[Expr],
+    order_by: &[Expr],
+) -> WindowSortKey {
     let mut sort_key = vec![];
     partition_by.iter().for_each(|e| {
         let e = e.clone().sort(true, true);
