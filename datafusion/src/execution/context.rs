@@ -22,7 +22,8 @@ use crate::{
         information_schema::CatalogWithInformationSchema,
     },
     optimizer::{
-        eliminate_limit::EliminateLimit, hash_build_probe_order::HashBuildProbeOrder,
+        count_statistics::StatisticsConstant, eliminate_limit::EliminateLimit,
+        hash_build_probe_order::HashBuildProbeOrder,
     },
     physical_optimizer::optimizer::PhysicalOptimizerRule,
 };
@@ -639,6 +640,7 @@ impl Default for ExecutionConfig {
                 Arc::new(SimplifyExpressions::new()),
                 Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(LimitPushDown::new()),
+                Arc::new(StatisticsConstant::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(CoalesceBatches::new()),
