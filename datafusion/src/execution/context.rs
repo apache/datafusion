@@ -635,12 +635,12 @@ impl Default for ExecutionConfig {
             optimizers: vec![
                 Arc::new(ConstantFolding::new()),
                 Arc::new(EliminateLimit::new()),
+                Arc::new(StatisticsConstant::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(SimplifyExpressions::new()),
                 Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(LimitPushDown::new()),
-                Arc::new(StatisticsConstant::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(CoalesceBatches::new()),
