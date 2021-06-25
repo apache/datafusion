@@ -477,11 +477,11 @@ impl ExecutionContext {
     pub async fn write_csv(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        path: impl Into<String>,
+        path: impl AsRef<str>,
     ) -> Result<()> {
-        let path = path.into();
+        let path = path.as_ref();
         // create directory to contain the CSV files (one per partition)
-        let fs_path = Path::new(&path);
+        let fs_path = Path::new(path);
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -515,12 +515,12 @@ impl ExecutionContext {
     pub async fn write_parquet(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        path: impl Into<String>,
+        path: impl AsRef<str>,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
-        let path = path.into();
+        let path = path.as_ref();
         // create directory to contain the Parquet files (one per partition)
-        let fs_path = Path::new(&path);
+        let fs_path = Path::new(path);
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
