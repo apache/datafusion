@@ -135,14 +135,18 @@ impl DFSchema {
         &self.fields[i]
     }
 
-    /// Find the index of the column with the given unqualifed name
+    /// Find the index of the column with the given unqualified name
     pub fn index_of(&self, name: &str) -> Result<usize> {
         for i in 0..self.fields.len() {
             if self.fields[i].name() == name {
                 return Ok(i);
             }
         }
-        Err(DataFusionError::Plan(format!("No field named '{}'", name)))
+        Err(DataFusionError::Plan(format!(
+            "No field named '{}'. Valid fields are {}.",
+            name,
+            self.get_field_names()
+        )))
     }
 
     /// Find the index of the column with the given qualifer and name
@@ -181,8 +185,9 @@ impl DFSchema {
             .collect();
         match matches.len() {
             0 => Err(DataFusionError::Plan(format!(
-                "No field with unqualified name '{}'",
-                name
+                "No field with unqualified name '{}'. Valid fields are {}.",
+                name,
+                self.get_field_names()
             ))),
             1 => Ok(matches[0].to_owned()),
             _ => Err(DataFusionError::Plan(format!(
@@ -207,8 +212,10 @@ impl DFSchema {
             .collect();
         match matches.len() {
             0 => Err(DataFusionError::Plan(format!(
-                "No field named '{}.{}'",
-                relation_name, name
+                "No field named '{}.{}'. Valid fields are {}.",
+                relation_name,
+                name,
+                self.get_field_names()
             ))),
             1 => Ok(matches[0].to_owned()),
             _ => Err(DataFusionError::Internal(format!(
@@ -272,6 +279,15 @@ impl DFSchema {
                 })
                 .collect(),
         }
+    }
+
+    /// Get comma-seperated list of field names for use in error messages
+    fn get_field_names(&self) -> String {
+        self.fields
+            .iter()
+            .map(|f| format!("'{}'", f.name()))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -582,6 +598,28 @@ mod tests {
         field name \'t1.c0\' and unqualified field name \'c0\' which would be ambiguous",
             &format!("{}", join.err().unwrap())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn helpful_error_messages() -> Result<()> {
+        let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+        let expected_help = "Valid fields are \'c0\', \'c1\'.";
+        assert!(schema
+            .field_with_qualified_name("x", "y")
+            .unwrap_err()
+            .to_string()
+            .contains(expected_help));
+        assert!(schema
+            .field_with_unqualified_name("y")
+            .unwrap_err()
+            .to_string()
+            .contains(expected_help));
+        assert!(schema
+            .index_of("y")
+            .unwrap_err()
+            .to_string()
+            .contains(expected_help));
         Ok(())
     }
 
