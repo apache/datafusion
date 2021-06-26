@@ -119,8 +119,18 @@ impl LogicalPlanBuilder {
         options: CsvReadOptions,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
+        Self::scan_csv_with_name(path, options, projection, path)
+    }
+
+    /// Scan a CSV data source and register it with a given table name
+    pub fn scan_csv_with_name(
+        path: &str,
+        options: CsvReadOptions,
+        projection: Option<Vec<usize>>,
+        table_name: &str,
+    ) -> Result<Self> {
         let provider = Arc::new(CsvFile::try_new(path, options)?);
-        Self::scan(path, provider, projection)
+        Self::scan(table_name, provider, projection)
     }
 
     /// Scan a Parquet data source
@@ -129,8 +139,18 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         max_concurrency: usize,
     ) -> Result<Self> {
+        Self::scan_parquet_with_name(path, projection, max_concurrency, path)
+    }
+
+    /// Scan a Parquet data source and register it with a given table name
+    pub fn scan_parquet_with_name(
+        path: &str,
+        projection: Option<Vec<usize>>,
+        max_concurrency: usize,
+        table_name: &str,
+    ) -> Result<Self> {
         let provider = Arc::new(ParquetTable::try_new(path, max_concurrency)?);
-        Self::scan(path, provider, projection)
+        Self::scan(table_name, provider, projection)
     }
 
     /// Scan an empty data source, mainly used in tests
