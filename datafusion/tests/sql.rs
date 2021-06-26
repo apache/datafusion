@@ -27,14 +27,8 @@ use chrono::Duration;
 extern crate arrow;
 extern crate datafusion;
 
-use arrow::{array::*, datatypes::TimeUnit};
-use arrow::{datatypes::Int32Type, datatypes::Int64Type, record_batch::RecordBatch};
 use arrow::{
-    datatypes::{
-        ArrowNativeType, ArrowPrimitiveType, ArrowTimestampType, DataType, Field, Schema,
-        SchemaRef, TimestampMicrosecondType, TimestampMillisecondType,
-        TimestampNanosecondType, TimestampSecondType,
-    },
+    array::*, datatypes::*, record_batch::RecordBatch,
     util::display::array_value_to_string,
 };
 
@@ -3341,6 +3335,31 @@ async fn query_is_not_null() -> Result<()> {
     let sql = "SELECT c1 IS NOT NULL FROM test";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["true"], vec!["false"], vec!["true"]];
+
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_get_field() -> Result<()> {
+    let inner_field = Field::new("inner", DataType::Float64, true);
+    let field = Field::new("c1", DataType::Struct(vec![inner_field.clone()]), true);
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    let array = Arc::new(Float64Array::from(vec![Some(1.1), None])) as ArrayRef;
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(StructArray::from(vec![(inner_field, array)]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT test.c1.inner FROM test";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["1.1"], vec!["NULL"]];
 
     assert_eq!(expected, actual);
     Ok(())

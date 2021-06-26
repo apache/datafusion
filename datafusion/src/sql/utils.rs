@@ -368,6 +368,10 @@ where
                 Ok(expr.clone())
             }
             Expr::Wildcard => Ok(Expr::Wildcard),
+            Expr::GetField { expr, name } => Ok(Expr::GetField {
+                expr: Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
+                name: name.clone(),
+            }),
         },
     }
 }

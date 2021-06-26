@@ -225,6 +225,7 @@ pub mod physical_plan;
 pub mod prelude;
 pub mod scalar;
 pub mod sql;
+mod utils;
 pub mod variable;
 
 // re-export dependencies from arrow-rs to minimise version maintenance for crate users
