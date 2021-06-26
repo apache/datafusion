@@ -114,7 +114,10 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::error::Result;
+    use crate::execution::context::ExecutionProps;
     use crate::logical_plan::LogicalPlan;
+    use crate::optimizer::count_statistics::StatisticsConstant;
+    use crate::optimizer::optimizer::OptimizerRule;
     use crate::{
         datasource::{datasource::Statistics, TableProvider},
         logical_plan::Expr,
@@ -148,6 +151,9 @@ mod tests {
                 column_statistics: None,
             }
         }
+        fn has_exact_statistics(&self) -> bool {
+            true
+        }
     }
 
     #[test]
@@ -158,20 +164,21 @@ mod tests {
             .unwrap();
 
         let plan = ctx
-            .sql("select count(*) from test")
-            .unwrap()
-            .to_logical_plan();
+            .create_logical_plan("select count(*) from test")
+            .unwrap();
         let expected = "\
-    Projection: #COUNT(UInt8(1))\
-    \n  Projection: UInt64(100) AS COUNT(Uint8(1))\
-    \n    EmptyRelation";
+            Projection: #COUNT(UInt8(1))\
+            \n  Projection: UInt64(100) AS COUNT(Uint8(1))\
+            \n    EmptyRelation";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let formatted_plan = format!("{:?}", plan);
+        let opt = StatisticsConstant::new();
+        let optimized_plan = opt.optimize(plan, &ExecutionProps::new()).unwrap();
+        let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
         assert_eq!(plan.schema(), plan.schema());
     }
