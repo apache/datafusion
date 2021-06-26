@@ -128,6 +128,10 @@ fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             let expr = physical_name(expr, input_schema)?;
             Ok(format!("{} IS NOT NULL", expr))
         }
+        Expr::GetField { expr, name } => {
+            let expr = physical_name(expr, input_schema)?;
+            Ok(format!("{}.{}", expr, name))
+        }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_physical_name(&fun.to_string(), false, args, input_schema)
         }
@@ -870,6 +874,10 @@ impl DefaultPhysicalPlanner {
             )?),
             Expr::IsNotNull(expr) => expressions::is_not_null(
                 self.create_physical_expr(expr, input_dfschema, input_schema, ctx_state)?,
+            ),
+            Expr::GetField { expr, name } => expressions::get_field(
+                self.create_physical_expr(expr, input_dfschema, input_schema, ctx_state)?,
+                name.clone(),
             ),
             Expr::ScalarFunction { fun, args } => {
                 let physical_args = args

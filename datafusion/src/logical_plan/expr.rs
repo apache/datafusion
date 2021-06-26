@@ -25,6 +25,7 @@ use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
     window_functions,
 };
+use crate::utils::get_field;
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
 use arrow::{compute::can_cast_types, datatypes::DataType};
@@ -188,6 +189,13 @@ pub enum Expr {
     IsNull(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
+    /// Returns the field of a [`StructArray`] by name
+    GetField {
+        /// the expression to take the field from
+        expr: Box<Expr>,
+        /// The name of the field to take
+        name: String,
+    },
     /// Whether an expression is between a given range.
     Between {
         /// The value to compare
@@ -378,6 +386,10 @@ impl Expr {
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
+            Expr::GetField { ref expr, name } => {
+                let data_type = expr.get_type(schema)?;
+                get_field(&data_type, name).map(|x| x.data_type().clone())
+            }
         }
     }
 
@@ -435,6 +447,10 @@ impl Expr {
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
+            Expr::GetField { ref expr, name } => {
+                let data_type = expr.get_type(input_schema)?;
+                get_field(&data_type, name).map(|x| x.is_nullable())
+            }
         }
     }
 
@@ -575,6 +591,14 @@ impl Expr {
         Expr::IsNotNull(Box::new(self))
     }
 
+    /// Returns the values of the field `name` from an expression returning a `Struct`
+    pub fn get_field<I: Into<String>>(self, name: I) -> Expr {
+        Expr::GetField {
+            expr: Box::new(self),
+            name: name.into(),
+        }
+    }
+
     /// Create a sort expression from an existing expression.
     ///
     /// ```
@@ -710,6 +734,7 @@ impl Expr {
                     .try_fold(visitor, |visitor, arg| arg.accept(visitor))
             }
             Expr::Wildcard => Ok(visitor),
+            Expr::GetField { ref expr, .. } => expr.accept(visitor),
         }?;
 
         visitor.post_visit(self)
@@ -867,6 +892,10 @@ impl Expr {
                 negated,
             },
             Expr::Wildcard => Expr::Wildcard,
+            Expr::GetField { expr, name } => Expr::GetField {
+                expr: rewrite_boxed(expr, rewriter)?,
+                name,
+            },
         };
 
         // now rewrite this expression itself
@@ -1508,6 +1537,7 @@ impl fmt::Debug for Expr {
                 }
             }
             Expr::Wildcard => write!(f, "*"),
+            Expr::GetField { ref expr, name } => write!(f, "({:?}).{}", expr, name),
         }
     }
 }
@@ -1583,6 +1613,10 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::IsNotNull(expr) => {
             let expr = create_name(expr, input_schema)?;
             Ok(format!("{} IS NOT NULL", expr))
+        }
+        Expr::GetField { expr, name } => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{}.{}", expr, name))
         }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_name(&fun.to_string(), false, args, input_schema)
@@ -1692,6 +1726,12 @@ mod tests {
             format!("{:?}", col_not_null.is_not_null()),
             "#col2 IS NOT NULL"
         );
+    }
+
+    #[test]
+    fn display_get_field() {
+        let col_null = col("col1").get_field("name");
+        assert_eq!(format!("{:?}", col_null), "(#col1).name");
     }
 
     #[derive(Default)]
