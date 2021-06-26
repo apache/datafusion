@@ -51,9 +51,13 @@ impl OptimizerRule for StatisticsConstant {
                 group_expr,
                 aggr_expr,
                 schema,
-            } if group_expr.len() == 0 && aggr_expr.len() == 1 => {
+            } if group_expr.is_empty() && aggr_expr.is_empty() => {
                 if let Some(num_rows) = match input.as_ref() {
-                    LogicalPlan::TableScan { source, .. } => source.statistics().num_rows,
+                    LogicalPlan::TableScan { source, .. }
+                        if source.has_exact_statistics() =>
+                    {
+                        source.statistics().num_rows
+                    }
                     _ => None,
                 } {
                     return match &aggr_expr[0] {

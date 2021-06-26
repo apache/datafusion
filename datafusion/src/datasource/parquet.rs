@@ -101,6 +101,10 @@ impl TableProvider for ParquetTable {
     fn statistics(&self) -> Statistics {
         self.statistics.clone()
     }
+
+    fn has_exact_statistics(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
