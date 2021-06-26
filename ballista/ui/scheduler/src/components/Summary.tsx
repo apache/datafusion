@@ -39,13 +39,14 @@ export interface SchedulerState {
 }
 
 export interface SummaryProps {
-  schedulerState?: SchedulerState
+  schedulerState?: SchedulerState;
 }
 
-export const Summary: React.FunctionComponent<SummaryProps> = ({schedulerState}) => {
-
+export const Summary: React.FunctionComponent<SummaryProps> = ({
+  schedulerState,
+}) => {
   if (!schedulerState) {
-    return <Text>Scheduler isn't running</Text>
+    return <Text>Scheduler isn't running</Text>;
   }
 
   return (
@@ -58,7 +59,9 @@ export const Summary: React.FunctionComponent<SummaryProps> = ({schedulerState})
             alignItems={"flex-start"}
             fontWeight={"normal"}
           >
-            <Text fontWeight={"light"} mb={2}>General Cluster Info</Text>
+            <Text fontWeight={"light"} mb={2}>
+              General Cluster Info
+            </Text>
             <Flex>
               <Label>Status</Label>
               <Flex alignItems={"center"}>

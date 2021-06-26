@@ -16,12 +16,12 @@
 // under the License.
 
 import React from "react";
-import {Box } from "@chakra-ui/react";
-import {Column, DateCell, DataTable} from "./DataTable";
+import { Box } from "@chakra-ui/react";
+import { Column, DateCell, DataTable } from "./DataTable";
 
 export enum NodeStatus {
   RUNNING = "RUNNING",
-  TERMINATED = "TERMINATED"
+  TERMINATED = "TERMINATED",
 }
 
 export interface NodeInfo {
@@ -32,7 +32,7 @@ export interface NodeInfo {
   started: string;
 }
 
-const columns : Column<any>[] = [
+const columns: Column<any>[] = [
   {
     Header: "Node",
     accessor: "id",
@@ -57,7 +57,7 @@ const columns : Column<any>[] = [
 ];
 
 interface NodesListProps {
-  nodes:  NodeInfo[]
+  nodes: NodeInfo[];
 }
 
 export const NodesList: React.FunctionComponent<NodesListProps> = ({
