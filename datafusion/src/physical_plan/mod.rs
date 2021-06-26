@@ -396,7 +396,8 @@ impl ColumnarValue {
         }
     }
 
-    fn into_array(self, num_rows: usize) -> ArrayRef {
+    /// Convert a columnar value into an ArrayRef
+    pub fn into_array(self, num_rows: usize) -> ArrayRef {
         match self {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),

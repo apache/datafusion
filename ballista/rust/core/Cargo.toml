@@ -30,6 +30,7 @@ build = "build.rs"
 simd = ["datafusion/simd"]
 
 [dependencies]
+ahash = "0.7"
 async-trait = "0.1.36"
 futures = "0.3"
 log = "0.4"
