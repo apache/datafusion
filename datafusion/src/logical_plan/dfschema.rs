@@ -57,15 +57,6 @@ impl DFSchema {
                         field.qualified_name()
                     )));
                 }
-            } else if let Some(shared_qualifiers) = field.shared_qualifiers() {
-                for qualifier in shared_qualifiers {
-                    if !qualified_names.insert((qualifier, field.name())) {
-                        return Err(DataFusionError::Plan(format!(
-                            "Schema contains duplicate qualified field name '{}'",
-                            field.qualified_name()
-                        )));
-                    }
-                }
             } else if !unqualified_names.insert(field.name()) {
                 return Err(DataFusionError::Plan(format!(
                     "Schema contains duplicate unqualified field name '{}'",
@@ -170,18 +161,8 @@ impl DFSchema {
                 // current field is qualified and not shared between relations, compare both
                 // qualifer and name.
                 (Some(q), Some(field_q)) => q == field_q && field.name() == name,
-                // field to lookup is qualified.
-                // current field is either unqualified or qualified and shared between relations.
-                (Some(q), None) => {
-                    if let Some(shared_q) = field.shared_qualifiers() {
-                        // current field is a shared qualified field, check for all shared
-                        // relation names.
-                        shared_q.contains(q) && field.name() == name
-                    } else {
-                        // current field is unqualifiied
-                        false
-                    }
-                }
+                // field to lookup is qualified but current field is unqualified.
+                (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier
                 _ => field.name() == name,
             })
@@ -222,13 +203,17 @@ impl DFSchema {
         }
     }
 
-    /// Find the field with the given name
-    pub fn field_with_unqualified_name(&self, name: &str) -> Result<&DFField> {
-        let matches: Vec<&DFField> = self
-            .fields
+    /// Find all fields match the given name
+    pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&DFField> {
+        self.fields
             .iter()
             .filter(|field| field.name() == name)
-            .collect();
+            .collect()
+    }
+
+    /// Find the field with the given name
+    pub fn field_with_unqualified_name(&self, name: &str) -> Result<&DFField> {
+        let matches = self.fields_with_unqualified_name(name);
         match matches.len() {
             0 => Err(DataFusionError::Plan(format!(
                 "No field with unqualified name '{}'. Valid fields are {}.",
@@ -417,9 +402,6 @@ impl Display for DFSchema {
 pub struct DFField {
     /// Optional qualifier (usually a table or relation name)
     qualifier: Option<String>,
-    /// Optional set of qualifiers that all share this same field. This is used for `JOIN USING`
-    /// clause where the join keys are combined into a shared column.
-    shared_qualifiers: Option<HashSet<String>>,
     /// Arrow field definition
     field: Field,
 }
@@ -434,7 +416,6 @@ impl DFField {
     ) -> Self {
         DFField {
             qualifier: qualifier.map(|s| s.to_owned()),
-            shared_qualifiers: None,
             field: Field::new(name, data_type, nullable),
         }
     }
@@ -443,7 +424,6 @@ impl DFField {
     pub fn from(field: Field) -> Self {
         Self {
             qualifier: None,
-            shared_qualifiers: None,
             field,
         }
     }
@@ -452,7 +432,6 @@ impl DFField {
     pub fn from_qualified(qualifier: &str, field: Field) -> Self {
         Self {
             qualifier: Some(qualifier.to_owned()),
-            shared_qualifiers: None,
             field,
         }
     }
@@ -502,11 +481,6 @@ impl DFField {
         self.qualifier.as_ref()
     }
 
-    /// Get the optional qualifier
-    pub fn shared_qualifiers(&self) -> Option<&HashSet<String>> {
-        self.shared_qualifiers.as_ref()
-    }
-
     /// Get the arrow field
     pub fn field(&self) -> &Field {
         &self.field
@@ -515,13 +489,6 @@ impl DFField {
     /// Return field with qualifier stripped
     pub fn strip_qualifier(mut self) -> Self {
         self.qualifier = None;
-        self
-    }
-
-    /// Return field with shared qualifiers set and qualifier stripped
-    pub fn set_shared_qualifiers(mut self, shared_qualifiers: HashSet<String>) -> Self {
-        self.qualifier = None;
-        self.shared_qualifiers = Some(shared_qualifiers);
         self
     }
 }

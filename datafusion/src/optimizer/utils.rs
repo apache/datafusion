@@ -215,13 +215,8 @@ pub fn from_plan(
             on,
             ..
         } => {
-            let schema = build_join_schema(
-                inputs[0].schema(),
-                inputs[1].schema(),
-                on,
-                join_type,
-                join_constraint,
-            )?;
+            let schema =
+                build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
             Ok(LogicalPlan::Join {
                 left: Arc::new(inputs[0].clone()),
                 right: Arc::new(inputs[1].clone()),

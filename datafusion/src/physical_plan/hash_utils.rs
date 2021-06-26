@@ -21,7 +21,7 @@ use crate::error::{DataFusionError, Result};
 use arrow::datatypes::{Field, Schema};
 use std::collections::HashSet;
 
-use crate::logical_plan::{JoinConstraint, JoinType};
+use crate::logical_plan::JoinType;
 use crate::physical_plan::expressions::Column;
 
 /// The on clause of the join, as vector of (left, right) columns.
@@ -88,34 +88,13 @@ fn check_join_set_is_valid(
 
 /// Creates a schema for a join operation.
 /// The fields from the left side are first
-pub fn build_join_schema(
-    left: &Schema,
-    right: &Schema,
-    on: JoinOnRef,
-    join_type: &JoinType,
-    join_constraint: JoinConstraint,
-) -> Schema {
+pub fn build_join_schema(left: &Schema, right: &Schema, join_type: &JoinType) -> Schema {
     let fields: Vec<Field> = match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            match join_constraint {
-                JoinConstraint::On => {
-                    let left_fields = left.fields().iter();
-                    let right_fields = right.fields().iter();
-                    // left then right
-                    left_fields.chain(right_fields).cloned().collect()
-                }
-                JoinConstraint::Using => {
-                    // using join requires unique join columns in the output schema, so we mark all
-                    // right join keys as duplicate
-                    let duplicate_keys =
-                        &on.iter().map(|on| on.1.name()).collect::<HashSet<_>>();
-                    let right_fields = right
-                        .fields()
-                        .iter()
-                        .filter(|f| !duplicate_keys.contains(f.name().as_str()));
-                    left.fields().iter().chain(right_fields).cloned().collect()
-                }
-            }
+            let left_fields = left.fields().iter();
+            let right_fields = right.fields().iter();
+            // left then right
+            left_fields.chain(right_fields).cloned().collect()
         }
         JoinType::Semi | JoinType::Anti => left.fields().clone(),
     };

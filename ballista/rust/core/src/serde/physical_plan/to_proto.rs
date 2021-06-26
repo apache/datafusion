@@ -136,7 +136,6 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 })
                 .collect();
             let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
-            let join_constraint: protobuf::JoinConstraint = exec.join_constraint().into();
 
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
@@ -145,7 +144,6 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                         right: Some(Box::new(right)),
                         on,
                         join_type: join_type.into(),
-                        join_constraint: join_constraint.into(),
                     },
                 ))),
             })

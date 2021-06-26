@@ -267,9 +267,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     ))
                 })?;
 
-                let builder =
-                    LogicalPlanBuilder::from(&convert_box_required!(join.left)?);
-
+                let builder = LogicalPlanBuilder::from(convert_box_required!(join.left)?);
                 let builder = match join_constraint.into() {
                     JoinConstraint::On => builder.join(
                         &convert_box_required!(join.right)?,

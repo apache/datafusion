@@ -20,7 +20,7 @@
 
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{window_frames, DFField, DFSchema, DFSchemaRef};
+use crate::logical_plan::{window_frames, DFField, DFSchema, LogicalPlan};
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
     window_functions,
@@ -29,7 +29,7 @@ use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -84,14 +84,33 @@ impl Column {
     }
 
     /// Normalize Column with qualifier based on provided dataframe schemas.
-    pub fn normalize(self, schemas: &[&DFSchemaRef]) -> Result<Self> {
+    pub fn normalize(self, plan: &LogicalPlan) -> Result<Self> {
         if self.relation.is_some() {
             return Ok(self);
         }
 
-        for schema in schemas {
-            if let Ok(field) = schema.field_with_unqualified_name(&self.name) {
-                return Ok(field.qualified_column());
+        let schemas = plan.all_schemas();
+        let using_columns = plan.using_columns()?;
+
+        for schema in &schemas {
+            let fields = schema.fields_with_unqualified_name(&self.name);
+            match fields.len() {
+                0 => continue,
+                1 => {
+                    return Ok(fields[0].qualified_column());
+                }
+                _ => {
+                    for using_col in &using_columns {
+                        let all_matched = fields
+                            .iter()
+                            .all(|f| using_col.contains(&f.qualified_column()));
+                        // All matched fields belong to the same using column set, use the first
+                        // qualifer
+                        if all_matched {
+                            return Ok(fields[0].qualified_column());
+                        }
+                    }
+                }
             }
         }
 
@@ -1109,35 +1128,56 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     }
 }
 
-/// Recursively normalize all Column expressions in a given expression tree
-pub fn normalize_col(e: Expr, schemas: &[&DFSchemaRef]) -> Result<Expr> {
-    struct ColumnNormalizer<'a, 'b> {
-        schemas: &'a [&'b DFSchemaRef],
+/// Recursively replace all Column expressions in a given expression tree with Column expressions
+/// provided by the hash map argument.
+pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
+    struct ColumnReplacer<'a> {
+        replace_map: &'a HashMap<&'a Column, &'a Column>,
     }
 
-    impl<'a, 'b> ExprRewriter for ColumnNormalizer<'a, 'b> {
+    impl<'a> ExprRewriter for ColumnReplacer<'a> {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(c) = expr {
-                Ok(Expr::Column(c.normalize(self.schemas)?))
+            if let Expr::Column(c) = &expr {
+                match self.replace_map.get(c) {
+                    Some(new_c) => Ok(Expr::Column((*new_c).to_owned())),
+                    None => Ok(expr),
+                }
             } else {
                 Ok(expr)
             }
         }
     }
 
-    e.rewrite(&mut ColumnNormalizer { schemas })
+    e.rewrite(&mut ColumnReplacer { replace_map })
+}
+
+/// Recursively normalize all Column expressions in a given expression tree by adding qualifiers
+/// wherever applicable
+pub fn normalize_col(e: Expr, plan: &LogicalPlan) -> Result<Expr> {
+    struct ColumnNormalizer<'a> {
+        plan: &'a LogicalPlan,
+    }
+
+    impl<'a> ExprRewriter for ColumnNormalizer<'a> {
+        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+            if let Expr::Column(c) = expr {
+                Ok(Expr::Column(c.normalize(self.plan)?))
+            } else {
+                Ok(expr)
+            }
+        }
+    }
+
+    e.rewrite(&mut ColumnNormalizer { plan })
 }
 
 /// Recursively normalize all Column expressions in a list of expression trees
 #[inline]
 pub fn normalize_cols(
     exprs: impl IntoIterator<Item = Expr>,
-    schemas: &[&DFSchemaRef],
+    plan: &LogicalPlan,
 ) -> Result<Vec<Expr>> {
-    exprs
-        .into_iter()
-        .map(|e| normalize_col(e, schemas))
-        .collect()
+    exprs.into_iter().map(|e| normalize_col(e, plan)).collect()
 }
 
 /// Create an expression to represent the min() aggregate function

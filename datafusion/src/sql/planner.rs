@@ -27,8 +27,8 @@ use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
-    and, lit, union_with_alias, Column, DFSchema, Expr, LogicalPlan, LogicalPlanBuilder,
-    Operator, PlanType, StringifiedPlan, ToDFSchema,
+    and, col, lit, normalize_col, union_with_alias, Column, DFSchema, Expr, LogicalPlan,
+    LogicalPlanBuilder, Operator, PlanType, StringifiedPlan, ToDFSchema,
 };
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
@@ -560,7 +560,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 //   SELECT c1 AS m FROM t HAVING c1 > 10;
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
-                resolve_aliases_to_exprs(&having_expr, &alias_map)
+                let having_expr = resolve_aliases_to_exprs(&having_expr, &alias_map)?;
+                normalize_col(having_expr, &projected_plan)
             })
             .transpose()?;
 
@@ -584,6 +585,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let group_by_expr =
                     resolve_positions_to_exprs(&group_by_expr, &select_exprs)
                         .unwrap_or(group_by_expr);
+                let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                 self.validate_schema_satisfies_exprs(
                     plan.schema(),
                     &[group_by_expr.clone()],
@@ -662,13 +664,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Vec<Expr>> {
         let input_schema = plan.schema();
 
-        Ok(projection
+        projection
             .iter()
             .map(|expr| self.sql_select_to_rex(expr, input_schema))
             .collect::<Result<Vec<Expr>>>()?
             .iter()
             .flat_map(|expr| expand_wildcard(expr, input_schema))
-            .collect::<Vec<Expr>>())
+            .map(|expr| normalize_col(expr, plan))
+            .collect::<Result<Vec<Expr>>>()
     }
 
     /// Wrap a plan in a projection
@@ -816,24 +819,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         find_column_exprs(exprs)
             .iter()
             .try_for_each(|col| match col {
-                Expr::Column(col) => {
-                    match &col.relation {
-                        Some(r) => {
-                            Ok(schema.field_with_qualified_name(r, &col.name)?.to_owned())
-                        }
-                        None => {
-                            Ok(schema.field_with_unqualified_name(&col.name)?.to_owned())
+                Expr::Column(col) => match &col.relation {
+                    Some(r) => {
+                        schema.field_with_qualified_name(r, &col.name)?;
+                        Ok(())
+                    }
+                    None => {
+                        if !schema.fields_with_unqualified_name(&col.name).is_empty() {
+                            Ok(())
+                        } else {
+                            Err(DataFusionError::Plan(format!(
+                                "No field with unqualified name '{}'",
+                                &col.name
+                            )))
                         }
                     }
-                    .map_err(|_: DataFusionError| {
-                        DataFusionError::Plan(format!(
-                            "Invalid identifier '{}' for schema {}",
-                            col,
-                            schema.to_string()
-                        ))
-                    })?;
-                    Ok(())
                 }
+                .map_err(|_: DataFusionError| {
+                    DataFusionError::Plan(format!(
+                        "Invalid identifier '{}' for schema {}",
+                        col,
+                        schema.to_string()
+                    ))
+                }),
                 _ => Err(DataFusionError::Internal("Not a column".to_string())),
             })
     }
@@ -911,11 +919,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let var_names = vec![id.value.clone()];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
-                    Ok(Expr::Column(
-                        schema
-                            .field_with_unqualified_name(&id.value)?
-                            .qualified_column(),
-                    ))
+                    Ok(col(&id.value))
                 }
             }
 
@@ -1654,7 +1658,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
+            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
         ));
     }
 
@@ -1712,7 +1716,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
+            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
         ));
     }
 
@@ -1722,7 +1726,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'x'"),
+            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#x' for schema "),
         ));
     }
 
@@ -2193,7 +2197,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
+            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
         ));
     }
 
@@ -2283,7 +2287,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
+            DataFusionError::Plan(msg) if msg.contains("Column #doesnotexist not found in provided schemas"),
         ));
     }
 
@@ -2293,7 +2297,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
+            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
         ));
     }
 
@@ -2724,7 +2728,7 @@ mod tests {
             FROM person \
             JOIN person as person2 \
             USING (id)";
-        let expected = "Projection: #person.first_name, #id\
+        let expected = "Projection: #person.first_name, #person.id\
         \n  Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
         \n    TableScan: person2 projection=None";

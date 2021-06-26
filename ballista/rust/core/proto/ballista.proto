@@ -576,7 +576,6 @@ message HashJoinExecNode {
   PhysicalPlanNode right = 2;
   repeated JoinOn on = 3;
   JoinType join_type = 4;
-  JoinConstraint join_constraint = 5;
 }
 
 message PhysicalColumn {

@@ -350,21 +350,11 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         ))
                     })?;
 
-                let join_constraint =
-                    protobuf::JoinConstraint::from_i32(hashjoin.join_constraint)
-                        .ok_or_else(|| {
-                            proto_error(format!(
-                        "Received a HashJoinNode message with unknown JoinConstraint {}",
-                        hashjoin.join_constraint,
-                    ))
-                        })?;
-
                 Ok(Arc::new(HashJoinExec::try_new(
                     left,
                     right,
                     on,
                     &join_type.into(),
-                    join_constraint.into(),
                     PartitionMode::CollectLeft,
                 )?))
             }

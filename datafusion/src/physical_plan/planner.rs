@@ -563,7 +563,6 @@ impl DefaultPhysicalPlanner {
                 right,
                 on: keys,
                 join_type,
-                join_constraint,
                 ..
             } => {
                 let left_df_schema = left.schema();
@@ -604,7 +603,6 @@ impl DefaultPhysicalPlanner {
                         )?),
                         join_on,
                         join_type,
-                        *join_constraint,
                         PartitionMode::Partitioned,
                     )?))
                 } else {
@@ -613,7 +611,6 @@ impl DefaultPhysicalPlanner {
                         physical_right,
                         join_on,
                         join_type,
-                        *join_constraint,
                         PartitionMode::CollectLeft,
                     )?))
                 }
@@ -1389,7 +1386,7 @@ mod tests {
         let expected_error: &str = "Error during planning: \
         Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
         LogicalPlan schema: DFSchema { fields: [\
-            DFField { qualifier: None, shared_qualifiers: None, field: Field { \
+            DFField { qualifier: None, field: Field { \
                 name: \"a\", \
                 data_type: Int32, \
                 nullable: false, \

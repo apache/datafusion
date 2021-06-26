@@ -58,7 +58,7 @@ use super::{
     merge::MergeExec,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{JoinConstraint, JoinType};
+use crate::logical_plan::JoinType;
 
 use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -95,8 +95,6 @@ pub struct HashJoinExec {
     on: Vec<(Column, Column)>,
     /// How the join is performed
     join_type: JoinType,
-    /// Join constraint
-    join_constraint: JoinConstraint,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side
@@ -133,20 +131,13 @@ impl HashJoinExec {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: &JoinType,
-        join_constraint: JoinConstraint,
         partition_mode: PartitionMode,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
-        let schema = Arc::new(build_join_schema(
-            &left_schema,
-            &right_schema,
-            &on,
-            join_type,
-            join_constraint,
-        ));
+        let schema = Arc::new(build_join_schema(&left_schema, &right_schema, join_type));
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
@@ -155,7 +146,6 @@ impl HashJoinExec {
             right,
             on,
             join_type: *join_type,
-            join_constraint,
             schema,
             build_side: Arc::new(Mutex::new(None)),
             random_state,
@@ -181,11 +171,6 @@ impl HashJoinExec {
     /// How the join is performed
     pub fn join_type(&self) -> &JoinType {
         &self.join_type
-    }
-
-    /// Join constraint
-    pub fn join_constraint(&self) -> JoinConstraint {
-        self.join_constraint
     }
 
     /// Calculates column indices and left/right placement on input / output schemas and jointype
@@ -245,7 +230,6 @@ impl ExecutionPlan for HashJoinExec {
                 children[1].clone(),
                 self.on.clone(),
                 &self.join_type,
-                self.join_constraint,
                 self.mode,
             )?)),
             _ => Err(DataFusionError::Internal(
@@ -1325,16 +1309,8 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: &JoinType,
-        join_constraint: JoinConstraint,
     ) -> Result<HashJoinExec> {
-        HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            join_type,
-            join_constraint,
-            PartitionMode::CollectLeft,
-        )
+        HashJoinExec::try_new(left, right, on, join_type, PartitionMode::CollectLeft)
     }
 
     async fn join_collect(
@@ -1342,9 +1318,8 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: &JoinType,
-        join_constraint: JoinConstraint,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
-        let join = join(left, right, on, join_type, join_constraint)?;
+        let join = join(left, right, on, join_type)?;
         let columns = columns(&join.schema());
 
         let stream = join.execute(0).await?;
@@ -1358,7 +1333,6 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: &JoinType,
-        join_constraint: JoinConstraint,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let partition_count = 4;
 
@@ -1383,7 +1357,6 @@ mod tests {
             )?),
             on,
             join_type,
-            join_constraint,
             PartitionMode::Partitioned,
         )?;
 
@@ -1422,14 +1395,9 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let (columns, batches) = join_collect(
-            left.clone(),
-            right.clone(),
-            on.clone(),
-            &JoinType::Inner,
-            JoinConstraint::On,
-        )
-        .await?;
+        let (columns, batches) =
+            join_collect(left.clone(), right.clone(), on.clone(), &JoinType::Inner)
+                .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -1441,49 +1409,6 @@ mod tests {
             "| 2  | 5  | 8  | 20 | 5  | 80 |",
             "| 3  | 5  | 9  | 20 | 5  | 80 |",
             "+----+----+----+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn join_inner_using() -> Result<()> {
-        let left = build_table(
-            ("a1", &vec![1, 2, 3]),
-            ("b1", &vec![4, 5, 5]), // this has a repetition
-            ("c1", &vec![7, 8, 9]),
-        );
-        let right = build_table(
-            ("a2", &vec![10, 20, 30]),
-            ("b1", &vec![4, 5, 6]),
-            ("c2", &vec![70, 80, 90]),
-        );
-
-        let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
-        )];
-
-        let (columns, batches) = join_collect(
-            left.clone(),
-            right.clone(),
-            on.clone(),
-            &JoinType::Inner,
-            JoinConstraint::Using,
-        )
-        .await?;
-
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
-
-        let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 5  | 9  | 20 | 80 |",
-            "+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1512,20 +1437,19 @@ mod tests {
             right.clone(),
             on.clone(),
             &JoinType::Inner,
-            JoinConstraint::Using,
         )
         .await?;
 
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 5  | 9  | 20 | 80 |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 5  | 9  | 20 | 5  | 80 |",
+            "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1549,8 +1473,7 @@ mod tests {
             Column::new_with_schema("b2", &right.schema())?,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, JoinConstraint::On).await?;
+        let (columns, batches) = join_collect(left, right, on, &JoinType::Inner).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -1592,8 +1515,7 @@ mod tests {
             ),
         ];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, JoinConstraint::On).await?;
+        let (columns, batches) = join_collect(left, right, on, &JoinType::Inner).await?;
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
@@ -1616,7 +1538,7 @@ mod tests {
 
     /// Test where the left has 2 parts, the right with 1 part => 1 part
     #[tokio::test]
-    async fn join_inner_using_one_two_parts_left() -> Result<()> {
+    async fn join_inner_one_two_parts_left() -> Result<()> {
         let batch1 = build_table_i32(
             ("a1", &vec![1, 2]),
             ("b2", &vec![1, 2]),
@@ -1645,22 +1567,20 @@ mod tests {
             ),
         ];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, JoinConstraint::Using)
-                .await?;
+        let (columns, batches) = join_collect(left, right, on, &JoinType::Inner).await?;
 
-        assert_eq!(columns, vec!["a1", "b2", "c1", "c2"]);
+        assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
         assert_eq!(batches.len(), 1);
 
         let expected = vec![
-            "+----+----+----+----+",
-            "| a1 | b2 | c1 | c2 |",
-            "+----+----+----+----+",
-            "| 1  | 1  | 7  | 70 |",
-            "| 2  | 2  | 8  | 80 |",
-            "| 2  | 2  | 9  | 80 |",
-            "+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b2 | c1 | a1 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 1  | 7  | 1  | 1  | 70 |",
+            "| 2  | 2  | 8  | 2  | 2  | 80 |",
+            "| 2  | 2  | 9  | 2  | 2  | 80 |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1670,7 +1590,7 @@ mod tests {
 
     /// Test where the left has 1 part, the right has 2 parts => 2 parts
     #[tokio::test]
-    async fn join_inner_using_one_two_parts_right() -> Result<()> {
+    async fn join_inner_one_two_parts_right() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1694,10 +1614,10 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let join = join(left, right, on, &JoinType::Inner, JoinConstraint::Using)?;
+        let join = join(left, right, on, &JoinType::Inner)?;
 
         let columns = columns(&join.schema());
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         // first part
         let stream = join.execute(0).await?;
@@ -1705,11 +1625,11 @@ mod tests {
         assert_eq!(batches.len(), 1);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1718,12 +1638,12 @@ mod tests {
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 2  | 5  | 8  | 30 | 90 |",
-            "| 3  | 5  | 9  | 30 | 90 |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 2  | 5  | 8  | 30 | 5  | 90 |",
+            "| 3  | 5  | 9  | 30 | 5  | 90 |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1760,24 +1680,24 @@ mod tests {
             Column::new_with_schema("b1", &right.schema()).unwrap(),
         )];
 
-        let join = join(left, right, on, &JoinType::Left, JoinConstraint::Using).unwrap();
+        let join = join(left, right, on, &JoinType::Left).unwrap();
 
         let columns = columns(&join.schema());
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let stream = join.execute(0).await.unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 7  | 9  |    |    |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 7  | 9  |    | 7  |    |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1801,7 +1721,7 @@ mod tests {
             Column::new_with_schema("b2", &right.schema()).unwrap(),
         )];
 
-        let join = join(left, right, on, &JoinType::Full, JoinConstraint::On).unwrap();
+        let join = join(left, right, on, &JoinType::Full).unwrap();
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
@@ -1840,22 +1760,22 @@ mod tests {
         )];
         let schema = right.schema();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
-        let join = join(left, right, on, &JoinType::Left, JoinConstraint::Using).unwrap();
+        let join = join(left, right, on, &JoinType::Left).unwrap();
 
         let columns = columns(&join.schema());
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let stream = join.execute(0).await.unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  |    |    |",
-            "| 2  | 5  | 8  |    |    |",
-            "| 3  | 7  | 9  |    |    |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  |    | 4  |    |",
+            "| 2  | 5  | 8  |    | 5  |    |",
+            "| 3  | 7  | 9  |    | 7  |    |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1875,7 +1795,7 @@ mod tests {
         )];
         let schema = right.schema();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
-        let join = join(left, right, on, &JoinType::Full, JoinConstraint::On).unwrap();
+        let join = join(left, right, on, &JoinType::Full).unwrap();
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
@@ -1913,14 +1833,9 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let (columns, batches) = join_collect(
-            left.clone(),
-            right.clone(),
-            on.clone(),
-            &JoinType::Left,
-            JoinConstraint::On,
-        )
-        .await?;
+        let (columns, batches) =
+            join_collect(left.clone(), right.clone(), on.clone(), &JoinType::Left)
+                .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
@@ -1959,19 +1874,18 @@ mod tests {
             right.clone(),
             on.clone(),
             &JoinType::Left,
-            JoinConstraint::Using,
         )
         .await?;
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 7  | 9  |    |    |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 7  | 9  |    | 7  |    |",
+            "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1995,7 +1909,7 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let join = join(left, right, on, &JoinType::Semi, JoinConstraint::On)?;
+        let join = join(left, right, on, &JoinType::Semi)?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
@@ -2034,7 +1948,7 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let join = join(left, right, on, &JoinType::Anti, JoinConstraint::On)?;
+        let join = join(left, right, on, &JoinType::Anti)?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
@@ -2071,8 +1985,7 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Right, JoinConstraint::On).await?;
+        let (columns, batches) = join_collect(left, right, on, &JoinType::Right).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -2108,25 +2021,19 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let (columns, batches) = partitioned_join_collect(
-            left,
-            right,
-            on,
-            &JoinType::Right,
-            JoinConstraint::Using,
-        )
-        .await?;
+        let (columns, batches) =
+            partitioned_join_collect(left, right, on, &JoinType::Right).await?;
 
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "|    | 6  |    | 30 | 90 |",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "|    | 6  |    | 30 | 6  | 90 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -2151,7 +2058,7 @@ mod tests {
             Column::new_with_schema("b2", &right.schema()).unwrap(),
         )];
 
-        let join = join(left, right, on, &JoinType::Full, JoinConstraint::On)?;
+        let join = join(left, right, on, &JoinType::Full)?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);

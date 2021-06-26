@@ -40,7 +40,6 @@ use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
     DFSchemaRef, Partitioning,
 };
-use std::collections::HashSet;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -213,7 +212,6 @@ impl LogicalPlanBuilder {
     /// * An invalid expression is used (e.g. a `sort` expression)
     pub fn project(&self, expr: impl IntoIterator<Item = Expr>) -> Result<Self> {
         let input_schema = self.plan.schema();
-        let all_schemas = self.plan.all_schemas();
         let mut projected_expr = vec![];
         for e in expr {
             match e {
@@ -223,10 +221,8 @@ impl LogicalPlanBuilder {
                             .push(Expr::Column(input_schema.field(i).qualified_column()))
                     });
                 }
-                _ => projected_expr.push(columnize_expr(
-                    normalize_col(e, &all_schemas)?,
-                    input_schema,
-                )),
+                _ => projected_expr
+                    .push(columnize_expr(normalize_col(e, &self.plan)?, input_schema)),
             }
         }
 
@@ -243,7 +239,7 @@ impl LogicalPlanBuilder {
 
     /// Apply a filter
     pub fn filter(&self, expr: Expr) -> Result<Self> {
-        let expr = normalize_col(expr, &self.plan.all_schemas())?;
+        let expr = normalize_col(expr, &self.plan)?;
         Ok(Self::from(LogicalPlan::Filter {
             predicate: expr,
             input: Arc::new(self.plan.clone()),
@@ -260,9 +256,8 @@ impl LogicalPlanBuilder {
 
     /// Apply a sort
     pub fn sort(&self, exprs: impl IntoIterator<Item = Expr>) -> Result<Self> {
-        let schemas = self.plan.all_schemas();
         Ok(Self::from(LogicalPlan::Sort {
-            expr: normalize_cols(exprs, &schemas)?,
+            expr: normalize_cols(exprs, &self.plan)?,
             input: Arc::new(self.plan.clone()),
         }))
     }
@@ -288,20 +283,15 @@ impl LogicalPlanBuilder {
 
         let left_keys: Vec<Column> = left_keys
             .into_iter()
-            .map(|c| c.into().normalize(&self.plan.all_schemas()))
+            .map(|c| c.into().normalize(&self.plan))
             .collect::<Result<_>>()?;
         let right_keys: Vec<Column> = right_keys
             .into_iter()
-            .map(|c| c.into().normalize(&right.all_schemas()))
+            .map(|c| c.into().normalize(right))
             .collect::<Result<_>>()?;
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
-        let join_schema = build_join_schema(
-            self.plan.schema(),
-            right.schema(),
-            &on,
-            &join_type,
-            &JoinConstraint::On,
-        )?;
+        let join_schema =
+            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
         Ok(Self::from(LogicalPlan::Join {
             left: Arc::new(self.plan.clone()),
@@ -323,21 +313,16 @@ impl LogicalPlanBuilder {
         let left_keys: Vec<Column> = using_keys
             .clone()
             .into_iter()
-            .map(|c| c.into().normalize(&self.plan.all_schemas()))
+            .map(|c| c.into().normalize(&self.plan))
             .collect::<Result<_>>()?;
         let right_keys: Vec<Column> = using_keys
             .into_iter()
-            .map(|c| c.into().normalize(&right.all_schemas()))
+            .map(|c| c.into().normalize(right))
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
-        let join_schema = build_join_schema(
-            self.plan.schema(),
-            right.schema(),
-            &on,
-            &join_type,
-            &JoinConstraint::Using,
-        )?;
+        let join_schema =
+            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
         Ok(Self::from(LogicalPlan::Join {
             left: Arc::new(self.plan.clone()),
@@ -390,9 +375,8 @@ impl LogicalPlanBuilder {
         group_expr: impl IntoIterator<Item = Expr>,
         aggr_expr: impl IntoIterator<Item = Expr>,
     ) -> Result<Self> {
-        let schemas = self.plan.all_schemas();
-        let group_expr = normalize_cols(group_expr, &schemas)?;
-        let aggr_expr = normalize_cols(aggr_expr, &schemas)?;
+        let group_expr = normalize_cols(group_expr, &self.plan)?;
+        let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
         let all_expr = group_expr.iter().chain(aggr_expr.iter());
 
         validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
@@ -436,53 +420,14 @@ impl LogicalPlanBuilder {
 pub fn build_join_schema(
     left: &DFSchema,
     right: &DFSchema,
-    on: &[(Column, Column)],
     join_type: &JoinType,
-    join_constraint: &JoinConstraint,
 ) -> Result<DFSchema> {
     let fields: Vec<DFField> = match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            match join_constraint {
-                JoinConstraint::On => {
-                    let right_fields = right.fields().iter();
-                    let left_fields = left.fields().iter();
-                    // left then right
-                    left_fields.chain(right_fields).cloned().collect()
-                }
-                JoinConstraint::Using => {
-                    // using join requires unique join column in the output schema, so we mark all
-                    // right join keys as duplicate
-                    let duplicate_join_names =
-                        on.iter().map(|on| &on.1.name).collect::<HashSet<_>>();
-
-                    let right_fields = right
-                        .fields()
-                        .iter()
-                        .filter(|f| !duplicate_join_names.contains(f.name()))
-                        .cloned();
-
-                    let left_fields = left.fields().iter().map(|f| {
-                        for key in on.iter() {
-                            // update qualifiers for shared fields
-                            if duplicate_join_names.contains(f.name()) {
-                                let mut hs = HashSet::new();
-                                if let Some(q) = &key.0.relation {
-                                    hs.insert(q.to_string());
-                                }
-                                if let Some(q) = &key.1.relation {
-                                    hs.insert(q.to_string());
-                                }
-                                return f.clone().set_shared_qualifiers(hs);
-                            }
-                        }
-
-                        f.clone()
-                    });
-
-                    // left then right
-                    left_fields.chain(right_fields).collect()
-                }
-            }
+            let right_fields = right.fields().iter();
+            let left_fields = left.fields().iter();
+            // left then right
+            left_fields.chain(right_fields).cloned().collect()
         }
         JoinType::Semi | JoinType::Anti => {
             // Only use the left side for the schema

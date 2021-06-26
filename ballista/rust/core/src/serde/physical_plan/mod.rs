@@ -27,7 +27,7 @@ mod roundtrip_tests {
             compute::kernels::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
-        logical_plan::{JoinConstraint, JoinType, Operator},
+        logical_plan::{JoinType, Operator},
         physical_plan::{
             empty::EmptyExec,
             expressions::{binary, col, lit, InListExpr, NotExpr},
@@ -92,7 +92,6 @@ mod roundtrip_tests {
             Arc::new(EmptyExec::new(false, Arc::new(schema_right))),
             on,
             &JoinType::Inner,
-            JoinConstraint::On,
             PartitionMode::CollectLeft,
         )?))
     }
