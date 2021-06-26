@@ -67,7 +67,7 @@ impl OptimizerRule for StatisticsConstant {
                                     Box::new(Expr::Literal(ScalarValue::UInt64(Some(
                                         num_rows as u64,
                                     )))),
-                                    "#COUNT(Uint8(1))".to_string(),
+                                    "COUNT(Uint8(1))".to_string(),
                                 )],
                                 input: Arc::new(LogicalPlan::EmptyRelation {
                                     produce_one_row: true,
@@ -159,7 +159,7 @@ mod tests {
             .to_logical_plan();
         let expected = "\
     Projection: #COUNT(UInt8(1))\
-    \n  Projection: UInt64(100) AS #COUNT(Uint8(1))\
+    \n  Projection: UInt64(100) AS COUNT(Uint8(1))\
     \n    EmptyRelation";
 
         assert_optimized_plan_eq(&plan, expected);
