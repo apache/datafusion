@@ -745,10 +745,10 @@ message ExecutorRegistration {
   uint32 port = 3;
 }
 
-message GetExecutorMetadataParams {}
-
-message GetExecutorMetadataResult {
-  repeated ExecutorMetadata metadata = 1;
+message ExecutorHeartbeat {
+  ExecutorMetadata meta = 1;
+  // Unix epoch-based timestamp in seconds
+  uint64 timestamp = 2;
 }
 
 message RunningTask {
@@ -847,8 +847,6 @@ message FilePartitionMetadata {
 }
 
 service SchedulerGrpc {
-  rpc GetExecutorsMetadata (GetExecutorMetadataParams) returns (GetExecutorMetadataResult) {}
-
   // Executors must poll the scheduler for heartbeat and to receive tasks
   rpc PollWork (PollWorkParams) returns (PollWorkResult) {}
 
