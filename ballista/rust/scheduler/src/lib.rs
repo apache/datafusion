@@ -34,10 +34,10 @@ use std::{fmt, net::IpAddr};
 use ballista_core::serde::protobuf::{
     execute_query_params::Query, executor_registration::OptionalHost, job_status,
     scheduler_grpc_server::SchedulerGrpc, ExecuteQueryParams, ExecuteQueryResult,
-    FailedJob, FilePartitionMetadata, FileType, GetExecutorMetadataParams,
-    GetExecutorMetadataResult, GetFileMetadataParams, GetFileMetadataResult,
-    GetJobStatusParams, GetJobStatusResult, JobStatus, PartitionId, PollWorkParams,
-    PollWorkResult, QueuedJob, RunningJob, TaskDefinition, TaskStatus,
+    FailedJob, FilePartitionMetadata, FileType, GetFileMetadataParams,
+    GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult, JobStatus,
+    PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob, TaskDefinition,
+    TaskStatus,
 };
 use ballista_core::serde::scheduler::ExecutorMeta;
 
@@ -76,9 +76,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 #[derive(Clone)]
 pub struct SchedulerServer {
     caller_ip: IpAddr,
-    state: Arc<SchedulerState>,
+    pub(crate) state: Arc<SchedulerState>,
     start_time: u128,
-    version: String,
 }
 
 impl SchedulerServer {
@@ -87,7 +86,6 @@ impl SchedulerServer {
         namespace: String,
         caller_ip: IpAddr,
     ) -> Self {
-        const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
         let state = Arc::new(SchedulerState::new(config, namespace));
         let state_clone = state.clone();
 
@@ -101,35 +99,12 @@ impl SchedulerServer {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis(),
-            version: VERSION.unwrap_or("Unknown").to_string(),
         }
     }
 }
 
 #[tonic::async_trait]
 impl SchedulerGrpc for SchedulerServer {
-    async fn get_executors_metadata(
-        &self,
-        _request: Request<GetExecutorMetadataParams>,
-    ) -> std::result::Result<Response<GetExecutorMetadataResult>, tonic::Status> {
-        info!("Received get_executors_metadata request");
-        let result = self
-            .state
-            .get_executors_metadata()
-            .await
-            .map_err(|e| {
-                let msg = format!("Error reading executors metadata: {}", e);
-                error!("{}", msg);
-                tonic::Status::internal(msg)
-            })?
-            .into_iter()
-            .map(|meta| meta.into())
-            .collect();
-        Ok(Response::new(GetExecutorMetadataResult {
-            metadata: result,
-        }))
-    }
-
     async fn poll_work(
         &self,
         request: Request<PollWorkParams>,
@@ -279,13 +254,6 @@ impl SchedulerGrpc for SchedulerServer {
                 }
             };
             debug!("Received plan for execution: {:?}", plan);
-            let executors = self.state.get_executors_metadata().await.map_err(|e| {
-                let msg = format!("Error reading executors metadata: {}", e);
-                error!("{}", msg);
-                tonic::Status::internal(msg)
-            })?;
-            debug!("Found executors: {:?}", executors);
-
             let job_id: String = {
                 let mut rng = thread_rng();
                 std::iter::repeat(())
