@@ -50,3 +50,10 @@ jobs:
           # if you encounter error, try rerun the command below with --write instead of --check
           # and commit the changes
           npx prettier@2.3.0 --check {ballista,datafusion,datafusion-examples,dev,docs,python}/**/*.md README.md DEVELOPERS.md
+      - name: Prettier check for Ballista UI
+        run: |
+          cd ballista/ui/scheduler
+          npx yarn
+          # if you encounter error, try rerun the command below with --write instead of --check
+          # and commit the changes
+          npx yarn prettier --check **/*.{ts,tsx}
