@@ -16,9 +16,11 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
+use std::sync::Arc;
+
 use crate::{
     execution::context::ExecutionProps,
-    logical_plan::{Expr, LogicalPlan},
+    logical_plan::{DFSchema, Expr, LogicalPlan},
     physical_plan::aggregates::AggregateFunction,
     scalar::ScalarValue,
 };
@@ -43,6 +45,7 @@ impl OptimizerRule for StatisticsConstant {
         execution_props: &ExecutionProps,
     ) -> crate::error::Result<LogicalPlan> {
         match plan {
+            // match only select count(*) from table_scan
             LogicalPlan::Aggregate {
                 input,
                 group_expr,
@@ -53,32 +56,28 @@ impl OptimizerRule for StatisticsConstant {
                     LogicalPlan::TableScan { source, .. } => source.statistics().num_rows,
                     _ => None,
                 } {
-                    let expr: Vec<Expr> = aggr_expr
-                        .iter()
-                        .map(|e| match e {
-                            Expr::AggregateFunction {
-                                fun: AggregateFunction::Count,
-                                args,
-                                distinct: false,
-                            } if args
-                                == &[Expr::Literal(ScalarValue::UInt8(Some(1)))] =>
-                            {
-                                Expr::Alias(
+                    return match &aggr_expr[0] {
+                        Expr::AggregateFunction {
+                            fun: AggregateFunction::Count,
+                            args,
+                            distinct: false,
+                        } if args == &[Expr::Literal(ScalarValue::UInt8(Some(1)))] => {
+                            Ok(LogicalPlan::Projection {
+                                expr: vec![Expr::Alias(
                                     Box::new(Expr::Literal(ScalarValue::UInt64(Some(
                                         num_rows as u64,
                                     )))),
                                     "#COUNT(Uint8(1))".to_string(),
-                                )
-                            }
-                            _ => e.clone(),
-                        })
-                        .collect();
-
-                    return Ok(LogicalPlan::Projection {
-                        expr,
-                        input: input.clone(),
-                        schema: schema.clone(),
-                    });
+                                )],
+                                input: Arc::new(LogicalPlan::EmptyRelation {
+                                    produce_one_row: true,
+                                    schema: Arc::new(DFSchema::empty()),
+                                }),
+                                schema: schema.clone(),
+                            })
+                        }
+                        _ => Ok(plan.clone()),
+                    };
                 }
 
                 Ok(plan.clone())
@@ -161,7 +160,7 @@ mod tests {
         let expected = "\
     Projection: #COUNT(UInt8(1))\
     \n  Projection: UInt64(100) AS #COUNT(Uint8(1))\
-    \n    TableScan: test projection=Some([])";
+    \n    EmptyRelation";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
