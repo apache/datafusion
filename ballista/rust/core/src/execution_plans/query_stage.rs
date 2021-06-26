@@ -426,7 +426,7 @@ mod tests {
             1,
             input_plan,
             work_dir.into_path().to_str().unwrap().to_owned(),
-            Some(Partitioning::Hash(vec![Arc::new(Column::new("a"))], 2)),
+            Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 2)),
         )?;
         let mut stream = query_stage.execute(0).await?;
         let batches = utils::collect_stream(&mut stream)
