@@ -573,7 +573,6 @@ mod tests {
 
     use datafusion::arrow::array::*;
     use datafusion::arrow::util::display::array_value_to_string;
-
     use datafusion::logical_plan::Expr;
     use datafusion::logical_plan::Expr::Cast;
 
@@ -1041,5 +1040,52 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    mod ballista_round_trip {
+        use super::*;
+        use ballista_core::serde::protobuf;
+        use std::convert::TryInto;
+
+        fn round_trip_query(n: usize) -> Result<()> {
+            let config = ExecutionConfig::new()
+                .with_concurrency(1)
+                .with_batch_size(10);
+            let mut ctx = ExecutionContext::with_config(config);
+
+            for &table in TABLES {
+                let schema = get_schema(table);
+                let options = CsvReadOptions::new()
+                    .schema(&schema)
+                    .delimiter(b'|')
+                    .has_header(false)
+                    .file_extension(".tbl");
+                let provider = CsvFile::try_new("./foo.csv", options)?;
+                ctx.register_table(table, Arc::new(provider))?;
+            }
+
+            let plan = create_logical_plan(&mut ctx, n)?;
+            let proto: protobuf::LogicalPlanNode = (&plan).try_into().unwrap();
+            let round_trip: LogicalPlan = (&proto).try_into().unwrap();
+            assert_eq!(format!("{:?}", plan), format!("{:?}", round_trip));
+
+            Ok(())
+        }
+
+        macro_rules! test_round_trip {
+            ($tn:ident, $query:expr) => {
+                #[test]
+                fn $tn() -> Result<()> {
+                    round_trip_query($query)
+                }
+            };
+        }
+
+        test_round_trip!(q1, 1);
+        test_round_trip!(q3, 3);
+        test_round_trip!(q5, 5);
+        test_round_trip!(q6, 6);
+        test_round_trip!(q10, 10);
+        test_round_trip!(q12, 12);
     }
 }
