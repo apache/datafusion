@@ -17,7 +17,9 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
-use self::{display::DisplayableExecutionPlan, coalesce_partitions::CoalescePartitionsExec};
+use self::{
+    coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
+};
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::LogicalPlan;
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -592,6 +594,7 @@ pub trait Accumulator: Send + Sync + Debug {
 pub mod aggregates;
 pub mod array_expressions;
 pub mod coalesce_batches;
+pub mod coalesce_partitions;
 pub mod common;
 pub mod cross_join;
 #[cfg(feature = "crypto_expressions")]
@@ -613,7 +616,6 @@ pub mod json;
 pub mod limit;
 pub mod math_expressions;
 pub mod memory;
-pub mod coalesce_partitions;
 pub mod parquet;
 pub mod planner;
 pub mod projection;

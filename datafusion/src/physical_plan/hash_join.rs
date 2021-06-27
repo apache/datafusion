@@ -54,8 +54,8 @@ use arrow::array::{
 
 use super::expressions::Column;
 use super::{
-    hash_utils::{build_join_schema, check_join_is_valid, JoinOn, JoinType},
     coalesce_partitions::CoalescePartitionsExec,
+    hash_utils::{build_join_schema, check_join_is_valid, JoinOn, JoinType},
 };
 use crate::error::{DataFusionError, Result};
 

@@ -32,9 +32,9 @@ use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
 use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::HashJoinExec;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::ExecutionPlan;
 use log::info;
@@ -106,7 +106,10 @@ impl DistributedPlanner {
             let config = ExecutionConfig::new().with_physical_optimizer_rules(rules);
             let ctx = ExecutionContext::with_config(config);
             Ok((ctx.create_physical_plan(&adapter.logical_plan)?, stages))
-        } else if let Some(merge) = execution_plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
+        } else if let Some(merge) = execution_plan
+            .as_any()
+            .downcast_ref::<CoalescePartitionsExec>()
+        {
             let query_stage = create_query_stage(
                 job_id,
                 self.next_stage_id(),
@@ -244,8 +247,10 @@ mod test {
     use ballista_core::serde::protobuf;
     use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
     use datafusion::physical_plan::sort::SortExec;
+    use datafusion::physical_plan::{
+        coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
+    };
     use datafusion::physical_plan::{displayable, ExecutionPlan};
-    use datafusion::physical_plan::{coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec};
     use std::convert::TryInto;
     use std::sync::Arc;
     use uuid::Uuid;

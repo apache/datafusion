@@ -27,7 +27,9 @@ use arrow::record_batch::RecordBatch;
 
 use futures::{Stream, TryStreamExt};
 
-use super::{hash_utils::check_join_is_valid, coalesce_partitions::CoalescePartitionsExec};
+use super::{
+    coalesce_partitions::CoalescePartitionsExec, hash_utils::check_join_is_valid,
+};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
