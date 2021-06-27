@@ -89,15 +89,15 @@ pub struct LogicalPlanBuilder {
 
 impl LogicalPlanBuilder {
     /// Create a builder from an existing plan
-    pub fn from(plan: &LogicalPlan) -> Self {
-        Self { plan: plan.clone() }
+    pub fn from(plan: LogicalPlan) -> Self {
+        Self { plan }
     }
 
     /// Create an empty relation.
     ///
     /// `produce_one_row` set to true means this empty node needs to produce a placeholder row.
     pub fn empty(produce_one_row: bool) -> Self {
-        Self::from(&LogicalPlan::EmptyRelation {
+        Self::from(LogicalPlan::EmptyRelation {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
         })
@@ -202,7 +202,7 @@ impl LogicalPlanBuilder {
             limit: None,
         };
 
-        Ok(Self::from(&table_scan))
+        Ok(Self::from(table_scan))
     }
 
     /// Apply a projection.
@@ -234,7 +234,7 @@ impl LogicalPlanBuilder {
 
         let schema = DFSchema::new(exprlist_to_fields(&projected_expr, input_schema)?)?;
 
-        Ok(Self::from(&LogicalPlan::Projection {
+        Ok(Self::from(LogicalPlan::Projection {
             expr: projected_expr,
             input: Arc::new(self.plan.clone()),
             schema: DFSchemaRef::new(schema),
@@ -244,7 +244,7 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(&self, expr: Expr) -> Result<Self> {
         let expr = normalize_col(expr, &self.plan.all_schemas())?;
-        Ok(Self::from(&LogicalPlan::Filter {
+        Ok(Self::from(LogicalPlan::Filter {
             predicate: expr,
             input: Arc::new(self.plan.clone()),
         }))
@@ -252,7 +252,7 @@ impl LogicalPlanBuilder {
 
     /// Apply a limit
     pub fn limit(&self, n: usize) -> Result<Self> {
-        Ok(Self::from(&LogicalPlan::Limit {
+        Ok(Self::from(LogicalPlan::Limit {
             n,
             input: Arc::new(self.plan.clone()),
         }))
@@ -261,7 +261,7 @@ impl LogicalPlanBuilder {
     /// Apply a sort
     pub fn sort(&self, exprs: impl IntoIterator<Item = Expr>) -> Result<Self> {
         let schemas = self.plan.all_schemas();
-        Ok(Self::from(&LogicalPlan::Sort {
+        Ok(Self::from(LogicalPlan::Sort {
             expr: normalize_cols(exprs, &schemas)?,
             input: Arc::new(self.plan.clone()),
         }))
@@ -269,11 +269,7 @@ impl LogicalPlanBuilder {
 
     /// Apply a union
     pub fn union(&self, plan: LogicalPlan) -> Result<Self> {
-        Ok(Self::from(&union_with_alias(
-            self.plan.clone(),
-            plan,
-            None,
-        )?))
+        Ok(Self::from(union_with_alias(self.plan.clone(), plan, None)?))
     }
 
     /// Apply a join with on constraint
@@ -307,7 +303,7 @@ impl LogicalPlanBuilder {
             &JoinConstraint::On,
         )?;
 
-        Ok(Self::from(&LogicalPlan::Join {
+        Ok(Self::from(LogicalPlan::Join {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             on,
@@ -343,7 +339,7 @@ impl LogicalPlanBuilder {
             &JoinConstraint::Using,
         )?;
 
-        Ok(Self::from(&LogicalPlan::Join {
+        Ok(Self::from(LogicalPlan::Join {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             on,
@@ -356,7 +352,7 @@ impl LogicalPlanBuilder {
     /// Apply a cross join
     pub fn cross_join(&self, right: &LogicalPlan) -> Result<Self> {
         let schema = self.plan.schema().join(right.schema())?;
-        Ok(Self::from(&LogicalPlan::CrossJoin {
+        Ok(Self::from(LogicalPlan::CrossJoin {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             schema: DFSchemaRef::new(schema),
@@ -365,7 +361,7 @@ impl LogicalPlanBuilder {
 
     /// Repartition
     pub fn repartition(&self, partitioning_scheme: Partitioning) -> Result<Self> {
-        Ok(Self::from(&LogicalPlan::Repartition {
+        Ok(Self::from(LogicalPlan::Repartition {
             input: Arc::new(self.plan.clone()),
             partitioning_scheme,
         }))
@@ -379,7 +375,7 @@ impl LogicalPlanBuilder {
         let mut window_fields: Vec<DFField> =
             exprlist_to_fields(all_expr, self.plan.schema())?;
         window_fields.extend_from_slice(self.plan.schema().fields());
-        Ok(Self::from(&LogicalPlan::Window {
+        Ok(Self::from(LogicalPlan::Window {
             input: Arc::new(self.plan.clone()),
             window_expr,
             schema: Arc::new(DFSchema::new(window_fields)?),
@@ -404,7 +400,7 @@ impl LogicalPlanBuilder {
         let aggr_schema =
             DFSchema::new(exprlist_to_fields(all_expr, self.plan.schema())?)?;
 
-        Ok(Self::from(&LogicalPlan::Aggregate {
+        Ok(Self::from(LogicalPlan::Aggregate {
             input: Arc::new(self.plan.clone()),
             group_expr,
             aggr_expr,
@@ -421,7 +417,7 @@ impl LogicalPlanBuilder {
 
         let schema = LogicalPlan::explain_schema();
 
-        Ok(Self::from(&LogicalPlan::Explain {
+        Ok(Self::from(LogicalPlan::Explain {
             verbose,
             plan: Arc::new(self.plan.clone()),
             stringified_plans,

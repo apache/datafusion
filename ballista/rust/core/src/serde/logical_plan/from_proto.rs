@@ -61,14 +61,14 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                LogicalPlanBuilder::from(&input)
+                LogicalPlanBuilder::from(input)
                     .project(x)?
                     .build()
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Selection(selection) => {
                 let input: LogicalPlan = convert_box_required!(selection.input)?;
-                LogicalPlanBuilder::from(&input)
+                LogicalPlanBuilder::from(input)
                     .filter(
                         selection
                             .expr
@@ -86,7 +86,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                LogicalPlanBuilder::from(&input)
+                LogicalPlanBuilder::from(input)
                     .window(window_expr)?
                     .build()
                     .map_err(|e| e.into())
@@ -103,7 +103,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                LogicalPlanBuilder::from(&input)
+                LogicalPlanBuilder::from(input)
                     .aggregate(group_expr, aggr_expr)?
                     .build()
                     .map_err(|e| e.into())
@@ -172,7 +172,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<Expr>, _>>()?;
-                LogicalPlanBuilder::from(&input)
+                LogicalPlanBuilder::from(input)
                     .sort(sort_expr)?
                     .build()
                     .map_err(|e| e.into())
@@ -203,7 +203,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     }
                 };
 
-                LogicalPlanBuilder::from(&input)
+                LogicalPlanBuilder::from(input)
                     .repartition(partitioning_scheme)?
                     .build()
                     .map_err(|e| e.into())
@@ -233,14 +233,14 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
             }
             LogicalPlanType::Explain(explain) => {
                 let input: LogicalPlan = convert_box_required!(explain.input)?;
-                LogicalPlanBuilder::from(&input)
+                LogicalPlanBuilder::from(input)
                     .explain(explain.verbose)?
                     .build()
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan = convert_box_required!(limit.input)?;
-                LogicalPlanBuilder::from(&input)
+                LogicalPlanBuilder::from(input)
                     .limit(limit.limit as usize)?
                     .build()
                     .map_err(|e| e.into())
@@ -265,7 +265,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     protobuf::JoinType::Semi => JoinType::Semi,
                     protobuf::JoinType::Anti => JoinType::Anti,
                 };
-                LogicalPlanBuilder::from(&convert_box_required!(join.left)?)
+                LogicalPlanBuilder::from(convert_box_required!(join.left)?)
                     .join(
                         &convert_box_required!(join.right)?,
                         join_type,
