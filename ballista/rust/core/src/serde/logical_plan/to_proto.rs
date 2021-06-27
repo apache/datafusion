@@ -1201,7 +1201,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
             Expr::Wildcard => Ok(protobuf::LogicalExprNode {
                 expr_type: Some(protobuf::logical_expr_node::ExprType::Wildcard(true)),
             }),
-            Expr::TryCast { .. } => unimplemented!(),
+            _ => unimplemented!(),
         }
     }
 }
