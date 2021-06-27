@@ -16,11 +16,11 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
-use std::sync::Arc;
+use std::{sync::Arc, vec};
 
 use crate::{
     execution::context::ExecutionProps,
-    logical_plan::{DFSchema, Expr, LogicalPlan},
+    logical_plan::{col, DFField, DFSchema, Expr, LogicalPlan},
     physical_plan::aggregates::AggregateFunction,
     scalar::ScalarValue,
 };
@@ -51,7 +51,12 @@ impl OptimizerRule for AggregateStatistics {
                 group_expr,
                 aggr_expr,
                 schema,
-            } if group_expr.is_empty() && aggr_expr.len() == 1 => {
+            } if group_expr.is_empty() => {
+                // aggregations that can not be replaced
+                // using statistics
+                let mut agg = vec![];
+                // expressions that can be replaced by constants
+                let mut projections = vec![];
                 if let Some(num_rows) = match input.as_ref() {
                     LogicalPlan::TableScan { source, .. }
                         if source.has_exact_statistics() =>
@@ -60,30 +65,66 @@ impl OptimizerRule for AggregateStatistics {
                     }
                     _ => None,
                 } {
-                    return match &aggr_expr[0] {
-                        Expr::AggregateFunction {
-                            fun: AggregateFunction::Count,
-                            args,
-                            distinct: false,
-                        } if args == &[Expr::Literal(ScalarValue::UInt8(Some(1)))] => {
-                            Ok(LogicalPlan::Projection {
-                                expr: vec![Expr::Alias(
+                    for expr in aggr_expr {
+                        match expr {
+                            Expr::AggregateFunction {
+                                fun: AggregateFunction::Count,
+                                args,
+                                distinct: false,
+                            } if args
+                                == &[Expr::Literal(ScalarValue::UInt8(Some(1)))] =>
+                            {
+                                projections.push(Expr::Alias(
                                     Box::new(Expr::Literal(ScalarValue::UInt64(Some(
                                         num_rows as u64,
                                     )))),
                                     "COUNT(Uint8(1))".to_string(),
-                                )],
-                                input: Arc::new(LogicalPlan::EmptyRelation {
-                                    produce_one_row: true,
-                                    schema: Arc::new(DFSchema::empty()),
-                                }),
-                                schema: schema.clone(),
-                            })
+                                ));
+                            }
+                            _ => {
+                                agg.push(expr.clone());
+                            }
                         }
-                        _ => Ok(plan.clone()),
-                    };
-                }
+                    }
 
+                    return Ok(if agg.is_empty() {
+                        // table scan can be entirely removed
+
+                        LogicalPlan::Projection {
+                            expr: projections,
+                            input: Arc::new(LogicalPlan::EmptyRelation {
+                                produce_one_row: true,
+                                schema: Arc::new(DFSchema::empty()),
+                            }),
+                            schema: schema.clone(),
+                        }
+                    } else if projections.is_empty() {
+                        // no replacements -> return original plan
+                        plan.clone()
+                    } else {
+                        // Split into parts that can be supported and part that should stay in aggregate
+                        let agg_fields = agg
+                            .iter()
+                            .map(|x| x.to_field(input.schema()))
+                            .collect::<Result<Vec<DFField>>>()?;
+                        let agg_schema = DFSchema::new(agg_fields)?;
+                        let cols = agg
+                            .iter()
+                            .map(|e| e.name(&agg_schema))
+                            .collect::<Result<Vec<String>>>()?;
+                        projections.extend(cols.iter().map(|x| col(x)));
+                        LogicalPlan::Projection {
+                            expr: projections,
+                            schema: schema.clone(),
+                            input: Arc::new(LogicalPlan::Aggregate {
+                                input: input.clone(),
+                                group_expr: vec![],
+                                aggr_expr: agg,
+                                schema: Arc::new(agg_schema),
+                            }),
+                        }
+                    });
+                }
                 Ok(plan.clone())
             }
             // Rest: recurse and find possible statistics
@@ -202,6 +243,32 @@ mod tests {
             Projection: #COUNT(UInt8(1))\
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
             \n    TableScan: test projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn optimize_count_sum() -> Result<()> {
+        use crate::execution::context::ExecutionContext;
+        let mut ctx = ExecutionContext::new();
+        ctx.register_table(
+            "test",
+            Arc::new(TestTableProvider {
+                num_rows: 100,
+                is_exact: true,
+            }),
+        )
+        .unwrap();
+
+        let plan = ctx
+            .create_logical_plan("select sum(a)/count(*) from test")
+            .unwrap();
+        let expected = "\
+            Projection: #SUM(test.a) Divide #COUNT(UInt8(1))\
+            \n  Projection: UInt64(100) AS COUNT(Uint8(1)), #SUM(test.a)\
+            \n    Aggregate: groupBy=[[]], aggr=[[SUM(#test.a)]]\
+            \n      TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
