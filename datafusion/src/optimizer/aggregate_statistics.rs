@@ -125,6 +125,7 @@ mod tests {
 
     struct TestTableProvider {
         num_rows: usize,
+        is_exact: bool,
     }
 
     impl TableProvider for TestTableProvider {
@@ -152,7 +153,7 @@ mod tests {
             }
         }
         fn has_exact_statistics(&self) -> bool {
-            true
+            self.is_exact
         }
     }
 
@@ -160,8 +161,14 @@ mod tests {
     fn optimize_count_using_statistics() -> Result<()> {
         use crate::execution::context::ExecutionContext;
         let mut ctx = ExecutionContext::new();
-        ctx.register_table("test", Arc::new(TestTableProvider { num_rows: 100 }))
-            .unwrap();
+        ctx.register_table(
+            "test",
+            Arc::new(TestTableProvider {
+                num_rows: 100,
+                is_exact: true,
+            }),
+        )
+        .unwrap();
 
         let plan = ctx
             .create_logical_plan("select count(*) from test")
@@ -170,6 +177,31 @@ mod tests {
             Projection: #COUNT(UInt8(1))\
             \n  Projection: UInt64(100) AS COUNT(Uint8(1))\
             \n    EmptyRelation";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn optimize_count_not_exact() -> Result<()> {
+        use crate::execution::context::ExecutionContext;
+        let mut ctx = ExecutionContext::new();
+        ctx.register_table(
+            "test",
+            Arc::new(TestTableProvider {
+                num_rows: 100,
+                is_exact: false,
+            }),
+        )
+        .unwrap();
+
+        let plan = ctx
+            .create_logical_plan("select count(*) from test")
+            .unwrap();
+        let expected = "\
+            Projection: #COUNT(UInt8(1))\
+            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
