@@ -34,7 +34,7 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::expressions::{CastExpr, TryCastExpr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::AggregateMode;
-use datafusion::physical_plan::hash_join::HashJoinExec;
+use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::hash_utils::JoinType;
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::parquet::ParquetExec;
@@ -143,6 +143,10 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 JoinType::Semi => protobuf::JoinType::Semi,
                 JoinType::Anti => protobuf::JoinType::Anti,
             };
+            let partition_mode = match exec.partition_mode() {
+                PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
+                PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
+            };
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
                     protobuf::HashJoinExecNode {
@@ -150,6 +154,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                         right: Some(Box::new(right)),
                         on,
                         join_type: join_type.into(),
+                        partition_mode: partition_mode.into(),
                     },
                 ))),
             })

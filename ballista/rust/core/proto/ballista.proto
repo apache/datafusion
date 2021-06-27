@@ -565,12 +565,17 @@ message CsvScanExecNode {
   repeated string filename = 8;
 }
 
+enum PartitionMode {
+  COLLECT_LEFT = 0;
+  PARTITIONED = 1;
+}
+
 message HashJoinExecNode {
   PhysicalPlanNode left = 1;
   PhysicalPlanNode right = 2;
   repeated JoinOn on = 3;
   JoinType join_type = 4;
-
+  PartitionMode partition_mode = 6;
 }
 
 message PhysicalColumn {
