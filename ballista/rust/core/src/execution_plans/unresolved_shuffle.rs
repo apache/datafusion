@@ -30,10 +30,10 @@ use datafusion::{
 };
 use log::info;
 
-/// UnresolvedShuffleExec represents a dependency on the results of several QueryStageExec nodes which haven't been computed yet.
+/// UnresolvedShuffleExec represents a dependency on the results of several ShuffleWriterExec nodes which haven't been computed yet.
 ///
 /// An ExecutionPlan that contains an UnresolvedShuffleExec isn't ready for execution. The presence of this ExecutionPlan
-/// is used as a signal so the scheduler knows it can't start computation on a specific QueryStageExec.
+/// is used as a signal so the scheduler knows it can't start computation on a specific ShuffleWriterExec.
 #[derive(Debug, Clone)]
 pub struct UnresolvedShuffleExec {
     // The query stage ids which needs to be computed

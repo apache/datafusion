@@ -58,9 +58,9 @@ impl Default for DistributedPlanner {
 }
 
 impl DistributedPlanner {
-    /// Returns a vector of ExecutionPlans, where the root node is a [QueryStageExec].
+    /// Returns a vector of ExecutionPlans, where the root node is a [ShuffleWriterExec].
     /// Plans that depend on the input of other plans will have leaf nodes of type [UnresolvedShuffleExec].
-    /// A [QueryStageExec] is created whenever the partitioning changes.
+    /// A [ShuffleWriterExec] is created whenever the partitioning changes.
     ///
     /// Returns an empty vector if the execution_plan doesn't need to be sliced into several stages.
     pub fn plan_query_stages(
@@ -280,13 +280,13 @@ mod test {
         }
 
         /* Expected result:
-        QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=1
+        ShuffleWriterExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=1
          HashAggregateExec: groupBy=["l_returnflag"], aggrExpr=["SUM(l_extendedprice Multiply Int64(1)) [\"l_extendedprice * CAST(1 AS Float64)\"]"]
           CsvExec: testdata/lineitem; partitions=2
-        QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=2
+        ShuffleWriterExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=2
          MergeExec
           UnresolvedShuffleExec: stages=[1]
-        QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=3
+        ShuffleWriterExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=3
          SortExec { input: ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_ext
           ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_extendedprice Multip
            HashAggregateExec: groupBy=["l_returnflag"], aggrExpr=["SUM(l_extendedprice Multiply Int64(1)) [\"l_extendedprice * CAST(1 AS Float64)\"]"]

@@ -164,7 +164,7 @@ fn build_exec_plan_diagram(
     } else if plan.as_any().downcast_ref::<FilterExec>().is_some() {
         "FilterExec"
     } else if plan.as_any().downcast_ref::<ShuffleWriterExec>().is_some() {
-        "QueryStageExec"
+        "ShuffleWriterExec"
     } else if plan
         .as_any()
         .downcast_ref::<UnresolvedShuffleExec>()
