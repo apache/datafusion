@@ -155,7 +155,7 @@ mod test {
     fn limit_pushdown_projection_table_provider() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
             .limit(1000)?
             .build()?;
@@ -174,7 +174,7 @@ mod test {
     fn limit_push_down_take_smaller_limit() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .limit(1000)?
             .limit(10)?
             .build()?;
@@ -195,7 +195,7 @@ mod test {
     fn limit_doesnt_push_down_aggregation() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![max(col("b"))])?
             .limit(1000)?
             .build()?;
@@ -214,8 +214,8 @@ mod test {
     fn limit_should_push_down_union() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let plan = LogicalPlanBuilder::from(&table_scan)
-            .union(LogicalPlanBuilder::from(&table_scan).build()?)?
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .union(LogicalPlanBuilder::from(table_scan).build()?)?
             .limit(1000)?
             .build()?;
 
@@ -236,7 +236,7 @@ mod test {
     fn multi_stage_limit_recurses_to_deeper_limit() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .limit(1000)?
             .aggregate(vec![col("a")], vec![max(col("b"))])?
             .limit(10)?
