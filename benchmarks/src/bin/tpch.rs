@@ -1095,7 +1095,7 @@ mod tests {
             );
 
             // test physical plan roundtrip
-            if let Ok(_) = env::var("TPCH_DATA") {
+            if env::var("TPCH_DATA").is_ok() {
                 let physical_plan = ctx.create_physical_plan(&plan)?;
                 let proto: protobuf::PhysicalPlanNode =
                     (physical_plan.clone()).try_into().unwrap();
