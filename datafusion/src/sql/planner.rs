@@ -2824,6 +2824,17 @@ mod tests {
     }
 
     #[test]
+    fn empty_over_dup_with_different_sort() {
+        let sql = "SELECT order_id oid, MAX(order_id) OVER (), MAX(order_id) OVER (ORDER BY order_id) from orders";
+        let expected = "\
+        Projection: #orders.order_id AS oid, #MAX(orders.order_id), #MAX(orders.order_id) ORDER BY [#orders.order_id ASC NULLS FIRST]\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.order_id)]]\
+        \n    WindowAggr: windowExpr=[[MAX(#orders.order_id) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
+        \n      TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn empty_over_plus() {
         let sql = "SELECT order_id, MAX(qty * 1.1) OVER () from orders";
         let expected = "\
@@ -2857,7 +2868,7 @@ mod tests {
     fn over_partition_by() {
         let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id]]]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -2879,7 +2890,7 @@ mod tests {
     fn over_order_by() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty), #MIN(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST], #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
@@ -2890,7 +2901,7 @@ mod tests {
     fn over_order_by_with_window_frame_double_end() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS BETWEEN 3 PRECEDING and 3 FOLLOWING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING, #MIN(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING, #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
@@ -2901,7 +2912,7 @@ mod tests {
     fn over_order_by_with_window_frame_single_end() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) ROWS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
@@ -2944,7 +2955,7 @@ mod tests {
     fn over_order_by_with_window_frame_single_end_groups() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id GROUPS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
@@ -2967,7 +2978,7 @@ mod tests {
     fn over_order_by_two_sort_keys() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY (order_id + 1)) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty), #MIN(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST], #MIN(orders.qty) ORDER BY [#orders.order_id Plus Int64(1) ASC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id Plus Int64(1) ASC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
@@ -2991,7 +3002,7 @@ mod tests {
     fn over_order_by_sort_keys_sorting() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty), #SUM(orders.qty), #MIN(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST], #SUM(orders.qty), #MIN(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[SUM(#orders.qty)]]\
         \n    WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST]]]\
         \n      WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]]]\
@@ -3016,7 +3027,7 @@ mod tests {
     fn over_order_by_sort_keys_sorting_prefix_compacting() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty), #SUM(orders.qty), #MIN(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST], #SUM(orders.qty), #MIN(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[SUM(#orders.qty)]]\
         \n    WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
         \n      WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]]]\
@@ -3045,7 +3056,7 @@ mod tests {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders ORDER BY order_id";
         let expected = "\
         Sort: #orders.order_id ASC NULLS FIRST\
-        \n  Projection: #orders.order_id, #MAX(orders.qty), #SUM(orders.qty), #MIN(orders.qty)\
+        \n  Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST], #SUM(orders.qty), #MIN(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]\
         \n    WindowAggr: windowExpr=[[SUM(#orders.qty)]]\
         \n      WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST]]]\
         \n        WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]]]\
@@ -3067,7 +3078,7 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3087,7 +3098,7 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3110,7 +3121,7 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty), MIN(qty) OVER (PARTITION BY qty ORDER BY order_id) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty), #MIN(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS FIRST], #MIN(orders.qty) PARTITION BY [#orders.qty] ORDER BY [#orders.order_id ASC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.qty] ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
@@ -3133,7 +3144,7 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty), MIN(qty) OVER (PARTITION BY order_id, qty ORDER BY price) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty), #MIN(orders.qty)\
+        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS FIRST], #MIN(orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.price ASC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.price ASC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
