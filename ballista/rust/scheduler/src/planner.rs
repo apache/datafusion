@@ -25,7 +25,7 @@ use std::sync::Arc;
 use ballista_core::datasource::DfTableAdapter;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::{
-    execution_plans::{QueryStageExec, ShuffleReaderExec, UnresolvedShuffleExec},
+    execution_plans::{ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec},
     serde::scheduler::PartitionLocation,
 };
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
@@ -39,7 +39,7 @@ use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::ExecutionPlan;
 use log::info;
 
-type PartialQueryStageResult = (Arc<dyn ExecutionPlan>, Vec<Arc<QueryStageExec>>);
+type PartialQueryStageResult = (Arc<dyn ExecutionPlan>, Vec<Arc<ShuffleWriterExec>>);
 
 pub struct DistributedPlanner {
     next_stage_id: usize,
@@ -67,7 +67,7 @@ impl DistributedPlanner {
         &mut self,
         job_id: &str,
         execution_plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<Vec<Arc<QueryStageExec>>> {
+    ) -> Result<Vec<Arc<ShuffleWriterExec>>> {
         info!("planning query stages");
         let (new_plan, mut stages) =
             self.plan_query_stages_internal(job_id, execution_plan)?;
@@ -225,8 +225,8 @@ fn create_query_stage(
     job_id: &str,
     stage_id: usize,
     plan: Arc<dyn ExecutionPlan>,
-) -> Result<Arc<QueryStageExec>> {
-    Ok(Arc::new(QueryStageExec::try_new(
+) -> Result<Arc<ShuffleWriterExec>> {
+    Ok(Arc::new(ShuffleWriterExec::try_new(
         job_id.to_owned(),
         stage_id,
         plan,
