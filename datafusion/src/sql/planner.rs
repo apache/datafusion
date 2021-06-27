@@ -1650,7 +1650,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'doesnotexist'",
+            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
         ));
     }
 
@@ -1708,7 +1708,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'doesnotexist'",
+            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
         ));
     }
 
@@ -1718,7 +1718,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'x'",
+            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'x'"),
         ));
     }
 
@@ -2189,7 +2189,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'doesnotexist'",
+            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
         ));
     }
 
@@ -2279,7 +2279,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'doesnotexist'",
+            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
         ));
     }
 
@@ -2289,7 +2289,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg == "No field with unqualified name 'doesnotexist'",
+            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
         ));
     }
 
