@@ -126,9 +126,14 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     projection = Some(column_indices);
                 }
 
-                LogicalPlanBuilder::scan_csv(&scan.path, options, projection)?
-                    .build()
-                    .map_err(|e| e.into())
+                LogicalPlanBuilder::scan_csv_with_name(
+                    &scan.path,
+                    options,
+                    projection,
+                    &scan.table_name,
+                )?
+                .build()
+                .map_err(|e| e.into())
             }
             LogicalPlanType::ParquetScan(scan) => {
                 let projection = match scan.projection.as_ref() {
@@ -151,9 +156,14 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                         Some(r?)
                     }
                 };
-                LogicalPlanBuilder::scan_parquet(&scan.path, projection, 24)? //TODO concurrency
-                    .build()
-                    .map_err(|e| e.into())
+                LogicalPlanBuilder::scan_parquet_with_name(
+                    &scan.path,
+                    projection,
+                    24,
+                    &scan.table_name,
+                )? //TODO concurrency
+                .build()
+                .map_err(|e| e.into())
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan = convert_box_required!(sort.input)?;
