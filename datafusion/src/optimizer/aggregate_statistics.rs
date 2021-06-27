@@ -29,16 +29,16 @@ use super::{optimizer::OptimizerRule, utils};
 use crate::error::Result;
 
 /// Optimizer that uses available statistics for aggregate functions
-pub struct StatisticsConstant {}
+pub struct AggregateStatistics {}
 
-impl StatisticsConstant {
+impl AggregateStatistics {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl OptimizerRule for StatisticsConstant {
+impl OptimizerRule for AggregateStatistics {
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -116,7 +116,7 @@ mod tests {
     use crate::error::Result;
     use crate::execution::context::ExecutionProps;
     use crate::logical_plan::LogicalPlan;
-    use crate::optimizer::count_statistics::StatisticsConstant;
+    use crate::optimizer::aggregate_statistics::AggregateStatistics;
     use crate::optimizer::optimizer::OptimizerRule;
     use crate::{
         datasource::{datasource::Statistics, TableProvider},
@@ -157,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_count() -> Result<()> {
+    fn optimize_count_using_statistics() -> Result<()> {
         use crate::execution::context::ExecutionContext;
         let mut ctx = ExecutionContext::new();
         ctx.register_table("test", Arc::new(TestTableProvider { num_rows: 100 }))
@@ -176,7 +176,7 @@ mod tests {
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let opt = StatisticsConstant::new();
+        let opt = AggregateStatistics::new();
         let optimized_plan = opt.optimize(plan, &ExecutionProps::new()).unwrap();
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
