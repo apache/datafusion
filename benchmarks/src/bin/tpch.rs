@@ -1045,6 +1045,7 @@ mod tests {
     mod ballista_round_trip {
         use super::*;
         use ballista_core::serde::protobuf;
+        use datafusion::physical_plan::ExecutionPlan;
         use std::convert::TryInto;
 
         fn round_trip_query(n: usize) -> Result<()> {
@@ -1053,6 +1054,12 @@ mod tests {
                 .with_batch_size(10);
             let mut ctx = ExecutionContext::with_config(config);
 
+            let tpch_data_path = if let Ok(path) = env::var("TPCH_DATA") {
+                path
+            } else {
+                "./".to_string()
+            };
+
             for &table in TABLES {
                 let schema = get_schema(table);
                 let options = CsvReadOptions::new()
@@ -1060,14 +1067,45 @@ mod tests {
                     .delimiter(b'|')
                     .has_header(false)
                     .file_extension(".tbl");
-                let provider = CsvFile::try_new("./foo.csv", options)?;
+                let provider = CsvFile::try_new(
+                    &format!("{}/{}.tbl", tpch_data_path, table),
+                    options,
+                )?;
                 ctx.register_table(table, Arc::new(provider))?;
             }
 
+            // test logical plan round trip
             let plan = create_logical_plan(&mut ctx, n)?;
             let proto: protobuf::LogicalPlanNode = (&plan).try_into().unwrap();
             let round_trip: LogicalPlan = (&proto).try_into().unwrap();
-            assert_eq!(format!("{:?}", plan), format!("{:?}", round_trip));
+            assert_eq!(
+                format!("{:?}", plan),
+                format!("{:?}", round_trip),
+                "logical plan round trip failed"
+            );
+
+            // test optimized logical plan round trip
+            let plan = ctx.optimize(&plan)?;
+            let proto: protobuf::LogicalPlanNode = (&plan).try_into().unwrap();
+            let round_trip: LogicalPlan = (&proto).try_into().unwrap();
+            assert_eq!(
+                format!("{:?}", plan),
+                format!("{:?}", round_trip),
+                "opitmized logical plan round trip failed"
+            );
+
+            // test physical plan roundtrip
+            if let Ok(_) = env::var("TPCH_DATA") {
+                let physical_plan = ctx.create_physical_plan(&plan)?;
+                let proto: protobuf::PhysicalPlanNode =
+                    (physical_plan.clone()).try_into().unwrap();
+                let round_trip: Arc<dyn ExecutionPlan> = (&proto).try_into().unwrap();
+                assert_eq!(
+                    format!("{:?}", physical_plan),
+                    format!("{:?}", round_trip),
+                    "physical plan round trip failed"
+                );
+            }
 
             Ok(())
         }
