@@ -90,7 +90,7 @@ mod roundtrip_tests {
 
         let schema_left = Arc::new(schema_left);
         let schema_right = Arc::new(schema_right);
-        for join_type in vec![
+        for join_type in &[
             JoinType::Inner,
             JoinType::Left,
             JoinType::Right,
@@ -99,7 +99,7 @@ mod roundtrip_tests {
             JoinType::Semi,
         ] {
             for partition_mode in
-                vec![PartitionMode::Partitioned, PartitionMode::CollectLeft]
+                &[PartitionMode::Partitioned, PartitionMode::CollectLeft]
             {
                 roundtrip_test(Arc::new(HashJoinExec::try_new(
                     Arc::new(EmptyExec::new(false, schema_left.clone())),
