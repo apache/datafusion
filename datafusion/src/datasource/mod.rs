@@ -28,6 +28,7 @@ pub use self::csv::{CsvFile, CsvReadOptions};
 pub use self::datasource::{TableProvider, TableType};
 pub use self::memory::MemTable;
 
+/// Source for table input data
 pub(crate) enum Source<R = Box<dyn std::io::Read + Send + Sync + 'static>> {
     /// Path to a single file or a directory containing one of more files
     Path(String),
