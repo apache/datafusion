@@ -1054,11 +1054,10 @@ mod tests {
                 .with_batch_size(10);
             let mut ctx = ExecutionContext::with_config(config);
 
-            let tpch_data_path = if let Ok(path) = env::var("TPCH_DATA") {
-                path
-            } else {
-                "./".to_string()
-            };
+            // set tpch_data_path to dummy value and skip physical plan serde test when TPCH_DATA
+            // is not set.
+            let tpch_data_path =
+                env::var("TPCH_DATA").unwrap_or_else(|_| "./".to_string());
 
             for &table in TABLES {
                 let schema = get_schema(table);
