@@ -27,7 +27,7 @@ use arrow::record_batch::RecordBatch;
 
 use futures::{Stream, TryStreamExt};
 
-use super::{hash_utils::check_join_is_valid, merge::MergeExec};
+use super::{hash_utils::check_join_is_valid, coalesce_partitions::CoalescePartitionsExec};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -144,7 +144,7 @@ impl ExecutionPlan for CrossJoinExec {
                     let start = Instant::now();
 
                     // merge all left parts into a single stream
-                    let merge = MergeExec::new(self.left.clone());
+                    let merge = CoalescePartitionsExec::new(self.left.clone());
                     let stream = merge.execute(0).await?;
 
                     // Load all batches and count the rows

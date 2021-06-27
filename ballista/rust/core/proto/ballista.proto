@@ -414,7 +414,7 @@ message PhysicalPlanNode {
     SortExecNode sort = 11;
     CoalesceBatchesExecNode coalesce_batches = 12;
     FilterExecNode filter = 13;
-    MergeExecNode merge = 14;
+    CoalescePartitionsExecNode merge = 14;
     UnresolvedShuffleExecNode unresolved = 15;
     RepartitionExecNode repartition = 16;
     WindowAggExecNode window = 17;
@@ -648,7 +648,7 @@ message CoalesceBatchesExecNode {
   uint32 target_batch_size = 2;
 }
 
-message MergeExecNode {
+message CoalescePartitionsExecNode {
   PhysicalPlanNode input = 1;
 }
 

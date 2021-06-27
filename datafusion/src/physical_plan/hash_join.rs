@@ -55,7 +55,7 @@ use arrow::array::{
 use super::expressions::Column;
 use super::{
     hash_utils::{build_join_schema, check_join_is_valid, JoinOn, JoinType},
-    merge::MergeExec,
+    coalesce_partitions::CoalescePartitionsExec,
 };
 use crate::error::{DataFusionError, Result};
 
@@ -260,7 +260,7 @@ impl ExecutionPlan for HashJoinExec {
                             let start = Instant::now();
 
                             // merge all left parts into a single stream
-                            let merge = MergeExec::new(self.left.clone());
+                            let merge = CoalescePartitionsExec::new(self.left.clone());
                             let stream = merge.execute(0).await?;
 
                             // This operation performs 2 steps at once:

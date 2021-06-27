@@ -22,7 +22,7 @@ use ballista_core::error::Result;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
-use datafusion::physical_optimizer::merge_exec::AddMergeExec;
+use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::csv::CsvReadOptions;
 
@@ -33,7 +33,7 @@ pub const TPCH_TABLES: &[&str] = &[
 pub fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
     // remove Repartition rule because that isn't supported yet
     let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
-        Arc::new(AddMergeExec::new()),
+        Arc::new(AddCoalescePartitionsExec::new()),
         Arc::new(CoalesceBatches::new()),
     ];
     let config = ExecutionConfig::new()
