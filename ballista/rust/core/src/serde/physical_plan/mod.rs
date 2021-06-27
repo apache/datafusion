@@ -106,7 +106,7 @@ mod roundtrip_tests {
                     Arc::new(EmptyExec::new(false, schema_right.clone())),
                     on.clone(),
                     &join_type,
-                    partition_mode,
+                    *partition_mode,
                 )?))?;
             }
         }
