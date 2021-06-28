@@ -144,7 +144,7 @@ impl OptimizerRule for AggregateStatistics {
     }
 
     fn name(&self) -> &str {
-        "count_statistics"
+        "aggregate_statistics"
     }
 }
 
