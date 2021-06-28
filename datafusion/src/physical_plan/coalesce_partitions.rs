@@ -40,15 +40,15 @@ use pin_project_lite::pin_project;
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
 #[derive(Debug)]
-pub struct MergeExec {
+pub struct CoalescePartitionsExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
 }
 
-impl MergeExec {
+impl CoalescePartitionsExec {
     /// Create a new MergeExec
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        MergeExec { input }
+        CoalescePartitionsExec { input }
     }
 
     /// Input execution plan
@@ -58,7 +58,7 @@ impl MergeExec {
 }
 
 #[async_trait]
-impl ExecutionPlan for MergeExec {
+impl ExecutionPlan for CoalescePartitionsExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -82,7 +82,7 @@ impl ExecutionPlan for MergeExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match children.len() {
-            1 => Ok(Arc::new(MergeExec::new(children[0].clone()))),
+            1 => Ok(Arc::new(CoalescePartitionsExec::new(children[0].clone()))),
             _ => Err(DataFusionError::Internal(
                 "MergeExec wrong number of children".to_string(),
             )),
@@ -194,7 +194,7 @@ mod tests {
         // input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
-        let merge = MergeExec::new(Arc::new(csv));
+        let merge = CoalescePartitionsExec::new(Arc::new(csv));
 
         // output of MergeExec should have a single partition
         assert_eq!(merge.output_partitioning().partition_count(), 1);

@@ -1230,7 +1230,7 @@ mod tests {
     use crate::physical_plan::expressions::{col, Avg};
     use crate::{assert_batches_sorted_eq, physical_plan::common};
 
-    use crate::physical_plan::merge::MergeExec;
+    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 
     /// some mock data to aggregates
     fn some_data() -> (Arc<Schema>, Vec<RecordBatch>) {
@@ -1298,7 +1298,7 @@ mod tests {
         ];
         assert_batches_sorted_eq!(expected, &result);
 
-        let merge = Arc::new(MergeExec::new(partial_aggregate));
+        let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
         let final_group: Vec<Arc<dyn PhysicalExpr>> = (0..groups.len())
             .map(|i| col(&groups[i].1, &input_schema))

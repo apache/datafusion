@@ -315,9 +315,9 @@ impl RecordBatchStream for SortStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::merge::MergeExec;
     use crate::physical_plan::{
         collect,
         csv::{CsvExec, CsvReadOptions},
@@ -357,7 +357,7 @@ mod tests {
                     options: SortOptions::default(),
                 },
             ],
-            Arc::new(MergeExec::new(Arc::new(csv))),
+            Arc::new(CoalescePartitionsExec::new(Arc::new(csv))),
         )?);
 
         let result: Vec<RecordBatch> = collect(sort_exec).await?;
