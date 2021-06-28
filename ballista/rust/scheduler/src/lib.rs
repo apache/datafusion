@@ -40,10 +40,10 @@ use std::{fmt, net::IpAddr};
 use ballista_core::serde::protobuf::{
     execute_query_params::Query, executor_registration::OptionalHost, job_status,
     scheduler_grpc_server::SchedulerGrpc, task_status, ExecuteQueryParams,
-    ExecuteQueryResult, FailedJob, FilePartitionMetadata, FileType, GetFileMetadataParams,
-    GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult, JobStatus,
-    PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob, TaskDefinition,
-    TaskStatus,
+    ExecuteQueryResult, FailedJob, FilePartitionMetadata, FileType,
+    GetFileMetadataParams, GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult,
+    JobStatus, PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob,
+    TaskDefinition, TaskStatus,
 };
 use ballista_core::serde::scheduler::ExecutorMeta;
 
