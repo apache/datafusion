@@ -274,6 +274,57 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn optimize_count_group_by() -> Result<()> {
+        use crate::execution::context::ExecutionContext;
+        let mut ctx = ExecutionContext::new();
+        ctx.register_table(
+            "test",
+            Arc::new(TestTableProvider {
+                num_rows: 100,
+                is_exact: true,
+            }),
+        )
+        .unwrap();
+
+        let plan = ctx
+            .create_logical_plan("SELECT count(*), a FROM test GROUP BY a")
+            .unwrap();
+        let expected = "\
+            Projection: #COUNT(UInt8(1)), #test.a\
+            \n  Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(UInt8(1))]]\
+            \n    TableScan: test projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn optimize_count_filter() -> Result<()> {
+        use crate::execution::context::ExecutionContext;
+        let mut ctx = ExecutionContext::new();
+        ctx.register_table(
+            "test",
+            Arc::new(TestTableProvider {
+                num_rows: 100,
+                is_exact: true,
+            }),
+        )
+        .unwrap();
+
+        let plan = ctx
+            .create_logical_plan("SELECT count(*) FROM test WHERE a < 5")
+            .unwrap();
+        let expected = "\
+            Projection: #COUNT(UInt8(1))\
+            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n    Filter: #test.a Lt Int64(5)\
+            \n      TableScan: test projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let opt = AggregateStatistics::new();
         let optimized_plan = opt.optimize(plan, &ExecutionProps::new()).unwrap();
