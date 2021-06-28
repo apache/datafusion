@@ -435,7 +435,7 @@ mod tests {
     use super::*;
     use crate::{
         assert_batches_sorted_eq,
-        physical_plan::memory::MemoryExec,
+        physical_plan::{expressions::col, memory::MemoryExec},
         test::exec::{BarrierExec, ErrorExec, MockExec},
     };
     use arrow::datatypes::{DataType, Field, Schema};
@@ -513,12 +513,7 @@ mod tests {
         let output_partitions = repartition(
             &schema,
             partitions,
-            Partitioning::Hash(
-                vec![Arc::new(crate::physical_plan::expressions::Column::new(
-                    "c0",
-                ))],
-                8,
-            ),
+            Partitioning::Hash(vec![col("c0", &schema)?], 8),
         )
         .await?;
 
@@ -761,6 +756,7 @@ mod tests {
                 partitioning: Partitioning::Hash(
                     vec![Arc::new(crate::physical_plan::expressions::Column::new(
                         "my_awesome_field",
+                        0,
                     ))],
                     2,
                 ),

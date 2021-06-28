@@ -502,7 +502,7 @@ mod tests {
     #[test]
     fn test_simplify_optimized_plan() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
             .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))?
             .build()?;
@@ -510,8 +510,8 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-	        Filter: #b Gt Int32(1)\
-            \n  Projection: #a\
+	        Filter: #test.b Gt Int32(1)\
+            \n  Projection: #test.a\
             \n    TableScan: test projection=None",
         );
         Ok(())
@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn test_simplify_optimized_plan_with_composed_and() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
             .filter(and(
                 and(col("a").gt(lit(5)), col("b").lt(lit(6))),
@@ -532,8 +532,8 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-            Filter: #a Gt Int32(5) And #b Lt Int32(6)\
-            \n  Projection: #a\
+            Filter: #test.a Gt Int32(5) And #test.b Lt Int32(6)\
+            \n  Projection: #test.a\
 	        \n    TableScan: test projection=None",
         );
         Ok(())

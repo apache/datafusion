@@ -25,7 +25,7 @@ use std::{any::Any, convert::TryInto};
 
 use crate::{
     error::{DataFusionError, Result},
-    logical_plan::Expr,
+    logical_plan::{Column, Expr},
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
         common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -497,7 +497,7 @@ macro_rules! get_statistic {
 // Extract the min or max value calling `func` or `bytes_func` on the ParquetStatistics as appropriate
 macro_rules! get_min_max_values {
     ($self:expr, $column:expr, $func:ident, $bytes_func:ident) => {{
-        let (column_index, field) = if let Some((v, f)) = $self.parquet_schema.column_with_name($column) {
+        let (column_index, field) = if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.name) {
             (v, f)
         } else {
             // Named column was not present
@@ -532,11 +532,11 @@ macro_rules! get_min_max_values {
 }
 
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
-    fn min_values(&self, column: &str) -> Option<ArrayRef> {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         get_min_max_values!(self, column, min, min_bytes)
     }
 
-    fn max_values(&self, column: &str) -> Option<ArrayRef> {
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
         get_min_max_values!(self, column, max, max_bytes)
     }
 
@@ -593,7 +593,6 @@ fn read_files(
         loop {
             match batch_reader.next() {
                 Some(Ok(batch)) => {
-                    //println!("ParquetExec got new batch from {}", filename);
                     total_rows += batch.num_rows();
                     send_result(&response_tx, Ok(batch))?;
                     if limit.map(|l| total_rows >= l).unwrap_or(false) {

@@ -11,45 +11,32 @@
 // limitations under the License.
 
 use crate::SchedulerServer;
-use ballista_core::serde::protobuf::{
-    scheduler_grpc_server::SchedulerGrpc, ExecutorMetadata, GetExecutorMetadataParams,
-    GetExecutorMetadataResult,
-};
-use ballista_core::serde::scheduler::ExecutorMeta;
-use tonic::{Request, Response};
+use ballista_core::{serde::scheduler::ExecutorMeta, BALLISTA_VERSION};
 use warp::Rejection;
 
 #[derive(Debug, serde::Serialize)]
 struct StateResponse {
     executors: Vec<ExecutorMeta>,
     started: u128,
-    version: String,
+    version: &'static str,
 }
 
 pub(crate) async fn scheduler_state(
     data_server: SchedulerServer,
 ) -> Result<impl warp::Reply, Rejection> {
-    let data: Result<Response<GetExecutorMetadataResult>, tonic::Status> = data_server
-        .get_executors_metadata(Request::new(GetExecutorMetadataParams {}))
-        .await;
-    let metadata: Vec<ExecutorMeta> = match data {
-        Ok(result) => {
-            let res: &GetExecutorMetadataResult = result.get_ref();
-            let vec: &Vec<ExecutorMetadata> = &res.metadata;
-            vec.iter()
-                .map(|v: &ExecutorMetadata| ExecutorMeta {
-                    host: v.host.clone(),
-                    port: v.port as u16,
-                    id: v.id.clone(),
-                })
-                .collect()
-        }
-        Err(_) => vec![],
-    };
+    // TODO: Display last seen information in UI
+    let executors: Vec<ExecutorMeta> = data_server
+        .state
+        .get_executors_metadata()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(metadata, _duration)| metadata)
+        .collect();
     let response = StateResponse {
-        executors: metadata,
+        executors,
         started: data_server.start_time,
-        version: data_server.version.clone(),
+        version: BALLISTA_VERSION,
     };
     Ok(warp::reply::json(&response))
 }

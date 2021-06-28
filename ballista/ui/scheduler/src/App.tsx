@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import React, {useState, useEffect} from "react";
-import {Box, Grid, VStack} from "@chakra-ui/react";
-import {Header} from "./components/Header";
-import { Summary} from "./components/Summary";
-import {QueriesList, Query, QueryStatus} from "./components/QueriesList";
-import {Footer} from "./components/Footer";
+import React, { useState, useEffect } from "react";
+import { Box, Grid, VStack } from "@chakra-ui/react";
+import { Header } from "./components/Header";
+import { Summary } from "./components/Summary";
+import { QueriesList, Query, QueryStatus } from "./components/QueriesList";
+import { Footer } from "./components/Footer";
 
 import "./App.css";
 
@@ -38,22 +38,23 @@ const getRandomQueries = (num: number): Query[] => {
   for (let i = 0; i < num; i++) {
     nodes.push({
       started: new Date().toISOString(),
-      query: "SELECT \n" +
-          "    employee.id,\n" +
-          "    employee.first_name,\n" +
-          "    employee.last_name,\n" +
-          "    SUM(DATEDIFF(\"SECOND\", call.start_time, call.end_time)) AS call_duration_sum\n" +
-          "FROM call\n" +
-          "INNER JOIN employee ON call.employee_id = employee.id\n" +
-          "GROUP BY\n" +
-          "    employee.id,\n" +
-          "    employee.first_name,\n" +
-          "    employee.last_name\n" +
-          "ORDER BY\n" +
-          "    employee.id ASC;",
+      query:
+        "SELECT \n" +
+        "    employee.id,\n" +
+        "    employee.first_name,\n" +
+        "    employee.last_name,\n" +
+        '    SUM(DATEDIFF("SECOND", call.start_time, call.end_time)) AS call_duration_sum\n' +
+        "FROM call\n" +
+        "INNER JOIN employee ON call.employee_id = employee.id\n" +
+        "GROUP BY\n" +
+        "    employee.id,\n" +
+        "    employee.first_name,\n" +
+        "    employee.last_name\n" +
+        "ORDER BY\n" +
+        "    employee.id ASC;",
       status: QueryStatus.RUNNING,
       progress: Math.round(Math.random() * 100),
-      uuid: uuidv4()
+      uuid: uuidv4(),
     });
   }
   return nodes;
@@ -61,19 +62,18 @@ const getRandomQueries = (num: number): Query[] => {
 
 const queries = getRandomQueries(17);
 
-const App : React.FunctionComponent<any> = () => {
-
-  const [schedulerState, setSchedulerState] = useState(undefined)
+const App: React.FunctionComponent<any> = () => {
+  const [schedulerState, setSchedulerState] = useState(undefined);
 
   function getSchedulerState() {
     return fetch(`/state`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Accept': 'application/json'
-      }
+        Accept: "application/json",
+      },
     })
-      .then(res => res.json())
-      .then(res => setSchedulerState(res));
+      .then((res) => res.json())
+      .then((res) => setSchedulerState(res));
   }
 
   useEffect(() => {
@@ -92,6 +92,6 @@ const App : React.FunctionComponent<any> = () => {
       </Grid>
     </Box>
   );
-}
+};
 
 export default App;

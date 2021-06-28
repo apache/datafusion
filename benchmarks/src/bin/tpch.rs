@@ -18,7 +18,6 @@
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
 use std::{
-    collections::HashMap,
     fs,
     iter::Iterator,
     path::{Path, PathBuf},
@@ -252,11 +251,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
 async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     println!("Running benchmarks with the following options: {:?}", opt);
 
-    let mut settings = HashMap::new();
-    settings.insert("batch.size".to_owned(), format!("{}", opt.batch_size));
-
-    let ctx =
-        BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), settings);
+    let ctx = BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap());
 
     // register tables with Ballista context
     let path = opt.path.to_str().unwrap();
@@ -578,7 +573,6 @@ mod tests {
 
     use datafusion::arrow::array::*;
     use datafusion::arrow::util::display::array_value_to_string;
-
     use datafusion::logical_plan::Expr;
     use datafusion::logical_plan::Expr::Cast;
 
@@ -710,6 +704,16 @@ mod tests {
     #[tokio::test]
     async fn run_q6() -> Result<()> {
         run_query(6).await
+    }
+
+    #[tokio::test]
+    async fn run_q7() -> Result<()> {
+        run_query(7).await
+    }
+
+    #[tokio::test]
+    async fn run_q8() -> Result<()> {
+        run_query(8).await
     }
 
     #[tokio::test]
@@ -1036,5 +1040,89 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    mod ballista_round_trip {
+        use super::*;
+        use ballista_core::serde::protobuf;
+        use datafusion::physical_plan::ExecutionPlan;
+        use std::convert::TryInto;
+
+        fn round_trip_query(n: usize) -> Result<()> {
+            let config = ExecutionConfig::new()
+                .with_concurrency(1)
+                .with_batch_size(10);
+            let mut ctx = ExecutionContext::with_config(config);
+
+            // set tpch_data_path to dummy value and skip physical plan serde test when TPCH_DATA
+            // is not set.
+            let tpch_data_path =
+                env::var("TPCH_DATA").unwrap_or_else(|_| "./".to_string());
+
+            for &table in TABLES {
+                let schema = get_schema(table);
+                let options = CsvReadOptions::new()
+                    .schema(&schema)
+                    .delimiter(b'|')
+                    .has_header(false)
+                    .file_extension(".tbl");
+                let provider = CsvFile::try_new(
+                    &format!("{}/{}.tbl", tpch_data_path, table),
+                    options,
+                )?;
+                ctx.register_table(table, Arc::new(provider))?;
+            }
+
+            // test logical plan round trip
+            let plan = create_logical_plan(&mut ctx, n)?;
+            let proto: protobuf::LogicalPlanNode = (&plan).try_into().unwrap();
+            let round_trip: LogicalPlan = (&proto).try_into().unwrap();
+            assert_eq!(
+                format!("{:?}", plan),
+                format!("{:?}", round_trip),
+                "logical plan round trip failed"
+            );
+
+            // test optimized logical plan round trip
+            let plan = ctx.optimize(&plan)?;
+            let proto: protobuf::LogicalPlanNode = (&plan).try_into().unwrap();
+            let round_trip: LogicalPlan = (&proto).try_into().unwrap();
+            assert_eq!(
+                format!("{:?}", plan),
+                format!("{:?}", round_trip),
+                "opitmized logical plan round trip failed"
+            );
+
+            // test physical plan roundtrip
+            if env::var("TPCH_DATA").is_ok() {
+                let physical_plan = ctx.create_physical_plan(&plan)?;
+                let proto: protobuf::PhysicalPlanNode =
+                    (physical_plan.clone()).try_into().unwrap();
+                let round_trip: Arc<dyn ExecutionPlan> = (&proto).try_into().unwrap();
+                assert_eq!(
+                    format!("{:?}", physical_plan),
+                    format!("{:?}", round_trip),
+                    "physical plan round trip failed"
+                );
+            }
+
+            Ok(())
+        }
+
+        macro_rules! test_round_trip {
+            ($tn:ident, $query:expr) => {
+                #[test]
+                fn $tn() -> Result<()> {
+                    round_trip_query($query)
+                }
+            };
+        }
+
+        test_round_trip!(q1, 1);
+        test_round_trip!(q3, 3);
+        test_round_trip!(q5, 5);
+        test_round_trip!(q6, 6);
+        test_round_trip!(q10, 10);
+        test_round_trip!(q12, 12);
     }
 }

@@ -30,7 +30,7 @@ mod roundtrip_tests {
         logical_plan::Operator,
         physical_plan::{
             empty::EmptyExec,
-            expressions::{binary, lit, InListExpr, NotExpr},
+            expressions::{binary, col, lit, InListExpr, NotExpr},
             expressions::{Avg, Column, PhysicalSortExpr},
             filter::FilterExec,
             hash_aggregate::{AggregateMode, HashAggregateExec},
@@ -83,34 +83,34 @@ mod roundtrip_tests {
         let field_a = Field::new("col", DataType::Int64, false);
         let schema_left = Schema::new(vec![field_a.clone()]);
         let schema_right = Schema::new(vec![field_a]);
+        let on = vec![(
+            Column::new("col", schema_left.index_of("col")?),
+            Column::new("col", schema_right.index_of("col")?),
+        )];
 
         roundtrip_test(Arc::new(HashJoinExec::try_new(
             Arc::new(EmptyExec::new(false, Arc::new(schema_left))),
             Arc::new(EmptyExec::new(false, Arc::new(schema_right))),
-            &[("col".to_string(), "col".to_string())],
+            on,
             &JoinType::Inner,
             PartitionMode::CollectLeft,
         )?))
     }
 
-    fn col(name: &str) -> Arc<dyn PhysicalExpr> {
-        Arc::new(Column::new(name))
-    }
-
     #[test]
     fn rountrip_hash_aggregate() -> Result<()> {
-        let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
-            vec![(col("a"), "unused".to_string())];
-
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-            col("b"),
-            "AVG(b)".to_string(),
-            DataType::Float64,
-        ))];
-
         let field_a = Field::new("a", DataType::Int64, false);
         let field_b = Field::new("b", DataType::Int64, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+        let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            vec![(col("a", &schema)?, "unused".to_string())];
+
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
+            col("b", &schema)?,
+            "AVG(b)".to_string(),
+            DataType::Float64,
+        ))];
 
         roundtrip_test(Arc::new(HashAggregateExec::try_new(
             AggregateMode::Final,
@@ -127,9 +127,9 @@ mod roundtrip_tests {
         let field_b = Field::new("b", DataType::Int64, false);
         let field_c = Field::new("c", DataType::Int64, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
-        let not = Arc::new(NotExpr::new(col("a")));
+        let not = Arc::new(NotExpr::new(col("a", &schema)?));
         let in_list = Arc::new(InListExpr::new(
-            col("b"),
+            col("b", &schema)?,
             vec![
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(2))),
@@ -150,14 +150,14 @@ mod roundtrip_tests {
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
         let sort_exprs = vec![
             PhysicalSortExpr {
-                expr: col("a"),
+                expr: col("a", &schema)?,
                 options: SortOptions {
                     descending: true,
                     nulls_first: false,
                 },
             },
             PhysicalSortExpr {
-                expr: col("b"),
+                expr: col("b", &schema)?,
                 options: SortOptions {
                     descending: false,
                     nulls_first: true,

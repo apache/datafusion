@@ -579,21 +579,18 @@ mod tests {
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
         let schema = b1.schema();
 
+        let sort = vec![
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("c", &schema).unwrap(),
+                options: Default::default(),
+            },
+        ];
         let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(
-            vec![
-                PhysicalSortExpr {
-                    expr: col("b"),
-                    options: Default::default(),
-                },
-                PhysicalSortExpr {
-                    expr: col("c"),
-                    options: Default::default(),
-                },
-            ],
-            Arc::new(exec),
-            1024,
-        ));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), 1024));
 
         let collected = collect(merge).await.unwrap();
         assert_eq!(collected.len(), 1);
@@ -668,18 +665,18 @@ mod tests {
 
         let sort = vec![
             PhysicalSortExpr {
-                expr: col("c1"),
+                expr: col("c1", &schema).unwrap(),
                 options: SortOptions {
                     descending: true,
                     nulls_first: true,
                 },
             },
             PhysicalSortExpr {
-                expr: col("c2"),
+                expr: col("c2", &schema).unwrap(),
                 options: Default::default(),
             },
             PhysicalSortExpr {
-                expr: col("c7"),
+                expr: col("c7", &schema).unwrap(),
                 options: SortOptions::default(),
             },
         ];
@@ -744,25 +741,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input() {
+        let schema = test::aggr_test_schema();
         let sort = vec![
             // uint8
             PhysicalSortExpr {
-                expr: col("c7"),
+                expr: col("c7", &schema).unwrap(),
                 options: Default::default(),
             },
             // int16
             PhysicalSortExpr {
-                expr: col("c4"),
+                expr: col("c4", &schema).unwrap(),
                 options: Default::default(),
             },
             // utf-8
             PhysicalSortExpr {
-                expr: col("c1"),
+                expr: col("c1", &schema).unwrap(),
                 options: SortOptions::default(),
             },
             // utf-8
             PhysicalSortExpr {
-                expr: col("c13"),
+                expr: col("c13", &schema).unwrap(),
                 options: SortOptions::default(),
             },
         ];
@@ -782,15 +780,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input_output() {
+        let schema = test::aggr_test_schema();
+
         let sort = vec![
             // float64
             PhysicalSortExpr {
-                expr: col("c12"),
+                expr: col("c12", &schema).unwrap(),
                 options: Default::default(),
             },
             // utf-8
             PhysicalSortExpr {
-                expr: col("c13"),
+                expr: col("c13", &schema).unwrap(),
                 options: Default::default(),
             },
         ];
@@ -850,27 +850,24 @@ mod tests {
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
         let schema = b1.schema();
 
+        let sort = vec![
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            },
+            PhysicalSortExpr {
+                expr: col("c", &schema).unwrap(),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            },
+        ];
         let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(
-            vec![
-                PhysicalSortExpr {
-                    expr: col("b"),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: true,
-                    },
-                },
-                PhysicalSortExpr {
-                    expr: col("c"),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    },
-                },
-            ],
-            Arc::new(exec),
-            1024,
-        ));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), 1024));
 
         let collected = collect(merge).await.unwrap();
         assert_eq!(collected.len(), 1);
@@ -898,8 +895,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_async() {
+        let schema = test::aggr_test_schema();
         let sort = vec![PhysicalSortExpr {
-            expr: col("c7"),
+            expr: col("c7", &schema).unwrap(),
             options: SortOptions::default(),
         }];
 

@@ -30,7 +30,9 @@ use datafusion::{
 };
 
 use datafusion::execution::context::ExecutionContext;
-use datafusion::logical_plan::{col, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_plan::{
+    col, Expr, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+};
 use datafusion::physical_plan::{
     ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -176,7 +178,7 @@ async fn custom_source_dataframe() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 
     let table = ctx.read_table(Arc::new(CustomTableProvider))?;
-    let logical_plan = LogicalPlanBuilder::from(&table.to_logical_plan())
+    let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
         .project(vec![col("c2")])?
         .build()?;
 
@@ -196,8 +198,11 @@ async fn custom_source_dataframe() -> Result<()> {
         _ => panic!("expect optimized_plan to be projection"),
     }
 
-    let expected = "Projection: #c2\
-        \n  TableScan: projection=Some([1])";
+    let expected = format!(
+        "Projection: #{}.c2\
+        \n  TableScan: {} projection=Some([1])",
+        UNNAMED_TABLE, UNNAMED_TABLE
+    );
     assert_eq!(format!("{:?}", optimized_plan), expected);
 
     let physical_plan = ctx.create_physical_plan(&optimized_plan)?;

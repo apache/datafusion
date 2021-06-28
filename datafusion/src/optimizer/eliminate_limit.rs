@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn limit_0_root() {
         let table_scan = test_table_scan().unwrap();
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])
             .unwrap()
             .limit(0)
@@ -104,12 +104,12 @@ mod tests {
     #[test]
     fn limit_0_nested() {
         let table_scan = test_table_scan().unwrap();
-        let plan1 = LogicalPlanBuilder::from(&table_scan)
+        let plan1 = LogicalPlanBuilder::from(table_scan.clone())
             .aggregate(vec![col("a")], vec![sum(col("b"))])
             .unwrap()
             .build()
             .unwrap();
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])
             .unwrap()
             .limit(0)
@@ -122,7 +122,7 @@ mod tests {
         // Left side is removed
         let expected = "Union\
             \n  EmptyRelation\
-            \n  Aggregate: groupBy=[[#a]], aggr=[[SUM(#b)]]\
+            \n  Aggregate: groupBy=[[#test.a]], aggr=[[SUM(#test.b)]]\
             \n    TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
     }
