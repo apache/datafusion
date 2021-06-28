@@ -32,8 +32,8 @@ pub struct RowNumber {
 
 impl RowNumber {
     /// Create a new ROW_NUMBER function
-    pub fn new(name: String) -> Self {
-        Self { name }
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into() }
     }
 }
 

@@ -241,7 +241,7 @@ fn optimize_plan(
             {
                 window_expr.iter().try_for_each(|expr| {
                     let name = &expr.name(schema)?;
-                    let column = Column::from_name(name.to_string());
+                    let column = Column::from_name(name);
                     if required_columns.contains(&column) {
                         new_window_expr.push(expr.clone());
                         new_required_columns.insert(column);
@@ -286,7 +286,7 @@ fn optimize_plan(
             let mut new_aggr_expr = Vec::new();
             aggr_expr.iter().try_for_each(|expr| {
                 let name = &expr.name(schema)?;
-                let column = Column::from_name(name.to_string());
+                let column = Column::from_name(name);
 
                 if required_columns.contains(&column) {
                     new_aggr_expr.push(expr.clone());

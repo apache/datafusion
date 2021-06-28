@@ -110,9 +110,9 @@ pub fn create_aggregate_expr(
     distinct: bool,
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
-    name: String,
+    name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
-    // coerce
+    let name = name.into();
     let arg = coerce(args, input_schema, &signature(fun))?;
     if arg.is_empty() {
         return Err(DataFusionError::Plan(format!(
