@@ -15,27 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! AddMergeExec adds MergeExec to merge plans
-//! with more partitions into one partition when the node
-//! needs a single partition
+//! AddCoalescePartitionsExec adds CoalescePartitionsExec to plans
+//! with more than one partition, to coalesce them into one partition
+//! when the node needs a single partition
 use super::optimizer::PhysicalOptimizerRule;
 use crate::{
     error::Result,
-    physical_plan::{merge::MergeExec, Distribution},
+    physical_plan::{coalesce_partitions::CoalescePartitionsExec, Distribution},
 };
 use std::sync::Arc;
 
-/// Introduces MergeExec
-pub struct AddMergeExec {}
+/// Introduces CoalescePartitionsExec
+pub struct AddCoalescePartitionsExec {}
 
-impl AddMergeExec {
+impl AddCoalescePartitionsExec {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl PhysicalOptimizerRule for AddMergeExec {
+impl PhysicalOptimizerRule for AddCoalescePartitionsExec {
     fn optimize(
         &self,
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
@@ -60,7 +60,7 @@ impl PhysicalOptimizerRule for AddMergeExec {
                             if child.output_partitioning().partition_count() == 1 {
                                 child.clone()
                             } else {
-                                Arc::new(MergeExec::new(child.clone()))
+                                Arc::new(CoalescePartitionsExec::new(child.clone()))
                             }
                         })
                         .collect(),

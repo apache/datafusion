@@ -17,7 +17,9 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
-use self::{display::DisplayableExecutionPlan, merge::MergeExec};
+use self::{
+    coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
+};
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::LogicalPlan;
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -315,7 +317,7 @@ pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
         }
         _ => {
             // merge into a single partition
-            let plan = MergeExec::new(plan.clone());
+            let plan = CoalescePartitionsExec::new(plan.clone());
             // MergeExec must produce a single partition
             assert_eq!(1, plan.output_partitioning().partition_count());
             common::collect(plan.execute(0).await?).await
@@ -592,6 +594,7 @@ pub trait Accumulator: Send + Sync + Debug {
 pub mod aggregates;
 pub mod array_expressions;
 pub mod coalesce_batches;
+pub mod coalesce_partitions;
 pub mod common;
 pub mod cross_join;
 #[cfg(feature = "crypto_expressions")]
@@ -613,7 +616,6 @@ pub mod json;
 pub mod limit;
 pub mod math_expressions;
 pub mod memory;
-pub mod merge;
 pub mod parquet;
 pub mod planner;
 pub mod projection;

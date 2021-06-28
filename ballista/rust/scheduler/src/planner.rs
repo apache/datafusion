@@ -30,11 +30,11 @@ use ballista_core::{
 };
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
-use datafusion::physical_optimizer::merge_exec::AddMergeExec;
+use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::HashJoinExec;
-use datafusion::physical_plan::merge::MergeExec;
 use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::ExecutionPlan;
 use log::info;
@@ -101,12 +101,15 @@ impl DistributedPlanner {
             // remove Repartition rule because that isn't supported yet
             let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
                 Arc::new(CoalesceBatches::new()),
-                Arc::new(AddMergeExec::new()),
+                Arc::new(AddCoalescePartitionsExec::new()),
             ];
             let config = ExecutionConfig::new().with_physical_optimizer_rules(rules);
             let ctx = ExecutionContext::with_config(config);
             Ok((ctx.create_physical_plan(&adapter.logical_plan)?, stages))
-        } else if let Some(merge) = execution_plan.as_any().downcast_ref::<MergeExec>() {
+        } else if let Some(merge) = execution_plan
+            .as_any()
+            .downcast_ref::<CoalescePartitionsExec>()
+        {
             let query_stage = create_query_stage(
                 job_id,
                 self.next_stage_id(),
@@ -244,8 +247,10 @@ mod test {
     use ballista_core::serde::protobuf;
     use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
     use datafusion::physical_plan::sort::SortExec;
+    use datafusion::physical_plan::{
+        coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
+    };
     use datafusion::physical_plan::{displayable, ExecutionPlan};
-    use datafusion::physical_plan::{merge::MergeExec, projection::ProjectionExec};
     use std::convert::TryInto;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -284,7 +289,7 @@ mod test {
          HashAggregateExec: groupBy=["l_returnflag"], aggrExpr=["SUM(l_extendedprice Multiply Int64(1)) [\"l_extendedprice * CAST(1 AS Float64)\"]"]
           CsvExec: testdata/lineitem; partitions=2
         QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=2
-         MergeExec
+         CoalescePartitionsExec
           UnresolvedShuffleExec: stages=[1]
         QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=3
          SortExec { input: ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_ext
@@ -309,7 +314,7 @@ mod test {
         assert_eq!(unresolved_shuffle.query_stage_ids, vec![2]);
 
         let merge_exec = stages[1].children()[0].clone();
-        let merge_exec = downcast_exec!(merge_exec, MergeExec);
+        let merge_exec = downcast_exec!(merge_exec, CoalescePartitionsExec);
 
         let unresolved_shuffle = merge_exec.children()[0].clone();
         let unresolved_shuffle =
