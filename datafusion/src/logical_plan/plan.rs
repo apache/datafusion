@@ -95,12 +95,6 @@ pub enum LogicalPlan {
         input: Arc<LogicalPlan>,
         /// The window function expression
         window_expr: Vec<Expr>,
-        /// Filter by expressions
-        // filter_by_expr: Vec<Expr>,
-        /// Partition by expressions
-        // partition_by_expr: Vec<Expr>,
-        /// Window Frame
-        // window_frame: Option<WindowFrame>,
         /// The schema description of the window output
         schema: DFSchemaRef,
     },

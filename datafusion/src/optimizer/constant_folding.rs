@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn optimize_plan_eq_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("b").eq(lit(true)))?
             .filter(col("c").eq(lit(false)))?
             .project(vec![col("a")])?
@@ -563,7 +563,7 @@ mod tests {
     #[test]
     fn optimize_plan_not_eq_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("b").not_eq(lit(true)))?
             .filter(col("c").not_eq(lit(false)))?
             .limit(1)?
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn optimize_plan_and_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("b").not_eq(lit(true)).and(col("c").eq(lit(true))))?
             .project(vec![col("a")])?
             .build()?;
@@ -601,7 +601,7 @@ mod tests {
     #[test]
     fn optimize_plan_or_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("b").not_eq(lit(true)).or(col("c").eq(lit(false))))?
             .project(vec![col("a")])?
             .build()?;
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn optimize_plan_not_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("b").eq(lit(false)).not())?
             .project(vec![col("a")])?
             .build()?;
@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn optimize_plan_support_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("d"), col("b").eq(lit(false))])?
             .build()?;
 
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn optimize_plan_support_aggregate() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("c"), col("b")])?
             .aggregate(
                 vec![col("a"), col("c")],
@@ -691,7 +691,7 @@ mod tests {
             )))],
             fun: BuiltinScalarFunction::ToTimestamp,
         }];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -713,7 +713,7 @@ mod tests {
             )))],
             fun: BuiltinScalarFunction::ToTimestamp,
         }];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -732,7 +732,7 @@ mod tests {
             args: vec![],
             fun: BuiltinScalarFunction::ToTimestamp,
         }];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -751,7 +751,7 @@ mod tests {
             expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some("0".to_string())))),
             data_type: DataType::Int32,
         }];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -770,7 +770,7 @@ mod tests {
             expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some("".to_string())))),
             data_type: DataType::Int32,
         }];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -790,7 +790,7 @@ mod tests {
             fun: BuiltinScalarFunction::Now,
         }];
         let time = chrono::Utc::now();
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -823,7 +823,7 @@ mod tests {
                 "t2".to_string(),
             ),
         ];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()

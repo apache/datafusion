@@ -89,15 +89,15 @@ pub struct LogicalPlanBuilder {
 
 impl LogicalPlanBuilder {
     /// Create a builder from an existing plan
-    pub fn from(plan: &LogicalPlan) -> Self {
-        Self { plan: plan.clone() }
+    pub fn from(plan: LogicalPlan) -> Self {
+        Self { plan }
     }
 
     /// Create an empty relation.
     ///
     /// `produce_one_row` set to true means this empty node needs to produce a placeholder row.
     pub fn empty(produce_one_row: bool) -> Self {
-        Self::from(&LogicalPlan::EmptyRelation {
+        Self::from(LogicalPlan::EmptyRelation {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
         })
@@ -120,8 +120,18 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let path = path.into();
-        let provider = Arc::new(CsvFile::try_new(&path, options)?);
-        Self::scan(path, provider, projection)
+        Self::scan_csv_with_name(path.clone(), options, projection, path)
+    }
+
+    /// Scan a CSV data source and register it with a given table name
+    pub fn scan_csv_with_name(
+        path: impl Into<String>,
+        options: CsvReadOptions,
+        projection: Option<Vec<usize>>,
+        table_name: impl Into<String>,
+    ) -> Result<Self> {
+        let provider = Arc::new(CsvFile::try_new(path, options)?);
+        Self::scan(table_name, provider, projection)
     }
 
     /// Scan a Parquet data source
@@ -131,8 +141,18 @@ impl LogicalPlanBuilder {
         max_concurrency: usize,
     ) -> Result<Self> {
         let path = path.into();
-        let provider = Arc::new(ParquetTable::try_new(&path, max_concurrency)?);
-        Self::scan(path, provider, projection)
+        Self::scan_parquet_with_name(path.clone(), projection, max_concurrency, path)
+    }
+
+    /// Scan a Parquet data source and register it with a given table name
+    pub fn scan_parquet_with_name(
+        path: impl Into<String>,
+        projection: Option<Vec<usize>>,
+        max_concurrency: usize,
+        table_name: impl Into<String>,
+    ) -> Result<Self> {
+        let provider = Arc::new(ParquetTable::try_new(path, max_concurrency)?);
+        Self::scan(table_name, provider, projection)
     }
 
     /// Scan an empty data source, mainly used in tests
@@ -186,7 +206,7 @@ impl LogicalPlanBuilder {
             limit: None,
         };
 
-        Ok(Self::from(&table_scan))
+        Ok(Self::from(table_scan))
     }
 
     /// Apply a projection.
@@ -218,7 +238,7 @@ impl LogicalPlanBuilder {
 
         let schema = DFSchema::new(exprlist_to_fields(&projected_expr, input_schema)?)?;
 
-        Ok(Self::from(&LogicalPlan::Projection {
+        Ok(Self::from(LogicalPlan::Projection {
             expr: projected_expr,
             input: Arc::new(self.plan.clone()),
             schema: DFSchemaRef::new(schema),
@@ -228,7 +248,7 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(&self, expr: Expr) -> Result<Self> {
         let expr = normalize_col(expr, &self.plan.all_schemas())?;
-        Ok(Self::from(&LogicalPlan::Filter {
+        Ok(Self::from(LogicalPlan::Filter {
             predicate: expr,
             input: Arc::new(self.plan.clone()),
         }))
@@ -236,7 +256,7 @@ impl LogicalPlanBuilder {
 
     /// Apply a limit
     pub fn limit(&self, n: usize) -> Result<Self> {
-        Ok(Self::from(&LogicalPlan::Limit {
+        Ok(Self::from(LogicalPlan::Limit {
             n,
             input: Arc::new(self.plan.clone()),
         }))
@@ -245,7 +265,7 @@ impl LogicalPlanBuilder {
     /// Apply a sort
     pub fn sort(&self, exprs: impl IntoIterator<Item = Expr>) -> Result<Self> {
         let schemas = self.plan.all_schemas();
-        Ok(Self::from(&LogicalPlan::Sort {
+        Ok(Self::from(LogicalPlan::Sort {
             expr: normalize_cols(exprs, &schemas)?,
             input: Arc::new(self.plan.clone()),
         }))
@@ -253,11 +273,7 @@ impl LogicalPlanBuilder {
 
     /// Apply a union
     pub fn union(&self, plan: LogicalPlan) -> Result<Self> {
-        Ok(Self::from(&union_with_alias(
-            self.plan.clone(),
-            plan,
-            None,
-        )?))
+        Ok(Self::from(union_with_alias(self.plan.clone(), plan, None)?))
     }
 
     /// Apply a join with on constraint
@@ -291,7 +307,7 @@ impl LogicalPlanBuilder {
             &JoinConstraint::On,
         )?;
 
-        Ok(Self::from(&LogicalPlan::Join {
+        Ok(Self::from(LogicalPlan::Join {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             on,
@@ -327,7 +343,7 @@ impl LogicalPlanBuilder {
             &JoinConstraint::Using,
         )?;
 
-        Ok(Self::from(&LogicalPlan::Join {
+        Ok(Self::from(LogicalPlan::Join {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             on,
@@ -340,7 +356,7 @@ impl LogicalPlanBuilder {
     /// Apply a cross join
     pub fn cross_join(&self, right: &LogicalPlan) -> Result<Self> {
         let schema = self.plan.schema().join(right.schema())?;
-        Ok(Self::from(&LogicalPlan::CrossJoin {
+        Ok(Self::from(LogicalPlan::CrossJoin {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             schema: DFSchemaRef::new(schema),
@@ -349,30 +365,21 @@ impl LogicalPlanBuilder {
 
     /// Repartition
     pub fn repartition(&self, partitioning_scheme: Partitioning) -> Result<Self> {
-        Ok(Self::from(&LogicalPlan::Repartition {
+        Ok(Self::from(LogicalPlan::Repartition {
             input: Arc::new(self.plan.clone()),
             partitioning_scheme,
         }))
     }
 
-    /// Apply a window
-    ///
-    /// NOTE: this feature is under development and this API will be changing
-    ///
-    /// - https://github.com/apache/arrow-datafusion/issues/359 basic structure
-    /// - https://github.com/apache/arrow-datafusion/issues/298 empty over clause
-    /// - https://github.com/apache/arrow-datafusion/issues/299 with partition clause
-    /// - https://github.com/apache/arrow-datafusion/issues/360 with order by
-    /// - https://github.com/apache/arrow-datafusion/issues/361 with window frame
-    pub fn window(&self, window_expr: Vec<Expr>) -> Result<Self> {
+    /// Apply a window functions to extend the schema
+    pub fn window(&self, window_expr: impl IntoIterator<Item = Expr>) -> Result<Self> {
+        let window_expr = window_expr.into_iter().collect::<Vec<Expr>>();
         let all_expr = window_expr.iter();
         validate_unique_names("Windows", all_expr.clone(), self.plan.schema())?;
-
         let mut window_fields: Vec<DFField> =
             exprlist_to_fields(all_expr, self.plan.schema())?;
         window_fields.extend_from_slice(self.plan.schema().fields());
-
-        Ok(Self::from(&LogicalPlan::Window {
+        Ok(Self::from(LogicalPlan::Window {
             input: Arc::new(self.plan.clone()),
             window_expr,
             schema: Arc::new(DFSchema::new(window_fields)?),
@@ -397,7 +404,7 @@ impl LogicalPlanBuilder {
         let aggr_schema =
             DFSchema::new(exprlist_to_fields(all_expr, self.plan.schema())?)?;
 
-        Ok(Self::from(&LogicalPlan::Aggregate {
+        Ok(Self::from(LogicalPlan::Aggregate {
             input: Arc::new(self.plan.clone()),
             group_expr,
             aggr_expr,
@@ -414,7 +421,7 @@ impl LogicalPlanBuilder {
 
         let schema = LogicalPlan::explain_schema();
 
-        Ok(Self::from(&LogicalPlan::Explain {
+        Ok(Self::from(LogicalPlan::Explain {
             verbose,
             plan: Arc::new(self.plan.clone()),
             stringified_plans,

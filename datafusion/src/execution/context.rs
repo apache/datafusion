@@ -898,7 +898,7 @@ mod tests {
         logical_plan::{col, create_udf, sum, Expr},
     };
     use crate::{
-        datasource::{MemTable, TableType},
+        datasource::{empty::EmptyTable, MemTable, TableType},
         logical_plan::create_udaf,
         physical_plan::expressions::AvgAccumulator,
     };
@@ -1078,7 +1078,7 @@ mod tests {
         let ctx = create_ctx(&tmp_dir, partition_count)?;
 
         let table = ctx.table("test")?;
-        let logical_plan = LogicalPlanBuilder::from(&table.to_logical_plan())
+        let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
             .project(vec![col("c2")])?
             .build()?;
 
@@ -2571,7 +2571,7 @@ mod tests {
 
         let t = ctx.table("t")?;
 
-        let plan = LogicalPlanBuilder::from(&t.to_logical_plan())
+        let plan = LogicalPlanBuilder::from(t.to_logical_plan())
             .project(vec![
                 col("a"),
                 col("b"),
@@ -3335,6 +3335,19 @@ mod tests {
             "| Jorge  | 2018-12-13 12:12:10.011 |",
             "+--------+-------------------------+",
         ];
+        assert_batches_sorted_eq!(expected, &result);
+    }
+
+    #[tokio::test]
+    async fn query_empty_table() {
+        let mut ctx = ExecutionContext::new();
+        let empty_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())));
+        ctx.register_table("test_tbl", empty_table).unwrap();
+        let sql = "SELECT * FROM test_tbl";
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("Query empty table");
+        let expected = vec!["++", "++"];
         assert_batches_sorted_eq!(expected, &result);
     }
 

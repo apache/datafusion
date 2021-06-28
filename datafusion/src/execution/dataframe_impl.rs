@@ -63,7 +63,7 @@ impl DataFrame for DataFrameImpl {
 
     /// Create a projection based on arbitrary expressions
     fn select(&self, expr_list: Vec<Expr>) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .project(expr_list)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -71,7 +71,7 @@ impl DataFrame for DataFrameImpl {
 
     /// Create a filter based on a predicate expression
     fn filter(&self, predicate: Expr) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .filter(predicate)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -83,7 +83,7 @@ impl DataFrame for DataFrameImpl {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .aggregate(group_expr, aggr_expr)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -91,13 +91,17 @@ impl DataFrame for DataFrameImpl {
 
     /// Limit the number of rows
     fn limit(&self, n: usize) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan).limit(n)?.build()?;
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
+            .limit(n)?
+            .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
     }
 
     /// Sort by specified sorting expressions
     fn sort(&self, expr: Vec<Expr>) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan).sort(expr)?.build()?;
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
+            .sort(expr)?
+            .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
     }
 
@@ -109,7 +113,7 @@ impl DataFrame for DataFrameImpl {
         left_cols: &[&str],
         right_cols: &[&str],
     ) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .join(
                 &right.to_logical_plan(),
                 join_type,
@@ -124,7 +128,7 @@ impl DataFrame for DataFrameImpl {
         &self,
         partitioning_scheme: Partitioning,
     ) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .repartition(partitioning_scheme)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -161,7 +165,7 @@ impl DataFrame for DataFrameImpl {
     }
 
     fn explain(&self, verbose: bool) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .explain(verbose)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -173,7 +177,7 @@ impl DataFrame for DataFrameImpl {
     }
 
     fn union(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .union(dataframe.to_logical_plan())?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))

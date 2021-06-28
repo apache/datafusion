@@ -171,9 +171,6 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        // FIXME, for now we assume all the rows belong to the same partition, which will not be the
-        // case when partition_by is supported, in which case we'll parallelize the calls.
-        // See https://github.com/apache/arrow-datafusion/issues/299
         let values = self.evaluate_args(batch)?;
         let partition_points = self.evaluate_partition_points(
             batch.num_rows(),
@@ -209,8 +206,9 @@ fn find_ranges_in_range<'a>(
 ) -> &'a [Range<usize>] {
     let start_idx = sort_partition_points
         .partition_point(|sort_range| sort_range.start < partition_range.start);
-    let end_idx = sort_partition_points
-        .partition_point(|sort_range| sort_range.end <= partition_range.end);
+    let end_idx = start_idx
+        + sort_partition_points[start_idx..]
+            .partition_point(|sort_range| sort_range.end <= partition_range.end);
     &sort_partition_points[start_idx..end_idx]
 }
 
@@ -308,9 +306,6 @@ impl WindowExpr for AggregateWindowExpr {
 
     /// evaluate the window function values against the batch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        // FIXME, for now we assume all the rows belong to the same partition, which will not be the
-        // case when partition_by is supported, in which case we'll parallelize the calls.
-        // See https://github.com/apache/arrow-datafusion/issues/299
         match self.evaluation_mode() {
             WindowFrameUnits::Range => self.peer_based_evaluate(batch),
             WindowFrameUnits::Rows => self.row_based_evaluate(batch),
@@ -476,9 +471,6 @@ fn compute_window_aggregates(
     window_expr: Vec<Arc<dyn WindowExpr>>,
     batch: &RecordBatch,
 ) -> Result<Vec<ArrayRef>> {
-    // FIXME, for now we assume all the rows belong to the same partition, which will not be the
-    // case when partition_by is supported, in which case we'll parallelize the calls.
-    // See https://github.com/apache/arrow-datafusion/issues/299
     window_expr
         .iter()
         .map(|window_expr| window_expr.evaluate(batch))

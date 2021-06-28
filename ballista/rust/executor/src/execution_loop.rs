@@ -91,10 +91,14 @@ async fn run_received_tasks(
     task_status_sender: Sender<TaskStatus>,
     task: TaskDefinition,
 ) {
-    info!("Received task {:?}", task.task_id.as_ref().unwrap());
+    let task_id = task.task_id.unwrap();
+    let task_id_log = format!(
+        "{}/{}/{}",
+        task_id.job_id, task_id.stage_id, task_id.partition_id
+    );
+    info!("Received task {}", task_id_log);
     available_tasks_slots.fetch_sub(1, Ordering::SeqCst);
     let plan: Arc<dyn ExecutionPlan> = (&task.plan.unwrap()).try_into().unwrap();
-    let task_id = task.task_id.unwrap();
 
     tokio::spawn(async move {
         let execution_result = executor
@@ -105,7 +109,8 @@ async fn run_received_tasks(
                 plan,
             )
             .await;
-        info!("DONE WITH TASK: {:?}", execution_result);
+        info!("Done with task {}", task_id_log);
+        debug!("Statistics: {:?}", execution_result);
         available_tasks_slots.fetch_add(1, Ordering::SeqCst);
         let _ = task_status_sender.send(as_task_status(
             execution_result.map(|_| ()),
