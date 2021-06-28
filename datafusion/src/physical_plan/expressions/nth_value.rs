@@ -18,11 +18,14 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
-use arrow::array::{new_empty_array, new_null_array, ArrayRef};
+use arrow::array::{new_null_array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
+use arrow::record_batch::RecordBatch;
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// nth_value kind
@@ -111,25 +114,34 @@ impl BuiltInWindowFunctionExpr for NthValue {
         &self.name
     }
 
-    fn evaluate(&self, num_rows: usize, values: &[ArrayRef]) -> Result<ArrayRef> {
-        if values.is_empty() {
-            return Err(DataFusionError::Execution(format!(
-                "No arguments supplied to {}",
-                self.name()
-            )));
-        }
-        let value = &values[0];
-        if value.len() != num_rows {
-            return Err(DataFusionError::Execution(format!(
-                "Invalid data supplied to {}, expect {} rows, got {} rows",
-                self.name(),
-                num_rows,
-                value.len()
-            )));
-        }
-        if num_rows == 0 {
-            return Ok(new_empty_array(value.data_type()));
-        }
+    fn create_evaluator(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        let values = self
+            .expressions()
+            .iter()
+            .map(|e| e.evaluate(batch))
+            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Box::new(NthValueEvaluator {
+            kind: self.kind,
+            values,
+        }))
+    }
+}
+
+/// Value evaluator for nth_value functions
+pub(crate) struct NthValueEvaluator {
+    kind: NthValueKind,
+    values: Vec<ArrayRef>,
+}
+
+impl PartitionEvaluator for NthValueEvaluator {
+    fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
+        let value = &self.values[0];
+        let num_rows = partition.end - partition.start;
+        let value = value.slice(partition.start, num_rows);
         let index: usize = match self.kind {
             NthValueKind::First => 0,
             NthValueKind::Last => (num_rows as usize) - 1,
@@ -138,7 +150,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
         Ok(if index >= num_rows {
             new_null_array(value.data_type(), num_rows)
         } else {
-            let value = ScalarValue::try_from_array(value, index)?;
+            let value = ScalarValue::try_from_array(&value, index)?;
             value.to_array_of_size(num_rows)
         })
     }
@@ -157,8 +169,9 @@ mod tests {
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
-        let result = expr.evaluate(batch.num_rows(), &values)?;
-        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        let result = expr.create_evaluator(&batch)?.evaluate(vec![0..8])?;
+        assert_eq!(1, result.len());
+        let result = result[0].as_any().downcast_ref::<Int32Array>().unwrap();
         let result = result.values();
         assert_eq!(expected, result);
         Ok(())

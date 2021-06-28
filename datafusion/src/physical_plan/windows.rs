@@ -21,11 +21,12 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::physical_plan::{
     aggregates, common,
-    expressions::{Literal, NthValue, PhysicalSortExpr, RowNumber},
+    expressions::{dense_rank, rank, Literal, NthValue, PhysicalSortExpr, RowNumber},
     type_coercion::coerce,
-    window_functions::signature_for_built_in,
-    window_functions::BuiltInWindowFunctionExpr,
-    window_functions::{BuiltInWindowFunction, WindowFunction},
+    window_functions::{
+        signature_for_built_in, BuiltInWindowFunction, BuiltInWindowFunctionExpr,
+        WindowFunction,
+    },
     Accumulator, AggregateExpr, Distribution, ExecutionPlan, Partitioning, PhysicalExpr,
     RecordBatchStream, SendableRecordBatchStream, WindowExpr,
 };
@@ -84,7 +85,8 @@ pub fn create_window_expr(
             window_frame,
         }),
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr {
-            window: create_built_in_window_expr(fun, args, input_schema, name)?,
+            fun: fun.clone(),
+            expr: create_built_in_window_expr(fun, args, input_schema, name)?,
             partition_by: partition_by.to_vec(),
             order_by: order_by.to_vec(),
             window_frame,
@@ -100,6 +102,8 @@ fn create_built_in_window_expr(
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     match fun {
         BuiltInWindowFunction::RowNumber => Ok(Arc::new(RowNumber::new(name))),
+        BuiltInWindowFunction::Rank => Ok(Arc::new(rank(name))),
+        BuiltInWindowFunction::DenseRank => Ok(Arc::new(dense_rank(name))),
         BuiltInWindowFunction::NthValue => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
@@ -138,7 +142,8 @@ fn create_built_in_window_expr(
 /// A window expr that takes the form of a built in window function
 #[derive(Debug)]
 pub struct BuiltInWindowExpr {
-    window: Arc<dyn BuiltInWindowFunctionExpr>,
+    fun: BuiltInWindowFunction,
+    expr: Arc<dyn BuiltInWindowFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Option<WindowFrame>,
@@ -151,15 +156,15 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn name(&self) -> &str {
-        self.window.name()
+        self.expr.name()
     }
 
     fn field(&self) -> Result<Field> {
-        self.window.field()
+        self.expr.field()
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.window.expressions()
+        self.expr.expressions()
     }
 
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>] {
@@ -171,25 +176,17 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let values = self.evaluate_args(batch)?;
-        let partition_points = self.evaluate_partition_points(
-            batch.num_rows(),
-            &self.partition_columns(batch)?,
-        )?;
-        let results = partition_points
-            .iter()
-            .map(|partition_range| {
-                let start = partition_range.start;
-                let len = partition_range.end - start;
-                let values = values
-                    .iter()
-                    .map(|arr| arr.slice(start, len))
-                    .collect::<Vec<_>>();
-                self.window.evaluate(len, &values)
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .collect::<Vec<ArrayRef>>();
+        let evaluator = self.expr.create_evaluator(batch)?;
+        let num_rows = batch.num_rows();
+        let partition_points =
+            self.evaluate_partition_points(num_rows, &self.partition_columns(batch)?)?;
+        let results = if evaluator.include_rank() {
+            let sort_partition_points =
+                self.evaluate_partition_points(num_rows, &self.sort_columns(batch)?)?;
+            evaluator.evaluate_with_rank(partition_points, sort_partition_points)?
+        } else {
+            evaluator.evaluate(partition_points)?
+        };
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
         concat(&results).map_err(DataFusionError::ArrowError)
     }
@@ -200,7 +197,7 @@ impl WindowExpr for BuiltInWindowExpr {
 /// boundaries would align (what's sorted on [partition columns...] would definitely be sorted
 /// on finer columns), so this will use binary search to find ranges that are within the
 /// partition range and return the valid slice.
-fn find_ranges_in_range<'a>(
+pub(crate) fn find_ranges_in_range<'a>(
     partition_range: &Range<usize>,
     sort_partition_points: &'a [Range<usize>],
 ) -> &'a [Range<usize>] {
