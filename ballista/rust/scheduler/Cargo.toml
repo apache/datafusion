@@ -61,6 +61,7 @@ uuid = { version = "0.8", features = ["v4"] }
 
 [build-dependencies]
 configure_me_codegen = "0.4.0"
+tonic-build = { version = "0.4" }
 
 [package.metadata.configure_me.bin]
 scheduler = "scheduler_config_spec.toml"

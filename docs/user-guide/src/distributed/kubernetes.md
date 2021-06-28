@@ -28,6 +28,7 @@ The k8s deployment consists of:
 - k8s deployment for one or more executor processes
 - k8s service to route traffic to the schedulers
 - k8s persistent volume and persistent volume claims to make local data accessible to Ballista
+- _(optional)_ a [keda](http://keda.sh) instance for autoscaling the number of executors
 
 ## Limitations
 
@@ -163,8 +164,8 @@ spec:
           image: <your-image>
           command: ["/executor"]
           args:
-            - "--bind-port=50051",
-            - "--scheduler-host=ballista-scheduler",
+            - "--bind-port=50051"
+            - "--scheduler-host=ballista-scheduler"
             - "--scheduler-port=50050"
           ports:
             - containerPort: 50051
@@ -216,3 +217,48 @@ Run the following kubectl command to delete the cluster.
 ```bash
 kubectl delete -f cluster.yaml
 ```
+
+## Adding autoscaling for executors
+
+Ballista supports autoscaling for executors through [Keda](http://keda.sh). Keda allows scaling a deployment
+through custom metrics which are exposed through the Ballista scheduler, and it can even scale the number of
+executors down to 0 if there is no activity in the cluster.
+
+Keda can be installed in your kubernetes cluster through a single command line:
+
+```bash
+kubectl apply -f https://github.com/kedacore/keda/releases/download/v2.3.0/keda-2.3.0.yaml
+```
+
+Once you have deployed Keda on your cluster, you can now deploy a new kubernetes object called `ScaledObject`
+which will let Keda know how to scale your executors. In order to do that, copy the following YAML into a
+`scale.yaml` file:
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: ballista-executor
+spec:
+  scaleTargetRef:
+    name: ballista-executor
+  minReplicaCount: 0
+  maxReplicaCount: 5
+  triggers:
+  - type: external
+    metadata:
+      # Change this DNS if the scheduler isn't deployed in the "default" namespace
+      scalerAddress: ballista-scheduler.default.svc.cluster.local:50050
+```
+
+And then deploy it into the cluster:
+
+```bash
+kubectl apply -f scale.yaml
+```
+
+If the cluster is inactive, Keda will now scale the number of executors down to 0, and will scale them up when
+you launch a query. Please note that Keda will perform a scan once every 30 seconds, so it might take a bit to
+scale the executors.
+
+Please visit Keda's [documentation page](https://keda.sh/docs/2.3/concepts/scaling-deployments/) for more information.
