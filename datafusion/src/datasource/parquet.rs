@@ -42,11 +42,12 @@ pub struct ParquetTable {
 
 impl ParquetTable {
     /// Attempt to initialize a new `ParquetTable` from a file path.
-    pub fn try_new(path: &str, max_concurrency: usize) -> Result<Self> {
-        let parquet_exec = ParquetExec::try_from_path(path, None, None, 0, 1, None)?;
+    pub fn try_new(path: impl Into<String>, max_concurrency: usize) -> Result<Self> {
+        let path = path.into();
+        let parquet_exec = ParquetExec::try_from_path(&path, None, None, 0, 1, None)?;
         let schema = parquet_exec.schema();
         Ok(Self {
-            path: path.to_string(),
+            path,
             schema,
             statistics: parquet_exec.statistics().to_owned(),
             max_concurrency,

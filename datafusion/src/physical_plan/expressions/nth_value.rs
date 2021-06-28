@@ -45,12 +45,12 @@ pub struct NthValue {
 impl NthValue {
     /// Create a new FIRST_VALUE window aggregate function
     pub fn first_value(
-        name: String,
+        name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             expr,
             data_type,
             kind: NthValueKind::First,
@@ -59,12 +59,12 @@ impl NthValue {
 
     /// Create a new LAST_VALUE window aggregate function
     pub fn last_value(
-        name: String,
+        name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             expr,
             data_type,
             kind: NthValueKind::Last,
@@ -73,7 +73,7 @@ impl NthValue {
 
     /// Create a new NTH_VALUE window aggregate function
     pub fn nth_value(
-        name: String,
+        name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
         n: u32,
@@ -83,7 +83,7 @@ impl NthValue {
                 "nth_value expect n to be > 0".to_owned(),
             )),
             _ => Ok(Self {
-                name,
+                name: name.into(),
                 expr,
                 data_type,
                 kind: NthValueKind::Nth(n),
