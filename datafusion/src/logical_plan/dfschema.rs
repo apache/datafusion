@@ -158,8 +158,8 @@ impl DFSchema {
             }
         }
         Err(DataFusionError::Plan(format!(
-            "No field matches column '{}'",
-            col,
+            "No field matches column '{}'. Available fields: {}",
+            col, self
         )))
     }
 
