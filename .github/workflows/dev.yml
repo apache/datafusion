@@ -27,13 +27,18 @@ jobs:
     name: Lint C++, Python, R, Rust, Docker, RAT
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout Arrow
+        uses: actions/checkout@v2
+        with:
+          repository: apache/arrow
+          submodules: true
+          fetch-depth: 0
       - name: Setup Python
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v2
         with:
           python-version: 3.8
       - name: Setup Archery
-        run: pip install -e dev/archery[docker]
+        run: pip install -e dev/archery[lint]
       - name: Lint
         run: archery lint --rat
 
@@ -49,11 +54,8 @@ jobs:
         run: |
           # if you encounter error, try rerun the command below with --write instead of --check
           # and commit the changes
-          npx prettier@2.3.0 --check {ballista,datafusion,datafusion-examples,dev,docs,python}/**/*.md README.md DEVELOPERS.md
-      - name: Prettier check for Ballista UI
-        run: |
-          cd ballista/ui/scheduler
-          npx yarn
-          # if you encounter error, try rerun the command below with --write instead of --check
-          # and commit the changes
-          npx yarn prettier --check **/*.{ts,tsx}
+          npx prettier@2.3.2 --check \
+            {ballista,datafusion,datafusion-examples,docs,python}/**/*.md \
+            README.md \
+            DEVELOPERS.md \
+            ballista/**/*.{ts,tsx}

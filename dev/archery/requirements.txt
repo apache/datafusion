@@ -1,4 +1,0 @@
-click
-pygithub
-python-dotenv
-ruamel.yaml
