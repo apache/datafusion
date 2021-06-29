@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! QueryStageExec represents a section of a query plan that has consistent partitioning and
-//! can be executed as one unit with each partition being executed in parallel. The output of
-//! a query stage either forms the input of another query stage or can be the final result of
-//! a query.
+//! ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
+//! can be executed as one unit with each partition being executed in parallel. The output of each
+//! partition is re-partitioned and streamed to disk in Arrow IPC format. Future stages of the query
+//! will use the ShuffleReaderExec to read these results.
 
 use std::iter::Iterator;
 use std::path::PathBuf;
@@ -48,12 +48,12 @@ use log::info;
 use std::fs::File;
 use uuid::Uuid;
 
-/// QueryStageExec represents a section of a query plan that has consistent partitioning and
-/// can be executed as one unit with each partition being executed in parallel. The output of
-/// a query stage either forms the input of another query stage or can be the final result of
-/// a query.
+/// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
+/// can be executed as one unit with each partition being executed in parallel. The output of each
+/// partition is re-partitioned and streamed to disk in Arrow IPC format. Future stages of the query
+/// will use the ShuffleReaderExec to read these results.
 #[derive(Debug, Clone)]
-pub struct QueryStageExec {
+pub struct ShuffleWriterExec {
     /// Unique ID for the job (query) that this stage is a part of
     job_id: String,
     /// Unique query stage ID within the job
@@ -66,8 +66,8 @@ pub struct QueryStageExec {
     shuffle_output_partitioning: Option<Partitioning>,
 }
 
-impl QueryStageExec {
-    /// Create a new query stage
+impl ShuffleWriterExec {
+    /// Create a new shuffle writer
     pub fn try_new(
         job_id: String,
         stage_id: usize,
@@ -96,7 +96,7 @@ impl QueryStageExec {
 }
 
 #[async_trait]
-impl ExecutionPlan for QueryStageExec {
+impl ExecutionPlan for ShuffleWriterExec {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -118,7 +118,7 @@ impl ExecutionPlan for QueryStageExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert!(children.len() == 1);
-        Ok(Arc::new(QueryStageExec::try_new(
+        Ok(Arc::new(ShuffleWriterExec::try_new(
             self.job_id.clone(),
             self.stage_id,
             children[0].clone(),
@@ -379,7 +379,7 @@ mod tests {
     async fn test() -> Result<()> {
         let input_plan = create_input_plan()?;
         let work_dir = TempDir::new()?;
-        let query_stage = QueryStageExec::try_new(
+        let query_stage = ShuffleWriterExec::try_new(
             "jobOne".to_owned(),
             1,
             input_plan,
@@ -418,7 +418,7 @@ mod tests {
     async fn test_partitioned() -> Result<()> {
         let input_plan = create_input_plan()?;
         let work_dir = TempDir::new()?;
-        let query_stage = QueryStageExec::try_new(
+        let query_stage = ShuffleWriterExec::try_new(
             "jobOne".to_owned(),
             1,
             input_plan,

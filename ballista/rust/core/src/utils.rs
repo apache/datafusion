@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::{fs::File, pin::Pin};
 
 use crate::error::{BallistaError, Result};
-use crate::execution_plans::{QueryStageExec, UnresolvedShuffleExec};
+use crate::execution_plans::{ShuffleWriterExec, UnresolvedShuffleExec};
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
@@ -106,7 +106,7 @@ pub async fn collect_stream(
     Ok(batches)
 }
 
-pub fn produce_diagram(filename: &str, stages: &[Arc<QueryStageExec>]) -> Result<()> {
+pub fn produce_diagram(filename: &str, stages: &[Arc<ShuffleWriterExec>]) -> Result<()> {
     let write_file = File::create(filename)?;
     let mut w = BufWriter::new(&write_file);
     writeln!(w, "digraph G {{")?;
@@ -163,8 +163,8 @@ fn build_exec_plan_diagram(
         "CsvExec"
     } else if plan.as_any().downcast_ref::<FilterExec>().is_some() {
         "FilterExec"
-    } else if plan.as_any().downcast_ref::<QueryStageExec>().is_some() {
-        "QueryStageExec"
+    } else if plan.as_any().downcast_ref::<ShuffleWriterExec>().is_some() {
+        "ShuffleWriterExec"
     } else if plan
         .as_any()
         .downcast_ref::<UnresolvedShuffleExec>()
