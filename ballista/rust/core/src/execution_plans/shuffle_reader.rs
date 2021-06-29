@@ -36,7 +36,7 @@ use datafusion::{
 use futures::{future, Stream, StreamExt};
 use log::info;
 
-/// ShuffleReaderExec reads partitions that have already been materialized by a query stage
+/// ShuffleReaderExec reads partitions that have already been materialized by a ShuffleWriterExec
 /// being executed by an executor
 #[derive(Debug, Clone)]
 pub struct ShuffleReaderExec {

@@ -293,7 +293,7 @@ mod tests {
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::UInt32, false),
         ]);
-        LogicalPlanBuilder::scan_empty("test", &schema, None)?.build()
+        LogicalPlanBuilder::scan_empty(Some("test"), &schema, None)?.build()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
@@ -544,16 +544,16 @@ mod tests {
     #[test]
     fn optimize_plan_eq_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("b").eq(lit(true)))?
             .filter(col("c").eq(lit(false)))?
             .project(vec![col("a")])?
             .build()?;
 
         let expected = "\
-        Projection: #a\
-        \n  Filter: NOT #c\
-        \n    Filter: #b\
+        Projection: #test.a\
+        \n  Filter: NOT #test.c\
+        \n    Filter: #test.b\
         \n      TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -563,7 +563,7 @@ mod tests {
     #[test]
     fn optimize_plan_not_eq_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("b").not_eq(lit(true)))?
             .filter(col("c").not_eq(lit(false)))?
             .limit(1)?
@@ -571,10 +571,10 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Projection: #a\
+        Projection: #test.a\
         \n  Limit: 1\
-        \n    Filter: #c\
-        \n      Filter: NOT #b\
+        \n    Filter: #test.c\
+        \n      Filter: NOT #test.b\
         \n        TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -584,14 +584,14 @@ mod tests {
     #[test]
     fn optimize_plan_and_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("b").not_eq(lit(true)).and(col("c").eq(lit(true))))?
             .project(vec![col("a")])?
             .build()?;
 
         let expected = "\
-        Projection: #a\
-        \n  Filter: NOT #b And #c\
+        Projection: #test.a\
+        \n  Filter: NOT #test.b And #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -601,14 +601,14 @@ mod tests {
     #[test]
     fn optimize_plan_or_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("b").not_eq(lit(true)).or(col("c").eq(lit(false))))?
             .project(vec![col("a")])?
             .build()?;
 
         let expected = "\
-        Projection: #a\
-        \n  Filter: NOT #b Or NOT #c\
+        Projection: #test.a\
+        \n  Filter: NOT #test.b Or NOT #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -618,14 +618,14 @@ mod tests {
     #[test]
     fn optimize_plan_not_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("b").eq(lit(false)).not())?
             .project(vec![col("a")])?
             .build()?;
 
         let expected = "\
-        Projection: #a\
-        \n  Filter: #b\
+        Projection: #test.a\
+        \n  Filter: #test.b\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -635,12 +635,12 @@ mod tests {
     #[test]
     fn optimize_plan_support_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("d"), col("b").eq(lit(false))])?
             .build()?;
 
         let expected = "\
-        Projection: #a, #d, NOT #b\
+        Projection: #test.a, #test.d, NOT #test.b\
         \n  TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn optimize_plan_support_aggregate() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("c"), col("b")])?
             .aggregate(
                 vec![col("a"), col("c")],
@@ -659,8 +659,8 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Aggregate: groupBy=[[#a, #c]], aggr=[[MAX(#b), MIN(#b)]]\
-        \n  Projection: #a, #c, #b\
+        Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b), MIN(#test.b)]]\
+        \n  Projection: #test.a, #test.c, #test.b\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -691,7 +691,7 @@ mod tests {
             )))],
             fun: BuiltinScalarFunction::ToTimestamp,
         }];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -713,7 +713,7 @@ mod tests {
             )))],
             fun: BuiltinScalarFunction::ToTimestamp,
         }];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -732,7 +732,7 @@ mod tests {
             args: vec![],
             fun: BuiltinScalarFunction::ToTimestamp,
         }];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -751,7 +751,7 @@ mod tests {
             expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some("0".to_string())))),
             data_type: DataType::Int32,
         }];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -770,7 +770,7 @@ mod tests {
             expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some("".to_string())))),
             data_type: DataType::Int32,
         }];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -790,7 +790,7 @@ mod tests {
             fun: BuiltinScalarFunction::Now,
         }];
         let time = chrono::Utc::now();
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()
@@ -823,7 +823,7 @@ mod tests {
                 "t2".to_string(),
             ),
         ];
-        let plan = LogicalPlanBuilder::from(&table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
             .build()

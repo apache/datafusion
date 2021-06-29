@@ -18,13 +18,13 @@
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
 use crate::error::Result;
-use crate::physical_plan::{
-    window_functions::BuiltInWindowFunctionExpr, PhysicalExpr, WindowAccumulator,
-};
-use crate::scalar::ScalarValue;
+use crate::physical_plan::window_functions::PartitionEvaluator;
+use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
+use arrow::record_batch::RecordBatch;
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// row_number expression
@@ -35,8 +35,8 @@ pub struct RowNumber {
 
 impl RowNumber {
     /// Create a new ROW_NUMBER function
-    pub fn new(name: String) -> Self {
-        Self { name }
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into() }
     }
 }
 
@@ -57,49 +57,26 @@ impl BuiltInWindowFunctionExpr for RowNumber {
     }
 
     fn name(&self) -> &str {
-        self.name.as_str()
+        &self.name
     }
 
-    fn create_accumulator(&self) -> Result<Box<dyn WindowAccumulator>> {
-        Ok(Box::new(RowNumberAccumulator::new()))
-    }
-}
-
-#[derive(Debug)]
-struct RowNumberAccumulator {
-    row_number: u64,
-}
-
-impl RowNumberAccumulator {
-    /// new row_number accumulator
-    pub fn new() -> Self {
-        // row number is 1 based
-        Self { row_number: 1 }
+    fn create_evaluator(
+        &self,
+        _batch: &RecordBatch,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        Ok(Box::new(NumRowsEvaluator::default()))
     }
 }
 
-impl WindowAccumulator for RowNumberAccumulator {
-    fn scan(&mut self, _values: &[ScalarValue]) -> Result<Option<ScalarValue>> {
-        let result = Some(ScalarValue::UInt64(Some(self.row_number)));
-        self.row_number += 1;
-        Ok(result)
-    }
+#[derive(Default)]
+pub(crate) struct NumRowsEvaluator {}
 
-    fn scan_batch(
-        &mut self,
-        num_rows: usize,
-        _values: &[ArrayRef],
-    ) -> Result<Option<ArrayRef>> {
-        let new_row_number = self.row_number + (num_rows as u64);
-        // TODO: probably would be nice to have a (optimized) kernel for this at some point to
-        // generate an array like this.
-        let result = UInt64Array::from_iter_values(self.row_number..new_row_number);
-        self.row_number = new_row_number;
-        Ok(Some(Arc::new(result)))
-    }
-
-    fn evaluate(&self) -> Result<Option<ScalarValue>> {
-        Ok(None)
+impl PartitionEvaluator for NumRowsEvaluator {
+    fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
+        let num_rows = partition.end - partition.start;
+        Ok(Arc::new(UInt64Array::from_iter_values(
+            1..(num_rows as u64) + 1,
+        )))
     }
 }
 
@@ -117,27 +94,12 @@ mod tests {
         ]));
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
-
-        let row_number = Arc::new(RowNumber::new("row_number".to_owned()));
-
-        let mut acc = row_number.create_accumulator()?;
-        let expr = row_number.expressions();
-        let values = expr
-            .iter()
-            .map(|e| e.evaluate(&batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
-
-        let result = acc.scan_batch(batch.num_rows(), &values)?;
-        assert_eq!(true, result.is_some());
-
-        let result = result.unwrap();
-        let result = result.as_any().downcast_ref::<UInt64Array>().unwrap();
+        let row_number = RowNumber::new("row_number".to_owned());
+        let result = row_number.create_evaluator(&batch)?.evaluate(vec![0..8])?;
+        assert_eq!(1, result.len());
+        let result = result[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
-
-        let result = acc.evaluate()?;
-        assert_eq!(false, result.is_some());
         Ok(())
     }
 
@@ -148,27 +110,12 @@ mod tests {
         ]));
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
-
-        let row_number = Arc::new(RowNumber::new("row_number".to_owned()));
-
-        let mut acc = row_number.create_accumulator()?;
-        let expr = row_number.expressions();
-        let values = expr
-            .iter()
-            .map(|e| e.evaluate(&batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
-
-        let result = acc.scan_batch(batch.num_rows(), &values)?;
-        assert_eq!(true, result.is_some());
-
-        let result = result.unwrap();
-        let result = result.as_any().downcast_ref::<UInt64Array>().unwrap();
+        let row_number = RowNumber::new("row_number".to_owned());
+        let result = row_number.create_evaluator(&batch)?.evaluate(vec![0..8])?;
+        assert_eq!(1, result.len());
+        let result = result[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
-
-        let result = acc.evaluate()?;
-        assert_eq!(false, result.is_some());
         Ok(())
     }
 }

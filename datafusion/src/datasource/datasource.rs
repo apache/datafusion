@@ -108,6 +108,11 @@ pub trait TableProvider: Sync + Send {
     /// Statistics should be optional because not all data sources can provide statistics.
     fn statistics(&self) -> Statistics;
 
+    /// Returns whether statistics provided are exact values or estimates
+    fn has_exact_statistics(&self) -> bool {
+        false
+    }
+
     /// Tests whether the table provider can make use of a filter expression
     /// to optimise data retrieval.
     fn supports_filter_pushdown(

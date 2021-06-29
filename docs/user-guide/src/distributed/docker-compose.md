@@ -24,23 +24,33 @@ demonstrates how to start a cluster using a single process that acts as both a s
 volume mounted into the container so that Ballista can access the host file system.
 
 ```yaml
-version: "2.0"
+version: '2.2'
 services:
   etcd:
     image: quay.io/coreos/etcd:v3.4.9
     command: "etcd -advertise-client-urls http://etcd:2379 -listen-client-urls http://0.0.0.0:2379"
-    ports:
-      - "2379:2379"
-  ballista-executor:
-    image: ballistacompute/ballista-rust:0.4.2-SNAPSHOT
-    command: "/executor --bind-host 0.0.0.0 --bind-port 50051 --local"
-    environment:
-      - RUST_LOG=info
+  ballista-scheduler:
+    image: ballista:0.5.0-SNAPSHOT
+    command: "/scheduler --config-backend etcd --etcd-urls etcd:2379 --bind-host 0.0.0.0 --bind-port 50050"
     ports:
       - "50050:50050"
-      - "50051:50051"
+    environment:
+      - RUST_LOG=info
     volumes:
       - ./data:/data
+    depends_on:
+      - etcd
+  ballista-executor:
+    image: ballista:0.5.0-SNAPSHOT
+    command: "/executor --bind-host 0.0.0.0 --bind-port 50051 --scheduler-host ballista-scheduler"
+    ports:
+      - "50051:50051"
+    environment:
+      - RUST_LOG=info
+    volumes:
+      - ./data:/data
+    depends_on:
+      - ballista-scheduler
 ```
 
 With the above content saved to a `docker-compose.yaml` file, the following command can be used to start the single

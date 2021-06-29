@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::{fs::File, pin::Pin};
 
 use crate::error::{BallistaError, Result};
-use crate::execution_plans::{QueryStageExec, UnresolvedShuffleExec};
+use crate::execution_plans::{ShuffleWriterExec, UnresolvedShuffleExec};
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
@@ -40,15 +40,15 @@ use datafusion::arrow::{
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 use datafusion::logical_plan::Operator;
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
-use datafusion::physical_optimizer::merge_exec::AddMergeExec;
+use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::csv::CsvExec;
 use datafusion::physical_plan::expressions::{BinaryExpr, Column, Literal};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
 use datafusion::physical_plan::hash_join::HashJoinExec;
-use datafusion::physical_plan::merge::MergeExec;
 use datafusion::physical_plan::parquet::ParquetExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sort::SortExec;
@@ -106,7 +106,7 @@ pub async fn collect_stream(
     Ok(batches)
 }
 
-pub fn produce_diagram(filename: &str, stages: &[Arc<QueryStageExec>]) -> Result<()> {
+pub fn produce_diagram(filename: &str, stages: &[Arc<ShuffleWriterExec>]) -> Result<()> {
     let write_file = File::create(filename)?;
     let mut w = BufWriter::new(&write_file);
     writeln!(w, "digraph G {{")?;
@@ -163,8 +163,8 @@ fn build_exec_plan_diagram(
         "CsvExec"
     } else if plan.as_any().downcast_ref::<FilterExec>().is_some() {
         "FilterExec"
-    } else if plan.as_any().downcast_ref::<QueryStageExec>().is_some() {
-        "QueryStageExec"
+    } else if plan.as_any().downcast_ref::<ShuffleWriterExec>().is_some() {
+        "ShuffleWriterExec"
     } else if plan
         .as_any()
         .downcast_ref::<UnresolvedShuffleExec>()
@@ -177,8 +177,12 @@ fn build_exec_plan_diagram(
         .is_some()
     {
         "CoalesceBatchesExec"
-    } else if plan.as_any().downcast_ref::<MergeExec>().is_some() {
-        "MergeExec"
+    } else if plan
+        .as_any()
+        .downcast_ref::<CoalescePartitionsExec>()
+        .is_some()
+    {
+        "CoalescePartitionsExec"
     } else {
         println!("Unknown: {:?}", plan);
         "Unknown"
@@ -226,7 +230,7 @@ pub fn create_datafusion_context() -> ExecutionContext {
     // remove Repartition rule because that isn't supported yet
     let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
         Arc::new(CoalesceBatches::new()),
-        Arc::new(AddMergeExec::new()),
+        Arc::new(AddCoalescePartitionsExec::new()),
     ];
     let config = ExecutionConfig::new()
         .with_concurrency(1)

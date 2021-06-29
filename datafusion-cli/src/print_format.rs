@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_from_str_failure() {
-        assert_eq!(true, "pretty".parse::<PrintFormat>().is_err());
+        assert!("pretty".parse::<PrintFormat>().is_err());
     }
 
     #[test]

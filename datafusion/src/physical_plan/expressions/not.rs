@@ -127,9 +127,9 @@ mod tests {
     fn neg_op() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
 
-        let expr = not(col("a"), &schema)?;
+        let expr = not(col("a", &schema)?, &schema)?;
         assert_eq!(expr.data_type(&schema)?, DataType::Boolean);
-        assert_eq!(expr.nullable(&schema)?, true);
+        assert!(expr.nullable(&schema)?);
 
         let input = BooleanArray::from(vec![Some(true), None, Some(false)]);
         let expected = &BooleanArray::from(vec![Some(false), None, Some(true)]);
@@ -152,7 +152,7 @@ mod tests {
     fn neg_op_not_null() {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
 
-        let expr = not(col("a"), &schema);
+        let expr = not(col("a", &schema).unwrap(), &schema);
         assert!(expr.is_err());
     }
 }

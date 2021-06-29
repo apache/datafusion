@@ -315,9 +315,9 @@ impl RecordBatchStream for SortStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::merge::MergeExec;
     use crate::physical_plan::{
         collect,
         csv::{CsvExec, CsvReadOptions},
@@ -343,21 +343,21 @@ mod tests {
             vec![
                 // c1 string column
                 PhysicalSortExpr {
-                    expr: col("c1"),
+                    expr: col("c1", &schema)?,
                     options: SortOptions::default(),
                 },
                 // c2 uin32 column
                 PhysicalSortExpr {
-                    expr: col("c2"),
+                    expr: col("c2", &schema)?,
                     options: SortOptions::default(),
                 },
                 // c7 uin8 column
                 PhysicalSortExpr {
-                    expr: col("c7"),
+                    expr: col("c7", &schema)?,
                     options: SortOptions::default(),
                 },
             ],
-            Arc::new(MergeExec::new(Arc::new(csv))),
+            Arc::new(CoalescePartitionsExec::new(Arc::new(csv))),
         )?);
 
         let result: Vec<RecordBatch> = collect(sort_exec).await?;
@@ -417,14 +417,14 @@ mod tests {
         let sort_exec = Arc::new(SortExec::try_new(
             vec![
                 PhysicalSortExpr {
-                    expr: col("a"),
+                    expr: col("a", &schema)?,
                     options: SortOptions {
                         descending: true,
                         nulls_first: true,
                     },
                 },
                 PhysicalSortExpr {
-                    expr: col("b"),
+                    expr: col("b", &schema)?,
                     options: SortOptions {
                         descending: false,
                         nulls_first: false,

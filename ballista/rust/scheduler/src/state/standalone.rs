@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{sync::Arc, task::Poll, time::Duration};
+use std::{sync::Arc, task::Poll};
 
 use crate::state::ConfigBackendClient;
 use ballista_core::error::{ballista_error, BallistaError, Result};
@@ -89,13 +89,7 @@ impl ConfigBackendClient for StandaloneClient {
             .map_err(|e| ballista_error(&format!("sled error {:?}", e)))?)
     }
 
-    // TODO: support lease_time. See https://github.com/spacejam/sled/issues/1119 for how to approach this
-    async fn put(
-        &self,
-        key: String,
-        value: Vec<u8>,
-        _lease_time: Option<Duration>,
-    ) -> Result<()> {
+    async fn put(&self, key: String, value: Vec<u8>) -> Result<()> {
         self.db
             .insert(key, value)
             .map_err(|e| {
@@ -170,7 +164,7 @@ mod tests {
         let client = create_instance()?;
         let key = "key";
         let value = "value".as_bytes();
-        client.put(key.to_owned(), value.to_vec(), None).await?;
+        client.put(key.to_owned(), value.to_vec()).await?;
         assert_eq!(client.get(key).await?, value);
         Ok(())
     }
@@ -189,12 +183,8 @@ mod tests {
         let client = create_instance()?;
         let key = "key";
         let value = "value".as_bytes();
-        client
-            .put(format!("{}/1", key), value.to_vec(), None)
-            .await?;
-        client
-            .put(format!("{}/2", key), value.to_vec(), None)
-            .await?;
+        client.put(format!("{}/1", key), value.to_vec()).await?;
+        client.put(format!("{}/2", key), value.to_vec()).await?;
         assert_eq!(
             client.get_from_prefix(key).await?,
             vec![
@@ -211,13 +201,13 @@ mod tests {
         let key = "key";
         let value = "value".as_bytes();
         let mut watch: Box<dyn Watch> = client.watch(key.to_owned()).await?;
-        client.put(key.to_owned(), value.to_vec(), None).await?;
+        client.put(key.to_owned(), value.to_vec()).await?;
         assert_eq!(
             watch.next().await,
             Some(WatchEvent::Put(key.to_owned(), value.to_owned()))
         );
         let value2 = "value2".as_bytes();
-        client.put(key.to_owned(), value2.to_vec(), None).await?;
+        client.put(key.to_owned(), value2.to_vec()).await?;
         assert_eq!(
             watch.next().await,
             Some(WatchEvent::Put(key.to_owned(), value2.to_owned()))

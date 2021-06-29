@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use ballista_core::error::BallistaError;
-use ballista_core::execution_plans::QueryStageExec;
+use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::utils;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::ExecutionPlan;
@@ -51,8 +51,13 @@ impl Executor {
         part: usize,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<RecordBatch, BallistaError> {
-        let exec =
-            QueryStageExec::try_new(job_id, stage_id, plan, self.work_dir.clone(), None)?;
+        let exec = ShuffleWriterExec::try_new(
+            job_id,
+            stage_id,
+            plan,
+            self.work_dir.clone(),
+            None,
+        )?;
         let mut stream = exec.execute(part).await?;
         let batches = utils::collect_stream(&mut stream).await?;
         // the output should be a single batch containing metadata (path and statistics)

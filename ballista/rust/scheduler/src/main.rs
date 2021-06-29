@@ -18,6 +18,7 @@
 //! Ballista Rust scheduler binary.
 
 use anyhow::{Context, Result};
+use ballista_scheduler::externalscaler::external_scaler_server::ExternalScalerServer;
 use futures::future::{self, Either, TryFutureExt};
 use hyper::{server::conn::AddrStream, service::make_service_fn, Server};
 use std::convert::Infallible;
@@ -72,8 +73,11 @@ async fn start_server(
             let scheduler_grpc_server =
                 SchedulerGrpcServer::new(scheduler_server.clone());
 
+            let keda_scaler = ExternalScalerServer::new(scheduler_server.clone());
+
             let mut tonic = TonicServer::builder()
                 .add_service(scheduler_grpc_server)
+                .add_service(keda_scaler)
                 .into_service();
             let mut warp = warp::service(get_routes(scheduler_server));
 

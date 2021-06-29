@@ -25,21 +25,21 @@ use std::sync::Arc;
 use ballista_core::datasource::DfTableAdapter;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::{
-    execution_plans::{QueryStageExec, ShuffleReaderExec, UnresolvedShuffleExec},
+    execution_plans::{ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec},
     serde::scheduler::PartitionLocation,
 };
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
-use datafusion::physical_optimizer::merge_exec::AddMergeExec;
+use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::HashJoinExec;
-use datafusion::physical_plan::merge::MergeExec;
 use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::ExecutionPlan;
 use log::info;
 
-type PartialQueryStageResult = (Arc<dyn ExecutionPlan>, Vec<Arc<QueryStageExec>>);
+type PartialQueryStageResult = (Arc<dyn ExecutionPlan>, Vec<Arc<ShuffleWriterExec>>);
 
 pub struct DistributedPlanner {
     next_stage_id: usize,
@@ -58,16 +58,16 @@ impl Default for DistributedPlanner {
 }
 
 impl DistributedPlanner {
-    /// Returns a vector of ExecutionPlans, where the root node is a [QueryStageExec].
+    /// Returns a vector of ExecutionPlans, where the root node is a [ShuffleWriterExec].
     /// Plans that depend on the input of other plans will have leaf nodes of type [UnresolvedShuffleExec].
-    /// A [QueryStageExec] is created whenever the partitioning changes.
+    /// A [ShuffleWriterExec] is created whenever the partitioning changes.
     ///
     /// Returns an empty vector if the execution_plan doesn't need to be sliced into several stages.
     pub fn plan_query_stages(
         &mut self,
         job_id: &str,
         execution_plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<Vec<Arc<QueryStageExec>>> {
+    ) -> Result<Vec<Arc<ShuffleWriterExec>>> {
         info!("planning query stages");
         let (new_plan, mut stages) =
             self.plan_query_stages_internal(job_id, execution_plan)?;
@@ -101,12 +101,15 @@ impl DistributedPlanner {
             // remove Repartition rule because that isn't supported yet
             let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
                 Arc::new(CoalesceBatches::new()),
-                Arc::new(AddMergeExec::new()),
+                Arc::new(AddCoalescePartitionsExec::new()),
             ];
             let config = ExecutionConfig::new().with_physical_optimizer_rules(rules);
             let ctx = ExecutionContext::with_config(config);
             Ok((ctx.create_physical_plan(&adapter.logical_plan)?, stages))
-        } else if let Some(merge) = execution_plan.as_any().downcast_ref::<MergeExec>() {
+        } else if let Some(merge) = execution_plan
+            .as_any()
+            .downcast_ref::<CoalescePartitionsExec>()
+        {
             let query_stage = create_query_stage(
                 job_id,
                 self.next_stage_id(),
@@ -225,8 +228,8 @@ fn create_query_stage(
     job_id: &str,
     stage_id: usize,
     plan: Arc<dyn ExecutionPlan>,
-) -> Result<Arc<QueryStageExec>> {
-    Ok(Arc::new(QueryStageExec::try_new(
+) -> Result<Arc<ShuffleWriterExec>> {
+    Ok(Arc::new(ShuffleWriterExec::try_new(
         job_id.to_owned(),
         stage_id,
         plan,
@@ -244,8 +247,10 @@ mod test {
     use ballista_core::serde::protobuf;
     use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
     use datafusion::physical_plan::sort::SortExec;
+    use datafusion::physical_plan::{
+        coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
+    };
     use datafusion::physical_plan::{displayable, ExecutionPlan};
-    use datafusion::physical_plan::{merge::MergeExec, projection::ProjectionExec};
     use std::convert::TryInto;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -280,13 +285,13 @@ mod test {
         }
 
         /* Expected result:
-        QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=1
+        ShuffleWriterExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=1
          HashAggregateExec: groupBy=["l_returnflag"], aggrExpr=["SUM(l_extendedprice Multiply Int64(1)) [\"l_extendedprice * CAST(1 AS Float64)\"]"]
           CsvExec: testdata/lineitem; partitions=2
-        QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=2
-         MergeExec
+        ShuffleWriterExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=2
+         CoalescePartitionsExec
           UnresolvedShuffleExec: stages=[1]
-        QueryStageExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=3
+        ShuffleWriterExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=3
          SortExec { input: ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_ext
           ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_extendedprice Multip
            HashAggregateExec: groupBy=["l_returnflag"], aggrExpr=["SUM(l_extendedprice Multiply Int64(1)) [\"l_extendedprice * CAST(1 AS Float64)\"]"]
@@ -309,7 +314,7 @@ mod test {
         assert_eq!(unresolved_shuffle.query_stage_ids, vec![2]);
 
         let merge_exec = stages[1].children()[0].clone();
-        let merge_exec = downcast_exec!(merge_exec, MergeExec);
+        let merge_exec = downcast_exec!(merge_exec, CoalescePartitionsExec);
 
         let unresolved_shuffle = merge_exec.children()[0].clone();
         let unresolved_shuffle =

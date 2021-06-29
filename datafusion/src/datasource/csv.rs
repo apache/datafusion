@@ -59,11 +59,12 @@ pub struct CsvFile {
 
 impl CsvFile {
     /// Attempt to initialize a new `CsvFile` from a file path
-    pub fn try_new(path: &str, options: CsvReadOptions) -> Result<Self> {
+    pub fn try_new(path: impl Into<String>, options: CsvReadOptions) -> Result<Self> {
+        let path = path.into();
         let schema = Arc::new(match options.schema {
             Some(s) => s.clone(),
             None => {
-                let filenames = common::build_file_list(path, options.file_extension)?;
+                let filenames = common::build_file_list(&path, options.file_extension)?;
                 if filenames.is_empty() {
                     return Err(DataFusionError::Plan(format!(
                         "No files found at {path} with file extension {file_extension}",
@@ -76,7 +77,7 @@ impl CsvFile {
         });
 
         Ok(Self {
-            source: Source::Path(path.to_string()),
+            source: Source::Path(path),
             schema,
             has_header: options.has_header,
             delimiter: options.delimiter,

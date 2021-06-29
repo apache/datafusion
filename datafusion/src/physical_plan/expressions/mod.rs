@@ -42,6 +42,7 @@ mod negative;
 mod not;
 mod nth_value;
 mod nullif;
+mod rank;
 mod row_number;
 mod sum;
 mod try_cast;
@@ -49,7 +50,9 @@ mod try_cast;
 pub use average::{avg_return_type, Avg, AvgAccumulator};
 pub use binary::{binary, binary_operator_data_type, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{cast, cast_with_options, CastExpr};
+pub use cast::{
+    cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
+};
 pub use column::{col, Column};
 pub use count::Count;
 pub use in_list::{in_list, InListExpr};
@@ -61,9 +64,11 @@ pub use negative::{negative, NegativeExpr};
 pub use not::{not, NotExpr};
 pub use nth_value::NthValue;
 pub use nullif::{nullif_func, SUPPORTED_NULLIF_TYPES};
+pub use rank::{dense_rank, rank};
 pub use row_number::RowNumber;
 pub use sum::{sum_return_type, Sum};
 pub use try_cast::{try_cast, TryCastExpr};
+
 /// returns the name of the state
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{}[{}]", name, state_name)
@@ -124,8 +129,11 @@ mod tests {
 
             let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
 
-            let agg =
-                Arc::new(<$OP>::new(col("a"), "bla".to_string(), $EXPECTED_DATATYPE));
+            let agg = Arc::new(<$OP>::new(
+                col("a", &schema)?,
+                "bla".to_string(),
+                $EXPECTED_DATATYPE,
+            ));
             let actual = aggregate(&batch, agg)?;
             let expected = ScalarValue::from($EXPECTED);
 

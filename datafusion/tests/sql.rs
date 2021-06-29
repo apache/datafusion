@@ -27,7 +27,11 @@ extern crate datafusion;
 use arrow::{array::*, datatypes::TimeUnit};
 use arrow::{datatypes::Int32Type, datatypes::Int64Type, record_batch::RecordBatch};
 use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
+    datatypes::{
+        ArrowNativeType, ArrowPrimitiveType, ArrowTimestampType, DataType, Field, Schema,
+        SchemaRef, TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampNanosecondType, TimestampSecondType,
+    },
     util::display::array_value_to_string,
 };
 
@@ -802,25 +806,206 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
     let sql = "select \
-    c2, \
-    sum(c3) over (), \
-    avg(c3) over (), \
-    count(c3) over (), \
-    max(c3) over (), \
-    min(c3) over (), \
-    first_value(c3) over (), \
-    last_value(c3) over (), \
-    nth_value(c3, 2) over ()
+    c9, \
+    count(c5) over (), \
+    max(c5) over (), \
+    min(c5) over (), \
+    first_value(c5) over (), \
+    last_value(c5) over (), \
+    nth_value(c5, 2) over () \
     from aggregate_test_100 \
-    order by c2
+    order by c9 \
     limit 5";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
-        vec!["1", "781", "7.81", "100", "125", "-117", "1", "30", "-40"],
+        vec![
+            "28774375",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "63044568",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "141047417",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "141680161",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+        vec![
+            "145294611",
+            "100",
+            "2143473091",
+            "-2141999138",
+            "2033001162",
+            "61035129",
+            "706441268",
+        ],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_window_with_partition_by() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "select \
+    c9, \
+    sum(cast(c4 as Int)) over (partition by c3), \
+    avg(cast(c4 as Int)) over (partition by c3), \
+    count(cast(c4 as Int)) over (partition by c3), \
+    max(cast(c4 as Int)) over (partition by c3), \
+    min(cast(c4 as Int)) over (partition by c3), \
+    first_value(cast(c4 as Int)) over (partition by c3), \
+    last_value(cast(c4 as Int)) over (partition by c3), \
+    nth_value(cast(c4 as Int), 2) over (partition by c3) \
+    from aggregate_test_100 \
+    order by c9 \
+    limit 5";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec![
+            "28774375", "-16110", "-16110", "1", "-16110", "-16110", "-16110", "-16110",
+            "NULL",
+        ],
+        vec![
+            "63044568", "3917", "3917", "1", "3917", "3917", "3917", "3917", "NULL",
+        ],
+        vec![
+            "141047417",
+            "-38455",
+            "-19227.5",
+            "2",
+            "-16974",
+            "-21481",
+            "-16974",
+            "-21481",
+            "-21481",
+        ],
+        vec![
+            "141680161",
+            "-1114",
+            "-1114",
+            "1",
+            "-1114",
+            "-1114",
+            "-1114",
+            "-1114",
+            "NULL",
+        ],
+        vec![
+            "145294611",
+            "15673",
+            "15673",
+            "1",
+            "15673",
+            "15673",
+            "15673",
+            "15673",
+            "NULL",
+        ],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_window_with_order_by() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "select \
+    c9, \
+    sum(c5) over (order by c9), \
+    avg(c5) over (order by c9), \
+    count(c5) over (order by c9), \
+    max(c5) over (order by c9), \
+    min(c5) over (order by c9), \
+    first_value(c5) over (order by c9), \
+    last_value(c5) over (order by c9), \
+    nth_value(c5, 2) over (order by c9) \
+    from aggregate_test_100 \
+    order by c9 \
+    limit 5";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec![
+            "28774375",
+            "61035129",
+            "61035129",
+            "1",
+            "61035129",
+            "61035129",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "63044568",
+            "-47938237",
+            "-23969118.5",
+            "2",
+            "61035129",
+            "-108973366",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "141047417",
+            "575165281",
+            "191721760.33333334",
+            "3",
+            "623103518",
+            "-108973366",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "141680161",
+            "-1352462829",
+            "-338115707.25",
+            "4",
+            "623103518",
+            "-1927628110",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
+        vec![
+            "145294611",
+            "-3251637940",
+            "-650327588",
+            "5",
+            "623103518",
+            "-1927628110",
+            "61035129",
+            "2025611582",
+            "-108973366",
+        ],
     ];
     assert_eq!(expected, actual);
     Ok(())
@@ -901,6 +1086,188 @@ async fn csv_query_cast_literal() -> Result<()> {
     let expected = vec![
         vec!["0.9294097332465232", "1"],
         vec!["0.3114712539863804", "1"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_millis() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema.clone(),
+        vec![Arc::new(Int64Array::from(vec![
+            1235865600000,
+            1235865660000,
+            1238544000000,
+        ]))],
+    )?;
+    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let sql = "SELECT to_timestamp_millis(ts) FROM t1 LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2009-03-01 00:00:00"],
+        vec!["2009-03-01 00:01:00"],
+        vec!["2009-04-01 00:00:00"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_micros() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema.clone(),
+        vec![Arc::new(Int64Array::from(vec![
+            1235865600000000,
+            1235865660000000,
+            1238544000000000,
+        ]))],
+    )?;
+    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let sql = "SELECT to_timestamp_micros(ts) FROM t1 LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2009-03-01 00:00:00"],
+        vec!["2009-03-01 00:01:00"],
+        vec!["2009-04-01 00:00:00"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_seconds() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema.clone(),
+        vec![Arc::new(Int64Array::from(vec![
+            1235865600, 1235865660, 1238544000,
+        ]))],
+    )?;
+    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let sql = "SELECT to_timestamp_seconds(ts) FROM t1 LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2009-03-01 00:00:00"],
+        vec!["2009-03-01 00:01:00"],
+        vec!["2009-04-01 00:00:00"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
+
+    // Original column is nanos, convert to millis and check timestamp
+    let sql = "SELECT to_timestamp_millis(ts) FROM ts_data LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190"],
+        vec!["2020-09-08 12:42:29.190"],
+        vec!["2020-09-08 11:42:29.190"],
+    ];
+    assert_eq!(expected, actual);
+
+    let sql = "SELECT to_timestamp_micros(ts) FROM ts_data LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190855"],
+        vec!["2020-09-08 12:42:29.190855"],
+        vec!["2020-09-08 11:42:29.190855"],
+    ];
+    assert_eq!(expected, actual);
+
+    let sql = "SELECT to_timestamp_seconds(ts) FROM ts_data LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29"],
+        vec!["2020-09-08 12:42:29"],
+        vec!["2020-09-08 11:42:29"],
+    ];
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("ts_secs", make_timestamp_table::<TimestampSecondType>()?)?;
+
+    // Original column is seconds, convert to millis and check timestamp
+    let sql = "SELECT to_timestamp_millis(ts) FROM ts_secs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29"],
+        vec!["2020-09-08 12:42:29"],
+        vec!["2020-09-08 11:42:29"],
+    ];
+    assert_eq!(expected, actual);
+
+    // Original column is seconds, convert to micros and check timestamp
+    let sql = "SELECT to_timestamp_micros(ts) FROM ts_secs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
+
+    // to nanos
+    let sql = "SELECT to_timestamp(ts) FROM ts_secs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_cast_timestamp_micros_to_others() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table(
+        "ts_micros",
+        make_timestamp_table::<TimestampMicrosecondType>()?,
+    )?;
+
+    // Original column is micros, convert to millis and check timestamp
+    let sql = "SELECT to_timestamp_millis(ts) FROM ts_micros LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190"],
+        vec!["2020-09-08 12:42:29.190"],
+        vec!["2020-09-08 11:42:29.190"],
+    ];
+    assert_eq!(expected, actual);
+
+    // Original column is micros, convert to seconds and check timestamp
+    let sql = "SELECT to_timestamp_seconds(ts) FROM ts_micros LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29"],
+        vec!["2020-09-08 12:42:29"],
+        vec!["2020-09-08 11:42:29"],
+    ];
+    assert_eq!(expected, actual);
+
+    // Original column is micros, convert to nanos and check timestamp
+    let sql = "SELECT to_timestamp(ts) FROM ts_micros LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["2020-09-08 13:42:29.190855"],
+        vec!["2020-09-08 12:42:29.190855"],
+        vec!["2020-09-08 11:42:29.190855"],
     ];
     assert_eq!(expected, actual);
     Ok(())
@@ -1590,12 +1957,12 @@ async fn csv_explain() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
     let actual = execute(&mut ctx, sql).await;
-    let expected = vec![
-        vec![
-            "logical_plan",
-            "Projection: #c1\n  Filter: #c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=None"
-        ]
-    ];
+    let expected = vec![vec![
+        "logical_plan",
+        "Projection: #aggregate_test_100.c1\
+            \n  Filter: #aggregate_test_100.c2 Gt Int64(10)\
+            \n    TableScan: aggregate_test_100 projection=None",
+    ]];
     assert_eq!(expected, actual);
 
     // Also, expect same result with lowercase explain
@@ -1623,8 +1990,8 @@ async fn csv_explain_plans() {
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: #c1 [c1:Utf8]",
-        "    Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]",
+        "  Projection: #aggregate_test_100.c1 [c1:Utf8]",
+        "    Filter: #aggregate_test_100.c2 Gt Int64(10) [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]",
         "      TableScan: aggregate_test_100 projection=None [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]",
     ];
     let formatted = plan.display_indent_schema().to_string();
@@ -1638,8 +2005,8 @@ async fn csv_explain_plans() {
     // Verify the text format of the plan
     let expected = vec![
         "Explain",
-        "  Projection: #c1",
-        "    Filter: #c2 Gt Int64(10)",
+        "  Projection: #aggregate_test_100.c1",
+        "    Filter: #aggregate_test_100.c2 Gt Int64(10)",
         "      TableScan: aggregate_test_100 projection=None",
     ];
     let formatted = plan.display_indent().to_string();
@@ -1658,9 +2025,9 @@ async fn csv_explain_plans() {
         "  {",
         "    graph[label=\"LogicalPlan\"]",
         "    2[shape=box label=\"Explain\"]",
-        "    3[shape=box label=\"Projection: #c1\"]",
+        "    3[shape=box label=\"Projection: #aggregate_test_100.c1\"]",
         "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]",
+        "    4[shape=box label=\"Filter: #aggregate_test_100.c2 Gt Int64(10)\"]",
         "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
         "    5[shape=box label=\"TableScan: aggregate_test_100 projection=None\"]",
         "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
@@ -1669,9 +2036,9 @@ async fn csv_explain_plans() {
         "  {",
         "    graph[label=\"Detailed LogicalPlan\"]",
         "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
-        "    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]",
+        "    8[shape=box label=\"Projection: #aggregate_test_100.c1\\nSchema: [c1:Utf8]\"]",
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]",
+        "    9[shape=box label=\"Filter: #aggregate_test_100.c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
         "    10[shape=box label=\"TableScan: aggregate_test_100 projection=None\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
@@ -1698,8 +2065,8 @@ async fn csv_explain_plans() {
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: #c1 [c1:Utf8]",
-        "    Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32]",
+        "  Projection: #aggregate_test_100.c1 [c1:Utf8]",
+        "    Filter: #aggregate_test_100.c2 Gt Int64(10) [c1:Utf8, c2:Int32]",
         "      TableScan: aggregate_test_100 projection=Some([0, 1]) [c1:Utf8, c2:Int32]",
     ];
     let formatted = plan.display_indent_schema().to_string();
@@ -1713,8 +2080,8 @@ async fn csv_explain_plans() {
     // Verify the text format of the plan
     let expected = vec![
         "Explain",
-        "  Projection: #c1",
-        "    Filter: #c2 Gt Int64(10)",
+        "  Projection: #aggregate_test_100.c1",
+        "    Filter: #aggregate_test_100.c2 Gt Int64(10)",
         "      TableScan: aggregate_test_100 projection=Some([0, 1])",
     ];
     let formatted = plan.display_indent().to_string();
@@ -1733,9 +2100,9 @@ async fn csv_explain_plans() {
         "  {",
         "    graph[label=\"LogicalPlan\"]",
         "    2[shape=box label=\"Explain\"]",
-        "    3[shape=box label=\"Projection: #c1\"]",
+        "    3[shape=box label=\"Projection: #aggregate_test_100.c1\"]",
         "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]",
+        "    4[shape=box label=\"Filter: #aggregate_test_100.c2 Gt Int64(10)\"]",
         "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
         "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\"]",
         "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
@@ -1744,9 +2111,9 @@ async fn csv_explain_plans() {
         "  {",
         "    graph[label=\"Detailed LogicalPlan\"]",
         "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
-        "    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]",
+        "    8[shape=box label=\"Projection: #aggregate_test_100.c1\\nSchema: [c1:Utf8]\"]",
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]",
+        "    9[shape=box label=\"Filter: #aggregate_test_100.c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
         "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
@@ -1775,9 +2142,13 @@ async fn csv_explain_plans() {
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
     // Since the plan contains path that are environmentally dependant (e.g. full path of the test file), only verify important content
     assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
-    assert!(actual.contains("Projection: #c1"), "Actual: '{}'", actual);
     assert!(
-        actual.contains("Filter: #c2 Gt Int64(10)"),
+        actual.contains("Projection: #aggregate_test_100.c1"),
+        "Actual: '{}'",
+        actual
+    );
+    assert!(
+        actual.contains("Filter: #aggregate_test_100.c2 Gt Int64(10)"),
         "Actual: '{}'",
         actual
     );
@@ -1798,7 +2169,11 @@ async fn csv_explain_verbose() {
     // pain). Instead just check for a few key pieces.
     assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
     assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
-    assert!(actual.contains("#c2 Gt Int64(10)"), "Actual: '{}'", actual);
+    assert!(
+        actual.contains("#aggregate_test_100.c2 Gt Int64(10)"),
+        "Actual: '{}'",
+        actual
+    );
 }
 
 #[tokio::test]
@@ -1821,8 +2196,8 @@ async fn csv_explain_verbose_plans() {
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: #c1 [c1:Utf8]",
-        "    Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]",
+        "  Projection: #aggregate_test_100.c1 [c1:Utf8]",
+        "    Filter: #aggregate_test_100.c2 Gt Int64(10) [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]",
         "      TableScan: aggregate_test_100 projection=None [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]",
     ];
     let formatted = plan.display_indent_schema().to_string();
@@ -1836,8 +2211,8 @@ async fn csv_explain_verbose_plans() {
     // Verify the text format of the plan
     let expected = vec![
         "Explain",
-        "  Projection: #c1",
-        "    Filter: #c2 Gt Int64(10)",
+        "  Projection: #aggregate_test_100.c1",
+        "    Filter: #aggregate_test_100.c2 Gt Int64(10)",
         "      TableScan: aggregate_test_100 projection=None",
     ];
     let formatted = plan.display_indent().to_string();
@@ -1856,9 +2231,9 @@ async fn csv_explain_verbose_plans() {
         "  {",
         "    graph[label=\"LogicalPlan\"]",
         "    2[shape=box label=\"Explain\"]",
-        "    3[shape=box label=\"Projection: #c1\"]",
+        "    3[shape=box label=\"Projection: #aggregate_test_100.c1\"]",
         "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]",
+        "    4[shape=box label=\"Filter: #aggregate_test_100.c2 Gt Int64(10)\"]",
         "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
         "    5[shape=box label=\"TableScan: aggregate_test_100 projection=None\"]",
         "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
@@ -1867,9 +2242,9 @@ async fn csv_explain_verbose_plans() {
         "  {",
         "    graph[label=\"Detailed LogicalPlan\"]",
         "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
-        "    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]",
+        "    8[shape=box label=\"Projection: #aggregate_test_100.c1\\nSchema: [c1:Utf8]\"]",
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]",
+        "    9[shape=box label=\"Filter: #aggregate_test_100.c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
         "    10[shape=box label=\"TableScan: aggregate_test_100 projection=None\\nSchema: [c1:Utf8, c2:Int32, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:Int64, c10:Utf8, c11:Float32, c12:Float64, c13:Utf8]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
@@ -1896,8 +2271,8 @@ async fn csv_explain_verbose_plans() {
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: #c1 [c1:Utf8]",
-        "    Filter: #c2 Gt Int64(10) [c1:Utf8, c2:Int32]",
+        "  Projection: #aggregate_test_100.c1 [c1:Utf8]",
+        "    Filter: #aggregate_test_100.c2 Gt Int64(10) [c1:Utf8, c2:Int32]",
         "      TableScan: aggregate_test_100 projection=Some([0, 1]) [c1:Utf8, c2:Int32]",
     ];
     let formatted = plan.display_indent_schema().to_string();
@@ -1911,8 +2286,8 @@ async fn csv_explain_verbose_plans() {
     // Verify the text format of the plan
     let expected = vec![
         "Explain",
-        "  Projection: #c1",
-        "    Filter: #c2 Gt Int64(10)",
+        "  Projection: #aggregate_test_100.c1",
+        "    Filter: #aggregate_test_100.c2 Gt Int64(10)",
         "      TableScan: aggregate_test_100 projection=Some([0, 1])",
     ];
     let formatted = plan.display_indent().to_string();
@@ -1931,9 +2306,9 @@ async fn csv_explain_verbose_plans() {
         "  {",
         "    graph[label=\"LogicalPlan\"]",
         "    2[shape=box label=\"Explain\"]",
-        "    3[shape=box label=\"Projection: #c1\"]",
+        "    3[shape=box label=\"Projection: #aggregate_test_100.c1\"]",
         "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    4[shape=box label=\"Filter: #c2 Gt Int64(10)\"]",
+        "    4[shape=box label=\"Filter: #aggregate_test_100.c2 Gt Int64(10)\"]",
         "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
         "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\"]",
         "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
@@ -1942,9 +2317,9 @@ async fn csv_explain_verbose_plans() {
         "  {",
         "    graph[label=\"Detailed LogicalPlan\"]",
         "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
-        "    8[shape=box label=\"Projection: #c1\\nSchema: [c1:Utf8]\"]",
+        "    8[shape=box label=\"Projection: #aggregate_test_100.c1\\nSchema: [c1:Utf8]\"]",
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    9[shape=box label=\"Filter: #c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]",
+        "    9[shape=box label=\"Filter: #aggregate_test_100.c2 Gt Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
         "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
@@ -1979,12 +2354,12 @@ async fn csv_explain_verbose_plans() {
     );
     assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
     assert!(
-        actual.contains("FilterExec: CAST(c2 AS Int64) > 10"),
+        actual.contains("FilterExec: CAST(c2@1 AS Int64) > 10"),
         "Actual: '{}'",
         actual
     );
     assert!(
-        actual.contains("ProjectionExec: expr=[c1]"),
+        actual.contains("ProjectionExec: expr=[c1@0 as c1]"),
         "Actual: '{}'",
         actual
     );
@@ -2322,17 +2697,33 @@ async fn like() -> Result<()> {
     Ok(())
 }
 
-fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
+fn make_timestamp_table<A>() -> Result<Arc<MemTable>>
+where
+    A: ArrowTimestampType,
+{
     let schema = Arc::new(Schema::new(vec![
-        Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), false),
+        Field::new("ts", DataType::Timestamp(A::get_time_unit(), None), false),
         Field::new("value", DataType::Int32, true),
     ]));
 
-    let mut builder = TimestampNanosecondArray::builder(3);
+    let mut builder = PrimitiveBuilder::<A>::new(3);
 
-    builder.append_value(1599572549190855000)?; // 2020-09-08T13:42:29.190855+00:00
-    builder.append_value(1599568949190855000)?; // 2020-09-08T12:42:29.190855+00:00
-    builder.append_value(1599565349190855000)?; // 2020-09-08T11:42:29.190855+00:00
+    let nanotimestamps = vec![
+        1599572549190855000i64, // 2020-09-08T13:42:29.190855+00:00
+        1599568949190855000,    // 2020-09-08T12:42:29.190855+00:00
+        1599565349190855000,    //2020-09-08T11:42:29.190855+00:00
+    ]; // 2020-09-08T11:42:29.190855+00:00
+    let divisor = match A::get_time_unit() {
+        TimeUnit::Nanosecond => 1,
+        TimeUnit::Microsecond => 1000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Second => 1_000_000_000,
+    };
+    for ts in nanotimestamps {
+        builder.append_value(
+            <A as ArrowPrimitiveType>::Native::from_i64(ts / divisor).unwrap(),
+        )?;
+    }
 
     let data = RecordBatch::try_new(
         schema.clone(),
@@ -2345,12 +2736,61 @@ fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
     Ok(Arc::new(table))
 }
 
+fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
+    make_timestamp_table::<TimestampNanosecondType>()
+}
+
 #[tokio::test]
 async fn to_timestamp() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp('2020-09-08T12:00:00+00:00')";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["2"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_timestamp_millis() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table(
+        "ts_data",
+        make_timestamp_table::<TimestampMillisecondType>()?,
+    )?;
+
+    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_millis('2020-09-08T12:00:00+00:00')";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["2"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_timestamp_micros() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table(
+        "ts_data",
+        make_timestamp_table::<TimestampMicrosecondType>()?,
+    )?;
+
+    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_micros('2020-09-08T12:00:00+00:00')";
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![vec!["2"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_timestamp_seconds() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
+
+    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')";
     let actual = execute(&mut ctx, sql).await;
 
     let expected = vec![vec!["2"]];
@@ -3361,15 +3801,15 @@ async fn test_physical_plan_display_indent() {
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
     let expected = vec![
         "GlobalLimitExec: limit=10",
-        "  SortExec: [the_min DESC]",
+        "  SortExec: [the_min@2 DESC]",
         "    MergeExec",
-        "      ProjectionExec: expr=[c1, MAX(c12), MIN(c12) as the_min]",
-        "        HashAggregateExec: mode=FinalPartitioned, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
+        "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(c12), MIN(aggregate_test_100.c12)@2 as the_min]",
+        "        HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(c12), MIN(c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",
-        "            RepartitionExec: partitioning=Hash([Column { name: \"c1\" }], 3)",
-        "              HashAggregateExec: mode=Partial, gby=[c1], aggr=[MAX(c12), MIN(c12)]",
+        "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 3)",
+        "              HashAggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(c12), MIN(c12)]",
         "                CoalesceBatchesExec: target_batch_size=4096",
-        "                  FilterExec: c12 < CAST(10 AS Float64)",
+        "                  FilterExec: c12@1 < CAST(10 AS Float64)",
         "                    RepartitionExec: partitioning=RoundRobinBatch(3)",
         "                      CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
         ];
@@ -3408,17 +3848,17 @@ async fn test_physical_plan_display_indent_multi_children() {
 
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
     let expected = vec![
-        "ProjectionExec: expr=[c1]",
+        "ProjectionExec: expr=[c1@0 as c1]",
         "  CoalesceBatchesExec: target_batch_size=4096",
-        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(\"c1\", \"c2\")]",
+        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c2\", index: 0 })]",
         "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\" }], 3)",
-        "          ProjectionExec: expr=[c1]",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 3)",
+        "          ProjectionExec: expr=[c1@0 as c1]",
         "            RepartitionExec: partitioning=RoundRobinBatch(3)",
         "              CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
         "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c2\" }], 3)",
-        "          ProjectionExec: expr=[c1 as c2]",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 3)",
+        "          ProjectionExec: expr=[c1@0 as c2]",
         "            RepartitionExec: partitioning=RoundRobinBatch(3)",
         "              CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
     ];

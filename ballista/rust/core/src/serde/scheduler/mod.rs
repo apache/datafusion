@@ -134,7 +134,8 @@ impl PartitionStats {
             false,
         )
     }
-    fn arrow_struct_fields(self) -> Vec<Field> {
+
+    pub fn arrow_struct_fields(self) -> Vec<Field> {
         vec![
             Field::new("num_rows", DataType::UInt64, false),
             Field::new("num_batches", DataType::UInt64, false),
@@ -142,7 +143,7 @@ impl PartitionStats {
         ]
     }
 
-    pub fn to_arrow_arrayref(&self) -> Result<Arc<StructArray>, BallistaError> {
+    pub fn to_arrow_arrayref(self) -> Result<Arc<StructArray>, BallistaError> {
         let mut field_builders = Vec::new();
 
         let mut num_rows_builder = UInt64Builder::new(1);

@@ -44,9 +44,13 @@ pub struct Count {
 
 impl Count {
     /// Create a new COUNT aggregate function.
-    pub fn new(expr: Arc<dyn PhysicalExpr>, name: String, data_type: DataType) -> Self {
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
         Self {
-            name,
+            name: name.into(),
             expr,
             data_type,
             nullable: true,

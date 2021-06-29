@@ -18,13 +18,14 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{
-    window_functions::BuiltInWindowFunctionExpr, PhysicalExpr, WindowAccumulator,
-};
+use crate::physical_plan::window_functions::PartitionEvaluator;
+use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
+use arrow::array::{new_null_array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
+use arrow::record_batch::RecordBatch;
 use std::any::Any;
-use std::convert::TryFrom;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// nth_value kind
@@ -47,12 +48,12 @@ pub struct NthValue {
 impl NthValue {
     /// Create a new FIRST_VALUE window aggregate function
     pub fn first_value(
-        name: String,
+        name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             expr,
             data_type,
             kind: NthValueKind::First,
@@ -61,12 +62,12 @@ impl NthValue {
 
     /// Create a new LAST_VALUE window aggregate function
     pub fn last_value(
-        name: String,
+        name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             expr,
             data_type,
             kind: NthValueKind::Last,
@@ -75,7 +76,7 @@ impl NthValue {
 
     /// Create a new NTH_VALUE window aggregate function
     pub fn nth_value(
-        name: String,
+        name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
         n: u32,
@@ -85,7 +86,7 @@ impl NthValue {
                 "nth_value expect n to be > 0".to_owned(),
             )),
             _ => Ok(Self {
-                name,
+                name: name.into(),
                 expr,
                 data_type,
                 kind: NthValueKind::Nth(n),
@@ -113,54 +114,45 @@ impl BuiltInWindowFunctionExpr for NthValue {
         &self.name
     }
 
-    fn create_accumulator(&self) -> Result<Box<dyn WindowAccumulator>> {
-        Ok(Box::new(NthValueAccumulator::try_new(
-            self.kind,
-            self.data_type.clone(),
-        )?))
+    fn create_evaluator(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        let values = self
+            .expressions()
+            .iter()
+            .map(|e| e.evaluate(batch))
+            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Box::new(NthValueEvaluator {
+            kind: self.kind,
+            values,
+        }))
     }
 }
 
-#[derive(Debug)]
-struct NthValueAccumulator {
+/// Value evaluator for nth_value functions
+pub(crate) struct NthValueEvaluator {
     kind: NthValueKind,
-    offset: u32,
-    value: ScalarValue,
+    values: Vec<ArrayRef>,
 }
 
-impl NthValueAccumulator {
-    /// new count accumulator
-    pub fn try_new(kind: NthValueKind, data_type: DataType) -> Result<Self> {
-        Ok(Self {
-            kind,
-            offset: 0,
-            // null value of that data_type by default
-            value: ScalarValue::try_from(&data_type)?,
+impl PartitionEvaluator for NthValueEvaluator {
+    fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
+        let value = &self.values[0];
+        let num_rows = partition.end - partition.start;
+        let value = value.slice(partition.start, num_rows);
+        let index: usize = match self.kind {
+            NthValueKind::First => 0,
+            NthValueKind::Last => (num_rows as usize) - 1,
+            NthValueKind::Nth(n) => (n as usize) - 1,
+        };
+        Ok(if index >= num_rows {
+            new_null_array(value.data_type(), num_rows)
+        } else {
+            let value = ScalarValue::try_from_array(&value, index)?;
+            value.to_array_of_size(num_rows)
         })
-    }
-}
-
-impl WindowAccumulator for NthValueAccumulator {
-    fn scan(&mut self, values: &[ScalarValue]) -> Result<Option<ScalarValue>> {
-        self.offset += 1;
-        match self.kind {
-            NthValueKind::Last => {
-                self.value = values[0].clone();
-            }
-            NthValueKind::First if self.offset == 1 => {
-                self.value = values[0].clone();
-            }
-            NthValueKind::Nth(n) if self.offset == n => {
-                self.value = values[0].clone();
-            }
-            _ => {}
-        }
-
-        Ok(None)
-    }
-
-    fn evaluate(&self) -> Result<Option<ScalarValue>> {
-        Ok(Some(self.value.clone()))
     }
 }
 
@@ -168,72 +160,66 @@ impl WindowAccumulator for NthValueAccumulator {
 mod tests {
     use super::*;
     use crate::error::Result;
-    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::expressions::Column;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
-    fn test_i32_result(expr: Arc<NthValue>, expected: i32) -> Result<()> {
+    fn test_i32_result(expr: NthValue, expected: Vec<i32>) -> Result<()> {
         let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
-
-        let mut acc = expr.create_accumulator()?;
-        let expr = expr.expressions();
-        let values = expr
-            .iter()
-            .map(|e| e.evaluate(&batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
-        let result = acc.scan_batch(batch.num_rows(), &values)?;
-        assert_eq!(false, result.is_some());
-        let result = acc.evaluate()?;
-        assert_eq!(Some(ScalarValue::Int32(Some(expected))), result);
+        let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
+        let result = expr.create_evaluator(&batch)?.evaluate(vec![0..8])?;
+        assert_eq!(1, result.len());
+        let result = result[0].as_any().downcast_ref::<Int32Array>().unwrap();
+        let result = result.values();
+        assert_eq!(expected, result);
         Ok(())
     }
 
     #[test]
     fn first_value() -> Result<()> {
-        let first_value = Arc::new(NthValue::first_value(
+        let first_value = NthValue::first_value(
             "first_value".to_owned(),
-            col("arr"),
+            Arc::new(Column::new("arr", 0)),
             DataType::Int32,
-        ));
-        test_i32_result(first_value, 1)?;
+        );
+        test_i32_result(first_value, vec![1; 8])?;
         Ok(())
     }
 
     #[test]
     fn last_value() -> Result<()> {
-        let last_value = Arc::new(NthValue::last_value(
+        let last_value = NthValue::last_value(
             "last_value".to_owned(),
-            col("arr"),
+            Arc::new(Column::new("arr", 0)),
             DataType::Int32,
-        ));
-        test_i32_result(last_value, 8)?;
+        );
+        test_i32_result(last_value, vec![8; 8])?;
         Ok(())
     }
 
     #[test]
     fn nth_value_1() -> Result<()> {
-        let nth_value = Arc::new(NthValue::nth_value(
+        let nth_value = NthValue::nth_value(
             "nth_value".to_owned(),
-            col("arr"),
+            Arc::new(Column::new("arr", 0)),
             DataType::Int32,
             1,
-        )?);
-        test_i32_result(nth_value, 1)?;
+        )?;
+        test_i32_result(nth_value, vec![1; 8])?;
         Ok(())
     }
 
     #[test]
     fn nth_value_2() -> Result<()> {
-        let nth_value = Arc::new(NthValue::nth_value(
+        let nth_value = NthValue::nth_value(
             "nth_value".to_owned(),
-            col("arr"),
+            Arc::new(Column::new("arr", 0)),
             DataType::Int32,
             2,
-        )?);
-        test_i32_result(nth_value, -2)?;
+        )?;
+        test_i32_result(nth_value, vec![-2; 8])?;
         Ok(())
     }
 }

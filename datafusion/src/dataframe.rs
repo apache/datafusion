@@ -188,6 +188,8 @@ pub trait DataFrame: Send + Sync {
         right_cols: &[&str],
     ) -> Result<Arc<dyn DataFrame>>;
 
+    // TODO: add join_using
+
     /// Repartition a DataFrame based on a logical partitioning scheme.
     ///
     /// ```

@@ -197,7 +197,7 @@ impl<'a, 'b> PlanVisitor for GraphvizVisitor<'a, 'b> {
         // id [label="foo"]
         let label = if self.with_schema {
             format!(
-                "{}\\nSchema: {}",
+                r"{}\nSchema: {}",
                 plan.display(),
                 display_schema(&plan.schema().as_ref().to_owned().into())
             )
