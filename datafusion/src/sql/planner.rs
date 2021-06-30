@@ -1362,15 +1362,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             let leading_field = leading_field
                 .as_ref()
-                .map(|dt| format!("{}", dt))
+                .map(|dt| dt.to_string())
                 .unwrap_or("second".to_string());
 
-            let unit = parts.next().map(|x| x.to_string()).unwrap_or(leading_field);
+            let unit = parts
+                .next()
+                .map(|part| part.to_string())
+                .unwrap_or(leading_field);
 
-            let (diff_month, diff_days, diff_millis) = calculate_from_part(
-                interval_period_str.unwrap(),
-                &unit,
-            )?;
+            let (diff_month, diff_days, diff_millis) =
+                calculate_from_part(interval_period_str.unwrap(), &unit)?;
 
             result_month += diff_month as i64;
 

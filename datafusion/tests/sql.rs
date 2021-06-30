@@ -3307,7 +3307,7 @@ async fn test_interval_expressions() -> Result<()> {
         "interval '5 day'",
         "0 years 0 mons 5 days 0 hours 0 mins 0.00 secs"
     );
-    // Hour is ignored, this matches PostgreSQL 
+    // Hour is ignored, this matches PostgreSQL
     test_expression!(
         "interval '5 day' hour",
         "0 years 0 mons 5 days 0 hours 0 mins 0.00 secs"
