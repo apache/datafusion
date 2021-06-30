@@ -404,11 +404,22 @@ impl ExecutionPlan for WindowAggExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
+        // because we can have repartitioning using the partition keys
+        // this would be either 1 or more than 1 depending on the presense of
+        // repartitioning
+        self.input.output_partitioning()
     }
 
     fn required_child_distribution(&self) -> Distribution {
-        Distribution::SinglePartition
+        if self
+            .window_expr()
+            .iter()
+            .all(|expr| expr.partition_by().is_empty())
+        {
+            Distribution::SinglePartition
+        } else {
+            Distribution::UnspecifiedDistribution
+        }
     }
 
     fn with_new_children(
@@ -428,22 +439,7 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
-                "WindowAggExec invalid partition {}",
-                partition
-            )));
-        }
-
-        // window needs to operate on a single partition currently
-        if 1 != self.input.output_partitioning().partition_count() {
-            return Err(DataFusionError::Internal(
-                "WindowAggExec requires a single input partition".to_owned(),
-            ));
-        }
-
         let input = self.input.execute(partition).await?;
-
         let stream = Box::pin(WindowAggStream::new(
             self.schema.clone(),
             self.window_expr.clone(),
@@ -578,38 +574,6 @@ mod tests {
 
         let input = Arc::new(csv);
         Ok((input, schema))
-    }
-
-    #[tokio::test]
-    async fn window_function_input_partition() -> Result<()> {
-        let (input, schema) = create_test_schema(4)?;
-
-        let window_exec = Arc::new(WindowAggExec::try_new(
-            vec![create_window_expr(
-                &WindowFunction::AggregateFunction(AggregateFunction::Count),
-                "count".to_owned(),
-                &[col("c3", &schema)?],
-                &[],
-                &[],
-                Some(WindowFrame::default()),
-                schema.as_ref(),
-            )?],
-            input,
-            schema.clone(),
-        )?);
-
-        let result = collect(window_exec).await;
-
-        assert!(result.is_err());
-        if let Some(DataFusionError::Internal(msg)) = result.err() {
-            assert_eq!(
-                msg,
-                "WindowAggExec requires a single input partition".to_owned()
-            );
-        } else {
-            unreachable!("Expect an internal error to happen");
-        }
-        Ok(())
     }
 
     #[tokio::test]
