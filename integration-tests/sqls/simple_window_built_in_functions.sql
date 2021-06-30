@@ -16,11 +16,12 @@
 
 SELECT
   c9,
-  row_number() OVER (PARTITION BY c2 ORDER BY c9) AS row_number,
-  count(c3) OVER (PARTITION BY c2 ORDER BY c9) AS count_c3,
-  avg(c3) OVER (PARTITION BY c2 ORDER BY c9) AS avg_c3_by_c2,
-  sum(c3) OVER (PARTITION BY c2 ORDER BY c9) AS sum_c3_by_c2,
-  max(c3) OVER (PARTITION BY c2 ORDER BY c9) AS max_c3_by_c2,
-  min(c3) OVER (PARTITION BY c2 ORDER BY c9) AS min_c3_by_c2
+  row_number() OVER (ORDER BY c9) row_num,
+  first_value(c9) OVER (ORDER BY c9) first_c9,
+  first_value(c9) OVER (ORDER BY c9 DESC) first_c9_desc,
+  last_value(c9) OVER (ORDER BY c9) last_c9,
+  last_value(c9) OVER (ORDER BY c9 DESC) last_c9_desc,
+  nth_value(c9, 2) OVER (ORDER BY c9) second_c9,
+  nth_value(c9, 2) OVER (ORDER BY c9 DESC) second_c9_desc
 FROM test
 ORDER BY c9;
