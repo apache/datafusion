@@ -3379,7 +3379,7 @@ mod tests {
 
         fn create_physical_expr(
             &self,
-            _e: &Expr,
+            _expr: &Expr,
             _input_dfschema: &crate::logical_plan::DFSchema,
             _input_schema: &Schema,
             _ctx_state: &ExecutionContextState,

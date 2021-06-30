@@ -183,14 +183,14 @@ pub trait PhysicalPlanner {
     /// Create a physical expression from a logical expression
     /// suitable for evaluation
     ///
-    /// `e`: the expression to convert
+    /// `expr`: the expression to convert
     ///
     /// `input_dfschema`: the logical plan schema for evaluating `e`
     ///
     /// `input_schema`: the physical schema for evaluating `e`
     fn create_physical_expr(
         &self,
-        e: &Expr,
+        expr: &Expr,
         input_dfschema: &DFSchema,
         input_schema: &Schema,
         ctx_state: &ExecutionContextState,
@@ -254,12 +254,18 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
     /// `input_schema`: the physical schema for evaluating `e`
     fn create_physical_expr(
         &self,
-        e: &Expr,
+        expr: &Expr,
         input_dfschema: &DFSchema,
         input_schema: &Schema,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.create_physical_expr(e, input_dfschema, input_schema, ctx_state)
+        DefaultPhysicalPlanner::create_physical_expr(
+            self,
+            expr,
+            input_dfschema,
+            input_schema,
+            ctx_state,
+        )
     }
 }
 
