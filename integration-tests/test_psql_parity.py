@@ -74,7 +74,7 @@ class PsqlParityTest(unittest.TestCase):
     def test_parity(self):
         root = Path(os.path.dirname(__file__)) / "sqls"
         files = set(root.glob("*.sql"))
-        self.assertEqual(len(files), 9, msg="tests are missed")
+        self.assertEqual(len(files), 11, msg="tests are missed")
         for fname in files:
             with self.subTest(fname=fname):
                 datafusion_output = pd.read_csv(
@@ -82,7 +82,7 @@ class PsqlParityTest(unittest.TestCase):
                 )
                 psql_output = pd.read_csv(io.BytesIO(generate_csv_from_psql(fname)))
                 self.assertTrue(
-                    np.allclose(datafusion_output, psql_output),
+                    np.allclose(datafusion_output, psql_output, equal_nan=True),
                     msg=f"datafusion output=\n{datafusion_output}, psql_output=\n{psql_output}",
                 )
 
