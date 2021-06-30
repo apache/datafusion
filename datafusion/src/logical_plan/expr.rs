@@ -83,7 +83,12 @@ impl Column {
         }
     }
 
-    /// Normalize Column with qualifier based on provided dataframe schemas.
+    /// Normalizes `self` if is unqualified (has no relation name)
+    /// with an explicit qualifier from the first matching input
+    /// schemas.
+    ///
+    /// For example, `foo` will be normalized to `t.foo` if there is a
+    /// column named `foo` in a relation named `t` found in `schemas`
     pub fn normalize(self, schemas: &[&DFSchemaRef]) -> Result<Self> {
         if self.relation.is_some() {
             return Ok(self);
@@ -1113,7 +1118,8 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     }
 }
 
-/// Recursively normalize all Column expressions in a given expression tree
+/// Recursively call [`Column::normalize`] on all Column expressions
+/// in the `expr` expression tree.
 pub fn normalize_col(e: Expr, schemas: &[&DFSchemaRef]) -> Result<Expr> {
     struct ColumnNormalizer<'a, 'b> {
         schemas: &'a [&'b DFSchemaRef],
