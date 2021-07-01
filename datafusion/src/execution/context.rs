@@ -3376,6 +3376,16 @@ mod tests {
                 "query not supported".to_string(),
             ))
         }
+
+        fn create_physical_expr(
+            &self,
+            _expr: &Expr,
+            _input_dfschema: &crate::logical_plan::DFSchema,
+            _input_schema: &Schema,
+            _ctx_state: &ExecutionContextState,
+        ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
+            unimplemented!()
+        }
     }
 
     struct MyQueryPlanner {}

@@ -20,8 +20,6 @@
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-use crate::execution::context::ExecutionContextState;
-use crate::logical_plan::LogicalPlan;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::{
     error::{DataFusionError, Result},
@@ -122,16 +120,8 @@ impl SQLMetric {
     }
 }
 
-/// Physical query planner that converts a `LogicalPlan` to an
-/// `ExecutionPlan` suitable for execution.
-pub trait PhysicalPlanner {
-    /// Create a physical plan from a logical plan
-    fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        ctx_state: &ExecutionContextState,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
-}
+/// Physical planner interface
+pub use self::planner::PhysicalPlanner;
 
 /// `ExecutionPlan` represent nodes in the DataFusion Physical Plan.
 ///

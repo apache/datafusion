@@ -39,9 +39,7 @@ use crate::physical_plan::sort::SortExec;
 use crate::physical_plan::udf;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{hash_utils, Partitioning};
-use crate::physical_plan::{
-    AggregateExpr, ExecutionPlan, PhysicalExpr, PhysicalPlanner, WindowExpr,
-};
+use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::sql::utils::{generate_sort_key, window_expr_common_partition_keys};
@@ -172,16 +170,51 @@ fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
     }
 }
 
+/// Physical query planner that converts a `LogicalPlan` to an
+/// `ExecutionPlan` suitable for execution.
+pub trait PhysicalPlanner {
+    /// Create a physical plan from a logical plan
+    fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Create a physical expression from a logical expression
+    /// suitable for evaluation
+    ///
+    /// `expr`: the expression to convert
+    ///
+    /// `input_dfschema`: the logical plan schema for evaluating `e`
+    ///
+    /// `input_schema`: the physical schema for evaluating `e`
+    fn create_physical_expr(
+        &self,
+        expr: &Expr,
+        input_dfschema: &DFSchema,
+        input_schema: &Schema,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn PhysicalExpr>>;
+}
+
 /// This trait exposes the ability to plan an [`ExecutionPlan`] out of a [`LogicalPlan`].
 pub trait ExtensionPlanner {
     /// Create a physical plan for a [`UserDefinedLogicalNode`].
-    /// This errors when the planner knows how to plan the concrete implementation of `node`
-    /// but errors while doing so, and `None` when the planner does not know how to plan the `node`
-    /// and wants to delegate the planning to another [`ExtensionPlanner`].
+    ///
+    /// `input_dfschema`: the logical plan schema for the inputs to this node
+    ///
+    /// Returns an error when the planner knows how to plan the concrete
+    /// implementation of `node` but errors while doing so.
+    ///
+    /// Returns `None` when the planner does not know how to plan the
+    /// `node` and wants to delegate the planning to another
+    /// [`ExtensionPlanner`].
     fn plan_extension(
         &self,
+        planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
-        inputs: &[Arc<dyn ExecutionPlan>],
+        logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
         ctx_state: &ExecutionContextState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
 }
@@ -209,6 +242,30 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan = self.create_initial_plan(logical_plan, ctx_state)?;
         self.optimize_plan(plan, ctx_state)
+    }
+
+    /// Create a physical expression from a logical expression
+    /// suitable for evaluation
+    ///
+    /// `e`: the expression to convert
+    ///
+    /// `input_dfschema`: the logical plan schema for evaluating `e`
+    ///
+    /// `input_schema`: the physical schema for evaluating `e`
+    fn create_physical_expr(
+        &self,
+        expr: &Expr,
+        input_dfschema: &DFSchema,
+        input_schema: &Schema,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        DefaultPhysicalPlanner::create_physical_expr(
+            self,
+            expr,
+            input_dfschema,
+            input_schema,
+            ctx_state,
+        )
     }
 }
 
@@ -721,7 +778,7 @@ impl DefaultPhysicalPlanner {
                 )))
             }
             LogicalPlan::Extension { node } => {
-                let inputs = node
+                let physical_inputs = node
                     .inputs()
                     .into_iter()
                     .map(|input_plan| self.create_initial_plan(input_plan, ctx_state))
@@ -733,7 +790,13 @@ impl DefaultPhysicalPlanner {
                         if let Some(plan) = maybe_plan {
                             Ok(Some(plan))
                         } else {
-                            planner.plan_extension(node.as_ref(), &inputs, ctx_state)
+                            planner.plan_extension(
+                                self,
+                                node.as_ref(),
+                                &node.inputs(),
+                                &physical_inputs,
+                                ctx_state,
+                            )
                         }
                     },
                 )?;
@@ -1644,8 +1707,10 @@ mod tests {
         /// Create a physical plan for an extension node
         fn plan_extension(
             &self,
+            _planner: &dyn PhysicalPlanner,
             _node: &dyn UserDefinedLogicalNode,
-            _inputs: &[Arc<dyn ExecutionPlan>],
+            _logical_inputs: &[&LogicalPlan],
+            _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _ctx_state: &ExecutionContextState,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             Ok(Some(Arc::new(NoOpExecutionPlan {
