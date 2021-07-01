@@ -17,6 +17,8 @@
 SELECT
   c9,
   row_number() OVER (ORDER BY c9) row_num,
+  lead(c9) OVER (ORDER BY c9) lead_c9,
+  lag(c9) OVER (ORDER BY c9) lag_c9,
   first_value(c9) OVER (ORDER BY c9) first_c9,
   first_value(c9) OVER (ORDER BY c9 DESC) first_c9_desc,
   last_value(c9) OVER (ORDER BY c9) last_c9,
