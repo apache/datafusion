@@ -74,7 +74,7 @@ class PsqlParityTest(unittest.TestCase):
     def test_parity(self):
         root = Path(os.path.dirname(__file__)) / "sqls"
         files = set(root.glob("*.sql"))
-        self.assertEqual(len(files), 11, msg="tests are missed")
+        self.assertEqual(len(files), 12, msg="tests are missed")
         for fname in files:
             with self.subTest(fname=fname):
                 datafusion_output = pd.read_csv(

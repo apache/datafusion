@@ -108,8 +108,9 @@ pub(crate) struct WindowShiftEvaluator {
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
-    fn evaluate_partition(&self, _partition: Range<usize>) -> Result<ArrayRef> {
+    fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
         let value = &self.values[0];
+        let value = value.slice(partition.start, partition.end - partition.start);
         shift(value.as_ref(), self.shift_offset).map_err(DataFusionError::ArrowError)
     }
 }
