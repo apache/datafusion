@@ -16,11 +16,7 @@
 # under the License.
 
 name: Dev
-
-on:
-  # always trigger
-  push:
-  pull_request:
+on: [push, pull_request]
 
 jobs:
   lint:
