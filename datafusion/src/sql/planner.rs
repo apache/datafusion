@@ -1363,7 +1363,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let leading_field = leading_field
                 .as_ref()
                 .map(|dt| dt.to_string())
-                .unwrap_or("second".to_string());
+                .unwrap_or_else(|| "second".to_string());
 
             let unit = parts
                 .next()

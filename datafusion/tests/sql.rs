@@ -3322,7 +3322,7 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '0.5' month",
-        "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 0 mons 15 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
         "interval '1 month'",
