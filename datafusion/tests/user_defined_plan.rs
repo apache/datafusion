@@ -321,16 +321,19 @@ impl ExtensionPlanner for TopKPlanner {
     /// Create a physical plan for an extension node
     fn plan_extension(
         &self,
+        _planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
-        inputs: &[Arc<dyn ExecutionPlan>],
+        logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
         _ctx_state: &ExecutionContextState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(
             if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
-                assert_eq!(inputs.len(), 1, "Inconsistent number of inputs");
+                assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
+                assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
                 // figure out input name
                 Some(Arc::new(TopKExec {
-                    input: inputs[0].clone(),
+                    input: physical_inputs[0].clone(),
                     k: topk_node.k,
                 }))
             } else {
