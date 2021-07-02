@@ -3300,6 +3300,11 @@ async fn test_interval_expressions() -> Result<()> {
         "interval '5 day'",
         "0 years 0 mons 5 days 0 hours 0 mins 0.00 secs"
     );
+    // Hour is ignored, this matches PostgreSQL
+    test_expression!(
+        "interval '5 day' hour",
+        "0 years 0 mons 5 days 0 hours 0 mins 0.00 secs"
+    );
     test_expression!(
         "interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'",
         "0 years 0 mons 5 days 4 hours 3 mins 2.100 secs"
@@ -3309,7 +3314,15 @@ async fn test_interval_expressions() -> Result<()> {
         "0 years 0 mons 15 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
+        "interval '0.5' month",
+        "0 years 0 mons 15 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
         "interval '1 month'",
+        "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
+        "interval '1' MONTH",
         "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
@@ -3330,6 +3343,10 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '2 year'",
+        "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
+        "interval '2' year",
         "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
     );
     Ok(())
