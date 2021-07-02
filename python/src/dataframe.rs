@@ -51,7 +51,7 @@ impl DataFrame {
     #[args(args = "*")]
     fn select(&self, args: &PyTuple) -> PyResult<Self> {
         let expressions = expression::from_tuple(args)?;
-        let builder = LogicalPlanBuilder::from(&self.plan);
+        let builder = LogicalPlanBuilder::from(self.plan.clone());
         let builder =
             errors::wrap(builder.project(expressions.into_iter().map(|e| e.expr)))?;
         let plan = errors::wrap(builder.build())?;
@@ -64,7 +64,7 @@ impl DataFrame {
 
     /// Filter according to the `predicate` expression
     fn filter(&self, predicate: expression::Expression) -> PyResult<Self> {
-        let builder = LogicalPlanBuilder::from(&self.plan);
+        let builder = LogicalPlanBuilder::from(self.plan.clone());
         let builder = errors::wrap(builder.filter(predicate.expr))?;
         let plan = errors::wrap(builder.build())?;
 
@@ -80,7 +80,7 @@ impl DataFrame {
         group_by: Vec<expression::Expression>,
         aggs: Vec<expression::Expression>,
     ) -> PyResult<Self> {
-        let builder = LogicalPlanBuilder::from(&self.plan);
+        let builder = LogicalPlanBuilder::from(self.plan.clone());
         let builder = errors::wrap(builder.aggregate(
             group_by.into_iter().map(|e| e.expr),
             aggs.into_iter().map(|e| e.expr),
@@ -96,7 +96,7 @@ impl DataFrame {
     /// Sort by specified sorting expressions
     fn sort(&self, exprs: Vec<expression::Expression>) -> PyResult<Self> {
         let exprs = exprs.into_iter().map(|e| e.expr);
-        let builder = LogicalPlanBuilder::from(&self.plan);
+        let builder = LogicalPlanBuilder::from(self.plan.clone());
         let builder = errors::wrap(builder.sort(exprs))?;
         let plan = errors::wrap(builder.build())?;
         Ok(DataFrame {
@@ -107,7 +107,7 @@ impl DataFrame {
 
     /// Limits the plan to return at most `count` rows
     fn limit(&self, count: usize) -> PyResult<Self> {
-        let builder = LogicalPlanBuilder::from(&self.plan);
+        let builder = LogicalPlanBuilder::from(self.plan.clone());
         let builder = errors::wrap(builder.limit(count))?;
         let plan = errors::wrap(builder.build())?;
 
@@ -141,7 +141,7 @@ impl DataFrame {
 
     /// Returns the join of two DataFrames `on`.
     fn join(&self, right: &DataFrame, on: Vec<&str>, how: &str) -> PyResult<Self> {
-        let builder = LogicalPlanBuilder::from(&self.plan);
+        let builder = LogicalPlanBuilder::from(self.plan.clone());
 
         let join_type = match how {
             "inner" => JoinType::Inner,
@@ -162,8 +162,8 @@ impl DataFrame {
         let builder = errors::wrap(builder.join(
             &right.plan,
             join_type,
-            on.as_slice(),
-            on.as_slice(),
+            on.clone(),
+            on,
         ))?;
 
         let plan = errors::wrap(builder.build())?;

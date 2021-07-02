@@ -112,9 +112,7 @@ def test_cast(ctx, tmp_path):
         "float",
     ]
 
-    select = ", ".join(
-        [f"CAST(9 AS {t}) AS A{i}" for i, t in enumerate(valid_types)]
-    )
+    select = ", ".join([f"CAST(9 AS {t}) AS A{i}" for i, t in enumerate(valid_types)])
 
     # can execute, which implies that we can cast
     ctx.sql(f"SELECT {select} FROM t").collect()
@@ -143,9 +141,7 @@ def test_udf(
     ctx, tmp_path, fn, input_types, output_type, input_values, expected_values
 ):
     # write to disk
-    path = helpers.write_parquet(
-        tmp_path / "a.parquet", pa.array(input_values)
-    )
+    path = helpers.write_parquet(tmp_path / "a.parquet", pa.array(input_values))
     ctx.register_parquet("t", path)
     ctx.register_udf("udf", fn, input_types, output_type)
 
