@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
+//! Defines physical expressions for `first_value`, `last_value`, and `nth_value`
+//! that can evaluated at runtime during query execution
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::window_functions::PartitionEvaluator;
