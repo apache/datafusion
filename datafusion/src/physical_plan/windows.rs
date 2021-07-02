@@ -21,7 +21,9 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::physical_plan::{
     aggregates, common,
-    expressions::{dense_rank, rank, Literal, NthValue, PhysicalSortExpr, RowNumber},
+    expressions::{
+        dense_rank, lag, lead, rank, Literal, NthValue, PhysicalSortExpr, RowNumber,
+    },
     type_coercion::coerce,
     window_functions::{
         signature_for_built_in, BuiltInWindowFunction, BuiltInWindowFunctionExpr,
@@ -100,10 +102,22 @@ fn create_built_in_window_expr(
     input_schema: &Schema,
     name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
-    match fun {
-        BuiltInWindowFunction::RowNumber => Ok(Arc::new(RowNumber::new(name))),
-        BuiltInWindowFunction::Rank => Ok(Arc::new(rank(name))),
-        BuiltInWindowFunction::DenseRank => Ok(Arc::new(dense_rank(name))),
+    Ok(match fun {
+        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name)),
+        BuiltInWindowFunction::Rank => Arc::new(rank(name)),
+        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name)),
+        BuiltInWindowFunction::Lag => {
+            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
+            let arg = coerced_args[0].clone();
+            let data_type = args[0].data_type(input_schema)?;
+            Arc::new(lag(name, data_type, arg))
+        }
+        BuiltInWindowFunction::Lead => {
+            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
+            let arg = coerced_args[0].clone();
+            let data_type = args[0].data_type(input_schema)?;
+            Arc::new(lead(name, data_type, arg))
+        }
         BuiltInWindowFunction::NthValue => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
@@ -118,25 +132,27 @@ fn create_built_in_window_expr(
                 .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
             let n: u32 = n as u32;
             let data_type = args[0].data_type(input_schema)?;
-            Ok(Arc::new(NthValue::nth_value(name, arg, data_type, n)?))
+            Arc::new(NthValue::nth_value(name, arg, data_type, n)?)
         }
         BuiltInWindowFunction::FirstValue => {
             let arg =
                 coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Ok(Arc::new(NthValue::first_value(name, arg, data_type)))
+            Arc::new(NthValue::first_value(name, arg, data_type))
         }
         BuiltInWindowFunction::LastValue => {
             let arg =
                 coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Ok(Arc::new(NthValue::last_value(name, arg, data_type)))
+            Arc::new(NthValue::last_value(name, arg, data_type))
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Window function with {:?} not yet implemented",
-            fun
-        ))),
-    }
+        _ => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Window function with {:?} not yet implemented",
+                fun
+            )))
+        }
+    })
 }
 
 /// A window expr that takes the form of a built in window function

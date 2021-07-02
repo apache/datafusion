@@ -16,14 +16,14 @@
 
 SELECT
   c9,
-  row_number() OVER (ORDER BY c9) row_num,
-  lead(c9) OVER (ORDER BY c9) lead_c9,
-  lag(c9) OVER (ORDER BY c9) lag_c9,
-  first_value(c9) OVER (ORDER BY c9) first_c9,
-  first_value(c9) OVER (ORDER BY c9 DESC) first_c9_desc,
-  last_value(c9) OVER (ORDER BY c9) last_c9,
-  last_value(c9) OVER (ORDER BY c9 DESC) last_c9_desc,
-  nth_value(c9, 2) OVER (ORDER BY c9) second_c9,
-  nth_value(c9, 2) OVER (ORDER BY c9 DESC) second_c9_desc
+  row_number() OVER (PARTITION BY c2 ORDER BY c9) row_num,
+  lead(c9) OVER (PARTITION BY c2 ORDER BY c9) lead_c9,
+  lag(c9) OVER (PARTITION BY c2 ORDER BY c9) lag_c9,
+  first_value(c9) OVER (PARTITION BY c2 ORDER BY c9) first_c9,
+  first_value(c9) OVER (PARTITION BY c2 ORDER BY c9 DESC) first_c9_desc,
+  last_value(c9) OVER (PARTITION BY c2 ORDER BY c9) last_c9,
+  last_value(c9) OVER (PARTITION BY c2 ORDER BY c9 DESC) last_c9_desc,
+  nth_value(c9, 2) OVER (PARTITION BY c2 ORDER BY c9) second_c9,
+  nth_value(c9, 2) OVER (PARTITION BY c2 ORDER BY c9 DESC) second_c9_desc
 FROM test
 ORDER BY c9;
