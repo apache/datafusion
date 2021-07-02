@@ -1264,13 +1264,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         last_field: &Option<DateTimeField>,
         fractional_seconds_precision: &Option<u64>,
     ) -> Result<Expr> {
-        if leading_field.is_some() {
-            return Err(DataFusionError::NotImplemented(format!(
-                "Unsupported Interval Expression with leading_field {:?}",
-                leading_field
-            )));
-        }
-
         if leading_precision.is_some() {
             return Err(DataFusionError::NotImplemented(format!(
                 "Unsupported Interval Expression with leading_precision {:?}",
@@ -1367,10 +1360,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 break;
             }
 
-            let (diff_month, diff_days, diff_millis) = calculate_from_part(
-                interval_period_str.unwrap(),
-                parts.next().unwrap_or("second"),
-            )?;
+            let leading_field = leading_field
+                .as_ref()
+                .map(|dt| dt.to_string())
+                .unwrap_or_else(|| "second".to_string());
+
+            let unit = parts
+                .next()
+                .map(|part| part.to_string())
+                .unwrap_or(leading_field);
+
+            let (diff_month, diff_days, diff_millis) =
+                calculate_from_part(interval_period_str.unwrap(), &unit)?;
 
             result_month += diff_month as i64;
 
