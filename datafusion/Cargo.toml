@@ -71,6 +71,7 @@ rand = "0.8"
 criterion = "0.3"
 tempfile = "3"
 doc-comment = "0.3"
+env_logger = { version = "0.8.4", default-features = false }
 
 [[bench]]
 name = "aggregate_query_sql"

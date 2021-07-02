@@ -112,6 +112,7 @@ mod tests {
     use crate::datasource::datasource::Statistics;
     use crate::physical_plan::parquet::{ParquetExec, ParquetPartition};
     use crate::physical_plan::projection::ProjectionExec;
+    use crate::physical_plan::SQLMetric;
 
     #[test]
     fn added_repartition_to_single_partition() -> Result<()> {
@@ -119,12 +120,13 @@ mod tests {
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ParquetExec::new(
-                vec![ParquetPartition {
-                    filenames: vec!["x".to_string()],
-                    statistics: Statistics::default(),
-                }],
+                vec![ParquetPartition::new(
+                    vec!["x".to_string()],
+                    Statistics::default(),
+                )],
                 schema,
                 None,
+                SQLMetric::counter(),
                 None,
                 2048,
                 None,
@@ -156,12 +158,13 @@ mod tests {
             Arc::new(ProjectionExec::try_new(
                 vec![],
                 Arc::new(ParquetExec::new(
-                    vec![ParquetPartition {
-                        filenames: vec!["x".to_string()],
-                        statistics: Statistics::default(),
-                    }],
+                    vec![ParquetPartition::new(
+                        vec!["x".to_string()],
+                        Statistics::default(),
+                    )],
                     schema,
                     None,
+                    SQLMetric::counter(),
                     None,
                     2048,
                     None,

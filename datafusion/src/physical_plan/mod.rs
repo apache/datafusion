@@ -297,6 +297,20 @@ pub fn visit_execution_plan<V: ExecutionPlanVisitor>(
     Ok(())
 }
 
+/// Recursively gateher all execution metrics from this plan and all of its input plans
+pub fn plan_metrics(plan: Arc<dyn ExecutionPlan>) -> HashMap<String, SQLMetric> {
+    fn get_metrics_inner(
+        plan: &dyn ExecutionPlan,
+        mut metrics: HashMap<String, SQLMetric>,
+    ) -> HashMap<String, SQLMetric> {
+        metrics.extend(plan.metrics().into_iter());
+        plan.children().into_iter().fold(metrics, |metrics, child| {
+            get_metrics_inner(child.as_ref(), metrics)
+        })
+    }
+    get_metrics_inner(plan.as_ref(), HashMap::new())
+}
+
 /// Execute the [ExecutionPlan] and collect the results in memory
 pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
     match plan.output_partitioning().partition_count() {
