@@ -112,35 +112,19 @@ pub fn build_join_schema(
 ) -> Schema {
     let fields: Vec<Field> = match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full => {
-            // remove right-side join keys if they have the same names as the left-side
-            let duplicate_keys = &on
-                .iter()
-                .filter(|(l, r)| l.name() == r.name())
-                .map(|on| on.1.name())
-                .collect::<HashSet<_>>();
-
             let left_fields = left.fields().iter();
 
             let right_fields = right
                 .fields()
-                .iter()
-                .filter(|f| !duplicate_keys.contains(f.name().as_str()));
+                .iter();
 
             // left then right
             left_fields.chain(right_fields).cloned().collect()
         }
         JoinType::Right => {
-            // remove left-side join keys if they have the same names as the right-side
-            let duplicate_keys = &on
-                .iter()
-                .filter(|(l, r)| l.name() == r.name())
-                .map(|on| on.1.name())
-                .collect::<HashSet<_>>();
-
             let left_fields = left
                 .fields()
-                .iter()
-                .filter(|f| !duplicate_keys.contains(f.name().as_str()));
+                .iter();
 
             let right_fields = right.fields().iter();
 
