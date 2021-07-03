@@ -922,10 +922,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 if &var_names[0][0..1] == "@" {
                     Ok(Expr::ScalarVariable(var_names))
-                } else if var_names.len() == 2 {
+                } else if var_names.len() > 1 {
                     // table.column identifier
                     let name = var_names.pop().unwrap();
-                    let relation = Some(var_names.pop().unwrap());
+                    let relation = Some(var_names.join("."));
                     Ok(Expr::Column(Column { relation, name }))
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
