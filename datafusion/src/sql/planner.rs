@@ -382,7 +382,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 if filter.is_empty() {
                     join.build()
-                } else {
+                } else if join_type == JoinType::Inner {
                     join.filter(
                         filter
                             .iter()
@@ -390,6 +390,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
                     )?
                     .build()
+                } else {
+                    Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported expressions in {:?} JOIN: {:?}",
+                        join_type, filter
+                    )))
                 }
             }
             JoinConstraint::Using(idents) => {
@@ -2722,7 +2727,7 @@ mod tests {
             JOIN orders \
             ON id = customer_id AND order_id > 1 ";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Filter: #orders.order_id Gt Int64(1)
+        \n  Filter: #orders.order_id Gt Int64(1)\
         \n    Join: #person.id = #orders.customer_id\
         \n      TableScan: person projection=None\
         \n      TableScan: orders projection=None";
