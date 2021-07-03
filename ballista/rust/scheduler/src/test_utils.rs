@@ -18,7 +18,7 @@
 use ballista_core::error::Result;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::execution::context::ExecutionContext;
+use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 use datafusion::physical_plan::csv::CsvReadOptions;
 
 pub const TPCH_TABLES: &[&str] = &[
@@ -26,7 +26,8 @@ pub const TPCH_TABLES: &[&str] = &[
 ];
 
 pub fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
-    let mut ctx = ExecutionContext::new();
+    let config = ExecutionConfig::new().with_concurrency(2); // TODO: this is hack to enable partitioned joins
+    let mut ctx = ExecutionContext::with_config(config);
     for table in TPCH_TABLES {
         let schema = get_tpch_schema(table);
         let options = CsvReadOptions::new()

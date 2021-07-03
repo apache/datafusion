@@ -736,7 +736,7 @@ impl DefaultPhysicalPlanner {
                     input
                 } else {
                     // Apply a LocalLimitExec to each partition. The optimizer will also insert
-                    // a MergeExec between the GlobalLimitExec and LocalLimitExec
+                    // a CoalescePartitionsExec between the GlobalLimitExec and LocalLimitExec
                     Arc::new(LocalLimitExec::new(input, limit))
                 };
 

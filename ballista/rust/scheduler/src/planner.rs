@@ -215,7 +215,7 @@ mod test {
     use ballista_core::error::BallistaError;
     use ballista_core::execution_plans::UnresolvedShuffleExec;
     use ballista_core::serde::protobuf;
-    use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
+    use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use datafusion::physical_plan::sort::SortExec;
     use datafusion::physical_plan::{
         coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
@@ -232,7 +232,7 @@ mod test {
     }
 
     #[test]
-    fn test() -> Result<(), BallistaError> {
+    fn distributed_hash_aggregate_plan() -> Result<(), BallistaError> {
         let mut ctx = datafusion_test_context("testdata")?;
 
         // simplified form of TPC-H query 1
@@ -255,41 +255,72 @@ mod test {
         }
 
         /* Expected result:
-        ShuffleWriterExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=1
-         HashAggregateExec: groupBy=["l_returnflag"], aggrExpr=["SUM(l_extendedprice Multiply Int64(1)) [\"l_extendedprice * CAST(1 AS Float64)\"]"]
-          CsvExec: testdata/lineitem; partitions=2
-        ShuffleWriterExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=2
-         CoalescePartitionsExec
-          UnresolvedShuffleExec: stages=[1]
-        ShuffleWriterExec: job=f011432e-e424-4016-915d-e3d8b84f6dbd, stage=3
-         SortExec { input: ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_ext
-          ProjectionExec { expr: [(Column { name: "l_returnflag" }, "l_returnflag"), (Column { name: "SUM(l_extendedprice Multip
-           HashAggregateExec: groupBy=["l_returnflag"], aggrExpr=["SUM(l_extendedprice Multiply Int64(1)) [\"l_extendedprice * CAST(1 AS Float64)\"]"]
-            UnresolvedShuffleExec: stages=[2]
+
+        ShuffleWriterExec: Some(Hash([Column { name: "l_returnflag", index: 0 }], 2))
+          HashAggregateExec: mode=Partial, gby=[l_returnflag@1 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
+            CsvExec: source=Path(testdata/lineitem: [testdata/lineitem/partition0.tbl,testdata/lineitem/partition1.tbl]), has_header=false
+
+        ShuffleWriterExec: None
+          ProjectionExec: expr=[l_returnflag@0 as l_returnflag, SUM(lineitem.l_extendedprice Multiply Int64(1))@1 as sum_disc_price]
+            HashAggregateExec: mode=FinalPartitioned, gby=[l_returnflag@0 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
+              CoalesceBatchesExec: target_batch_size=4096
+                RepartitionExec: partitioning=Hash([Column { name: "l_returnflag", index: 0 }], 2)
+                  HashAggregateExec: mode=Partial, gby=[l_returnflag@1 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
+                    CsvExec: source=Path(testdata/lineitem: [testdata/lineitem/partition0.tbl,testdata/lineitem/partition1.tbl]), has_header=false
+
+        ShuffleWriterExec: None
+          SortExec: [l_returnflag@0 ASC]
+            CoalescePartitionsExec
+              UnresolvedShuffleExec
         */
 
-        let sort = stages[2].children()[0].clone();
-        let sort = downcast_exec!(sort, SortExec);
+        assert_eq!(3, stages.len());
 
-        let projection = sort.children()[0].clone();
-        println!("{:?}", projection);
-        let projection = downcast_exec!(projection, ProjectionExec);
+        // verify stage 0
+        let stage0 = stages[0].children()[0].clone();
+        let partial_hash = downcast_exec!(stage0, HashAggregateExec);
+        assert!(*partial_hash.mode() == AggregateMode::Partial);
 
+        // verify stage 1
+        let stage1 = stages[1].children()[0].clone();
+        let projection = downcast_exec!(stage1, ProjectionExec);
         let final_hash = projection.children()[0].clone();
         let final_hash = downcast_exec!(final_hash, HashAggregateExec);
+        assert!(*final_hash.mode() == AggregateMode::FinalPartitioned);
 
-        let unresolved_shuffle = final_hash.children()[0].clone();
+        // verify stage 2
+        let stage2 = stages[2].children()[0].clone();
+        let sort = downcast_exec!(stage2, SortExec);
+        let coalesce_partitions = sort.children()[0].clone();
+        let coalesce_partitions =
+            downcast_exec!(coalesce_partitions, CoalescePartitionsExec);
+        let unresolved_shuffle = coalesce_partitions.children()[0].clone();
         let unresolved_shuffle =
             downcast_exec!(unresolved_shuffle, UnresolvedShuffleExec);
         assert_eq!(unresolved_shuffle.query_stage_ids, vec![2]);
 
-        let merge_exec = stages[1].children()[0].clone();
-        let merge_exec = downcast_exec!(merge_exec, CoalescePartitionsExec);
+        Ok(())
+    }
 
-        let unresolved_shuffle = merge_exec.children()[0].clone();
-        let unresolved_shuffle =
-            downcast_exec!(unresolved_shuffle, UnresolvedShuffleExec);
-        assert_eq!(unresolved_shuffle.query_stage_ids, vec![1]);
+    #[test]
+    fn roundtrip_serde_hash_aggregate() -> Result<(), BallistaError> {
+        let mut ctx = datafusion_test_context("testdata")?;
+
+        // simplified form of TPC-H query 1
+        let df = ctx.sql(
+            "select l_returnflag, sum(l_extendedprice * 1) as sum_disc_price
+            from lineitem
+            group by l_returnflag
+            order by l_returnflag",
+        )?;
+
+        let plan = df.to_logical_plan();
+        let plan = ctx.optimize(&plan)?;
+        let plan = ctx.create_physical_plan(&plan)?;
+
+        let mut planner = DistributedPlanner::new();
+        let job_uuid = Uuid::new_v4();
+        let stages = planner.plan_query_stages(&job_uuid.to_string(), plan)?;
 
         let partial_hash = stages[0].children()[0].clone();
         let partial_hash_serde = roundtrip_operator(partial_hash.clone())?;

@@ -308,7 +308,7 @@ pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
         _ => {
             // merge into a single partition
             let plan = CoalescePartitionsExec::new(plan.clone());
-            // MergeExec must produce a single partition
+            // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.output_partitioning().partition_count());
             common::collect(plan.execute(0).await?).await
         }
