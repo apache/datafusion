@@ -5,7 +5,7 @@ from
     (
         select
             c_custkey,
-            count(o_orderkey)
+            count(o_orderkey) c_count
         from
             customer left outer join orders on
                         c_custkey = o_custkey

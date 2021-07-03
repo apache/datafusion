@@ -368,15 +368,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // parse ON expression
                 let expr = self.sql_to_rex(sql_expr, &join_schema)?;
 
+                // expression that didn't match equi-join pattern
+                let mut filter = vec![];
+
                 // extract join keys
-                extract_join_keys(&expr, &mut keys)?;
+                extract_join_keys(&expr, &mut keys, &mut filter);
 
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
                 // return the logical plan representing the join
-                LogicalPlanBuilder::from(left)
-                    .join(right, join_type, left_keys, right_keys)?
+                let join = LogicalPlanBuilder::from(left)
+                    .join(right, join_type, left_keys, right_keys)?;
+
+                if filter.is_empty() {
+                    join.build()
+                } else {
+                    join.filter(
+                        filter
+                            .iter()
+                            .skip(1)
+                            .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
+                    )?
                     .build()
+                }
             }
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
@@ -1556,32 +1570,32 @@ fn remove_join_expressions(
 /// foo = bar
 /// foo = bar AND bar = baz AND ...
 ///
-fn extract_join_keys(expr: &Expr, accum: &mut Vec<(Column, Column)>) -> Result<()> {
+fn extract_join_keys(
+    expr: &Expr,
+    accum: &mut Vec<(Column, Column)>,
+    accum_filter: &mut Vec<Expr>,
+) {
     match expr {
         Expr::BinaryExpr { left, op, right } => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => {
                     accum.push((l.clone(), r.clone()));
-                    Ok(())
                 }
-                other => Err(DataFusionError::SQL(ParserError(format!(
-                    "Unsupported expression '{:?}' in JOIN condition",
-                    other
-                )))),
+                _other => {
+                    accum_filter.push(expr.clone());
+                }
             },
             Operator::And => {
-                extract_join_keys(left, accum)?;
-                extract_join_keys(right, accum)
+                extract_join_keys(left, accum, accum_filter);
+                extract_join_keys(right, accum, accum_filter);
             }
-            other => Err(DataFusionError::SQL(ParserError(format!(
-                "Unsupported expression '{:?}' in JOIN condition",
-                other
-            )))),
+            _other => {
+                accum_filter.push(expr.clone());
+            }
         },
-        other => Err(DataFusionError::SQL(ParserError(format!(
-            "Unsupported expression '{:?}' in JOIN condition",
-            other
-        )))),
+        _other => {
+            accum_filter.push(expr.clone());
+        }
     }
 }
 
@@ -2698,6 +2712,20 @@ mod tests {
         \n  Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn equijoin_unsupported_expression() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            JOIN orders \
+            ON id = customer_id AND order_id > 1 ";
+        let expected = "Projection: #person.id, #orders.order_id\
+        \n  Filter: #orders.order_id Gt Int64(1)
+        \n    Join: #person.id = #orders.customer_id\
+        \n      TableScan: person projection=None\
+        \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
