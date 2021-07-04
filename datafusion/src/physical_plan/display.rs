@@ -33,13 +33,27 @@ pub enum DisplayFormatType {
 /// Wraps an `ExecutionPlan` with various ways to display this plan
 pub struct DisplayableExecutionPlan<'a> {
     inner: &'a dyn ExecutionPlan,
+    /// whether to show metrics or not
+    with_metrics: bool,
 }
 
 impl<'a> DisplayableExecutionPlan<'a> {
     /// Create a wrapper around an [`'ExecutionPlan'] which can be
     /// pretty printed in a variety of ways
     pub fn new(inner: &'a dyn ExecutionPlan) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            with_metrics: false,
+        }
+    }
+
+    /// Create a wrapper around an [`'ExecutionPlan'] which can be
+    /// pretty printed in a variety of ways
+    pub fn with_metrics(inner: &'a dyn ExecutionPlan) -> Self {
+        Self {
+            inner,
+            with_metrics: true,
+        }
     }
 
     /// Return a `format`able structure that produces a single line
@@ -53,15 +67,26 @@ impl<'a> DisplayableExecutionPlan<'a> {
     ///         CsvExec: source=...",
     /// ```
     pub fn indent(&self) -> impl fmt::Display + 'a {
-        struct Wrapper<'a>(&'a dyn ExecutionPlan);
+        struct Wrapper<'a> {
+            plan: &'a dyn ExecutionPlan,
+            with_metrics: bool,
+        }
         impl<'a> fmt::Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 let t = DisplayFormatType::Default;
-                let mut visitor = IndentVisitor { t, f, indent: 0 };
-                accept(self.0, &mut visitor)
+                let mut visitor = IndentVisitor {
+                    t,
+                    f,
+                    indent: 0,
+                    with_metrics: self.with_metrics,
+                };
+                accept(self.plan, &mut visitor)
             }
         }
-        Wrapper(self.inner)
+        Wrapper {
+            plan: self.inner,
+            with_metrics: self.with_metrics,
+        }
     }
 }
 
@@ -71,8 +96,10 @@ struct IndentVisitor<'a, 'b> {
     t: DisplayFormatType,
     /// Write to this formatter
     f: &'a mut fmt::Formatter<'b>,
-    ///with_schema: bool,
+    /// Indent size
     indent: usize,
+    /// whether to show metrics or not
+    with_metrics: bool,
 }
 
 impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
@@ -83,6 +110,17 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
     ) -> std::result::Result<bool, Self::Error> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         plan.fmt_as(self.t, self.f)?;
+        if self.with_metrics {
+            write!(
+                self.f,
+                ", metrics=[{}]",
+                plan.metrics()
+                    .iter()
+                    .map(|(k, v)| format!("{}={:?}", k, v.value))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+        }
         writeln!(self.f)?;
         self.indent += 1;
         Ok(true)
