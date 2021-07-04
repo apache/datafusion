@@ -42,6 +42,7 @@ use datafusion::prelude::*;
 
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -343,21 +344,27 @@ async fn execute_query(
     debug: bool,
 ) -> Result<Vec<RecordBatch>> {
     if debug {
-        println!("Logical plan:\n{:?}", plan);
+        println!("=== Logical plan ===\n{:?}\n", plan);
     }
     let plan = ctx.optimize(plan)?;
     if debug {
-        println!("Optimized logical plan:\n{:?}", plan);
+        println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
     let physical_plan = ctx.create_physical_plan(&plan)?;
     if debug {
         println!(
-            "Physical plan:\n{}",
+            "=== Physical plan ===\n{}\n",
             displayable(physical_plan.as_ref()).indent().to_string()
         );
     }
-    let result = collect(physical_plan).await?;
+    let result = collect(physical_plan.clone()).await?;
     if debug {
+        println!(
+            "=== Physical plan with metrics ===\n{}\n",
+            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref())
+                .indent()
+                .to_string()
+        );
         pretty::print_batches(&result)?;
     }
     Ok(result)
