@@ -42,7 +42,9 @@ use datafusion::arrow::ipc::writer::FileWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::hash_join::create_hashes;
-use datafusion::physical_plan::{ExecutionPlan, Partitioning, RecordBatchStream};
+use datafusion::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+};
 use futures::StreamExt;
 use log::info;
 use std::fs::File;
@@ -305,6 +307,22 @@ impl ExecutionPlan for ShuffleWriterExec {
             _ => Err(DataFusionError::Execution(
                 "Invalid shuffle partitioning scheme".to_owned(),
             )),
+        }
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "ShuffleWriterExec: {:?}",
+                    self.shuffle_output_partitioning
+                )
+            }
         }
     }
 }
