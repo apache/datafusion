@@ -105,12 +105,25 @@ impl Column {
                     return Ok(fields[0].qualified_column());
                 }
                 _ => {
+                    // More than 1 fields in this schema have their names set to self.name.
+                    //
+                    // This should only happen when a JOIN query with USING constraint references
+                    // join columns using unqualified column name. For example:
+                    //
+                    // ```sql
+                    // SELECT id FROM t1 JOIN t2 USING(id)
+                    // ```
+                    //
+                    // In this case, both `t1.id` and `t2.id` will match unqualified column `id`.
+                    // We will use the relation from the first matched field to normalize self.
+
+                    // Compare matched fields with one USING JOIN clause at a time
                     for using_col in &using_columns {
                         let all_matched = fields
                             .iter()
                             .all(|f| using_col.contains(&f.qualified_column()));
-                        // All matched fields belong to the same using column set, use the first
-                        // qualifer
+                        // All matched fields belong to the same using column set, in orther words
+                        // the same join clause. We simply pick the qualifer from the first match.
                         if all_matched {
                             return Ok(fields[0].qualified_column());
                         }
