@@ -167,7 +167,7 @@
 //! * Filter: [`FilterExec`](physical_plan::filter::FilterExec)
 //! * Hash and Grouped aggregations: [`HashAggregateExec`](physical_plan::hash_aggregate::HashAggregateExec)
 //! * Sort: [`SortExec`](physical_plan::sort::SortExec)
-//! * Merge (partitions): [`MergeExec`](physical_plan::merge::MergeExec)
+//! * Coalesce partitions: [`CoalescePartitionsExec`](physical_plan::coalesce_partitions::CoalescePartitionsExec)
 //! * Limit: [`LocalLimitExec`](physical_plan::limit::LocalLimitExec) and [`GlobalLimitExec`](physical_plan::limit::GlobalLimitExec)
 //! * Scan a CSV: [`CsvExec`](physical_plan::csv::CsvExec)
 //! * Scan a Parquet: [`ParquetExec`](physical_plan::parquet::ParquetExec)

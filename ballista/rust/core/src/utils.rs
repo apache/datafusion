@@ -227,16 +227,7 @@ fn build_exec_plan_diagram(
 
 /// Create a DataFusion context that is compatible with Ballista
 pub fn create_datafusion_context() -> ExecutionContext {
-    // remove Repartition rule because that isn't supported yet
-    let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
-        Arc::new(CoalesceBatches::new()),
-        Arc::new(AddCoalescePartitionsExec::new()),
-    ];
-    let config = ExecutionConfig::new()
-        .with_concurrency(1)
-        .with_repartition_joins(false)
-        .with_repartition_aggregations(false)
-        .with_physical_optimizer_rules(rules);
+    let config = ExecutionConfig::new().with_concurrency(2); // TODO: this is hack to enable partitioned joins
     ExecutionContext::with_config(config)
 }
 

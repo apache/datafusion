@@ -3812,7 +3812,7 @@ async fn test_physical_plan_display_indent() {
     let expected = vec![
         "GlobalLimitExec: limit=10",
         "  SortExec: [the_min@2 DESC]",
-        "    MergeExec",
+        "    CoalescePartitionsExec",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(c12), MIN(c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",

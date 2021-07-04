@@ -15,15 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use ballista_core::error::Result;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
-use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
-use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
-use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::csv::CsvReadOptions;
 
 pub const TPCH_TABLES: &[&str] = &[
@@ -31,16 +26,8 @@ pub const TPCH_TABLES: &[&str] = &[
 ];
 
 pub fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
-    // remove Repartition rule because that isn't supported yet
-    let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
-        Arc::new(AddCoalescePartitionsExec::new()),
-        Arc::new(CoalesceBatches::new()),
-    ];
-    let config = ExecutionConfig::new()
-        .with_physical_optimizer_rules(rules)
-        .with_repartition_aggregations(false);
+    let config = ExecutionConfig::new().with_concurrency(2); // TODO: this is hack to enable partitioned joins
     let mut ctx = ExecutionContext::with_config(config);
-
     for table in TPCH_TABLES {
         let schema = get_tpch_schema(table);
         let options = CsvReadOptions::new()
