@@ -241,6 +241,38 @@ fn split_members<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>) {
     }
 }
 
+fn optimize_join(
+    mut state: State,
+    plan: &LogicalPlan,
+    left: &LogicalPlan,
+    right: &LogicalPlan,
+) -> Result<LogicalPlan> {
+    let (pushable_to_left, pushable_to_right, keep) =
+        get_join_predicates(&state, left.schema(), right.schema());
+
+    let mut left_state = state.clone();
+    left_state.filters = keep_filters(&left_state.filters, &pushable_to_left);
+    let left = optimize(left, left_state)?;
+
+    let mut right_state = state.clone();
+    right_state.filters = keep_filters(&right_state.filters, &pushable_to_right);
+    let right = optimize(right, right_state)?;
+
+    // create a new Join with the new `left` and `right`
+    let expr = plan.expressions();
+    let plan = utils::from_plan(plan, &expr, &[left, right])?;
+
+    if keep.0.is_empty() {
+        Ok(plan)
+    } else {
+        // wrap the join on the filter whose predicates must be kept
+        let plan = add_filter(plan, &keep.0);
+        state.filters = remove_filters(&state.filters, &keep.1);
+
+        Ok(plan)
+    }
+}
+
 fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Explain { .. } => {
@@ -346,30 +378,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             issue_filters(state, used_columns, plan)
         }
         LogicalPlan::CrossJoin { left, right, .. } => {
-            let (pushable_to_left, pushable_to_right, keep) =
-                get_join_predicates(&state, left.schema(), right.schema());
-
-            let mut left_state = state.clone();
-            left_state.filters = keep_filters(&left_state.filters, &pushable_to_left);
-            let left = optimize(left, left_state)?;
-
-            let mut right_state = state.clone();
-            right_state.filters = keep_filters(&right_state.filters, &pushable_to_right);
-            let right = optimize(right, right_state)?;
-
-            // create a new Join with the new `left` and `right`
-            let expr = plan.expressions();
-            let plan = utils::from_plan(plan, &expr, &[left, right])?;
-
-            if keep.0.is_empty() {
-                Ok(plan)
-            } else {
-                // wrap the join on the filter whose predicates must be kept
-                let plan = add_filter(plan, &keep.0);
-                state.filters = remove_filters(&state.filters, &keep.1);
-
-                Ok(plan)
-            }
+            optimize_join(state, plan, left, right)
         }
         LogicalPlan::Join {
             left, right, on, ..
@@ -427,33 +436,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     Some(Ok((join_side_predicate, join_side_columns)))
                 })
                 .collect::<Result<Vec<_>>>()?;
-
             state.filters.extend(join_side_filters);
 
-            let (pushable_to_left, pushable_to_right, keep) =
-                get_join_predicates(&state, left.schema(), right.schema());
-
-            let mut left_state = state.clone();
-            left_state.filters = keep_filters(&left_state.filters, &pushable_to_left);
-            let left = optimize(left, left_state)?;
-
-            let mut right_state = state.clone();
-            right_state.filters = keep_filters(&right_state.filters, &pushable_to_right);
-            let right = optimize(right, right_state)?;
-
-            // create a new Join with the new `left` and `right`
-            let expr = plan.expressions();
-            let plan = utils::from_plan(plan, &expr, &[left, right])?;
-
-            if keep.0.is_empty() {
-                Ok(plan)
-            } else {
-                // wrap the join on the filter whose predicates must be kept
-                let plan = add_filter(plan, &keep.0);
-                state.filters = remove_filters(&state.filters, &keep.1);
-
-                Ok(plan)
-            }
+            optimize_join(state, plan, left, right)
         }
         LogicalPlan::TableScan {
             source,
