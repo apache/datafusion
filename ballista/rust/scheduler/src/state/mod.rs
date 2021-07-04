@@ -236,6 +236,15 @@ impl SchedulerState {
         Ok((&value).try_into()?)
     }
 
+    pub async fn get_all_tasks(&self) -> Result<HashMap<String, TaskStatus>> {
+        self.config_client
+            .get_from_prefix(&get_task_prefix(&self.namespace))
+            .await?
+            .into_iter()
+            .map(|(key, bytes)| Ok((key, decode_protobuf(&bytes)?)))
+            .collect()
+    }
+
     /// This function ensures that the task wasn't assigned to an executor that died.
     /// If that is the case, then the task is re-scheduled.
     /// Returns true if the task was dead, false otherwise.
@@ -274,18 +283,12 @@ impl SchedulerState {
         &self,
         executor_id: &str,
     ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
-        let kvs: HashMap<String, Vec<u8>> = self
-            .config_client
-            .get_from_prefix(&get_task_prefix(&self.namespace))
-            .await?
-            .into_iter()
-            .collect();
+        let tasks = self.get_all_tasks().await?;
         // TODO: Make the duration a configurable parameter
         let executors = self
             .get_alive_executors_metadata(Duration::from_secs(60))
             .await?;
-        'tasks: for (_key, value) in kvs.iter() {
-            let mut status: TaskStatus = decode_protobuf(value)?;
+        'tasks: for (_key, status) in tasks.iter() {
             if status.status.is_none() {
                 let partition = status.partition_id.as_ref().unwrap();
                 let plan = self
@@ -301,7 +304,7 @@ impl SchedulerState {
                 for unresolved_shuffle in unresolved_shuffles {
                     for stage_id in unresolved_shuffle.query_stage_ids {
                         for partition_id in 0..unresolved_shuffle.partition_count {
-                            let referenced_task = kvs
+                            let referenced_task = tasks
                                 .get(&get_task_status_key(
                                     &self.namespace,
                                     &partition.job_id,
@@ -309,8 +312,6 @@ impl SchedulerState {
                                     partition_id,
                                 ))
                                 .unwrap();
-                            let referenced_task: TaskStatus =
-                                decode_protobuf(referenced_task)?;
                             let task_is_dead = self
                                 .reschedule_dead_task(&referenced_task, &executors)
                                 .await?;
@@ -318,14 +319,14 @@ impl SchedulerState {
                                 continue 'tasks;
                             } else if let Some(task_status::Status::Completed(
                                 CompletedTask { executor_id },
-                            )) = referenced_task.status
+                            )) = &referenced_task.status
                             {
                                 let empty = vec![];
                                 let locations =
                                     partition_locations.entry(stage_id).or_insert(empty);
                                 let executor_meta = executors
                                     .iter()
-                                    .find(|exec| exec.id == executor_id)
+                                    .find(|exec| exec.id == *executor_id)
                                     .unwrap()
                                     .clone();
                                 locations.push(vec![
@@ -350,6 +351,7 @@ impl SchedulerState {
                     remove_unresolved_shuffles(plan.as_ref(), &partition_locations)?;
 
                 // If we get here, there are no more unresolved shuffled and the task can be run
+                let mut status = status.clone();
                 status.status = Some(task_status::Status::Running(RunningTask {
                     executor_id: executor_id.to_owned(),
                 }));

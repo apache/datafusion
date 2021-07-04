@@ -44,10 +44,10 @@ pub struct Column {
 
 impl Column {
     /// Create Column from unqualified name.
-    pub fn from_name(name: String) -> Self {
+    pub fn from_name(name: impl Into<String>) -> Self {
         Self {
             relation: None,
-            name,
+            name: name.into(),
         }
     }
 
@@ -83,7 +83,12 @@ impl Column {
         }
     }
 
-    /// Normalize Column with qualifier based on provided dataframe schemas.
+    /// Normalizes `self` if is unqualified (has no relation name)
+    /// with an explicit qualifier from the first matching input
+    /// schemas.
+    ///
+    /// For example, `foo` will be normalized to `t.foo` if there is a
+    /// column named `foo` in a relation named `t` found in `schemas`
     pub fn normalize(self, plan: &LogicalPlan) -> Result<Self> {
         if self.relation.is_some() {
             return Ok(self);
@@ -150,7 +155,7 @@ impl fmt::Display for Column {
 /// ```
 /// # use datafusion::logical_plan::*;
 /// let expr = col("c1");
-/// assert_eq!(expr, Expr::Column(Column::from_name("c1".to_string())));
+/// assert_eq!(expr, Expr::Column(Column::from_name("c1")));
 /// ```
 ///
 /// ## Create the expression `c1 + c2` to add columns "c1" and "c2" together
@@ -1151,8 +1156,8 @@ pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<E
     e.rewrite(&mut ColumnReplacer { replace_map })
 }
 
-/// Recursively normalize all Column expressions in a given expression tree by adding qualifiers
-/// wherever applicable
+/// Recursively call [`Column::normalize`] on all Column expressions
+/// in the `expr` expression tree.
 pub fn normalize_col(e: Expr, plan: &LogicalPlan) -> Result<Expr> {
     struct ColumnNormalizer<'a> {
         plan: &'a LogicalPlan,

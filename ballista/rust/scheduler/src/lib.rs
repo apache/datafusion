@@ -28,16 +28,22 @@ pub use standalone::new_standalone_scheduler;
 #[cfg(test)]
 pub mod test_utils;
 
+// include the generated protobuf source as a submodule
+#[allow(clippy::all)]
+pub mod externalscaler {
+    include!(concat!(env!("OUT_DIR"), "/externalscaler.rs"));
+}
+
 use std::{convert::TryInto, sync::Arc};
 use std::{fmt, net::IpAddr};
 
 use ballista_core::serde::protobuf::{
     execute_query_params::Query, executor_registration::OptionalHost, job_status,
-    scheduler_grpc_server::SchedulerGrpc, ExecuteQueryParams, ExecuteQueryResult,
-    FailedJob, FilePartitionMetadata, FileType, GetFileMetadataParams,
-    GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult, JobStatus,
-    PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob, TaskDefinition,
-    TaskStatus,
+    scheduler_grpc_server::SchedulerGrpc, task_status, ExecuteQueryParams,
+    ExecuteQueryResult, FailedJob, FilePartitionMetadata, FileType,
+    GetFileMetadataParams, GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult,
+    JobStatus, PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob,
+    TaskDefinition, TaskStatus,
 };
 use ballista_core::serde::scheduler::ExecutorMeta;
 
@@ -62,6 +68,10 @@ impl parse_arg::ParseArgFromStr for ConfigBackend {
     }
 }
 
+use crate::externalscaler::{
+    external_scaler_server::ExternalScaler, GetMetricSpecResponse, GetMetricsRequest,
+    GetMetricsResponse, IsActiveResponse, MetricSpec, MetricValue, ScaledObjectRef,
+};
 use crate::planner::DistributedPlanner;
 
 use log::{debug, error, info, warn};
@@ -100,6 +110,55 @@ impl SchedulerServer {
                 .unwrap()
                 .as_millis(),
         }
+    }
+}
+
+const INFLIGHT_TASKS_METRIC_NAME: &str = "inflight_tasks";
+
+#[tonic::async_trait]
+impl ExternalScaler for SchedulerServer {
+    async fn is_active(
+        &self,
+        _request: Request<ScaledObjectRef>,
+    ) -> Result<Response<IsActiveResponse>, tonic::Status> {
+        let tasks = self.state.get_all_tasks().await.map_err(|e| {
+            let msg = format!("Error reading tasks: {}", e);
+            error!("{}", msg);
+            tonic::Status::internal(msg)
+        })?;
+        let result = tasks.iter().any(|(_key, task)| {
+            !matches!(
+                task.status,
+                Some(task_status::Status::Completed(_))
+                    | Some(task_status::Status::Failed(_))
+            )
+        });
+        debug!("Are there active tasks? {}", result);
+        Ok(Response::new(IsActiveResponse { result }))
+    }
+
+    async fn get_metric_spec(
+        &self,
+        _request: Request<ScaledObjectRef>,
+    ) -> Result<Response<GetMetricSpecResponse>, tonic::Status> {
+        Ok(Response::new(GetMetricSpecResponse {
+            metric_specs: vec![MetricSpec {
+                metric_name: INFLIGHT_TASKS_METRIC_NAME.to_string(),
+                target_size: 1,
+            }],
+        }))
+    }
+
+    async fn get_metrics(
+        &self,
+        _request: Request<GetMetricsRequest>,
+    ) -> Result<Response<GetMetricsResponse>, tonic::Status> {
+        Ok(Response::new(GetMetricsResponse {
+            metric_values: vec![MetricValue {
+                metric_name: INFLIGHT_TASKS_METRIC_NAME.to_string(),
+                metric_value: 10000000, // A very high number to saturate the HPA
+            }],
+        }))
     }
 }
 

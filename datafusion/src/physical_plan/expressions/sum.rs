@@ -65,9 +65,13 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
 
 impl Sum {
     /// Create a new SUM aggregate function
-    pub fn new(expr: Arc<dyn PhysicalExpr>, name: String, data_type: DataType) -> Self {
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
         Self {
-            name,
+            name: name.into(),
             expr,
             data_type,
             nullable: true,

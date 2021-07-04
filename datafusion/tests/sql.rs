@@ -903,7 +903,7 @@ async fn csv_query_window_with_partition_by() -> Result<()> {
             "-21481",
             "-16974",
             "-21481",
-            "-21481",
+            "NULL",
         ],
         vec![
             "141680161",
@@ -952,15 +952,8 @@ async fn csv_query_window_with_order_by() -> Result<()> {
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![
         vec![
-            "28774375",
-            "61035129",
-            "61035129",
-            "1",
-            "61035129",
-            "61035129",
-            "61035129",
-            "2025611582",
-            "-108973366",
+            "28774375", "61035129", "61035129", "1", "61035129", "61035129", "61035129",
+            "61035129", "NULL",
         ],
         vec![
             "63044568",
@@ -970,7 +963,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
             "61035129",
             "-108973366",
             "61035129",
-            "2025611582",
+            "-108973366",
             "-108973366",
         ],
         vec![
@@ -981,7 +974,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
             "623103518",
             "-108973366",
             "61035129",
-            "2025611582",
+            "623103518",
             "-108973366",
         ],
         vec![
@@ -992,7 +985,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
             "623103518",
             "-1927628110",
             "61035129",
-            "2025611582",
+            "-1927628110",
             "-108973366",
         ],
         vec![
@@ -1003,7 +996,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
             "623103518",
             "-1927628110",
             "61035129",
-            "2025611582",
+            "-1899175111",
             "-108973366",
         ],
     ];
@@ -3307,6 +3300,11 @@ async fn test_interval_expressions() -> Result<()> {
         "interval '5 day'",
         "0 years 0 mons 5 days 0 hours 0 mins 0.00 secs"
     );
+    // Hour is ignored, this matches PostgreSQL
+    test_expression!(
+        "interval '5 day' hour",
+        "0 years 0 mons 5 days 0 hours 0 mins 0.00 secs"
+    );
     test_expression!(
         "interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'",
         "0 years 0 mons 5 days 4 hours 3 mins 2.100 secs"
@@ -3316,7 +3314,15 @@ async fn test_interval_expressions() -> Result<()> {
         "0 years 0 mons 15 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
+        "interval '0.5' month",
+        "0 years 0 mons 15 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
         "interval '1 month'",
+        "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
+        "interval '1' MONTH",
         "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
@@ -3337,6 +3343,10 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '2 year'",
+        "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
+        "interval '2' year",
         "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
     );
     Ok(())

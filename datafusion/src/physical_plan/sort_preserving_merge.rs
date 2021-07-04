@@ -542,10 +542,10 @@ mod tests {
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::assert_batches_eq;
     use crate::datasource::CsvReadOptions;
+    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::csv::CsvExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::merge::MergeExec;
     use crate::physical_plan::sort::SortExec;
     use crate::physical_plan::{collect, common};
     use crate::test;
@@ -639,7 +639,7 @@ mod tests {
         src: Arc<dyn ExecutionPlan>,
         sort: Vec<PhysicalSortExpr>,
     ) -> RecordBatch {
-        let merge = Arc::new(MergeExec::new(src));
+        let merge = Arc::new(CoalescePartitionsExec::new(src));
         let sort_exec = Arc::new(SortExec::try_new(sort, merge).unwrap());
         let mut result = collect(sort_exec).await.unwrap();
         assert_eq!(result.len(), 1);

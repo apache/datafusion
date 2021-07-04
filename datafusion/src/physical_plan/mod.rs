@@ -17,9 +17,9 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
-use self::{display::DisplayableExecutionPlan, merge::MergeExec};
-use crate::execution::context::ExecutionContextState;
-use crate::logical_plan::LogicalPlan;
+use self::{
+    coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
+};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::{
     error::{DataFusionError, Result},
@@ -120,16 +120,8 @@ impl SQLMetric {
     }
 }
 
-/// Physical query planner that converts a `LogicalPlan` to an
-/// `ExecutionPlan` suitable for execution.
-pub trait PhysicalPlanner {
-    /// Create a physical plan from a logical plan
-    fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        ctx_state: &ExecutionContextState,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
-}
+/// Physical planner interface
+pub use self::planner::PhysicalPlanner;
 
 /// `ExecutionPlan` represent nodes in the DataFusion Physical Plan.
 ///
@@ -315,7 +307,7 @@ pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
         }
         _ => {
             // merge into a single partition
-            let plan = MergeExec::new(plan.clone());
+            let plan = CoalescePartitionsExec::new(plan.clone());
             // MergeExec must produce a single partition
             assert_eq!(1, plan.output_partitioning().partition_count());
             common::collect(plan.execute(0).await?).await
@@ -592,6 +584,7 @@ pub trait Accumulator: Send + Sync + Debug {
 pub mod aggregates;
 pub mod array_expressions;
 pub mod coalesce_batches;
+pub mod coalesce_partitions;
 pub mod common;
 pub mod cross_join;
 #[cfg(feature = "crypto_expressions")]
@@ -613,7 +606,6 @@ pub mod json;
 pub mod limit;
 pub mod math_expressions;
 pub mod memory;
-pub mod merge;
 pub mod parquet;
 pub mod planner;
 pub mod projection;

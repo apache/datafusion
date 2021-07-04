@@ -39,9 +39,9 @@ use datafusion::logical_plan::{
     window_frames::WindowFrame, DFSchema, Expr, JoinConstraint, JoinType,
 };
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::PartitionMode;
-use datafusion::physical_plan::merge::MergeExec;
 use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
@@ -148,7 +148,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
             }
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> = convert_box_required!(merge.input)?;
-                Ok(Arc::new(MergeExec::new(input)))
+                Ok(Arc::new(CoalescePartitionsExec::new(input)))
             }
             PhysicalPlanType::Repartition(repart) => {
                 let input: Arc<dyn ExecutionPlan> = convert_box_required!(repart.input)?;
@@ -350,12 +350,24 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         ))
                     })?;
 
+                let partition_mode =
+                    protobuf::PartitionMode::from_i32(hashjoin.partition_mode)
+                        .ok_or_else(|| {
+                            proto_error(format!(
+                        "Received a HashJoinNode message with unknown PartitionMode {}",
+                        hashjoin.partition_mode
+                    ))
+                        })?;
+                let partition_mode = match partition_mode {
+                    protobuf::PartitionMode::CollectLeft => PartitionMode::CollectLeft,
+                    protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
+                };
                 Ok(Arc::new(HashJoinExec::try_new(
                     left,
                     right,
                     on,
                     &join_type.into(),
-                    PartitionMode::CollectLeft,
+                    partition_mode,
                 )?))
             }
             PhysicalPlanType::ShuffleReader(shuffle_reader) => {

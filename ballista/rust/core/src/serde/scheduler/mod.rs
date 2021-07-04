@@ -34,7 +34,6 @@ pub mod to_proto;
 
 /// Action that can be sent to an executor
 #[derive(Debug, Clone)]
-
 pub enum Action {
     /// Execute a query and store the results in memory
     ExecutePartition(ExecutePartition),

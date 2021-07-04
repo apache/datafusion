@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+from typing import List
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
@@ -30,7 +31,7 @@ class Accumulator:
     def __init__(self):
         self._sum = pa.scalar(0.0)
 
-    def to_scalars(self) -> [pa.Scalar]:
+    def to_scalars(self) -> List[pa.Scalar]:
         return [self._sum]
 
     def update(self, values: pa.Array) -> None:

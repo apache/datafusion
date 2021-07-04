@@ -105,7 +105,7 @@ pub fn create_aggregate_expr(
     fun: &AggregateUDF,
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
-    name: String,
+    name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
     // coerce
     let args = coerce(args, input_schema, &fun.signature)?;
@@ -119,7 +119,7 @@ pub fn create_aggregate_expr(
         fun: fun.clone(),
         args: args.clone(),
         data_type: (fun.return_type)(&arg_types)?.as_ref().clone(),
-        name,
+        name: name.into(),
     }))
 }
 

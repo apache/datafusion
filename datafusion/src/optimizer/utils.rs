@@ -511,7 +511,7 @@ mod tests {
             &mut accum,
         )?;
         assert_eq!(1, accum.len());
-        assert!(accum.contains(&Column::from_name("a".to_string())));
+        assert!(accum.contains(&Column::from_name("a")));
         Ok(())
     }
 

@@ -22,7 +22,8 @@ use crate::{
         information_schema::CatalogWithInformationSchema,
     },
     optimizer::{
-        eliminate_limit::EliminateLimit, hash_build_probe_order::HashBuildProbeOrder,
+        aggregate_statistics::AggregateStatistics, eliminate_limit::EliminateLimit,
+        hash_build_probe_order::HashBuildProbeOrder,
     },
     physical_optimizer::optimizer::PhysicalOptimizerRule,
 };
@@ -61,7 +62,7 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::projection_push_down::ProjectionPushDown;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
-use crate::physical_optimizer::merge_exec::AddMergeExec;
+use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::physical_plan::csv::CsvReadOptions;
@@ -270,7 +271,7 @@ impl ExecutionContext {
     /// Creates a DataFrame for reading a CSV data source.
     pub fn read_csv(
         &mut self,
-        filename: &str,
+        filename: impl Into<String>,
         options: CsvReadOptions,
     ) -> Result<Arc<dyn DataFrame>> {
         Ok(Arc::new(DataFrameImpl::new(
@@ -280,7 +281,10 @@ impl ExecutionContext {
     }
 
     /// Creates a DataFrame for reading a Parquet data source.
-    pub fn read_parquet(&mut self, filename: &str) -> Result<Arc<dyn DataFrame>> {
+    pub fn read_parquet(
+        &mut self,
+        filename: impl Into<String>,
+    ) -> Result<Arc<dyn DataFrame>> {
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_parquet(
@@ -474,10 +478,11 @@ impl ExecutionContext {
     pub async fn write_csv(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        path: String,
+        path: impl AsRef<str>,
     ) -> Result<()> {
+        let path = path.as_ref();
         // create directory to contain the CSV files (one per partition)
-        let fs_path = Path::new(&path);
+        let fs_path = Path::new(path);
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -511,11 +516,12 @@ impl ExecutionContext {
     pub async fn write_parquet(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        path: String,
+        path: impl AsRef<str>,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
+        let path = path.as_ref();
         // create directory to contain the Parquet files (one per partition)
-        let fs_path = Path::new(&path);
+        let fs_path = Path::new(path);
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -624,6 +630,9 @@ pub struct ExecutionConfig {
     /// Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel
     /// using the provided `concurrency` level
     pub repartition_aggregations: bool,
+    /// Should DataFusion repartition data using the partition keys to execute window functions in
+    /// parallel using the provided `concurrency` level
+    pub repartition_windows: bool,
 }
 
 impl Default for ExecutionConfig {
@@ -634,6 +643,7 @@ impl Default for ExecutionConfig {
             optimizers: vec![
                 Arc::new(ConstantFolding::new()),
                 Arc::new(EliminateLimit::new()),
+                Arc::new(AggregateStatistics::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(SimplifyExpressions::new()),
@@ -643,7 +653,7 @@ impl Default for ExecutionConfig {
             physical_optimizers: vec![
                 Arc::new(CoalesceBatches::new()),
                 Arc::new(Repartition::new()),
-                Arc::new(AddMergeExec::new()),
+                Arc::new(AddCoalescePartitionsExec::new()),
             ],
             query_planner: Arc::new(DefaultQueryPlanner {}),
             default_catalog: "datafusion".to_owned(),
@@ -652,6 +662,7 @@ impl Default for ExecutionConfig {
             information_schema: false,
             repartition_joins: true,
             repartition_aggregations: true,
+            repartition_windows: true,
         }
     }
 }
@@ -742,9 +753,16 @@ impl ExecutionConfig {
         self.repartition_joins = enabled;
         self
     }
+
     /// Enables or disables the use of repartitioning for aggregations to improve parallelism
     pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
         self.repartition_aggregations = enabled;
+        self
+    }
+
+    /// Enables or disables the use of repartitioning for window functions to improve parallelism
+    pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
+        self.repartition_windows = enabled;
         self
     }
 }
@@ -1418,11 +1436,11 @@ mod tests {
             "+----+----+--------------+-----------------+----------------+------------------------+---------+-----------+---------+---------+---------+",
             "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(c2) | LAST_VALUE(c2) | NTH_VALUE(c2,Int64(2)) | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
             "+----+----+--------------+-----------------+----------------+------------------------+---------+-----------+---------+---------+---------+",
-            "| 0  | 1  | 1            | 1               | 10             | 2                      | 1       | 1         | 1       | 1       | 1       |",
-            "| 0  | 2  | 2            | 1               | 10             | 2                      | 3       | 2         | 2       | 1       | 1.5     |",
-            "| 0  | 3  | 3            | 1               | 10             | 2                      | 6       | 3         | 3       | 1       | 2       |",
-            "| 0  | 4  | 4            | 1               | 10             | 2                      | 10      | 4         | 4       | 1       | 2.5     |",
-            "| 0  | 5  | 5            | 1               | 10             | 2                      | 15      | 5         | 5       | 1       | 3       |",
+            "| 0  | 1  | 1            | 1               | 1              |                        | 1       | 1         | 1       | 1       | 1       |",
+            "| 0  | 2  | 2            | 1               | 2              | 2                      | 3       | 2         | 2       | 1       | 1.5     |",
+            "| 0  | 3  | 3            | 1               | 3              | 2                      | 6       | 3         | 3       | 1       | 2       |",
+            "| 0  | 4  | 4            | 1               | 4              | 2                      | 10      | 4         | 4       | 1       | 2.5     |",
+            "| 0  | 5  | 5            | 1               | 5              | 2                      | 15      | 5         | 5       | 1       | 3       |",
             "+----+----+--------------+-----------------+----------------+------------------------+---------+-----------+---------+---------+---------+",
         ];
 
@@ -1475,7 +1493,7 @@ mod tests {
             ROW_NUMBER() OVER (PARTITION BY c2 ORDER BY c1), \
             FIRST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
             LAST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
-            NTH_VALUE(c2 + c1, 2) OVER (PARTITION BY c2 ORDER BY c1), \
+            NTH_VALUE(c2 + c1, 1) OVER (PARTITION BY c2 ORDER BY c1), \
             SUM(c2) OVER (PARTITION BY c2 ORDER BY c1), \
             COUNT(c2) OVER (PARTITION BY c2 ORDER BY c1), \
             MAX(c2) OVER (PARTITION BY c2 ORDER BY c1), \
@@ -1490,13 +1508,13 @@ mod tests {
 
         let expected = vec![
             "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
-            "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(c2 Plus c1) | LAST_VALUE(c2 Plus c1) | NTH_VALUE(c2 Plus c1,Int64(2)) | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
+            "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(c2 Plus c1) | LAST_VALUE(c2 Plus c1) | NTH_VALUE(c2 Plus c1,Int64(1)) | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
             "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
-            "| 0  | 1  | 1            | 1                       | 4                      | 2                              | 1       | 1         | 1       | 1       | 1       |",
-            "| 0  | 2  | 1            | 2                       | 5                      | 3                              | 2       | 1         | 2       | 2       | 2       |",
-            "| 0  | 3  | 1            | 3                       | 6                      | 4                              | 3       | 1         | 3       | 3       | 3       |",
-            "| 0  | 4  | 1            | 4                       | 7                      | 5                              | 4       | 1         | 4       | 4       | 4       |",
-            "| 0  | 5  | 1            | 5                       | 8                      | 6                              | 5       | 1         | 5       | 5       | 5       |",
+            "| 0  | 1  | 1            | 1                       | 1                      | 1                              | 1       | 1         | 1       | 1       | 1       |",
+            "| 0  | 2  | 1            | 2                       | 2                      | 2                              | 2       | 1         | 2       | 2       | 2       |",
+            "| 0  | 3  | 1            | 3                       | 3                      | 3                              | 3       | 1         | 3       | 3       | 3       |",
+            "| 0  | 4  | 1            | 4                       | 4                      | 4                              | 4       | 1         | 4       | 4       | 4       |",
+            "| 0  | 5  | 1            | 5                       | 5                      | 5                              | 5       | 1         | 5       | 5       | 5       |",
             "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
         ];
 
@@ -3447,6 +3465,16 @@ mod tests {
             Err(DataFusionError::NotImplemented(
                 "query not supported".to_string(),
             ))
+        }
+
+        fn create_physical_expr(
+            &self,
+            _expr: &Expr,
+            _input_dfschema: &crate::logical_plan::DFSchema,
+            _input_schema: &Schema,
+            _ctx_state: &ExecutionContextState,
+        ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
+            unimplemented!()
         }
     }
 

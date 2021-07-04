@@ -54,8 +54,8 @@ use arrow::array::{
 
 use super::expressions::Column;
 use super::{
+    coalesce_partitions::CoalescePartitionsExec,
     hash_utils::{build_join_schema, check_join_is_valid, JoinOn},
-    merge::MergeExec,
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::JoinType;
@@ -173,6 +173,11 @@ impl HashJoinExec {
         &self.join_type
     }
 
+    /// The partitioning mode of this hash join
+    pub fn partition_mode(&self) -> &PartitionMode {
+        &self.mode
+    }
+
     /// Calculates column indices and left/right placement on input / output schemas and jointype
     fn column_indices_from_schema(&self) -> ArrowResult<Vec<ColumnIndex>> {
         let (primary_is_left, primary_schema, secondary_schema) = match self.join_type {
@@ -256,7 +261,7 @@ impl ExecutionPlan for HashJoinExec {
                             let start = Instant::now();
 
                             // merge all left parts into a single stream
-                            let merge = MergeExec::new(self.left.clone());
+                            let merge = CoalescePartitionsExec::new(self.left.clone());
                             let stream = merge.execute(0).await?;
 
                             // This operation performs 2 steps at once:
