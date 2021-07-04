@@ -919,6 +919,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let var_names = vec![id.value.clone()];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
+                    // create a column expression based on raw user input, this column will be
+                    // normalized with qualifer later by the SQL planner.
                     Ok(col(&id.value))
                 }
             }
