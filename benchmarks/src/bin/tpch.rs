@@ -201,7 +201,7 @@ async fn main() -> Result<()> {
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let config = ExecutionConfig::new()
-        .with_partitions(opt.concurrency)
+        .with_default_partitions(opt.concurrency)
         .with_batch_size(opt.batch_size);
     let mut ctx = ExecutionContext::with_config(config);
 
@@ -963,7 +963,7 @@ mod tests {
         // Tests running query with empty tables, to see whether they run succesfully.
 
         let config = ExecutionConfig::new()
-            .with_partitions(1)
+            .with_default_partitions(1)
             .with_batch_size(10);
         let mut ctx = ExecutionContext::with_config(config);
 
@@ -1057,7 +1057,7 @@ mod tests {
 
         fn round_trip_query(n: usize) -> Result<()> {
             let config = ExecutionConfig::new()
-                .with_partitions(1)
+                .with_default_partitions(1)
                 .with_batch_size(10);
             let mut ctx = ExecutionContext::with_config(config);
 

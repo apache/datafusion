@@ -135,7 +135,7 @@ mod tests {
 
         let optimized = optimizer.optimize(
             Arc::new(parquet_project),
-            &ExecutionConfig::new().with_partitions(10),
+            &ExecutionConfig::new().with_default_partitions(10),
         )?;
 
         assert_eq!(
@@ -173,7 +173,7 @@ mod tests {
 
         let optimized = optimizer.optimize(
             Arc::new(parquet_project),
-            &ExecutionConfig::new().with_partitions(10),
+            &ExecutionConfig::new().with_default_partitions(10),
         )?;
 
         // RepartitionExec is added to deepest node

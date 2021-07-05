@@ -675,7 +675,7 @@ impl ExecutionConfig {
     }
 
     /// Customize default_partitions
-    pub fn with_partitions(mut self, n: usize) -> Self {
+    pub fn with_default_partitions(mut self, n: usize) -> Self {
         // number of partitions must be greater than zero
         assert!(n > 0);
         self.default_partitions = n;
@@ -3474,8 +3474,9 @@ mod tests {
 
     /// Generate a partitioned CSV file and register it with an execution context
     fn create_ctx(tmp_dir: &TempDir, partition_count: usize) -> Result<ExecutionContext> {
-        let mut ctx =
-            ExecutionContext::with_config(ExecutionConfig::new().with_partitions(8));
+        let mut ctx = ExecutionContext::with_config(
+            ExecutionConfig::new().with_default_partitions(8),
+        );
 
         let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
 

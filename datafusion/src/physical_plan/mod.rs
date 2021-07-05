@@ -186,7 +186,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 ///
 /// // Hard code partitions as it appears in the RepartitionExec output
 /// let config = ExecutionConfig::new()
-///     .with_partitions(3);
+///     .with_default_partitions(3);
 /// let mut ctx = ExecutionContext::with_config(config);
 ///
 /// // register the a table
