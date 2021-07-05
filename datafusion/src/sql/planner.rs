@@ -682,13 +682,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         projection: &[SelectItem],
     ) -> Result<Vec<Expr>> {
         let input_schema = plan.schema();
+        let using_columns = plan.using_columns()?;
 
         projection
             .iter()
             .map(|expr| self.sql_select_to_rex(expr, input_schema))
             .collect::<Result<Vec<Expr>>>()?
             .iter()
-            .flat_map(|expr| expand_wildcard(expr, input_schema))
+            .flat_map(|expr| expand_wildcard(expr, input_schema, &using_columns))
             .map(|expr| normalize_col(expr, plan))
             .collect::<Result<Vec<Expr>>>()
     }
@@ -2770,6 +2771,19 @@ mod tests {
         \n  Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
         \n    TableScan: person2 projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn project_wildcard_on_join_with_using() {
+        let sql = "SELECT * \
+            FROM lineitem \
+            JOIN lineitem as lineitem2 \
+            USING (l_item_id)";
+        let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
+        \n  Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
+        \n    TableScan: lineitem projection=None\
+        \n    TableScan: lineitem2 projection=None";
         quick_test(sql, expected);
     }
 
