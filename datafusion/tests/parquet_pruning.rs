@@ -41,13 +41,13 @@ use tempfile::NamedTempFile;
 async fn prune_timestamps_nanos() {
     let output = ContextWithParquet::new()
         .await
-        .query("SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11')")
+        .query("SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')")
         .await;
     println!("{}", output.description());
     // TODO This should prune one metrics without error
     assert_eq!(output.predicate_evaluation_errors(), Some(1));
     assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 12, "{}", output.description());
+    assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
 #[tokio::test]
@@ -55,14 +55,14 @@ async fn prune_timestamps_micros() {
     let output = ContextWithParquet::new()
         .await
         .query(
-            "SELECT * FROM t where micros < to_timestamp_micros('2020-01-02 01:01:11')",
+            "SELECT * FROM t where micros < to_timestamp_micros('2020-01-02 01:01:11Z')",
         )
         .await;
     println!("{}", output.description());
     // TODO This should prune one metrics without error
     assert_eq!(output.predicate_evaluation_errors(), Some(1));
     assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 12, "{}", output.description());
+    assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
 #[tokio::test]
@@ -70,14 +70,14 @@ async fn prune_timestamps_millis() {
     let output = ContextWithParquet::new()
         .await
         .query(
-            "SELECT * FROM t where millis < to_timestamp_millis('2020-01-02 01:01:11')",
+            "SELECT * FROM t where millis < to_timestamp_millis('2020-01-02 01:01:11Z')",
         )
         .await;
     println!("{}", output.description());
     // TODO This should prune one metrics without error
     assert_eq!(output.predicate_evaluation_errors(), Some(1));
     assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 12, "{}", output.description());
+    assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
 #[tokio::test]
@@ -85,14 +85,14 @@ async fn prune_timestamps_seconds() {
     let output = ContextWithParquet::new()
         .await
         .query(
-            "SELECT * FROM t where seconds < to_timestamp_seconds('2020-01-02 01:01:11')",
+            "SELECT * FROM t where seconds < to_timestamp_seconds('2020-01-02 01:01:11Z')",
         )
         .await;
     println!("{}", output.description());
     // TODO This should prune one metrics without error
     assert_eq!(output.predicate_evaluation_errors(), Some(1));
     assert_eq!(output.row_groups_pruned(), Some(0));
-    assert_eq!(output.result_rows, 12, "{}", output.description());
+    assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
 // ----------------------
