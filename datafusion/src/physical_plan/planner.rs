@@ -679,8 +679,7 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<hash_utils::JoinOn>>()?;
 
-                if ctx_state.config.partitions > 1 && ctx_state.config.repartition_joins
-                {
+                if ctx_state.config.partitions > 1 && ctx_state.config.repartition_joins {
                     let (left_expr, right_expr) = join_on
                         .iter()
                         .map(|(l, r)| {

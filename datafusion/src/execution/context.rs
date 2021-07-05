@@ -607,7 +607,7 @@ impl QueryPlanner for DefaultQueryPlanner {
 pub struct ExecutionConfig {
     /// Number of concurrent threads for query execution.
     pub concurrency: usize,
-    /// Number of partitions for query execution.
+    /// Number of default partitions to use for repartioning data
     pub partitions: usize,
     /// Default batch size when reading data sources
     pub batch_size: usize,
@@ -684,7 +684,7 @@ impl ExecutionConfig {
         self
     }
 
-    /// Customize default number of partitions being created
+    /// Customize default number of partitions being used in repartioning
     pub fn with_partitions(mut self, n: usize) -> Self {
         // partitions must be greater than zero
         assert!(n > 0);

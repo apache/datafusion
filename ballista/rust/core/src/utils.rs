@@ -234,7 +234,9 @@ fn build_exec_plan_diagram(
 
 /// Create a DataFusion context that is compatible with Ballista
 pub fn create_datafusion_context() -> ExecutionContext {
-    let config = ExecutionConfig::new().with_concurrency(1).with_partitions(4); // TODO: make it easier to configure from Ballista
+    let config = ExecutionConfig::new()
+        .with_concurrency(1)
+        .with_partitions(4); // TODO: make it easier to configure from Ballista
     ExecutionContext::with_config(config)
 }
 
