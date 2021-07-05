@@ -35,8 +35,8 @@ impl Repartition {
     }
 }
 
-fn optimize_concurrency(
-    concurrency: usize,
+fn optimize_partitioning(
+    partitions: usize,
     requires_single_partition: bool,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -50,8 +50,8 @@ fn optimize_concurrency(
             .children()
             .iter()
             .map(|child| {
-                optimize_concurrency(
-                    concurrency,
+                optimize_partitioning(
+                    partitions,
                     matches!(
                         plan.required_child_distribution(),
                         Distribution::SinglePartition
@@ -64,9 +64,9 @@ fn optimize_concurrency(
     };
 
     let perform_repartition = match new_plan.output_partitioning() {
-        // Apply when underlying node has less than `self.concurrency` amount of concurrency
-        RoundRobinBatch(x) => x < concurrency,
-        UnknownPartitioning(x) => x < concurrency,
+        // Apply when underlying node has less than `self.partitions` amount of concurrency
+        RoundRobinBatch(x) => x < partitions,
+        UnknownPartitioning(x) => x < partitions,
         // we don't want to introduce partitioning after hash partitioning
         // as the plan will likely depend on this
         Hash(_, _) => false,
@@ -79,7 +79,7 @@ fn optimize_concurrency(
     if perform_repartition && !requires_single_partition && !is_empty_exec {
         Ok(Arc::new(RepartitionExec::try_new(
             new_plan,
-            RoundRobinBatch(concurrency),
+            RoundRobinBatch(partitions),
         )?))
     } else {
         Ok(new_plan)
@@ -92,11 +92,11 @@ impl PhysicalOptimizerRule for Repartition {
         plan: Arc<dyn ExecutionPlan>,
         config: &ExecutionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Don't run optimizer if concurrency == 1
-        if config.concurrency == 1 {
+        // Don't run optimizer if partitions == 1
+        if config.partitions == 1 {
             Ok(plan)
         } else {
-            optimize_concurrency(config.concurrency, true, plan)
+            optimize_partitioning(config.partitions, true, plan)
         }
     }
 

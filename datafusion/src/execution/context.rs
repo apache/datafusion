@@ -607,6 +607,8 @@ impl QueryPlanner for DefaultQueryPlanner {
 pub struct ExecutionConfig {
     /// Number of concurrent threads for query execution.
     pub concurrency: usize,
+    /// Number of partitions for query execution.
+    pub partitions: usize,
     /// Default batch size when reading data sources
     pub batch_size: usize,
     /// Responsible for optimizing a logical plan
@@ -639,6 +641,7 @@ impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             concurrency: num_cpus::get(),
+            partitions: num_cpus::get(),
             batch_size: 8192,
             optimizers: vec![
                 Arc::new(ConstantFolding::new()),
@@ -678,6 +681,14 @@ impl ExecutionConfig {
         // concurrency must be greater than zero
         assert!(n > 0);
         self.concurrency = n;
+        self
+    }
+
+    /// Customize default number of partitions being created
+    pub fn with_partitions(mut self, n: usize) -> Self {
+        // partitions must be greater than zero
+        assert!(n > 0);
+        self.partitions = n;
         self
     }
 
