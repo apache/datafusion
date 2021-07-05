@@ -1568,12 +1568,14 @@ fn remove_join_expressions(
     }
 }
 
-/// Parse equijoin ON condition which could be a single Eq or multiple conjunctive Eqs
+/// Extracts equijoin ON condition be a single Eq or multiple conjunctive Eqs
+/// Filters matching this pattern are added to `accum`
+/// Filters that don't match this pattern are added to `accum_filter`
+/// Examples:
 ///
-/// Examples
-///
-/// foo = bar
-/// foo = bar AND bar = baz AND ...
+/// foo = bar => accum=[(foo, bar)] accum_filter=[]
+/// foo = bar AND bar = baz => accum=[(foo, bar), (bar, baz)] accum_filter=[]
+/// foo = bar AND baz > 1 => accum=[(foo, bar)] accum_filter=[baz > 1]
 ///
 fn extract_join_keys(
     expr: &Expr,
