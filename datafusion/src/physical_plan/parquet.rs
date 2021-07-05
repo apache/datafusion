@@ -76,8 +76,8 @@ pub struct ParquetExec {
     batch_size: usize,
     /// Statistics for the data set (sum of statistics for all partitions)
     statistics: Statistics,
-    /// Numer of times the pruning predicate could not be created
-    predicate_creation_errors: Arc<SQLMetric>,
+    /// metrics for the overall execution
+    metrics: ParquetExecMetrics,
     /// Optional predicate builder
     predicate_builder: Option<PruningPredicate>,
     /// Optional limit of the number of rows
@@ -100,12 +100,19 @@ pub struct ParquetPartition {
     /// Statistics for this partition
     pub statistics: Statistics,
     /// Execution metrics
-    metrics: ParquetMetrics,
+    metrics: ParquetPartitionMetrics,
 }
 
-/// Stores metrics about this parquet execution
+/// Stores metrics about the overall parquet execution
 #[derive(Debug, Clone)]
-struct ParquetMetrics {
+pub struct ParquetExecMetrics {
+    /// Numer of times the pruning predicate could not be created
+    pub predicate_creation_errors: Arc<SQLMetric>,
+}
+
+/// Stores metrics about the parquet execution for a particular ParquetPartition
+#[derive(Debug, Clone)]
+struct ParquetPartitionMetrics {
     /// Numer of times the predicate could not be evaluated
     pub predicate_evaluation_errors: Arc<SQLMetric>,
     /// Number of row groups pruned using
@@ -241,7 +248,7 @@ impl ParquetExec {
             )));
         }
         let schema = Arc::new(schemas.pop().unwrap());
-        let predicate_creation_errors = SQLMetric::counter();
+        let metrics = ParquetExecMetrics::new();
 
         let predicate_builder = predicate.and_then(|predicate_expr| {
             match PruningPredicate::try_new(&predicate_expr, schema.clone()) {
@@ -251,7 +258,7 @@ impl ParquetExec {
                         "Could not create pruning predicate for {:?}: {}",
                         predicate_expr, e
                     );
-                    predicate_creation_errors.add(1);
+                    metrics.predicate_creation_errors.add(1);
                     None
                 }
             }
@@ -261,7 +268,7 @@ impl ParquetExec {
             partitions,
             schema,
             projection,
-            predicate_creation_errors,
+            metrics,
             predicate_builder,
             batch_size,
             limit,
@@ -273,7 +280,7 @@ impl ParquetExec {
         partitions: Vec<ParquetPartition>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
-        predicate_creation_errors: Arc<SQLMetric>,
+        metrics: ParquetExecMetrics,
         predicate_builder: Option<PruningPredicate>,
         batch_size: usize,
         limit: Option<usize>,
@@ -337,7 +344,7 @@ impl ParquetExec {
             partitions,
             schema: Arc::new(projected_schema),
             projection,
-            predicate_creation_errors,
+            metrics,
             predicate_builder,
             batch_size,
             statistics,
@@ -372,7 +379,7 @@ impl ParquetPartition {
         Self {
             filenames,
             statistics,
-            metrics: ParquetMetrics::new(),
+            metrics: ParquetPartitionMetrics::new(),
         }
     }
 
@@ -387,8 +394,18 @@ impl ParquetPartition {
     }
 }
 
-impl ParquetMetrics {
-    fn new() -> Self {
+impl ParquetExecMetrics {
+    /// Create new metrics
+    pub fn new() -> Self {
+        Self {
+            predicate_creation_errors: SQLMetric::counter(),
+        }
+    }
+}
+
+impl ParquetPartitionMetrics {
+    /// Create new metrics
+    pub fn new() -> Self {
         Self {
             predicate_evaluation_errors: SQLMetric::counter(),
             row_groups_pruned: SQLMetric::counter(),
@@ -513,7 +530,7 @@ impl ExecutionPlan for ParquetExec {
             })
             .chain(std::iter::once((
                 "numPredicateCreationErrors".to_string(),
-                self.predicate_creation_errors.as_ref().clone(),
+                self.metrics.predicate_creation_errors.as_ref().clone(),
             )))
             .collect()
     }
@@ -616,7 +633,7 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 
 fn build_row_group_predicate(
     predicate_builder: &PruningPredicate,
-    metrics: ParquetMetrics,
+    metrics: ParquetPartitionMetrics,
     row_group_metadata: &[RowGroupMetaData],
 ) -> Box<dyn Fn(&RowGroupMetaData, usize) -> bool> {
     let parquet_schema = predicate_builder.schema().as_ref();
@@ -647,7 +664,7 @@ fn build_row_group_predicate(
 
 fn read_files(
     filenames: &[String],
-    metrics: ParquetMetrics,
+    metrics: ParquetPartitionMetrics,
     projection: &[usize],
     predicate_builder: &Option<PruningPredicate>,
     batch_size: usize,
@@ -838,7 +855,7 @@ mod tests {
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate = build_row_group_predicate(
             &predicate_builder,
-            ParquetMetrics::new(),
+            ParquetPartitionMetrics::new(),
             &row_group_metadata,
         );
         let row_group_filter = row_group_metadata
@@ -871,7 +888,7 @@ mod tests {
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate = build_row_group_predicate(
             &predicate_builder,
-            ParquetMetrics::new(),
+            ParquetPartitionMetrics::new(),
             &row_group_metadata,
         );
         let row_group_filter = row_group_metadata
@@ -919,7 +936,7 @@ mod tests {
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate = build_row_group_predicate(
             &predicate_builder,
-            ParquetMetrics::new(),
+            ParquetPartitionMetrics::new(),
             &row_group_metadata,
         );
         let row_group_filter = row_group_metadata
@@ -937,7 +954,7 @@ mod tests {
         let predicate_builder = PruningPredicate::try_new(&expr, schema)?;
         let row_group_predicate = build_row_group_predicate(
             &predicate_builder,
-            ParquetMetrics::new(),
+            ParquetPartitionMetrics::new(),
             &row_group_metadata,
         );
         let row_group_filter = row_group_metadata
@@ -984,7 +1001,7 @@ mod tests {
         let row_group_metadata = vec![rgm1, rgm2];
         let row_group_predicate = build_row_group_predicate(
             &predicate_builder,
-            ParquetMetrics::new(),
+            ParquetPartitionMetrics::new(),
             &row_group_metadata,
         );
         let row_group_filter = row_group_metadata
