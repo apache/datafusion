@@ -110,9 +110,10 @@ mod tests {
 
     use super::*;
     use crate::datasource::datasource::Statistics;
-    use crate::physical_plan::parquet::{ParquetExec, ParquetPartition};
+    use crate::physical_plan::parquet::{
+        ParquetExec, ParquetExecMetrics, ParquetPartition,
+    };
     use crate::physical_plan::projection::ProjectionExec;
-    use crate::physical_plan::SQLMetric;
 
     #[test]
     fn added_repartition_to_single_partition() -> Result<()> {
@@ -126,7 +127,7 @@ mod tests {
                 )],
                 schema,
                 None,
-                SQLMetric::counter(),
+                ParquetExecMetrics::new(),
                 None,
                 2048,
                 None,
@@ -164,7 +165,7 @@ mod tests {
                     )],
                     schema,
                     None,
-                    SQLMetric::counter(),
+                    ParquetExecMetrics::new(),
                     None,
                     2048,
                     None,

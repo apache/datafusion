@@ -645,13 +645,12 @@ fn build_row_group_predicate(
     let predicate_values = predicate_builder.prune(&pruning_stats);
 
     match predicate_values {
-        Ok(values) => Box::new(move |_, i| {
+        Ok(values) => {
             // NB: false means don't scan row group
-            if !values[i] {
-                metrics.row_groups_pruned.add(1)
-            }
-            values[i]
-        }),
+            let num_pruned = values.iter().filter(|&v| !v).count();
+            metrics.row_groups_pruned.add(num_pruned);
+            Box::new(move |_, i| values[i])
+        }
         // stats filter array could not be built
         // return a closure which will not filter out any row groups
         Err(e) => {
