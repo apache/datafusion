@@ -227,7 +227,10 @@ fn build_exec_plan_diagram(
 
 /// Create a DataFusion context that is compatible with Ballista
 pub fn create_datafusion_context() -> ExecutionContext {
-    let config = ExecutionConfig::new().with_concurrency(2); // TODO: this is hack to enable partitioned joins
+    // specify partitions > 1 to enable partitioned joins
+    //TODO we need to implement a configuration mechanism for Ballista
+    // see https://github.com/apache/arrow-datafusion/issues/682
+    let config = ExecutionConfig::new().with_partitions(2);
     ExecutionContext::with_config(config)
 }
 

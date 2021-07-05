@@ -37,12 +37,12 @@ pub struct ParquetTable {
     path: String,
     schema: SchemaRef,
     statistics: Statistics,
-    max_concurrency: usize,
+    partition_count: usize,
 }
 
 impl ParquetTable {
     /// Attempt to initialize a new `ParquetTable` from a file path.
-    pub fn try_new(path: impl Into<String>, max_concurrency: usize) -> Result<Self> {
+    pub fn try_new(path: impl Into<String>, partition_count: usize) -> Result<Self> {
         let path = path.into();
         let parquet_exec = ParquetExec::try_from_path(&path, None, None, 0, 1, None)?;
         let schema = parquet_exec.schema();
@@ -50,7 +50,7 @@ impl ParquetTable {
             path,
             schema,
             statistics: parquet_exec.statistics().to_owned(),
-            max_concurrency,
+            partition_count,
         })
     }
 
@@ -94,7 +94,7 @@ impl TableProvider for ParquetTable {
             limit
                 .map(|l| std::cmp::min(l, batch_size))
                 .unwrap_or(batch_size),
-            self.max_concurrency,
+            self.partition_count,
             limit,
         )?))
     }

@@ -26,7 +26,10 @@ pub const TPCH_TABLES: &[&str] = &[
 ];
 
 pub fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
-    let config = ExecutionConfig::new().with_concurrency(2); // TODO: this is hack to enable partitioned joins
+    // specify partitions > 1 to enable partitioned joins
+    //TODO we need to implement a configuration mechanism for Ballista
+    // see https://github.com/apache/arrow-datafusion/issues/682
+    let config = ExecutionConfig::new().with_partitions(2);
     let mut ctx = ExecutionContext::with_config(config);
     for table in TPCH_TABLES {
         let schema = get_tpch_schema(table);

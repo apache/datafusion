@@ -103,7 +103,7 @@ impl ParquetExec {
         projection: Option<Vec<usize>>,
         predicate: Option<Expr>,
         batch_size: usize,
-        max_concurrency: usize,
+        partition_count: usize,
         limit: Option<usize>,
     ) -> Result<Self> {
         // build a list of filenames from the specified path, which could be a single file or
@@ -124,7 +124,7 @@ impl ParquetExec {
                 projection,
                 predicate,
                 batch_size,
-                max_concurrency,
+                partition_count,
                 limit,
             )
         }
@@ -137,15 +137,15 @@ impl ParquetExec {
         projection: Option<Vec<usize>>,
         predicate: Option<Expr>,
         batch_size: usize,
-        max_concurrency: usize,
+        partition_count: usize,
         limit: Option<usize>,
     ) -> Result<Self> {
         // build a list of Parquet partitions with statistics and gather all unique schemas
         // used in this data set
         let mut schemas: Vec<Schema> = vec![];
-        let mut partitions = Vec::with_capacity(max_concurrency);
+        let mut partitions = Vec::with_capacity(partition_count);
         let filenames: Vec<String> = filenames.iter().map(|s| s.to_string()).collect();
-        let chunks = split_files(&filenames, max_concurrency);
+        let chunks = split_files(&filenames, partition_count);
         let mut num_rows = 0;
         let mut total_byte_size = 0;
         let mut null_counts = Vec::new();

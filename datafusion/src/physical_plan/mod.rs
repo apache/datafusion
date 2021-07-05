@@ -184,9 +184,9 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 /// use datafusion::prelude::*;
 /// use datafusion::physical_plan::displayable;
 ///
-/// // Hard code concurrency as it appears in the RepartitionExec output
+/// // Hard code partitions as it appears in the RepartitionExec output
 /// let config = ExecutionConfig::new()
-///     .with_concurrency(3);
+///     .with_partitions(3);
 /// let mut ctx = ExecutionContext::with_config(config);
 ///
 /// // register the a table

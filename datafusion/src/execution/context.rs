@@ -290,7 +290,7 @@ impl ExecutionContext {
             &LogicalPlanBuilder::scan_parquet(
                 filename,
                 None,
-                self.state.lock().unwrap().config.concurrency,
+                self.state.lock().unwrap().config.default_partitions,
             )?
             .build()?,
         )))
@@ -324,7 +324,7 @@ impl ExecutionContext {
     pub fn register_parquet(&mut self, name: &str, filename: &str) -> Result<()> {
         let table = ParquetTable::try_new(
             filename,
-            self.state.lock().unwrap().config.concurrency,
+            self.state.lock().unwrap().config.default_partitions,
         )?;
         self.register_table(name, Arc::new(table))?;
         Ok(())
@@ -605,8 +605,9 @@ impl QueryPlanner for DefaultQueryPlanner {
 /// Configuration options for execution context
 #[derive(Clone)]
 pub struct ExecutionConfig {
-    /// Number of concurrent threads for query execution.
-    pub concurrency: usize,
+    /// Default number of partitions for query execution. Increasing the partition count can
+    /// increase concurrency in some cases.
+    pub default_partitions: usize,
     /// Default batch size when reading data sources
     pub batch_size: usize,
     /// Responsible for optimizing a logical plan
@@ -628,17 +629,17 @@ pub struct ExecutionConfig {
     /// using the provided `concurrency` level
     pub repartition_joins: bool,
     /// Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel
-    /// using the provided `concurrency` level
+    /// using the provided `default_partitions` level
     pub repartition_aggregations: bool,
     /// Should DataFusion repartition data using the partition keys to execute window functions in
-    /// parallel using the provided `concurrency` level
+    /// parallel using the provided `default_partitions` level
     pub repartition_windows: bool,
 }
 
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
-            concurrency: num_cpus::get(),
+            default_partitions: num_cpus::get(),
             batch_size: 8192,
             optimizers: vec![
                 Arc::new(ConstantFolding::new()),
@@ -673,11 +674,11 @@ impl ExecutionConfig {
         Default::default()
     }
 
-    /// Customize max_concurrency
-    pub fn with_concurrency(mut self, n: usize) -> Self {
-        // concurrency must be greater than zero
+    /// Customize default_partitions
+    pub fn with_partitions(mut self, n: usize) -> Self {
+        // number of partitions must be greater than zero
         assert!(n > 0);
-        self.concurrency = n;
+        self.default_partitions = n;
         self
     }
 
@@ -3474,7 +3475,7 @@ mod tests {
     /// Generate a partitioned CSV file and register it with an execution context
     fn create_ctx(tmp_dir: &TempDir, partition_count: usize) -> Result<ExecutionContext> {
         let mut ctx =
-            ExecutionContext::with_config(ExecutionConfig::new().with_concurrency(8));
+            ExecutionContext::with_config(ExecutionConfig::new().with_partitions(8));
 
         let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
 
