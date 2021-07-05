@@ -33,6 +33,7 @@ simd = ["datafusion/simd"]
 ahash = "0.7"
 async-trait = "0.1.36"
 futures = "0.3"
+hashbrown = "0.11"
 log = "0.4"
 prost = "0.7"
 serde = {version = "1", features = ["derive"]}

@@ -20,6 +20,7 @@
 //! partition is re-partitioned and streamed to disk in Arrow IPC format. Future stages of the query
 //! will use the ShuffleReaderExec to read these results.
 
+use std::fs::File;
 use std::iter::Iterator;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -43,11 +44,11 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::hash_join::create_hashes;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream, SQLMetric,
 };
 use futures::StreamExt;
+use hashbrown::HashMap;
 use log::info;
-use std::fs::File;
 use uuid::Uuid;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
@@ -66,6 +67,22 @@ pub struct ShuffleWriterExec {
     work_dir: String,
     /// Optional shuffle output partitioning
     shuffle_output_partitioning: Option<Partitioning>,
+    /// Shuffle write metrics
+    metrics: ShuffleWriteMetrics,
+}
+
+#[derive(Debug, Clone)]
+struct ShuffleWriteMetrics {
+    /// Time spend writing batches to shuffle files
+    write_time: Arc<SQLMetric>,
+}
+
+impl ShuffleWriteMetrics {
+    fn new() -> Self {
+        Self {
+            write_time: SQLMetric::time_nanos(),
+        }
+    }
 }
 
 impl ShuffleWriterExec {
@@ -83,6 +100,7 @@ impl ShuffleWriterExec {
             plan,
             work_dir,
             shuffle_output_partitioning,
+            metrics: ShuffleWriteMetrics::new(),
         })
     }
 
@@ -150,12 +168,16 @@ impl ExecutionPlan for ShuffleWriterExec {
                 info!("Writing results to {}", path);
 
                 // stream results to disk
-                let stats = utils::write_stream_to_disk(&mut stream, path)
-                    .await
-                    .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+                let stats = utils::write_stream_to_disk(
+                    &mut stream,
+                    path,
+                    self.metrics.write_time.clone(),
+                )
+                .await
+                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
 
                 info!(
-                    "Executed partition {} in {} seconds. Statistics: {:?}",
+                    "Executed partition {} in {} seconds. Statistics: {}",
                     partition,
                     now.elapsed().as_secs(),
                     stats
@@ -231,6 +253,7 @@ impl ExecutionPlan for ShuffleWriterExec {
                             RecordBatch::try_new(input_batch.schema(), columns)?;
 
                         // write batch out
+                        let start = Instant::now();
                         match &mut writers[num_output_partition] {
                             Some(w) => {
                                 w.write(&output_batch)?;
@@ -251,6 +274,7 @@ impl ExecutionPlan for ShuffleWriterExec {
                                 writers[num_output_partition] = Some(writer);
                             }
                         }
+                        self.metrics.write_time.add_elapsed(start);
                     }
                 }
 
@@ -308,6 +332,12 @@ impl ExecutionPlan for ShuffleWriterExec {
                 "Invalid shuffle partitioning scheme".to_owned(),
             )),
         }
+    }
+
+    fn metrics(&self) -> HashMap<String, SQLMetric> {
+        let mut metrics = HashMap::new();
+        metrics.insert("writeTime".to_owned(), (*self.metrics.write_time).clone());
+        metrics
     }
 
     fn fmt_as(
