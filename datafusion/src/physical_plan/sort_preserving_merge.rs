@@ -24,22 +24,23 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{ArrayRef, MutableArrayData};
-use arrow::compute::SortOptions;
+use arrow::{
+    array::{make_array as make_arrow_array, ArrayRef, MutableArrayData},
+    compute::SortOptions,
+    datatypes::SchemaRef,
+    error::{ArrowError, Result as ArrowResult},
+    record_batch::RecordBatch,
+};
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::FusedStream;
 use futures::{Stream, StreamExt};
 
-use crate::arrow::datatypes::SchemaRef;
-use crate::arrow::error::ArrowError;
-use crate::arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::common::spawn_execution;
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalExpr,
-    RecordBatchStream, SendableRecordBatchStream,
+    common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
+    Distribution, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
+    SendableRecordBatchStream,
 };
 
 /// Sort preserving merge execution plan
@@ -425,19 +426,38 @@ impl SortPreservingMergeStream {
                     self.in_progress.len(),
                 );
 
-                for row_index in &self.in_progress {
-                    let buffer_idx =
-                        stream_to_buffer_idx[row_index.stream_idx] + row_index.cursor_idx;
-
-                    // TODO: Coalesce contiguous writes
-                    array_data.extend(
-                        buffer_idx,
-                        row_index.row_idx,
-                        row_index.row_idx + 1,
-                    );
+                if self.in_progress.is_empty() {
+                    return make_arrow_array(array_data.freeze());
                 }
 
-                arrow::array::make_array(array_data.freeze())
+                let first = &self.in_progress[0];
+                let mut buffer_idx =
+                    stream_to_buffer_idx[first.stream_idx] + first.cursor_idx;
+                let mut start_row_idx = first.row_idx;
+                let mut end_row_idx = start_row_idx + 1;
+
+                for row_index in self.in_progress.iter().skip(1) {
+                    let next_buffer_idx =
+                        stream_to_buffer_idx[row_index.stream_idx] + row_index.cursor_idx;
+
+                    if next_buffer_idx == buffer_idx && row_index.row_idx == end_row_idx {
+                        // subsequent row in same batch
+                        end_row_idx += 1;
+                        continue;
+                    }
+
+                    // emit current batch of rows for current buffer
+                    array_data.extend(buffer_idx, start_row_idx, end_row_idx);
+
+                    // start new batch of rows
+                    buffer_idx = next_buffer_idx;
+                    start_row_idx = row_index.row_idx;
+                    end_row_idx = start_row_idx + 1;
+                }
+
+                // emit final batch of rows
+                array_data.extend(buffer_idx, start_row_idx, end_row_idx);
+                make_arrow_array(array_data.freeze())
             })
             .collect();
 
