@@ -50,9 +50,9 @@ RUN echo "Building OpenSSL" && \
     curl -LO "https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz" && \
     tar xzf "openssl-$OPENSSL_VERSION.tar.gz" && cd "openssl-$OPENSSL_VERSION" && \
     env CC=musl-gcc ./Configure no-shared no-zlib -fPIC --prefix=/usr/local/musl -DOPENSSL_NO_SECURE_MEMORY linux-x86_64 && \
-    env C_INCLUDE_PATH=/usr/local/musl/include/ make depend && \
-    env C_INCLUDE_PATH=/usr/local/musl/include/ make && \
-    make install 1>/dev/null && \
+    env C_INCLUDE_PATH=/usr/local/musl/include/ make -s depend && \
+    env C_INCLUDE_PATH=/usr/local/musl/include/ make -s && \
+    make -s install && \
     rm /usr/local/musl/include/linux /usr/local/musl/include/asm /usr/local/musl/include/asm-generic && \
     rm -r /tmp/*
 
@@ -62,7 +62,7 @@ RUN echo "Building zlib" && \
     curl -LO "http://zlib.net/zlib-$ZLIB_VERSION.tar.gz" && \
     tar xzf "zlib-$ZLIB_VERSION.tar.gz" && cd "zlib-$ZLIB_VERSION" && \
     CC=musl-gcc ./configure --static --prefix=/usr/local/musl && \
-    make && make install && \
+    make -s && make -s install && \
     rm -r /tmp/*
 
 RUN echo "Building libpq" && \
@@ -71,8 +71,8 @@ RUN echo "Building libpq" && \
     curl -LO "https://ftp.postgresql.org/pub/source/v$POSTGRESQL_VERSION/postgresql-$POSTGRESQL_VERSION.tar.gz" && \
     tar xzf "postgresql-$POSTGRESQL_VERSION.tar.gz" && cd "postgresql-$POSTGRESQL_VERSION" && \
     CC=musl-gcc CPPFLAGS=-I/usr/local/musl/include LDFLAGS=-L/usr/local/musl/lib ./configure --with-openssl --without-readline --prefix=/usr/local/musl && \
-    cd src/interfaces/libpq && make all-static-lib && make install-lib-static && \
-    cd ../../bin/pg_config && make && make install && \
+    cd src/interfaces/libpq && make -s all-static-lib && make -s install-lib-static && \
+    cd ../../bin/pg_config && make -s && make -s install && \
     rm -r /tmp/*
 
 ENV OPENSSL_DIR=/usr/local/musl/ \
