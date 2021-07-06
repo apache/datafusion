@@ -1842,4 +1842,76 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn normalize_cols() {
+        let expr = col("a") + col("b") + col("c");
+
+        // Schemas with some matching and some non matching cols
+        let schema_a =
+            DFSchema::new(vec![make_field("tableA", "a"), make_field("tableA", "aa")])
+                .unwrap();
+        let schema_c =
+            DFSchema::new(vec![make_field("tableC", "cc"), make_field("tableC", "c")])
+                .unwrap();
+        let schema_b = DFSchema::new(vec![make_field("tableB", "b")]).unwrap();
+        // non matching
+        let schema_f =
+            DFSchema::new(vec![make_field("tableC", "f"), make_field("tableC", "ff")])
+                .unwrap();
+        let schemas = vec![schema_c, schema_f, schema_b, schema_a]
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+        let schemas = schemas.iter().collect::<Vec<_>>();
+
+        let normalized_expr = normalize_col(expr, &schemas).unwrap();
+        assert_eq!(
+            normalized_expr,
+            col("tableA.a") + col("tableB.b") + col("tableC.c")
+        );
+    }
+
+    #[test]
+    fn normalize_cols_priority() {
+        let expr = col("a") + col("b");
+        // Schemas with multiple matches for column a, first takes priority
+        let schema_a = DFSchema::new(vec![make_field("tableA", "a")]).unwrap();
+        let schema_b = DFSchema::new(vec![make_field("tableB", "b")]).unwrap();
+        let schema_a2 = DFSchema::new(vec![make_field("tableA2", "a")]).unwrap();
+        let schemas = vec![schema_a2, schema_b, schema_a]
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+        let schemas = schemas.iter().collect::<Vec<_>>();
+
+        let normalized_expr = normalize_col(expr, &schemas).unwrap();
+        assert_eq!(normalized_expr, col("tableA2.a") + col("tableB.b"));
+    }
+
+    #[test]
+    fn normalize_cols_non_exist() {
+        // test normalizing columns when the name doesn't exist
+        let expr = col("a") + col("b");
+        let schema_a = DFSchema::new(vec![make_field("tableA", "a")]).unwrap();
+        let schemas = vec![schema_a].into_iter().map(Arc::new).collect::<Vec<_>>();
+        let schemas = schemas.iter().collect::<Vec<_>>();
+
+        let error = normalize_col(expr, &schemas).unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "Error during planning: Column #b not found in provided schemas"
+        );
+    }
+
+    #[test]
+    fn unnormalize_cols() {
+        let expr = col("tableA.a") + col("tableB.b");
+        let unnormalized_expr = unnormalize_col(expr);
+        assert_eq!(unnormalized_expr, col("a") + col("b"));
+    }
+
+    fn make_field(relation: &str, column: &str) -> DFField {
+        DFField::new(Some(relation), column, DataType::Int8, false)
+    }
 }
