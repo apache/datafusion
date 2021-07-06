@@ -21,4 +21,11 @@ set -e
 
 . ./dev/build-set-env.sh
 docker build -t ballista-base:$BALLISTA_VERSION -f dev/docker/ballista-base.dockerfile .
-docker build -t ballista:$BALLISTA_VERSION -f dev/docker/ballista.dockerfile .
+
+if [[ -z "${TEST}" ]]; then
+    CARGO_FLAG=""
+else
+    # build ballista in debug mode to reduce build time when TEST env var is set
+    CARGO_FLAG="--build-arg RELEASE_FLAG="
+fi
+docker build -t ballista:$BALLISTA_VERSION ${CARGO_FLAG} -f dev/docker/ballista.dockerfile .

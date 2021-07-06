@@ -63,17 +63,17 @@ ARG RELEASE_FLAG=--release
 ENV FORCE_REBUILD='true'
 RUN cargo build $RELEASE_FLAG
 
-# put the executor on /executor (need to be copied from different places depending on FLAG)
-ENV RELEASE_FLAG=${RELEASE_FLAG}
-RUN if [ -z "$RELEASE_FLAG" ]; then mv /tmp/ballista/target/debug/ballista-executor /executor; else mv /tmp/ballista/target/release/ballista-executor /executor; fi
-
-# put the scheduler on /scheduler (need to be copied from different places depending on FLAG)
-ENV RELEASE_FLAG=${RELEASE_FLAG}
-RUN if [ -z "$RELEASE_FLAG" ]; then mv /tmp/ballista/target/debug/ballista-scheduler /scheduler; else mv /tmp/ballista/target/release/ballista-scheduler /scheduler; fi
-
-# put the tpch on /tpch (need to be copied from different places depending on FLAG)
-ENV RELEASE_FLAG=${RELEASE_FLAG}
-RUN if [ -z "$RELEASE_FLAG" ]; then mv /tmp/ballista/target/debug/tpch /tpch; else mv /tmp/ballista/target/release/tpch /tpch; fi
+SHELL ["/bin/bash", "-c"]
+# binaries need to be copied from different places depending on RELEASE_FLAG
+RUN if [[ "$RELEASE_FLAG" == *"--release"* ]]; then \
+        mv /tmp/ballista/target/release/ballista-executor /executor && \
+        mv /tmp/ballista/target/release/ballista-scheduler /scheduler && \
+        mv /tmp/ballista/target/release/tpch /tpch; \
+    else \
+        mv /tmp/ballista/target/debug/ballista-executor /executor && \
+        mv /tmp/ballista/target/debug/ballista-scheduler /scheduler && \
+        mv /tmp/ballista/target/debug/tpch /tpch; \
+    fi
 
 # Copy the binary into a new container for a smaller docker image
 FROM ballista-base:0.5.0-SNAPSHOT
