@@ -42,18 +42,17 @@ ARG OPENSSL_VERSION=1.1.1b
 # component. It's possible that this will cause bizarre and terrible things to
 # happen. There may be "sanitized" header
 RUN echo "Building OpenSSL" && \
-    ls /usr/include/linux && \
     mkdir -p /usr/local/musl/include && \
     ln -s /usr/include/linux /usr/local/musl/include/linux && \
     ln -s /usr/include/x86_64-linux-gnu/asm /usr/local/musl/include/asm && \
     ln -s /usr/include/asm-generic /usr/local/musl/include/asm-generic && \
     cd /tmp && \
     curl -LO "https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz" && \
-    tar xvzf "openssl-$OPENSSL_VERSION.tar.gz" && cd "openssl-$OPENSSL_VERSION" && \
+    tar xzf "openssl-$OPENSSL_VERSION.tar.gz" && cd "openssl-$OPENSSL_VERSION" && \
     env CC=musl-gcc ./Configure no-shared no-zlib -fPIC --prefix=/usr/local/musl -DOPENSSL_NO_SECURE_MEMORY linux-x86_64 && \
     env C_INCLUDE_PATH=/usr/local/musl/include/ make depend && \
     env C_INCLUDE_PATH=/usr/local/musl/include/ make && \
-    make install && \
+    make install 1>/dev/null && \
     rm /usr/local/musl/include/linux /usr/local/musl/include/asm /usr/local/musl/include/asm-generic && \
     rm -r /tmp/*
 
