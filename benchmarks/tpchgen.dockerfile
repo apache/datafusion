@@ -22,7 +22,7 @@ RUN apt-get update && \
 
 RUN git clone https://github.com/databricks/tpch-dbgen.git && \
     cd tpch-dbgen && \
-    make
+    make -s
 
 WORKDIR /tpch-dbgen
 ADD entrypoint.sh /tpch-dbgen/

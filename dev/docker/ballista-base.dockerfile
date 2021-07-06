@@ -52,7 +52,7 @@ RUN echo "Building OpenSSL" && \
     env CC=musl-gcc ./Configure no-shared no-zlib -fPIC --prefix=/usr/local/musl -DOPENSSL_NO_SECURE_MEMORY linux-x86_64 && \
     env C_INCLUDE_PATH=/usr/local/musl/include/ make -s depend && \
     env C_INCLUDE_PATH=/usr/local/musl/include/ make -s && \
-    make -s install && \
+    make -s install 1>/dev/null && \
     rm /usr/local/musl/include/linux /usr/local/musl/include/asm /usr/local/musl/include/asm-generic && \
     rm -r /tmp/*
 
@@ -62,7 +62,7 @@ RUN echo "Building zlib" && \
     curl -LO "http://zlib.net/zlib-$ZLIB_VERSION.tar.gz" && \
     tar xzf "zlib-$ZLIB_VERSION.tar.gz" && cd "zlib-$ZLIB_VERSION" && \
     CC=musl-gcc ./configure --static --prefix=/usr/local/musl && \
-    make -s && make -s install && \
+    make -s && make -s install 1>/dev/null && \
     rm -r /tmp/*
 
 RUN echo "Building libpq" && \
