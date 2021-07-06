@@ -17,8 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 set -e
-
-TEST=1 ./dev/build-ballista-docker.sh
+./dev/build-ballista-docker.sh
 pushd benchmarks
 ./tpch-gen.sh
 
