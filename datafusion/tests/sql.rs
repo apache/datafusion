@@ -1695,7 +1695,7 @@ async fn equijoin() -> Result<()> {
 }
 
 #[tokio::test]
-async fn equijoin_unsuppored_condition() -> Result<()> {
+async fn equijoin_and_other_condition() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
