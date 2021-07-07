@@ -44,9 +44,9 @@ async fn prune_timestamps_nanos() {
         .query("SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')")
         .await;
     println!("{}", output.description());
-    // TODO This should prune one metrics without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(1));
-    assert_eq!(output.row_groups_pruned(), Some(0));
+    // This should prune one metrics without error
+    assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(output.row_groups_pruned(), Some(1));
     assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
@@ -59,9 +59,9 @@ async fn prune_timestamps_micros() {
         )
         .await;
     println!("{}", output.description());
-    // TODO This should prune one metrics without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(1));
-    assert_eq!(output.row_groups_pruned(), Some(0));
+    // This should prune one metrics without error
+    assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(output.row_groups_pruned(), Some(1));
     assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
@@ -74,9 +74,9 @@ async fn prune_timestamps_millis() {
         )
         .await;
     println!("{}", output.description());
-    // TODO This should prune one metrics without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(1));
-    assert_eq!(output.row_groups_pruned(), Some(0));
+    // This should prune one metrics without error
+    assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(output.row_groups_pruned(), Some(1));
     assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
@@ -89,9 +89,9 @@ async fn prune_timestamps_seconds() {
         )
         .await;
     println!("{}", output.description());
-    // TODO This should prune one metrics without error
-    assert_eq!(output.predicate_evaluation_errors(), Some(1));
-    assert_eq!(output.row_groups_pruned(), Some(0));
+    // This should prune one metrics without error
+    assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(output.row_groups_pruned(), Some(1));
     assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
