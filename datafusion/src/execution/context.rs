@@ -1279,6 +1279,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn left_join_using() -> Result<()> {
+        let results = execute(
+            "SELECT t1.c1, t2.c2 FROM test t1 JOIN test t2 USING (c2) ORDER BY t2.c2",
+            1,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+",
+            "| c1 | c2 |",
+            "+----+----+",
+            "| 0  | 1  |",
+            "| 0  | 2  |",
+            "| 0  | 3  |",
+            "| 0  | 4  |",
+            "| 0  | 5  |",
+            "| 0  | 6  |",
+            "| 0  | 7  |",
+            "| 0  | 8  |",
+            "| 0  | 9  |",
+            "| 0  | 10 |",
+            "+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn left_join_using_join_key_projection() -> Result<()> {
+        let results = execute(
+            "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 USING (c2) ORDER BY t2.c2",
+            1,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+----+",
+            "| c1 | c2 | c2 |",
+            "+----+----+----+",
+            "| 0  | 1  | 1  |",
+            "| 0  | 2  | 2  |",
+            "| 0  | 3  | 3  |",
+            "| 0  | 4  | 4  |",
+            "| 0  | 5  | 5  |",
+            "| 0  | 6  | 6  |",
+            "| 0  | 7  | 7  |",
+            "| 0  | 8  | 8  |",
+            "| 0  | 9  | 9  |",
+            "| 0  | 10 | 10 |",
+            "+----+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn left_join() -> Result<()> {
+        let results = execute(
+            "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 ON t1.c2 = t2.c2 ORDER BY t1.c2",
+            1,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+----+",
+            "| c1 | c2 | c2 |",
+            "+----+----+----+",
+            "| 0  | 1  | 1  |",
+            "| 0  | 2  | 2  |",
+            "| 0  | 3  | 3  |",
+            "| 0  | 4  | 4  |",
+            "| 0  | 5  | 5  |",
+            "| 0  | 6  | 6  |",
+            "| 0  | 7  | 7  |",
+            "| 0  | 8  | 8  |",
+            "| 0  | 9  | 9  |",
+            "| 0  | 10 | 10 |",
+            "+----+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn window() -> Result<()> {
         let results = execute(
             "SELECT \

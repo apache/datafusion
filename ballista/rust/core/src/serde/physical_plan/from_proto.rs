@@ -35,7 +35,9 @@ use datafusion::catalog::catalog::{
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
-use datafusion::logical_plan::{window_frames::WindowFrame, DFSchema, Expr};
+use datafusion::logical_plan::{
+    window_frames::WindowFrame, DFSchema, Expr, JoinConstraint, JoinType,
+};
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
@@ -57,7 +59,6 @@ use datafusion::physical_plan::{
     filter::FilterExec,
     functions::{self, BuiltinScalarFunction, ScalarFunctionExpr},
     hash_join::HashJoinExec,
-    hash_utils::JoinType,
     limit::{GlobalLimitExec, LocalLimitExec},
     parquet::ParquetExec,
     projection::ProjectionExec,
@@ -348,14 +349,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                             hashjoin.join_type
                         ))
                     })?;
-                let join_type = match join_type {
-                    protobuf::JoinType::Inner => JoinType::Inner,
-                    protobuf::JoinType::Left => JoinType::Left,
-                    protobuf::JoinType::Right => JoinType::Right,
-                    protobuf::JoinType::Full => JoinType::Full,
-                    protobuf::JoinType::Semi => JoinType::Semi,
-                    protobuf::JoinType::Anti => JoinType::Anti,
-                };
+
                 let partition_mode =
                     protobuf::PartitionMode::from_i32(hashjoin.partition_mode)
                         .ok_or_else(|| {
@@ -372,7 +366,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     left,
                     right,
                     on,
-                    &join_type,
+                    &join_type.into(),
                     partition_mode,
                 )?))
             }

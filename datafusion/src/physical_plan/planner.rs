@@ -40,7 +40,6 @@ use crate::physical_plan::udf;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{hash_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
-use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::sql::utils::{generate_sort_key, window_expr_common_partition_keys};
 use crate::variable::VarType;
@@ -661,14 +660,6 @@ impl DefaultPhysicalPlanner {
                 let physical_left = self.create_initial_plan(left, ctx_state)?;
                 let right_df_schema = right.schema();
                 let physical_right = self.create_initial_plan(right, ctx_state)?;
-                let physical_join_type = match join_type {
-                    JoinType::Inner => hash_utils::JoinType::Inner,
-                    JoinType::Left => hash_utils::JoinType::Left,
-                    JoinType::Right => hash_utils::JoinType::Right,
-                    JoinType::Full => hash_utils::JoinType::Full,
-                    JoinType::Semi => hash_utils::JoinType::Semi,
-                    JoinType::Anti => hash_utils::JoinType::Anti,
-                };
                 let join_on = keys
                     .iter()
                     .map(|(l, r)| {
@@ -702,7 +693,7 @@ impl DefaultPhysicalPlanner {
                             Partitioning::Hash(right_expr, ctx_state.config.concurrency),
                         )?),
                         join_on,
-                        &physical_join_type,
+                        join_type,
                         PartitionMode::Partitioned,
                     )?))
                 } else {
@@ -710,7 +701,7 @@ impl DefaultPhysicalPlanner {
                         physical_left,
                         physical_right,
                         join_on,
-                        &physical_join_type,
+                        join_type,
                         PartitionMode::CollectLeft,
                     )?))
                 }

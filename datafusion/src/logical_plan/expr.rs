@@ -20,7 +20,7 @@
 
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{window_frames, DFField, DFSchema, DFSchemaRef};
+use crate::logical_plan::{window_frames, DFField, DFSchema, LogicalPlan};
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
     window_functions,
@@ -29,7 +29,7 @@ use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -89,14 +89,46 @@ impl Column {
     ///
     /// For example, `foo` will be normalized to `t.foo` if there is a
     /// column named `foo` in a relation named `t` found in `schemas`
-    pub fn normalize(self, schemas: &[&DFSchemaRef]) -> Result<Self> {
+    pub fn normalize(self, plan: &LogicalPlan) -> Result<Self> {
         if self.relation.is_some() {
             return Ok(self);
         }
 
-        for schema in schemas {
-            if let Ok(field) = schema.field_with_unqualified_name(&self.name) {
-                return Ok(field.qualified_column());
+        let schemas = plan.all_schemas();
+        let using_columns = plan.using_columns()?;
+
+        for schema in &schemas {
+            let fields = schema.fields_with_unqualified_name(&self.name);
+            match fields.len() {
+                0 => continue,
+                1 => {
+                    return Ok(fields[0].qualified_column());
+                }
+                _ => {
+                    // More than 1 fields in this schema have their names set to self.name.
+                    //
+                    // This should only happen when a JOIN query with USING constraint references
+                    // join columns using unqualified column name. For example:
+                    //
+                    // ```sql
+                    // SELECT id FROM t1 JOIN t2 USING(id)
+                    // ```
+                    //
+                    // In this case, both `t1.id` and `t2.id` will match unqualified column `id`.
+                    // We will use the relation from the first matched field to normalize self.
+
+                    // Compare matched fields with one USING JOIN clause at a time
+                    for using_col in &using_columns {
+                        let all_matched = fields
+                            .iter()
+                            .all(|f| using_col.contains(&f.qualified_column()));
+                        // All matched fields belong to the same using column set, in orther words
+                        // the same join clause. We simply pick the qualifer from the first match.
+                        if all_matched {
+                            return Ok(fields[0].qualified_column());
+                        }
+                    }
+                }
             }
         }
 
@@ -321,9 +353,7 @@ impl Expr {
     pub fn get_type(&self, schema: &DFSchema) -> Result<DataType> {
         match self {
             Expr::Alias(expr, _) => expr.get_type(schema),
-            Expr::Column(c) => {
-                Ok(schema.field_from_qualified_column(c)?.data_type().clone())
-            }
+            Expr::Column(c) => Ok(schema.field_from_column(c)?.data_type().clone()),
             Expr::ScalarVariable(_) => Ok(DataType::Utf8),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case { when_then_expr, .. } => when_then_expr[0].1.get_type(schema),
@@ -395,9 +425,7 @@ impl Expr {
     pub fn nullable(&self, input_schema: &DFSchema) -> Result<bool> {
         match self {
             Expr::Alias(expr, _) => expr.nullable(input_schema),
-            Expr::Column(c) => {
-                Ok(input_schema.field_from_qualified_column(c)?.is_nullable())
-            }
+            Expr::Column(c) => Ok(input_schema.field_from_column(c)?.is_nullable()),
             Expr::Literal(value) => Ok(value.is_null()),
             Expr::ScalarVariable(_) => Ok(true),
             Expr::Case {
@@ -1118,36 +1146,56 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     }
 }
 
-/// Recursively call [`Column::normalize`] on all Column expressions
-/// in the `expr` expression tree.
-pub fn normalize_col(e: Expr, schemas: &[&DFSchemaRef]) -> Result<Expr> {
-    struct ColumnNormalizer<'a, 'b> {
-        schemas: &'a [&'b DFSchemaRef],
+/// Recursively replace all Column expressions in a given expression tree with Column expressions
+/// provided by the hash map argument.
+pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
+    struct ColumnReplacer<'a> {
+        replace_map: &'a HashMap<&'a Column, &'a Column>,
     }
 
-    impl<'a, 'b> ExprRewriter for ColumnNormalizer<'a, 'b> {
+    impl<'a> ExprRewriter for ColumnReplacer<'a> {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(c) = expr {
-                Ok(Expr::Column(c.normalize(self.schemas)?))
+            if let Expr::Column(c) = &expr {
+                match self.replace_map.get(c) {
+                    Some(new_c) => Ok(Expr::Column((*new_c).to_owned())),
+                    None => Ok(expr),
+                }
             } else {
                 Ok(expr)
             }
         }
     }
 
-    e.rewrite(&mut ColumnNormalizer { schemas })
+    e.rewrite(&mut ColumnReplacer { replace_map })
+}
+
+/// Recursively call [`Column::normalize`] on all Column expressions
+/// in the `expr` expression tree.
+pub fn normalize_col(e: Expr, plan: &LogicalPlan) -> Result<Expr> {
+    struct ColumnNormalizer<'a> {
+        plan: &'a LogicalPlan,
+    }
+
+    impl<'a> ExprRewriter for ColumnNormalizer<'a> {
+        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+            if let Expr::Column(c) = expr {
+                Ok(Expr::Column(c.normalize(self.plan)?))
+            } else {
+                Ok(expr)
+            }
+        }
+    }
+
+    e.rewrite(&mut ColumnNormalizer { plan })
 }
 
 /// Recursively normalize all Column expressions in a list of expression trees
 #[inline]
 pub fn normalize_cols(
     exprs: impl IntoIterator<Item = Expr>,
-    schemas: &[&DFSchemaRef],
+    plan: &LogicalPlan,
 ) -> Result<Vec<Expr>> {
-    exprs
-        .into_iter()
-        .map(|e| normalize_col(e, schemas))
-        .collect()
+    exprs.into_iter().map(|e| normalize_col(e, plan)).collect()
 }
 
 /// Create an expression to represent the min() aggregate function

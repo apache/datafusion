@@ -378,12 +378,18 @@ enum JoinType {
   ANTI = 5;
 }
 
+enum JoinConstraint {
+  ON = 0;
+  USING = 1;
+}
+
 message JoinNode {
   LogicalPlanNode left = 1;
   LogicalPlanNode right = 2;
   JoinType join_type = 3;
-  repeated Column left_join_column = 4;
-  repeated Column right_join_column = 5;
+  JoinConstraint join_constraint = 4;
+  repeated Column left_join_column = 5;
+  repeated Column right_join_column = 6;
 }
 
 message LimitNode {

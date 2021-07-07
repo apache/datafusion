@@ -48,6 +48,7 @@ impl DFSchema {
     pub fn new(fields: Vec<DFField>) -> Result<Self> {
         let mut qualified_names = HashSet::new();
         let mut unqualified_names = HashSet::new();
+
         for field in &fields {
             if let Some(qualifier) = field.qualifier() {
                 if !qualified_names.insert((qualifier, field.name())) {
@@ -94,10 +95,7 @@ impl DFSchema {
             schema
                 .fields()
                 .iter()
-                .map(|f| DFField {
-                    field: f.clone(),
-                    qualifier: Some(qualifier.to_owned()),
-                })
+                .map(|f| DFField::from_qualified(qualifier, f.clone()))
                 .collect(),
         )
     }
@@ -149,47 +147,80 @@ impl DFSchema {
         )))
     }
 
-    /// Find the index of the column with the given qualifer and name
-    pub fn index_of_column(&self, col: &Column) -> Result<usize> {
-        for i in 0..self.fields.len() {
-            let field = &self.fields[i];
-            if field.qualifier() == col.relation.as_ref() && field.name() == &col.name {
-                return Ok(i);
-            }
+    fn index_of_column_by_name(
+        &self,
+        qualifier: Option<&str>,
+        name: &str,
+    ) -> Result<usize> {
+        let matches: Vec<usize> = self
+            .fields
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| match (qualifier, &field.qualifier) {
+                // field to lookup is qualified.
+                // current field is qualified and not shared between relations, compare both
+                // qualifer and name.
+                (Some(q), Some(field_q)) => q == field_q && field.name() == name,
+                // field to lookup is qualified but current field is unqualified.
+                (Some(_), None) => false,
+                // field to lookup is unqualified, no need to compare qualifier
+                _ => field.name() == name,
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+
+        match matches.len() {
+            0 => Err(DataFusionError::Plan(format!(
+                "No field named '{}.{}'. Valid fields are {}.",
+                qualifier.unwrap_or(""),
+                name,
+                self.get_field_names()
+            ))),
+            1 => Ok(matches[0]),
+            _ => Err(DataFusionError::Internal(format!(
+                "Ambiguous reference to qualified field named '{}.{}'",
+                qualifier.unwrap_or(""),
+                name
+            ))),
         }
-        Err(DataFusionError::Plan(format!(
-            "No field matches column '{}'. Available fields: {}",
-            col, self
-        )))
+    }
+
+    /// Find the index of the column with the given qualifier and name
+    pub fn index_of_column(&self, col: &Column) -> Result<usize> {
+        self.index_of_column_by_name(col.relation.as_deref(), &col.name)
     }
 
     /// Find the field with the given name
     pub fn field_with_name(
         &self,
-        relation_name: Option<&str>,
+        qualifier: Option<&str>,
         name: &str,
-    ) -> Result<DFField> {
-        if let Some(relation_name) = relation_name {
-            self.field_with_qualified_name(relation_name, name)
+    ) -> Result<&DFField> {
+        if let Some(qualifier) = qualifier {
+            self.field_with_qualified_name(qualifier, name)
         } else {
             self.field_with_unqualified_name(name)
         }
     }
 
-    /// Find the field with the given name
-    pub fn field_with_unqualified_name(&self, name: &str) -> Result<DFField> {
-        let matches: Vec<&DFField> = self
-            .fields
+    /// Find all fields match the given name
+    pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&DFField> {
+        self.fields
             .iter()
             .filter(|field| field.name() == name)
-            .collect();
+            .collect()
+    }
+
+    /// Find the field with the given name
+    pub fn field_with_unqualified_name(&self, name: &str) -> Result<&DFField> {
+        let matches = self.fields_with_unqualified_name(name);
         match matches.len() {
             0 => Err(DataFusionError::Plan(format!(
                 "No field with unqualified name '{}'. Valid fields are {}.",
                 name,
                 self.get_field_names()
             ))),
-            1 => Ok(matches[0].to_owned()),
+            1 => Ok(matches[0]),
             _ => Err(DataFusionError::Plan(format!(
                 "Ambiguous reference to field named '{}'",
                 name
@@ -200,33 +231,15 @@ impl DFSchema {
     /// Find the field with the given qualified name
     pub fn field_with_qualified_name(
         &self,
-        relation_name: &str,
+        qualifier: &str,
         name: &str,
-    ) -> Result<DFField> {
-        let matches: Vec<&DFField> = self
-            .fields
-            .iter()
-            .filter(|field| {
-                field.qualifier == Some(relation_name.to_string()) && field.name() == name
-            })
-            .collect();
-        match matches.len() {
-            0 => Err(DataFusionError::Plan(format!(
-                "No field named '{}.{}'. Valid fields are {}.",
-                relation_name,
-                name,
-                self.get_field_names()
-            ))),
-            1 => Ok(matches[0].to_owned()),
-            _ => Err(DataFusionError::Internal(format!(
-                "Ambiguous reference to qualified field named '{}.{}'",
-                relation_name, name
-            ))),
-        }
+    ) -> Result<&DFField> {
+        let idx = self.index_of_column_by_name(Some(qualifier), name)?;
+        Ok(self.field(idx))
     }
 
     /// Find the field with the given qualified column
-    pub fn field_from_qualified_column(&self, column: &Column) -> Result<DFField> {
+    pub fn field_from_column(&self, column: &Column) -> Result<&DFField> {
         match &column.relation {
             Some(r) => self.field_with_qualified_name(r, &column.name),
             None => self.field_with_unqualified_name(&column.name),
@@ -247,31 +260,20 @@ impl DFSchema {
             fields: self
                 .fields
                 .into_iter()
-                .map(|f| {
-                    if f.qualifier().is_some() {
-                        DFField::new(
-                            None,
-                            f.name(),
-                            f.data_type().to_owned(),
-                            f.is_nullable(),
-                        )
-                    } else {
-                        f
-                    }
-                })
+                .map(|f| f.strip_qualifier())
                 .collect(),
         }
     }
 
     /// Replace all field qualifier with new value in schema
-    pub fn replace_qualifier(self, qualifer: &str) -> Self {
+    pub fn replace_qualifier(self, qualifier: &str) -> Self {
         DFSchema {
             fields: self
                 .fields
                 .into_iter()
                 .map(|f| {
                     DFField::new(
-                        Some(qualifer),
+                        Some(qualifier),
                         f.name(),
                         f.data_type().to_owned(),
                         f.is_nullable(),
@@ -328,10 +330,7 @@ impl TryFrom<Schema> for DFSchema {
             schema
                 .fields()
                 .iter()
-                .map(|f| DFField {
-                    field: f.clone(),
-                    qualifier: None,
-                })
+                .map(|f| DFField::from(f.clone()))
                 .collect(),
         )
     }
@@ -454,8 +453,8 @@ impl DFField {
 
     /// Returns a string to the `DFField`'s qualified name
     pub fn qualified_name(&self) -> String {
-        if let Some(relation_name) = &self.qualifier {
-            format!("{}.{}", relation_name, self.field.name())
+        if let Some(qualifier) = &self.qualifier {
+            format!("{}.{}", qualifier, self.field.name())
         } else {
             self.field.name().to_owned()
         }
@@ -469,6 +468,14 @@ impl DFField {
         }
     }
 
+    /// Builds an unqualified column based on self
+    pub fn unqualified_column(&self) -> Column {
+        Column {
+            relation: None,
+            name: self.field.name().to_string(),
+        }
+    }
+
     /// Get the optional qualifier
     pub fn qualifier(&self) -> Option<&String> {
         self.qualifier.as_ref()
@@ -477,6 +484,12 @@ impl DFField {
     /// Get the arrow field
     pub fn field(&self) -> &Field {
         &self.field
+    }
+
+    /// Return field with qualifier stripped
+    pub fn strip_qualifier(mut self) -> Self {
+        self.qualifier = None;
+        self
     }
 }
 

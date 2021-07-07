@@ -16,7 +16,7 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::{and, Column, LogicalPlan};
+use crate::logical_plan::{and, replace_col, Column, LogicalPlan};
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -96,12 +96,21 @@ fn get_join_predicates<'a>(
     let left_columns = &left
         .fields()
         .iter()
-        .map(|f| f.qualified_column())
+        .map(|f| {
+            std::iter::once(f.qualified_column())
+                // we need to push down filter using unqualified column as well
+                .chain(std::iter::once(f.unqualified_column()))
+        })
+        .flatten()
         .collect::<HashSet<_>>();
     let right_columns = &right
         .fields()
         .iter()
-        .map(|f| f.qualified_column())
+        .map(|f| {
+            std::iter::once(f.qualified_column())
+                .chain(std::iter::once(f.unqualified_column()))
+        })
+        .flatten()
         .collect::<HashSet<_>>();
 
     let filters = state
@@ -232,6 +241,38 @@ fn split_members<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>) {
     }
 }
 
+fn optimize_join(
+    mut state: State,
+    plan: &LogicalPlan,
+    left: &LogicalPlan,
+    right: &LogicalPlan,
+) -> Result<LogicalPlan> {
+    let (pushable_to_left, pushable_to_right, keep) =
+        get_join_predicates(&state, left.schema(), right.schema());
+
+    let mut left_state = state.clone();
+    left_state.filters = keep_filters(&left_state.filters, &pushable_to_left);
+    let left = optimize(left, left_state)?;
+
+    let mut right_state = state.clone();
+    right_state.filters = keep_filters(&right_state.filters, &pushable_to_right);
+    let right = optimize(right, right_state)?;
+
+    // create a new Join with the new `left` and `right`
+    let expr = plan.expressions();
+    let plan = utils::from_plan(plan, &expr, &[left, right])?;
+
+    if keep.0.is_empty() {
+        Ok(plan)
+    } else {
+        // wrap the join on the filter whose predicates must be kept
+        let plan = add_filter(plan, &keep.0);
+        state.filters = remove_filters(&state.filters, &keep.1);
+
+        Ok(plan)
+    }
+}
+
 fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Explain { .. } => {
@@ -336,32 +377,68 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .collect::<HashSet<_>>();
             issue_filters(state, used_columns, plan)
         }
-        LogicalPlan::Join { left, right, .. }
-        | LogicalPlan::CrossJoin { left, right, .. } => {
-            let (pushable_to_left, pushable_to_right, keep) =
-                get_join_predicates(&state, left.schema(), right.schema());
+        LogicalPlan::CrossJoin { left, right, .. } => {
+            optimize_join(state, plan, left, right)
+        }
+        LogicalPlan::Join {
+            left, right, on, ..
+        } => {
+            // duplicate filters for joined columns so filters can be pushed down to both sides.
+            // Take the following query as an example:
+            //
+            // ```sql
+            // SELECT * FROM t1 JOIN t2 on t1.id = t2.uid WHERE t1.id > 1
+            // ```
+            //
+            // `t1.id > 1` predicate needs to be pushed down to t1 table scan, while
+            // `t2.uid > 1` predicate needs to be pushed down to t2 table scan.
+            //
+            // Join clauses with `Using` constraints also take advantage of this logic to make sure
+            // predicates reference the shared join columns are pushed to both sides.
+            let join_side_filters = state
+                .filters
+                .iter()
+                .filter_map(|(predicate, columns)| {
+                    let mut join_cols_to_replace = HashMap::new();
+                    for col in columns.iter() {
+                        for (l, r) in on {
+                            if col == l {
+                                join_cols_to_replace.insert(col, r);
+                                break;
+                            } else if col == r {
+                                join_cols_to_replace.insert(col, l);
+                                break;
+                            }
+                        }
+                    }
 
-            let mut left_state = state.clone();
-            left_state.filters = keep_filters(&left_state.filters, &pushable_to_left);
-            let left = optimize(left, left_state)?;
+                    if join_cols_to_replace.is_empty() {
+                        return None;
+                    }
 
-            let mut right_state = state.clone();
-            right_state.filters = keep_filters(&right_state.filters, &pushable_to_right);
-            let right = optimize(right, right_state)?;
+                    let join_side_predicate =
+                        match replace_col(predicate.clone(), &join_cols_to_replace) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                return Some(Err(e));
+                            }
+                        };
 
-            // create a new Join with the new `left` and `right`
-            let expr = plan.expressions();
-            let plan = utils::from_plan(plan, &expr, &[left, right])?;
+                    let join_side_columns = columns
+                        .clone()
+                        .into_iter()
+                        // replace keys in join_cols_to_replace with values in resulting column
+                        // set
+                        .filter(|c| !join_cols_to_replace.contains_key(c))
+                        .chain(join_cols_to_replace.iter().map(|(_, v)| (*v).clone()))
+                        .collect();
 
-            if keep.0.is_empty() {
-                Ok(plan)
-            } else {
-                // wrap the join on the filter whose predicates must be kept
-                let plan = add_filter(plan, &keep.0);
-                state.filters = remove_filters(&state.filters, &keep.1);
+                    Some(Ok((join_side_predicate, join_side_columns)))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            state.filters.extend(join_side_filters);
 
-                Ok(plan)
-            }
+            optimize_join(state, plan, left, right)
         }
         LogicalPlan::TableScan {
             source,
@@ -878,12 +955,13 @@ mod tests {
         Ok(())
     }
 
-    /// post-join predicates on a column common to both sides is pushed to both sides
+    /// post-on-join predicates on a column common to both sides is pushed to both sides
     #[test]
-    fn filter_join_on_common_independent() -> Result<()> {
+    fn filter_on_join_on_common_independent() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan.clone()).build()?;
-        let right = LogicalPlanBuilder::from(table_scan)
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
             .project(vec![col("a")])?
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
@@ -901,20 +979,61 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test.a LtEq Int64(1)\
-            \n  Join: #test.a = #test.a\
+            \n  Join: #test.a = #test2.a\
             \n    TableScan: test projection=None\
-            \n    Projection: #test.a\
-            \n      TableScan: test projection=None"
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
         );
 
         // filter sent to side before the join
         let expected = "\
-        Join: #test.a = #test.a\
+        Join: #test.a = #test2.a\
         \n  Filter: #test.a LtEq Int64(1)\
         \n    TableScan: test projection=None\
-        \n  Projection: #test.a\
-        \n    Filter: #test.a LtEq Int64(1)\
-        \n      TableScan: test projection=None";
+        \n  Projection: #test2.a\
+        \n    Filter: #test2.a LtEq Int64(1)\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-using-join predicates on a column common to both sides is pushed to both sides
+    #[test]
+    fn filter_using_join_on_common_independent() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Inner,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test.a LtEq Int64(1)\
+            \n  Join: Using #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter sent to side before the join
+        let expected = "\
+        Join: Using #test.a = #test2.a\
+        \n  Filter: #test.a LtEq Int64(1)\
+        \n    TableScan: test projection=None\
+        \n  Projection: #test2.a\
+        \n    Filter: #test2.a LtEq Int64(1)\
+        \n      TableScan: test2 projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -923,10 +1042,11 @@ mod tests {
     #[test]
     fn filter_join_on_common_dependent() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan.clone())
+        let left = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("c")])?
             .build()?;
-        let right = LogicalPlanBuilder::from(table_scan)
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
             .project(vec![col("a"), col("b")])?
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
@@ -944,12 +1064,12 @@ mod tests {
         assert_eq!(
             format!("{:?}", plan),
             "\
-            Filter: #test.c LtEq #test.b\
-            \n  Join: #test.a = #test.a\
+            Filter: #test.c LtEq #test2.b\
+            \n  Join: #test.a = #test2.a\
             \n    Projection: #test.a, #test.c\
             \n      TableScan: test projection=None\
-            \n    Projection: #test.a, #test.b\
-            \n      TableScan: test projection=None"
+            \n    Projection: #test2.a, #test2.b\
+            \n      TableScan: test2 projection=None"
         );
 
         // expected is equal: no push-down
@@ -962,12 +1082,14 @@ mod tests {
     #[test]
     fn filter_join_on_one_side() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan.clone())
+        let left = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("b")])?
             .build()?;
-        let right = LogicalPlanBuilder::from(table_scan)
+        let table_scan_right = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(table_scan_right)
             .project(vec![col("a"), col("c")])?
             .build()?;
+
         let plan = LogicalPlanBuilder::from(left)
             .join(
                 &right,
@@ -983,20 +1105,20 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test.b LtEq Int64(1)\
-            \n  Join: #test.a = #test.a\
+            \n  Join: #test.a = #test2.a\
             \n    Projection: #test.a, #test.b\
             \n      TableScan: test projection=None\
-            \n    Projection: #test.a, #test.c\
-            \n      TableScan: test projection=None"
+            \n    Projection: #test2.a, #test2.c\
+            \n      TableScan: test2 projection=None"
         );
 
         let expected = "\
-        Join: #test.a = #test.a\
+        Join: #test.a = #test2.a\
         \n  Projection: #test.a, #test.b\
         \n    Filter: #test.b LtEq Int64(1)\
         \n      TableScan: test projection=None\
-        \n  Projection: #test.a, #test.c\
-        \n    TableScan: test projection=None";
+        \n  Projection: #test2.a, #test2.c\
+        \n    TableScan: test2 projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
