@@ -346,7 +346,10 @@ impl DefaultPhysicalPlanner {
                         .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
                     Arc::new(RepartitionExec::try_new(
                         input_exec,
-                        Partitioning::Hash(partition_keys, ctx_state.config.partition_count),
+                        Partitioning::Hash(
+                            partition_keys,
+                            ctx_state.config.partition_count,
+                        ),
                     )?)
                 } else {
                     input_exec
@@ -679,7 +682,9 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<hash_utils::JoinOn>>()?;
 
-                if ctx_state.config.partition_count > 1 && ctx_state.config.repartition_joins {
+                if ctx_state.config.partition_count > 1
+                    && ctx_state.config.repartition_joins
+                {
                     let (left_expr, right_expr) = join_on
                         .iter()
                         .map(|(l, r)| {
@@ -694,11 +699,17 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(HashJoinExec::try_new(
                         Arc::new(RepartitionExec::try_new(
                             physical_left,
-                            Partitioning::Hash(left_expr, ctx_state.config.partition_count),
+                            Partitioning::Hash(
+                                left_expr,
+                                ctx_state.config.partition_count,
+                            ),
                         )?),
                         Arc::new(RepartitionExec::try_new(
                             physical_right,
-                            Partitioning::Hash(right_expr, ctx_state.config.partition_count),
+                            Partitioning::Hash(
+                                right_expr,
+                                ctx_state.config.partition_count,
+                            ),
                         )?),
                         join_on,
                         &physical_join_type,
