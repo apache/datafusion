@@ -144,7 +144,7 @@ impl ExecutionContext {
 
             let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
                 Arc::new(CatalogWithInformationSchema::new(
-                    catalog_list.clone(),
+                    Arc::downgrade(&catalog_list),
                     Arc::new(default_catalog),
                 ))
             } else {
@@ -346,7 +346,7 @@ impl ExecutionContext {
         let state = self.state.lock().unwrap();
         let catalog = if state.config.information_schema {
             Arc::new(CatalogWithInformationSchema::new(
-                state.catalog_list.clone(),
+                Arc::downgrade(&state.catalog_list),
                 catalog,
             ))
         } else {
@@ -924,6 +924,7 @@ mod tests {
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use std::fs::File;
+    use std::sync::Weak;
     use std::thread::{self, JoinHandle};
     use std::{io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
@@ -3362,6 +3363,29 @@ mod tests {
             .expect("Query empty table");
         let expected = vec!["++", "++"];
         assert_batches_sorted_eq!(expected, &result);
+    }
+
+    #[tokio::test]
+    async fn catalogs_not_leaked() {
+        // the information schema used to introduce cyclic Arcs
+        let ctx = ExecutionContext::with_config(
+            ExecutionConfig::new().with_information_schema(true),
+        );
+
+        // register a single catalog
+        let catalog = Arc::new(MemoryCatalogProvider::new());
+        let catalog_weak = Arc::downgrade(&catalog);
+        ctx.register_catalog("my_catalog", catalog);
+
+        let catalog_list_weak = {
+            let state = ctx.state.lock().unwrap();
+            Arc::downgrade(&state.catalog_list)
+        };
+
+        drop(ctx);
+
+        assert_eq!(Weak::strong_count(&catalog_list_weak), 0);
+        assert_eq!(Weak::strong_count(&catalog_weak), 0);
     }
 
     struct MyPhysicalPlanner {}
