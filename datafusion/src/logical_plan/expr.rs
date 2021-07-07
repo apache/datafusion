@@ -90,14 +90,22 @@ impl Column {
     /// For example, `foo` will be normalized to `t.foo` if there is a
     /// column named `foo` in a relation named `t` found in `schemas`
     pub fn normalize(self, plan: &LogicalPlan) -> Result<Self> {
+        let schemas = plan.all_schemas();
+        let using_columns = plan.using_columns()?;
+        self.normalize_with_schemas(&schemas, &using_columns)
+    }
+
+    // Internal implementation of normalize
+    fn normalize_with_schemas(
+        self,
+        schemas: &[&Arc<DFSchema>],
+        using_columns: &[HashSet<Column>],
+    ) -> Result<Self> {
         if self.relation.is_some() {
             return Ok(self);
         }
 
-        let schemas = plan.all_schemas();
-        let using_columns = plan.using_columns()?;
-
-        for schema in &schemas {
+        for schema in schemas {
             let fields = schema.fields_with_unqualified_name(&self.name);
             match fields.len() {
                 0 => continue,
@@ -118,7 +126,7 @@ impl Column {
                     // We will use the relation from the first matched field to normalize self.
 
                     // Compare matched fields with one USING JOIN clause at a time
-                    for using_col in &using_columns {
+                    for using_col in using_columns {
                         let all_matched = fields
                             .iter()
                             .all(|f| using_col.contains(&f.qualified_column()));
@@ -1172,21 +1180,38 @@ pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<E
 /// Recursively call [`Column::normalize`] on all Column expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
+    normalize_col_with_schemas(expr, &plan.all_schemas(), &plan.using_columns()?)
+}
+
+/// Recursively call [`Column::normalize`] on all Column expressions
+/// in the `expr` expression tree.
+fn normalize_col_with_schemas(
+    expr: Expr,
+    schemas: &[&Arc<DFSchema>],
+    using_columns: &[HashSet<Column>],
+) -> Result<Expr> {
     struct ColumnNormalizer<'a> {
-        plan: &'a LogicalPlan,
+        schemas: &'a [&'a Arc<DFSchema>],
+        using_columns: &'a [HashSet<Column>],
     }
 
     impl<'a> ExprRewriter for ColumnNormalizer<'a> {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             if let Expr::Column(c) = expr {
-                Ok(Expr::Column(c.normalize(self.plan)?))
+                Ok(Expr::Column(c.normalize_with_schemas(
+                    self.schemas,
+                    self.using_columns,
+                )?))
             } else {
                 Ok(expr)
             }
         }
     }
 
-    expr.rewrite(&mut ColumnNormalizer { plan })
+    expr.rewrite(&mut ColumnNormalizer {
+        schemas,
+        using_columns,
+    })
 }
 
 /// Recursively normalize all Column expressions in a list of expression trees
@@ -1865,7 +1890,7 @@ mod tests {
             .collect::<Vec<_>>();
         let schemas = schemas.iter().collect::<Vec<_>>();
 
-        let normalized_expr = normalize_col(expr, &schemas).unwrap();
+        let normalized_expr = normalize_col_with_schemas(expr, &schemas, &[]).unwrap();
         assert_eq!(
             normalized_expr,
             col("tableA.a") + col("tableB.b") + col("tableC.c")
@@ -1885,7 +1910,7 @@ mod tests {
             .collect::<Vec<_>>();
         let schemas = schemas.iter().collect::<Vec<_>>();
 
-        let normalized_expr = normalize_col(expr, &schemas).unwrap();
+        let normalized_expr = normalize_col_with_schemas(expr, &schemas, &[]).unwrap();
         assert_eq!(normalized_expr, col("tableA2.a") + col("tableB.b"));
     }
 
@@ -1897,7 +1922,9 @@ mod tests {
         let schemas = vec![schema_a].into_iter().map(Arc::new).collect::<Vec<_>>();
         let schemas = schemas.iter().collect::<Vec<_>>();
 
-        let error = normalize_col(expr, &schemas).unwrap_err().to_string();
+        let error = normalize_col_with_schemas(expr, &schemas, &[])
+            .unwrap_err()
+            .to_string();
         assert_eq!(
             error,
             "Error during planning: Column #b not found in provided schemas"
