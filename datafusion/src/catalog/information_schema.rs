@@ -19,7 +19,10 @@
 //!
 //! Information Schema](https://en.wikipedia.org/wiki/Information_schema)
 
-use std::{any, sync::Arc};
+use std::{
+    any,
+    sync::{Arc, Weak},
+};
 
 use arrow::{
     array::{StringBuilder, UInt64Builder},
@@ -41,14 +44,14 @@ const COLUMNS: &str = "columns";
 /// Wraps another [`CatalogProvider`] and adds a "information_schema"
 /// schema that can introspect on tables in the catalog_list
 pub(crate) struct CatalogWithInformationSchema {
-    catalog_list: Arc<dyn CatalogList>,
+    catalog_list: Weak<dyn CatalogList>,
     /// wrapped provider
     inner: Arc<dyn CatalogProvider>,
 }
 
 impl CatalogWithInformationSchema {
     pub(crate) fn new(
-        catalog_list: Arc<dyn CatalogList>,
+        catalog_list: Weak<dyn CatalogList>,
         inner: Arc<dyn CatalogProvider>,
     ) -> Self {
         Self {
@@ -73,9 +76,10 @@ impl CatalogProvider for CatalogWithInformationSchema {
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         if name.eq_ignore_ascii_case(INFORMATION_SCHEMA) {
-            Some(Arc::new(InformationSchemaProvider {
-                catalog_list: self.catalog_list.clone(),
-            }))
+            Weak::upgrade(&self.catalog_list).map(|catalog_list| {
+                Arc::new(InformationSchemaProvider { catalog_list })
+                    as Arc<dyn SchemaProvider>
+            })
         } else {
             self.inner.schema(name)
         }

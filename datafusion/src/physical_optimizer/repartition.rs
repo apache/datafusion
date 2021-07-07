@@ -110,7 +110,9 @@ mod tests {
 
     use super::*;
     use crate::datasource::datasource::Statistics;
-    use crate::physical_plan::parquet::{ParquetExec, ParquetPartition};
+    use crate::physical_plan::parquet::{
+        ParquetExec, ParquetExecMetrics, ParquetPartition,
+    };
     use crate::physical_plan::projection::ProjectionExec;
 
     #[test]
@@ -119,12 +121,13 @@ mod tests {
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ParquetExec::new(
-                vec![ParquetPartition {
-                    filenames: vec!["x".to_string()],
-                    statistics: Statistics::default(),
-                }],
+                vec![ParquetPartition::new(
+                    vec!["x".to_string()],
+                    Statistics::default(),
+                )],
                 schema,
                 None,
+                ParquetExecMetrics::new(),
                 None,
                 2048,
                 None,
@@ -156,12 +159,13 @@ mod tests {
             Arc::new(ProjectionExec::try_new(
                 vec![],
                 Arc::new(ParquetExec::new(
-                    vec![ParquetPartition {
-                        filenames: vec!["x".to_string()],
-                        statistics: Statistics::default(),
-                    }],
+                    vec![ParquetPartition::new(
+                        vec!["x".to_string()],
+                        Statistics::default(),
+                    )],
                     schema,
                     None,
+                    ParquetExecMetrics::new(),
                     None,
                     2048,
                     None,

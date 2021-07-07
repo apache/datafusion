@@ -144,7 +144,7 @@ impl ExecutionContext {
 
             let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
                 Arc::new(CatalogWithInformationSchema::new(
-                    catalog_list.clone(),
+                    Arc::downgrade(&catalog_list),
                     Arc::new(default_catalog),
                 ))
             } else {
@@ -346,7 +346,7 @@ impl ExecutionContext {
         let state = self.state.lock().unwrap();
         let catalog = if state.config.information_schema {
             Arc::new(CatalogWithInformationSchema::new(
-                state.catalog_list.clone(),
+                Arc::downgrade(&state.catalog_list),
                 catalog,
             ))
         } else {
@@ -641,6 +641,9 @@ pub struct ExecutionConfig {
     /// Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel
     /// using the provided `concurrency` level
     pub repartition_aggregations: bool,
+    /// Should DataFusion repartition data using the partition keys to execute window functions in
+    /// parallel using the provided `concurrency` level
+    pub repartition_windows: bool,
 }
 
 impl Default for ExecutionConfig {
@@ -670,6 +673,7 @@ impl Default for ExecutionConfig {
             information_schema: false,
             repartition_joins: true,
             repartition_aggregations: true,
+            repartition_windows: true,
         }
     }
 }
@@ -760,9 +764,16 @@ impl ExecutionConfig {
         self.repartition_joins = enabled;
         self
     }
+
     /// Enables or disables the use of repartitioning for aggregations to improve parallelism
     pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
         self.repartition_aggregations = enabled;
+        self
+    }
+
+    /// Enables or disables the use of repartitioning for window functions to improve parallelism
+    pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
+        self.repartition_windows = enabled;
         self
     }
 }
@@ -924,6 +935,7 @@ mod tests {
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use std::fs::File;
+    use std::sync::Weak;
     use std::thread::{self, JoinHandle};
     use std::{io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
@@ -1278,6 +1290,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn left_join_using() -> Result<()> {
+        let results = execute(
+            "SELECT t1.c1, t2.c2 FROM test t1 JOIN test t2 USING (c2) ORDER BY t2.c2",
+            1,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+",
+            "| c1 | c2 |",
+            "+----+----+",
+            "| 0  | 1  |",
+            "| 0  | 2  |",
+            "| 0  | 3  |",
+            "| 0  | 4  |",
+            "| 0  | 5  |",
+            "| 0  | 6  |",
+            "| 0  | 7  |",
+            "| 0  | 8  |",
+            "| 0  | 9  |",
+            "| 0  | 10 |",
+            "+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn left_join_using_join_key_projection() -> Result<()> {
+        let results = execute(
+            "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 USING (c2) ORDER BY t2.c2",
+            1,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+----+",
+            "| c1 | c2 | c2 |",
+            "+----+----+----+",
+            "| 0  | 1  | 1  |",
+            "| 0  | 2  | 2  |",
+            "| 0  | 3  | 3  |",
+            "| 0  | 4  | 4  |",
+            "| 0  | 5  | 5  |",
+            "| 0  | 6  | 6  |",
+            "| 0  | 7  | 7  |",
+            "| 0  | 8  | 8  |",
+            "| 0  | 9  | 9  |",
+            "| 0  | 10 | 10 |",
+            "+----+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn left_join() -> Result<()> {
+        let results = execute(
+            "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 ON t1.c2 = t2.c2 ORDER BY t1.c2",
+            1,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+----+",
+            "| c1 | c2 | c2 |",
+            "+----+----+----+",
+            "| 0  | 1  | 1  |",
+            "| 0  | 2  | 2  |",
+            "| 0  | 3  | 3  |",
+            "| 0  | 4  | 4  |",
+            "| 0  | 5  | 5  |",
+            "| 0  | 6  | 6  |",
+            "| 0  | 7  | 7  |",
+            "| 0  | 8  | 8  |",
+            "| 0  | 9  | 9  |",
+            "| 0  | 10 | 10 |",
+            "+----+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn window() -> Result<()> {
         let results = execute(
             "SELECT \
@@ -1346,11 +1448,11 @@ mod tests {
             "+----+----+--------------+-----------------+----------------+------------------------+---------+-----------+---------+---------+---------+",
             "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(c2) | LAST_VALUE(c2) | NTH_VALUE(c2,Int64(2)) | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
             "+----+----+--------------+-----------------+----------------+------------------------+---------+-----------+---------+---------+---------+",
-            "| 0  | 1  | 1            | 1               | 10             | 2                      | 1       | 1         | 1       | 1       | 1       |",
-            "| 0  | 2  | 2            | 1               | 10             | 2                      | 3       | 2         | 2       | 1       | 1.5     |",
-            "| 0  | 3  | 3            | 1               | 10             | 2                      | 6       | 3         | 3       | 1       | 2       |",
-            "| 0  | 4  | 4            | 1               | 10             | 2                      | 10      | 4         | 4       | 1       | 2.5     |",
-            "| 0  | 5  | 5            | 1               | 10             | 2                      | 15      | 5         | 5       | 1       | 3       |",
+            "| 0  | 1  | 1            | 1               | 1              |                        | 1       | 1         | 1       | 1       | 1       |",
+            "| 0  | 2  | 2            | 1               | 2              | 2                      | 3       | 2         | 2       | 1       | 1.5     |",
+            "| 0  | 3  | 3            | 1               | 3              | 2                      | 6       | 3         | 3       | 1       | 2       |",
+            "| 0  | 4  | 4            | 1               | 4              | 2                      | 10      | 4         | 4       | 1       | 2.5     |",
+            "| 0  | 5  | 5            | 1               | 5              | 2                      | 15      | 5         | 5       | 1       | 3       |",
             "+----+----+--------------+-----------------+----------------+------------------------+---------+-----------+---------+---------+---------+",
         ];
 
@@ -1403,7 +1505,7 @@ mod tests {
             ROW_NUMBER() OVER (PARTITION BY c2 ORDER BY c1), \
             FIRST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
             LAST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
-            NTH_VALUE(c2 + c1, 2) OVER (PARTITION BY c2 ORDER BY c1), \
+            NTH_VALUE(c2 + c1, 1) OVER (PARTITION BY c2 ORDER BY c1), \
             SUM(c2) OVER (PARTITION BY c2 ORDER BY c1), \
             COUNT(c2) OVER (PARTITION BY c2 ORDER BY c1), \
             MAX(c2) OVER (PARTITION BY c2 ORDER BY c1), \
@@ -1418,13 +1520,13 @@ mod tests {
 
         let expected = vec![
             "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
-            "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(c2 Plus c1) | LAST_VALUE(c2 Plus c1) | NTH_VALUE(c2 Plus c1,Int64(2)) | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
+            "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(c2 Plus c1) | LAST_VALUE(c2 Plus c1) | NTH_VALUE(c2 Plus c1,Int64(1)) | SUM(c2) | COUNT(c2) | MAX(c2) | MIN(c2) | AVG(c2) |",
             "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
-            "| 0  | 1  | 1            | 1                       | 4                      | 2                              | 1       | 1         | 1       | 1       | 1       |",
-            "| 0  | 2  | 1            | 2                       | 5                      | 3                              | 2       | 1         | 2       | 2       | 2       |",
-            "| 0  | 3  | 1            | 3                       | 6                      | 4                              | 3       | 1         | 3       | 3       | 3       |",
-            "| 0  | 4  | 1            | 4                       | 7                      | 5                              | 4       | 1         | 4       | 4       | 4       |",
-            "| 0  | 5  | 1            | 5                       | 8                      | 6                              | 5       | 1         | 5       | 5       | 5       |",
+            "| 0  | 1  | 1            | 1                       | 1                      | 1                              | 1       | 1         | 1       | 1       | 1       |",
+            "| 0  | 2  | 1            | 2                       | 2                      | 2                              | 2       | 1         | 2       | 2       | 2       |",
+            "| 0  | 3  | 1            | 3                       | 3                      | 3                              | 3       | 1         | 3       | 3       | 3       |",
+            "| 0  | 4  | 1            | 4                       | 4                      | 4                              | 4       | 1         | 4       | 4       | 4       |",
+            "| 0  | 5  | 1            | 5                       | 5                      | 5                              | 5       | 1         | 5       | 5       | 5       |",
             "+----+----+--------------+-------------------------+------------------------+--------------------------------+---------+-----------+---------+---------+---------+",
         ];
 
@@ -3364,6 +3466,29 @@ mod tests {
         assert_batches_sorted_eq!(expected, &result);
     }
 
+    #[tokio::test]
+    async fn catalogs_not_leaked() {
+        // the information schema used to introduce cyclic Arcs
+        let ctx = ExecutionContext::with_config(
+            ExecutionConfig::new().with_information_schema(true),
+        );
+
+        // register a single catalog
+        let catalog = Arc::new(MemoryCatalogProvider::new());
+        let catalog_weak = Arc::downgrade(&catalog);
+        ctx.register_catalog("my_catalog", catalog);
+
+        let catalog_list_weak = {
+            let state = ctx.state.lock().unwrap();
+            Arc::downgrade(&state.catalog_list)
+        };
+
+        drop(ctx);
+
+        assert_eq!(Weak::strong_count(&catalog_list_weak), 0);
+        assert_eq!(Weak::strong_count(&catalog_weak), 0);
+    }
+
     struct MyPhysicalPlanner {}
 
     impl PhysicalPlanner for MyPhysicalPlanner {
@@ -3375,6 +3500,16 @@ mod tests {
             Err(DataFusionError::NotImplemented(
                 "query not supported".to_string(),
             ))
+        }
+
+        fn create_physical_expr(
+            &self,
+            _expr: &Expr,
+            _input_dfschema: &crate::logical_plan::DFSchema,
+            _input_schema: &Schema,
+            _ctx_state: &ExecutionContextState,
+        ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
+            unimplemented!()
         }
     }
 

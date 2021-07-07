@@ -1,3 +1,5 @@
+#!/bin/bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,8 +16,28 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-/target
-Cargo.lock
-venv
-.venv
+RAT_VERSION=0.13
+
+# download apache rat
+if [ ! -f apache-rat-${RAT_VERSION}.jar ]; then
+  curl -s https://repo1.maven.org/maven2/org/apache/rat/apache-rat/${RAT_VERSION}/apache-rat-${RAT_VERSION}.jar > apache-rat-${RAT_VERSION}.jar
+fi
+
+RAT="java -jar apache-rat-${RAT_VERSION}.jar -x "
+
+RELEASE_DIR=$(cd "$(dirname "$BASH_SOURCE")"; pwd)
+
+# generate the rat report
+$RAT $1 > rat.txt
+python $RELEASE_DIR/check-rat-report.py $RELEASE_DIR/rat_exclude_files.txt rat.txt > filtered_rat.txt
+cat filtered_rat.txt
+UNAPPROVED=`cat filtered_rat.txt  | grep "NOT APPROVED" | wc -l`
+
+if [ "0" -eq "${UNAPPROVED}" ]; then
+  echo "No unapproved licenses"
+else
+  echo "${UNAPPROVED} unapproved licences. Check rat report: rat.txt"
+  exit 1
+fi

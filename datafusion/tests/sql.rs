@@ -903,7 +903,7 @@ async fn csv_query_window_with_partition_by() -> Result<()> {
             "-21481",
             "-16974",
             "-21481",
-            "-21481",
+            "NULL",
         ],
         vec![
             "141680161",
@@ -952,15 +952,8 @@ async fn csv_query_window_with_order_by() -> Result<()> {
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![
         vec![
-            "28774375",
-            "61035129",
-            "61035129",
-            "1",
-            "61035129",
-            "61035129",
-            "61035129",
-            "2025611582",
-            "-108973366",
+            "28774375", "61035129", "61035129", "1", "61035129", "61035129", "61035129",
+            "61035129", "NULL",
         ],
         vec![
             "63044568",
@@ -970,7 +963,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
             "61035129",
             "-108973366",
             "61035129",
-            "2025611582",
+            "-108973366",
             "-108973366",
         ],
         vec![
@@ -981,7 +974,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
             "623103518",
             "-108973366",
             "61035129",
-            "2025611582",
+            "623103518",
             "-108973366",
         ],
         vec![
@@ -992,7 +985,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
             "623103518",
             "-1927628110",
             "61035129",
-            "2025611582",
+            "-1927628110",
             "-108973366",
         ],
         vec![
@@ -1003,7 +996,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
             "623103518",
             "-1927628110",
             "61035129",
-            "2025611582",
+            "-1899175111",
             "-108973366",
         ],
     ];
@@ -1691,6 +1684,28 @@ async fn equijoin() -> Result<()> {
         vec!["44", "d", "x"],
     ];
     assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_and_other_condition() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["11", "a", "z"], vec!["22", "b", "y"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_and_unsupported_condition() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
+    let res = ctx.create_logical_plan(sql);
+    assert!(res.is_err());
+    assert_eq!(format!("{}", res.unwrap_err()), "This feature is not implemented: Unsupported expressions in Left JOIN: [#t2_name GtEq Utf8(\"y\")]");
     Ok(())
 }
 
@@ -3307,6 +3322,11 @@ async fn test_interval_expressions() -> Result<()> {
         "interval '5 day'",
         "0 years 0 mons 5 days 0 hours 0 mins 0.00 secs"
     );
+    // Hour is ignored, this matches PostgreSQL
+    test_expression!(
+        "interval '5 day' hour",
+        "0 years 0 mons 5 days 0 hours 0 mins 0.00 secs"
+    );
     test_expression!(
         "interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'",
         "0 years 0 mons 5 days 4 hours 3 mins 2.100 secs"
@@ -3316,7 +3336,15 @@ async fn test_interval_expressions() -> Result<()> {
         "0 years 0 mons 15 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
+        "interval '0.5' month",
+        "0 years 0 mons 15 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
         "interval '1 month'",
+        "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
+        "interval '1' MONTH",
         "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
     );
     test_expression!(
@@ -3337,6 +3365,10 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '2 year'",
+        "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+    );
+    test_expression!(
+        "interval '2' year",
         "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
     );
     Ok(())
@@ -3802,7 +3834,7 @@ async fn test_physical_plan_display_indent() {
     let expected = vec![
         "GlobalLimitExec: limit=10",
         "  SortExec: [the_min@2 DESC]",
-        "    MergeExec",
+        "    CoalescePartitionsExec",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(c12), MIN(c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",

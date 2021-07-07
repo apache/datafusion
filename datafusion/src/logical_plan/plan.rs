@@ -21,9 +21,11 @@ use super::display::{GraphvizVisitor, IndentVisitor};
 use super::expr::{Column, Expr};
 use super::extension::UserDefinedLogicalNode;
 use crate::datasource::TableProvider;
+use crate::error::DataFusionError;
 use crate::logical_plan::dfschema::DFSchemaRef;
 use crate::sql::parser::FileType;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use std::collections::HashSet;
 use std::{
     fmt::{self, Display},
     sync::Arc,
@@ -353,6 +355,43 @@ impl LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::CreateExternalTable { .. } => vec![],
         }
+    }
+
+    /// returns all `Using` join columns in a logical plan
+    pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
+        struct UsingJoinColumnVisitor {
+            using_columns: Vec<HashSet<Column>>,
+        }
+
+        impl PlanVisitor for UsingJoinColumnVisitor {
+            type Error = DataFusionError;
+
+            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+                if let LogicalPlan::Join {
+                    join_constraint: JoinConstraint::Using,
+                    on,
+                    ..
+                } = plan
+                {
+                    self.using_columns.push(
+                        on.iter()
+                            .map(|entry| {
+                                std::iter::once(entry.0.clone())
+                                    .chain(std::iter::once(entry.1.clone()))
+                            })
+                            .flatten()
+                            .collect::<HashSet<_>>(),
+                    );
+                }
+                Ok(true)
+            }
+        }
+
+        let mut visitor = UsingJoinColumnVisitor {
+            using_columns: vec![],
+        };
+        self.accept(&mut visitor)?;
+        Ok(visitor.using_columns)
     }
 }
 
@@ -709,10 +748,21 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
-                    LogicalPlan::Join { on: ref keys, .. } => {
+                    LogicalPlan::Join {
+                        on: ref keys,
+                        join_constraint,
+                        ..
+                    } => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
-                        write!(f, "Join: {}", join_expr.join(", "))
+                        match join_constraint {
+                            JoinConstraint::On => {
+                                write!(f, "Join: {}", join_expr.join(", "))
+                            }
+                            JoinConstraint::Using => {
+                                write!(f, "Join: Using {}", join_expr.join(", "))
+                            }
+                        }
                     }
                     LogicalPlan::CrossJoin { .. } => {
                         write!(f, "CrossJoin:")

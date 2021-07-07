@@ -41,12 +41,10 @@ services:
   ballista-client:
     image: ballista:0.5.0-SNAPSHOT
     command: "/bin/sh" # do nothing
-    working_dir: /ballista/benchmarks/tpch
     environment:
       - RUST_LOG=info
     volumes:
       - ./data:/data
-      - ../..:/ballista
     depends_on:
       - ballista-scheduler
       - ballista-executor

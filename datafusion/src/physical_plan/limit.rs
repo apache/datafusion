@@ -49,7 +49,7 @@ pub struct GlobalLimitExec {
 }
 
 impl GlobalLimitExec {
-    /// Create a new MergeExec
+    /// Create a new GlobalLimitExec
     pub fn new(input: Arc<dyn ExecutionPlan>, limit: usize) -> Self {
         GlobalLimitExec { input, limit }
     }

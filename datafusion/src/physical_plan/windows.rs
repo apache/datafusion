@@ -21,7 +21,9 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::physical_plan::{
     aggregates, common,
-    expressions::{dense_rank, rank, Literal, NthValue, PhysicalSortExpr, RowNumber},
+    expressions::{
+        dense_rank, lag, lead, rank, Literal, NthValue, PhysicalSortExpr, RowNumber,
+    },
     type_coercion::coerce,
     window_functions::{
         signature_for_built_in, BuiltInWindowFunction, BuiltInWindowFunctionExpr,
@@ -100,10 +102,22 @@ fn create_built_in_window_expr(
     input_schema: &Schema,
     name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
-    match fun {
-        BuiltInWindowFunction::RowNumber => Ok(Arc::new(RowNumber::new(name))),
-        BuiltInWindowFunction::Rank => Ok(Arc::new(rank(name))),
-        BuiltInWindowFunction::DenseRank => Ok(Arc::new(dense_rank(name))),
+    Ok(match fun {
+        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name)),
+        BuiltInWindowFunction::Rank => Arc::new(rank(name)),
+        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name)),
+        BuiltInWindowFunction::Lag => {
+            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
+            let arg = coerced_args[0].clone();
+            let data_type = args[0].data_type(input_schema)?;
+            Arc::new(lag(name, data_type, arg))
+        }
+        BuiltInWindowFunction::Lead => {
+            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
+            let arg = coerced_args[0].clone();
+            let data_type = args[0].data_type(input_schema)?;
+            Arc::new(lead(name, data_type, arg))
+        }
         BuiltInWindowFunction::NthValue => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
@@ -118,25 +132,27 @@ fn create_built_in_window_expr(
                 .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
             let n: u32 = n as u32;
             let data_type = args[0].data_type(input_schema)?;
-            Ok(Arc::new(NthValue::nth_value(name, arg, data_type, n)?))
+            Arc::new(NthValue::nth_value(name, arg, data_type, n)?)
         }
         BuiltInWindowFunction::FirstValue => {
             let arg =
                 coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Ok(Arc::new(NthValue::first_value(name, arg, data_type)))
+            Arc::new(NthValue::first_value(name, arg, data_type))
         }
         BuiltInWindowFunction::LastValue => {
             let arg =
                 coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Ok(Arc::new(NthValue::last_value(name, arg, data_type)))
+            Arc::new(NthValue::last_value(name, arg, data_type))
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Window function with {:?} not yet implemented",
-            fun
-        ))),
-    }
+        _ => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Window function with {:?} not yet implemented",
+                fun
+            )))
+        }
+    })
 }
 
 /// A window expr that takes the form of a built in window function
@@ -404,11 +420,22 @@ impl ExecutionPlan for WindowAggExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
+        // because we can have repartitioning using the partition keys
+        // this would be either 1 or more than 1 depending on the presense of
+        // repartitioning
+        self.input.output_partitioning()
     }
 
     fn required_child_distribution(&self) -> Distribution {
-        Distribution::SinglePartition
+        if self
+            .window_expr()
+            .iter()
+            .all(|expr| expr.partition_by().is_empty())
+        {
+            Distribution::SinglePartition
+        } else {
+            Distribution::UnspecifiedDistribution
+        }
     }
 
     fn with_new_children(
@@ -428,22 +455,7 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
-                "WindowAggExec invalid partition {}",
-                partition
-            )));
-        }
-
-        // window needs to operate on a single partition currently
-        if 1 != self.input.output_partitioning().partition_count() {
-            return Err(DataFusionError::Internal(
-                "WindowAggExec requires a single input partition".to_owned(),
-            ));
-        }
-
         let input = self.input.execute(partition).await?;
-
         let stream = Box::pin(WindowAggStream::new(
             self.schema.clone(),
             self.window_expr.clone(),
@@ -578,38 +590,6 @@ mod tests {
 
         let input = Arc::new(csv);
         Ok((input, schema))
-    }
-
-    #[tokio::test]
-    async fn window_function_input_partition() -> Result<()> {
-        let (input, schema) = create_test_schema(4)?;
-
-        let window_exec = Arc::new(WindowAggExec::try_new(
-            vec![create_window_expr(
-                &WindowFunction::AggregateFunction(AggregateFunction::Count),
-                "count".to_owned(),
-                &[col("c3", &schema)?],
-                &[],
-                &[],
-                Some(WindowFrame::default()),
-                schema.as_ref(),
-            )?],
-            input,
-            schema.clone(),
-        )?);
-
-        let result = collect(window_exec).await;
-
-        assert!(result.is_err());
-        if let Some(DataFusionError::Internal(msg)) = result.err() {
-            assert_eq!(
-                msg,
-                "WindowAggExec requires a single input partition".to_owned()
-            );
-        } else {
-            unreachable!("Expect an internal error to happen");
-        }
-        Ok(())
     }
 
     #[tokio::test]

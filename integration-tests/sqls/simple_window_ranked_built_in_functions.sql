@@ -14,13 +14,9 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-SELECT
+select
   c9,
-  row_number() OVER (PARTITION BY c2 ORDER BY c9) AS row_number,
-  count(c3) OVER (PARTITION BY c2 ORDER BY c9) AS count_c3,
-  avg(c3) OVER (PARTITION BY c2 ORDER BY c9) AS avg_c3_by_c2,
-  sum(c3) OVER (PARTITION BY c2 ORDER BY c9) AS sum_c3_by_c2,
-  max(c3) OVER (PARTITION BY c2 ORDER BY c9) AS max_c3_by_c2,
-  min(c3) OVER (PARTITION BY c2 ORDER BY c9) AS min_c3_by_c2
+  rank() OVER (PARTITION BY c2 ORDER BY c3) rank_by_c3,
+  dense_rank() OVER (PARTITION BY c2 ORDER BY c3) dense_rank_by_c3
 FROM test
 ORDER BY c9;

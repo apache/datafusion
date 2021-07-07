@@ -26,8 +26,8 @@ use datafusion::logical_plan::window_frames::{
 };
 use datafusion::logical_plan::{
     abs, acos, asin, atan, ceil, cos, exp, floor, ln, log10, log2, round, signum, sin,
-    sqrt, tan, trunc, Column, DFField, DFSchema, Expr, JoinType, LogicalPlan,
-    LogicalPlanBuilder, Operator,
+    sqrt, tan, trunc, Column, DFField, DFSchema, Expr, JoinConstraint, JoinType,
+    LogicalPlan, LogicalPlanBuilder, Operator,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::csv::CsvReadOptions;
@@ -257,23 +257,32 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                             join.join_type
                         ))
                     })?;
-                let join_type = match join_type {
-                    protobuf::JoinType::Inner => JoinType::Inner,
-                    protobuf::JoinType::Left => JoinType::Left,
-                    protobuf::JoinType::Right => JoinType::Right,
-                    protobuf::JoinType::Full => JoinType::Full,
-                    protobuf::JoinType::Semi => JoinType::Semi,
-                    protobuf::JoinType::Anti => JoinType::Anti,
-                };
-                LogicalPlanBuilder::from(convert_box_required!(join.left)?)
-                    .join(
+                let join_constraint = protobuf::JoinConstraint::from_i32(
+                    join.join_constraint,
+                )
+                .ok_or_else(|| {
+                    proto_error(format!(
+                        "Received a JoinNode message with unknown JoinConstraint {}",
+                        join.join_constraint
+                    ))
+                })?;
+
+                let builder = LogicalPlanBuilder::from(convert_box_required!(join.left)?);
+                let builder = match join_constraint.into() {
+                    JoinConstraint::On => builder.join(
                         &convert_box_required!(join.right)?,
-                        join_type,
+                        join_type.into(),
                         left_keys,
                         right_keys,
-                    )?
-                    .build()
-                    .map_err(|e| e.into())
+                    )?,
+                    JoinConstraint::Using => builder.join_using(
+                        &convert_box_required!(join.right)?,
+                        join_type.into(),
+                        left_keys,
+                    )?,
+                };
+
+                builder.build().map_err(|e| e.into())
             }
         }
     }

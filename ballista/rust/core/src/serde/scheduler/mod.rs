@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use datafusion::arrow::array::{
     ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
@@ -34,7 +34,6 @@ pub mod to_proto;
 
 /// Action that can be sent to an executor
 #[derive(Debug, Clone)]
-
 pub enum Action {
     /// Execute a query and store the results in memory
     ExecutePartition(ExecutePartition),
@@ -111,6 +110,16 @@ impl Default for PartitionStats {
             num_batches: None,
             num_bytes: None,
         }
+    }
+}
+
+impl fmt::Display for PartitionStats {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "numBatches={:?}, numRows={:?}, numBytes={:?}",
+            self.num_batches, self.num_rows, self.num_bytes
+        )
     }
 }
 

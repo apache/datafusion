@@ -49,9 +49,7 @@ def data_datetime(f):
         datetime.datetime.now() - datetime.timedelta(days=1),
         datetime.datetime.now() + datetime.timedelta(days=1),
     ]
-    return pa.array(
-        data, type=pa.timestamp(f), mask=np.array([False, True, False])
-    )
+    return pa.array(data, type=pa.timestamp(f), mask=np.array([False, True, False]))
 
 
 def data_date32():
@@ -60,9 +58,7 @@ def data_date32():
         datetime.date(1980, 1, 1),
         datetime.date(2030, 1, 1),
     ]
-    return pa.array(
-        data, type=pa.date32(), mask=np.array([False, True, False])
-    )
+    return pa.array(data, type=pa.date32(), mask=np.array([False, True, False]))
 
 
 def data_timedelta(f):
@@ -71,9 +67,7 @@ def data_timedelta(f):
         datetime.timedelta(days=1),
         datetime.timedelta(seconds=1),
     ]
-    return pa.array(
-        data, type=pa.duration(f), mask=np.array([False, True, False])
-    )
+    return pa.array(data, type=pa.duration(f), mask=np.array([False, True, False]))
 
 
 def data_binary_other():

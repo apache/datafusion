@@ -37,8 +37,8 @@ Testing setup:
 
 - `git submodule init`
 - `git submodule update`
-- `export PARQUET_TEST_DATA=parquet_testing/`
-- `export ARROW_TEST_DATA=testing/data/`
+- `export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data/`
+- `export ARROW_TEST_DATA=$(pwd)/testing/data/`
 
 ## How to add a new scalar function
 

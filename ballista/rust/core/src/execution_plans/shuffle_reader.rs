@@ -28,13 +28,17 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
+use datafusion::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, SQLMetric,
+};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,
 };
 use futures::{future, Stream, StreamExt};
+use hashbrown::HashMap;
 use log::info;
+use std::time::Instant;
 
 /// ShuffleReaderExec reads partitions that have already been materialized by a ShuffleWriterExec
 /// being executed by an executor
@@ -43,6 +47,8 @@ pub struct ShuffleReaderExec {
     /// Each partition of a shuffle can read data from multiple locations
     pub(crate) partition: Vec<Vec<PartitionLocation>>,
     pub(crate) schema: SchemaRef,
+    /// Time to fetch data from executor
+    fetch_time: Arc<SQLMetric>,
 }
 
 impl ShuffleReaderExec {
@@ -51,7 +57,11 @@ impl ShuffleReaderExec {
         partition: Vec<Vec<PartitionLocation>>,
         schema: SchemaRef,
     ) -> Result<Self> {
-        Ok(Self { partition, schema })
+        Ok(Self {
+            partition,
+            schema,
+            fetch_time: SQLMetric::time_nanos(),
+        })
     }
 }
 
@@ -88,11 +98,13 @@ impl ExecutionPlan for ShuffleReaderExec {
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
         info!("ShuffleReaderExec::execute({})", partition);
 
+        let start = Instant::now();
         let partition_locations = &self.partition[partition];
         let result = future::join_all(partition_locations.iter().map(fetch_partition))
             .await
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
+        self.fetch_time.add_elapsed(start);
 
         let result = WrappedStream::new(
             Box::pin(futures::stream::iter(result).flatten()),
@@ -115,7 +127,7 @@ impl ExecutionPlan for ShuffleReaderExec {
                         x.iter()
                             .map(|l| {
                                 format!(
-                                    "[executor={} part={}:{}:{} stats={:?}]",
+                                    "[executor={} part={}:{}:{} stats={}]",
                                     l.executor_meta.id,
                                     l.partition_id.job_id,
                                     l.partition_id.stage_id,
@@ -127,10 +139,16 @@ impl ExecutionPlan for ShuffleReaderExec {
                             .join(",")
                     })
                     .collect::<Vec<String>>()
-                    .join("\n");
+                    .join(", ");
                 write!(f, "ShuffleReaderExec: partition_locations={}", loc_str)
             }
         }
+    }
+
+    fn metrics(&self) -> HashMap<String, SQLMetric> {
+        let mut metrics = HashMap::new();
+        metrics.insert("fetchTime".to_owned(), (*self.fetch_time).clone());
+        metrics
     }
 }
 
