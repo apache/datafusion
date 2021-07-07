@@ -1688,6 +1688,28 @@ async fn equijoin() -> Result<()> {
 }
 
 #[tokio::test]
+async fn equijoin_and_other_condition() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["11", "a", "z"], vec!["22", "b", "y"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_and_unsupported_condition() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
+    let res = ctx.create_logical_plan(sql);
+    assert!(res.is_err());
+    assert_eq!(format!("{}", res.unwrap_err()), "This feature is not implemented: Unsupported expressions in Left JOIN: [#t2.t2_name GtEq Utf8(\"y\")]");
+    Ok(())
+}
+
+#[tokio::test]
 async fn left_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id";
