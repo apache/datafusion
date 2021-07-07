@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
 
     let config = ExecutionConfig::new()
         .with_concurrency(opt.concurrency)
-        .with_partitions(opt.concurrency)
+        .with_default_partitions(opt.concurrency)
         .with_batch_size(opt.batch_size);
     let mut ctx = ExecutionContext::with_config(config);
 

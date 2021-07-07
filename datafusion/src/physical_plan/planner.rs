@@ -329,7 +329,7 @@ impl DefaultPhysicalPlanner {
                 let partition_keys = window_expr_common_partition_keys(window_expr)?;
 
                 let can_repartition = !partition_keys.is_empty()
-                    && ctx_state.config.partitions > 1
+                    && ctx_state.config.partition_count > 1
                     && ctx_state.config.repartition_windows;
 
                 let input_exec = if can_repartition {
@@ -346,7 +346,7 @@ impl DefaultPhysicalPlanner {
                         .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
                     Arc::new(RepartitionExec::try_new(
                         input_exec,
-                        Partitioning::Hash(partition_keys, ctx_state.config.partitions),
+                        Partitioning::Hash(partition_keys, ctx_state.config.partition_count),
                     )?)
                 } else {
                     input_exec
@@ -480,7 +480,7 @@ impl DefaultPhysicalPlanner {
                     .any(|x| matches!(x, DataType::Dictionary(_, _)));
 
                 let can_repartition = !groups.is_empty()
-                    && ctx_state.config.partitions > 1
+                    && ctx_state.config.partition_count > 1
                     && ctx_state.config.repartition_aggregations
                     && !contains_dict;
 
@@ -493,7 +493,7 @@ impl DefaultPhysicalPlanner {
                         initial_aggr,
                         Partitioning::Hash(
                             final_group.clone(),
-                            ctx_state.config.partitions,
+                            ctx_state.config.partition_count,
                         ),
                     )?);
                     // Combine hash aggregates within the partition
@@ -679,7 +679,7 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<hash_utils::JoinOn>>()?;
 
-                if ctx_state.config.partitions > 1 && ctx_state.config.repartition_joins {
+                if ctx_state.config.partition_count > 1 && ctx_state.config.repartition_joins {
                     let (left_expr, right_expr) = join_on
                         .iter()
                         .map(|(l, r)| {
@@ -694,11 +694,11 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(HashJoinExec::try_new(
                         Arc::new(RepartitionExec::try_new(
                             physical_left,
-                            Partitioning::Hash(left_expr, ctx_state.config.partitions),
+                            Partitioning::Hash(left_expr, ctx_state.config.partition_count),
                         )?),
                         Arc::new(RepartitionExec::try_new(
                             physical_right,
-                            Partitioning::Hash(right_expr, ctx_state.config.partitions),
+                            Partitioning::Hash(right_expr, ctx_state.config.partition_count),
                         )?),
                         join_on,
                         &physical_join_type,
@@ -1350,7 +1350,7 @@ mod tests {
     fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
         let mut ctx_state = make_ctx_state();
         ctx_state.config.concurrency = 4;
-        ctx_state.config.partitions = 4;
+        ctx_state.config.partition_count = 4;
 
         let planner = DefaultPhysicalPlanner::default();
         planner.create_physical_plan(logical_plan, &ctx_state)

@@ -608,7 +608,7 @@ pub struct ExecutionConfig {
     /// Number of concurrent threads for query execution.
     pub concurrency: usize,
     /// Number of default partitions to use for repartioning data
-    pub partitions: usize,
+    pub partition_count: usize,
     /// Default batch size when reading data sources
     pub batch_size: usize,
     /// Responsible for optimizing a logical plan
@@ -641,7 +641,7 @@ impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             concurrency: num_cpus::get(),
-            partitions: num_cpus::get(),
+            partition_count: num_cpus::get(),
             batch_size: 8192,
             optimizers: vec![
                 Arc::new(ConstantFolding::new()),
@@ -685,10 +685,10 @@ impl ExecutionConfig {
     }
 
     /// Customize default number of partitions being used in repartioning
-    pub fn with_partitions(mut self, n: usize) -> Self {
-        // partitions must be greater than zero
+    pub fn with_default_partitions(mut self, n: usize) -> Self {
+        // partition count must be greater than zero
         assert!(n > 0);
-        self.partitions = n;
+        self.partition_count = n;
         self
     }
 
@@ -3484,8 +3484,9 @@ mod tests {
 
     /// Generate a partitioned CSV file and register it with an execution context
     fn create_ctx(tmp_dir: &TempDir, partition_count: usize) -> Result<ExecutionContext> {
-        let mut ctx =
-            ExecutionContext::with_config(ExecutionConfig::new().with_concurrency(8));
+        let mut ctx = ExecutionContext::with_config(
+            ExecutionConfig::new().with_default_partitions(8),
+        );
 
         let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
 

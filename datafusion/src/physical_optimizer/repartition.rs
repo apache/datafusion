@@ -36,7 +36,7 @@ impl Repartition {
 }
 
 fn optimize_partitioning(
-    partitions: usize,
+    partition_count: usize,
     requires_single_partition: bool,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -51,7 +51,7 @@ fn optimize_partitioning(
             .iter()
             .map(|child| {
                 optimize_partitioning(
-                    partitions,
+                    partition_count,
                     matches!(
                         plan.required_child_distribution(),
                         Distribution::SinglePartition
@@ -65,8 +65,8 @@ fn optimize_partitioning(
 
     let perform_repartition = match new_plan.output_partitioning() {
         // Apply when underlying node has less than `self.partitions` amount of concurrency
-        RoundRobinBatch(x) => x < partitions,
-        UnknownPartitioning(x) => x < partitions,
+        RoundRobinBatch(x) => x < partition_count,
+        UnknownPartitioning(x) => x < partition_count,
         // we don't want to introduce partitioning after hash partitioning
         // as the plan will likely depend on this
         Hash(_, _) => false,
@@ -79,7 +79,7 @@ fn optimize_partitioning(
     if perform_repartition && !requires_single_partition && !is_empty_exec {
         Ok(Arc::new(RepartitionExec::try_new(
             new_plan,
-            RoundRobinBatch(partitions),
+            RoundRobinBatch(partition_count),
         )?))
     } else {
         Ok(new_plan)
@@ -93,10 +93,10 @@ impl PhysicalOptimizerRule for Repartition {
         config: &ExecutionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Don't run optimizer if partitions == 1
-        if config.partitions == 1 {
+        if config.partition_count == 1 {
             Ok(plan)
         } else {
-            optimize_partitioning(config.partitions, true, plan)
+            optimize_partitioning(config.partition_count, true, plan)
         }
     }
 
@@ -135,7 +135,7 @@ mod tests {
 
         let optimized = optimizer.optimize(
             Arc::new(parquet_project),
-            &ExecutionConfig::new().with_concurrency(10),
+            &ExecutionConfig::new().with_default_partitions(10),
         )?;
 
         assert_eq!(
@@ -173,7 +173,7 @@ mod tests {
 
         let optimized = optimizer.optimize(
             Arc::new(parquet_project),
-            &ExecutionConfig::new().with_concurrency(10),
+            &ExecutionConfig::new().with_default_partitions(10),
         )?;
 
         // RepartitionExec is added to deepest node

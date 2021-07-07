@@ -236,7 +236,7 @@ fn build_exec_plan_diagram(
 pub fn create_datafusion_context() -> ExecutionContext {
     let config = ExecutionConfig::new()
         .with_concurrency(1)
-        .with_partitions(4); // TODO: make it easier to configure from Ballista
+        .with_default_partitions(4); // TODO: make it easier to configure from Ballista
     ExecutionContext::with_config(config)
 }
 
