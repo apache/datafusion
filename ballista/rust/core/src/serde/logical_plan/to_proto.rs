@@ -26,7 +26,7 @@ use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUn
 use datafusion::datasource::CsvFile;
 use datafusion::logical_plan::{
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, Expr, JoinType, LogicalPlan,
+    Column, Expr, JoinConstraint, JoinType, LogicalPlan,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -804,26 +804,23 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 right,
                 on,
                 join_type,
+                join_constraint,
                 ..
             } => {
                 let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
                 let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
-                let join_type = match join_type {
-                    JoinType::Inner => protobuf::JoinType::Inner,
-                    JoinType::Left => protobuf::JoinType::Left,
-                    JoinType::Right => protobuf::JoinType::Right,
-                    JoinType::Full => protobuf::JoinType::Full,
-                    JoinType::Semi => protobuf::JoinType::Semi,
-                    JoinType::Anti => protobuf::JoinType::Anti,
-                };
                 let (left_join_column, right_join_column) =
                     on.iter().map(|(l, r)| (l.into(), r.into())).unzip();
+                let join_type: protobuf::JoinType = join_type.to_owned().into();
+                let join_constraint: protobuf::JoinConstraint =
+                    join_constraint.to_owned().into();
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Join(Box::new(
                         protobuf::JoinNode {
                             left: Some(Box::new(left)),
                             right: Some(Box::new(right)),
                             join_type: join_type.into(),
+                            join_constraint: join_constraint.into(),
                             left_join_column,
                             right_join_column,
                         },

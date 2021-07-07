@@ -216,9 +216,7 @@ fn optimize_plan(
             let schema = build_join_schema(
                 optimized_left.schema(),
                 optimized_right.schema(),
-                on,
                 join_type,
-                join_constraint,
             )?;
 
             Ok(LogicalPlan::Join {
@@ -499,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn join_schema_trim() -> Result<()> {
+    fn join_schema_trim_full_join_column_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
@@ -511,7 +509,7 @@ mod tests {
             .project(vec![col("a"), col("b"), col("c1")])?
             .build()?;
 
-        // make sure projections are pushed down to table scan
+        // make sure projections are pushed down to both table scans
         let expected = "Projection: #test.a, #test.b, #test2.c1\
         \n  Join: #test.a = #test2.c1\
         \n    TableScan: test projection=Some([0, 1])\
@@ -521,7 +519,7 @@ mod tests {
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
 
-        // make sure schema for join node doesn't include c1 column
+        // make sure schema for join node include both join columns
         let optimized_join = optimized_plan.inputs()[0];
         assert_eq!(
             **optimized_join.schema(),
@@ -529,6 +527,86 @@ mod tests {
                 DFField::new(Some("test"), "a", DataType::UInt32, false),
                 DFField::new(Some("test"), "b", DataType::UInt32, false),
                 DFField::new(Some("test2"), "c1", DataType::UInt32, false),
+            ])?,
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn join_schema_trim_partial_join_column_projection() -> Result<()> {
+        // test join column push down without explicit column projections
+
+        let table_scan = test_table_scan()?;
+
+        let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
+        let table2_scan =
+            LogicalPlanBuilder::scan_empty(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .join(&table2_scan, JoinType::Left, vec!["a"], vec!["c1"])?
+            // projecting joined column `a` should push the right side column `c1` projection as
+            // well into test2 table even though `c1` is not referenced in projection.
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        // make sure projections are pushed down to both table scans
+        let expected = "Projection: #test.a, #test.b\
+        \n  Join: #test.a = #test2.c1\
+        \n    TableScan: test projection=Some([0, 1])\
+        \n    TableScan: test2 projection=Some([0])";
+
+        let optimized_plan = optimize(&plan)?;
+        let formatted_plan = format!("{:?}", optimized_plan);
+        assert_eq!(formatted_plan, expected);
+
+        // make sure schema for join node include both join columns
+        let optimized_join = optimized_plan.inputs()[0];
+        assert_eq!(
+            **optimized_join.schema(),
+            DFSchema::new(vec![
+                DFField::new(Some("test"), "a", DataType::UInt32, false),
+                DFField::new(Some("test"), "b", DataType::UInt32, false),
+                DFField::new(Some("test2"), "c1", DataType::UInt32, false),
+            ])?,
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn join_schema_trim_using_join() -> Result<()> {
+        // shared join colums from using join should be pushed to both sides
+
+        let table_scan = test_table_scan()?;
+
+        let schema = Schema::new(vec![Field::new("a", DataType::UInt32, false)]);
+        let table2_scan =
+            LogicalPlanBuilder::scan_empty(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .join_using(&table2_scan, JoinType::Left, vec!["a"])?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        // make sure projections are pushed down to table scan
+        let expected = "Projection: #test.a, #test.b\
+        \n  Join: Using #test.a = #test2.a\
+        \n    TableScan: test projection=Some([0, 1])\
+        \n    TableScan: test2 projection=Some([0])";
+
+        let optimized_plan = optimize(&plan)?;
+        let formatted_plan = format!("{:?}", optimized_plan);
+        assert_eq!(formatted_plan, expected);
+
+        // make sure schema for join node include both join columns
+        let optimized_join = optimized_plan.inputs()[0];
+        assert_eq!(
+            **optimized_join.schema(),
+            DFSchema::new(vec![
+                DFField::new(Some("test"), "a", DataType::UInt32, false),
+                DFField::new(Some("test"), "b", DataType::UInt32, false),
+                DFField::new(Some("test2"), "a", DataType::UInt32, false),
             ])?,
         );
 
