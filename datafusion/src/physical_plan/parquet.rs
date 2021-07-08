@@ -514,7 +514,7 @@ impl ExecutionPlan for ParquetExec {
         self.partitions
             .iter()
             .flat_map(|p| {
-                [
+                vec![
                     (
                         format!(
                             "numPredicateEvaluationErrors for {}",
