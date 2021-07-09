@@ -49,6 +49,10 @@ pub async fn poll_loop(
         let task_status: Vec<TaskStatus> =
             sample_tasks_status(&mut task_status_receiver).await;
 
+        // Keeps track of whether we received task in last iteration
+        // to avoid going in sleep mode between polling
+        let mut active_job = false;
+
         let poll_work_result: anyhow::Result<
             tonic::Response<PollWorkResult>,
             tonic::Status,
@@ -73,14 +77,18 @@ pub async fn poll_loop(
                         task,
                     )
                     .await;
+                    active_job = true;
+                } else {
+                    active_job = false;
                 }
             }
             Err(error) => {
                 warn!("Executor registration failed. If this continues to happen the executor might be marked as dead by the scheduler. Error: {}", error);
             }
         }
-
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        if !active_job {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 
