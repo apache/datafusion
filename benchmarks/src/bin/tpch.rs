@@ -95,6 +95,10 @@ struct BallistaBenchmarkOpt {
     /// Ballista executor port
     #[structopt(long = "port")]
     port: Option<u16>,
+
+    /// Number of shuffle partitions
+    #[structopt(short, long, default_value = "2")]
+    shuffle_partitions: usize,
 }
 
 #[derive(Debug, StructOpt, Clone)]
@@ -256,7 +260,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     let mut config = HashMap::new();
     config.insert(
         BALLISTA_DEFAULT_SHUFFLE_PARTITIONS.to_owned(),
-        "4".to_owned(),
+        format!("{}", opt.shuffle_partitions),
     );
     let config = BallistaConfig::new(config);
     let ctx =

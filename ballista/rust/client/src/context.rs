@@ -24,15 +24,14 @@ use std::{collections::HashMap, convert::TryInto};
 use std::{fs, time::Duration};
 
 use ballista_core::config::BallistaConfig;
-use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
-use ballista_core::serde::protobuf::PartitionLocation;
 use ballista_core::serde::protobuf::{
-    execute_query_params::Query, job_status, ExecuteQueryParams, GetJobStatusParams,
-    GetJobStatusResult,
+    execute_query_params::Query, job_status, scheduler_grpc_client::SchedulerGrpcClient,
+    ExecuteQueryParams, GetJobStatusParams, GetJobStatusResult, KeyValuePair,
+    PartitionLocation,
 };
-use ballista_core::utils::WrappedStream;
 use ballista_core::{
     client::BallistaClient, datasource::DfTableAdapter, utils::create_datafusion_context,
+    utils::WrappedStream,
 };
 
 use datafusion::arrow::datatypes::Schema;
@@ -233,10 +232,11 @@ impl BallistaContext {
         &self,
         plan: &LogicalPlan,
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-        let scheduler_url = {
+        let (scheduler_url, config) = {
             let state = self.state.lock().unwrap();
-
-            format!("http://{}:{}", state.scheduler_host, state.scheduler_port)
+            let scheduler_url =
+                format!("http://{}:{}", state.scheduler_host, state.scheduler_port);
+            (scheduler_url, state.config.clone())
         };
 
         info!("Connecting to Ballista scheduler at {}", scheduler_url);
@@ -254,7 +254,14 @@ impl BallistaContext {
                         .try_into()
                         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?,
                 )),
-                settings: vec![], //TODO: serde for &self.state.lock().unwrap().config().clone(),
+                settings: config
+                    .settings()
+                    .iter()
+                    .map(|(k, v)| KeyValuePair {
+                        key: k.to_owned(),
+                        value: v.to_owned(),
+                    })
+                    .collect::<Vec<_>>(),
             })
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?
