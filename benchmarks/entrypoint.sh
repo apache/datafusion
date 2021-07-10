@@ -18,5 +18,11 @@
 
 set -e
 cd /tpch-dbgen
-./dbgen -vf -s 1
+if [[ $- == *i* ]]; then
+    ./dbgen -vf -s 1
+else
+    # do not run in verbose mode when running within an non-interactive
+    # terminal, for example Github Action job
+    ./dbgen -f -s 1
+fi
 mv *.tbl /data
