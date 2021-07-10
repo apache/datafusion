@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, convert::TryInto};
 use std::{fs, time::Duration};
 
+use ballista_core::config::BallistaConfig;
 use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
 use ballista_core::serde::protobuf::PartitionLocation;
 use ballista_core::serde::protobuf::{
@@ -45,6 +46,8 @@ use futures::StreamExt;
 use log::{error, info};
 
 struct BallistaContextState {
+    /// Ballista configuration
+    config: BallistaConfig,
     /// Scheduler host
     scheduler_host: String,
     /// Scheduler port
@@ -54,8 +57,13 @@ struct BallistaContextState {
 }
 
 impl BallistaContextState {
-    pub fn new(scheduler_host: String, scheduler_port: u16) -> Self {
+    pub fn new(
+        scheduler_host: String,
+        scheduler_port: u16,
+        config: &BallistaConfig,
+    ) -> Self {
         Self {
+            config: config.clone(),
             scheduler_host,
             scheduler_port,
             tables: HashMap::new(),
@@ -64,6 +72,7 @@ impl BallistaContextState {
 
     #[cfg(feature = "standalone")]
     pub async fn new_standalone(
+        config: &BallistaConfig,
         concurrent_tasks: usize,
     ) -> ballista_core::error::Result<Self> {
         info!("Running in local mode. Scheduler will be run in-proc");
@@ -87,10 +96,15 @@ impl BallistaContextState {
 
         ballista_executor::new_standalone_executor(scheduler, concurrent_tasks).await?;
         Ok(Self {
+            config: config.clone(),
             scheduler_host: "localhost".to_string(),
             scheduler_port: addr.port(),
             tables: HashMap::new(),
         })
+    }
+
+    pub fn config(&self) -> &BallistaConfig {
+        &self.config
     }
 }
 
@@ -100,8 +114,8 @@ pub struct BallistaContext {
 
 impl BallistaContext {
     /// Create a context for executing queries against a remote Ballista scheduler instance
-    pub fn remote(host: &str, port: u16) -> Self {
-        let state = BallistaContextState::new(host.to_owned(), port);
+    pub fn remote(host: &str, port: u16, config: &BallistaConfig) -> Self {
+        let state = BallistaContextState::new(host.to_owned(), port, config);
 
         Self {
             state: Arc::new(Mutex::new(state)),
@@ -110,9 +124,11 @@ impl BallistaContext {
 
     #[cfg(feature = "standalone")]
     pub async fn standalone(
+        config: &BallistaConfig,
         concurrent_tasks: usize,
     ) -> ballista_core::error::Result<Self> {
-        let state = BallistaContextState::new_standalone(concurrent_tasks).await?;
+        let state =
+            BallistaContextState::new_standalone(config, concurrent_tasks).await?;
 
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
@@ -127,7 +143,7 @@ impl BallistaContext {
         let path = fs::canonicalize(&path)?;
 
         // use local DataFusion context for now but later this might call the scheduler
-        let mut ctx = create_datafusion_context();
+        let mut ctx = create_datafusion_context(&self.state.lock().unwrap().config());
         let df = ctx.read_parquet(path.to_str().unwrap())?;
         Ok(df)
     }
@@ -144,7 +160,7 @@ impl BallistaContext {
         let path = fs::canonicalize(&path)?;
 
         // use local DataFusion context for now but later this might call the scheduler
-        let mut ctx = create_datafusion_context();
+        let mut ctx = create_datafusion_context(&self.state.lock().unwrap().config());
         let df = ctx.read_csv(path.to_str().unwrap(), options)?;
         Ok(df)
     }
@@ -176,9 +192,9 @@ impl BallistaContext {
     /// Create a DataFrame from a SQL statement
     pub fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         // use local DataFusion context for now but later this might call the scheduler
-        let mut ctx = create_datafusion_context();
         // register tables
         let state = self.state.lock().unwrap();
+        let mut ctx = create_datafusion_context(&state.config());
         for (name, plan) in &state.tables {
             let plan = ctx.optimize(plan)?;
             let execution_plan = ctx.create_physical_plan(&plan)?;
@@ -238,6 +254,7 @@ impl BallistaContext {
                         .try_into()
                         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?,
                 )),
+                settings: vec![], //TODO: serde for &self.state.lock().unwrap().config().clone(),
             })
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?

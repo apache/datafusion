@@ -18,6 +18,7 @@
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
 use std::{
+    collections::HashMap,
     fs,
     iter::Iterator,
     path::{Path, PathBuf},
@@ -28,21 +29,21 @@ use std::{
 use futures::StreamExt;
 
 use ballista::context::BallistaContext;
+use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
-
 use datafusion::datasource::parquet::ParquetTable;
 use datafusion::datasource::{CsvFile, MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
-use datafusion::physical_plan::{collect, displayable};
-use datafusion::prelude::*;
-
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::{collect, displayable};
+use datafusion::prelude::*;
+
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -252,7 +253,14 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
 async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     println!("Running benchmarks with the following options: {:?}", opt);
 
-    let ctx = BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap());
+    let mut config = HashMap::new();
+    config.insert(
+        BALLISTA_DEFAULT_SHUFFLE_PARTITIONS.to_owned(),
+        "4".to_owned(),
+    );
+    let config = BallistaConfig::new(config);
+    let ctx =
+        BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), &config);
 
     // register tables with Ballista context
     let path = opt.path.to_str().unwrap();
