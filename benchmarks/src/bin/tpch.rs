@@ -262,7 +262,8 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
         BALLISTA_DEFAULT_SHUFFLE_PARTITIONS.to_owned(),
         format!("{}", opt.shuffle_partitions),
     );
-    let config = BallistaConfig::new(config);
+    let config = BallistaConfig::new(config)
+        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
     let ctx =
         BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), &config);
 

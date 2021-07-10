@@ -302,7 +302,11 @@ impl SchedulerGrpc for SchedulerServer {
             for kv_pair in &settings {
                 config.insert(kv_pair.key.clone(), kv_pair.value.clone());
             }
-            let config = BallistaConfig::new(config);
+            let config = BallistaConfig::new(config).map_err(|e| {
+                let msg = format!("Could not parse configs: {}", e);
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?;
 
             let plan = match query {
                 Query::LogicalPlan(logical_plan) => {
