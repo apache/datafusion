@@ -18,7 +18,6 @@
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
 use std::{
-    collections::HashMap,
     fs,
     iter::Iterator,
     path::{Path, PathBuf},
@@ -257,13 +256,14 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
 async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     println!("Running benchmarks with the following options: {:?}", opt);
 
-    let mut config = HashMap::new();
-    config.insert(
-        BALLISTA_DEFAULT_SHUFFLE_PARTITIONS.to_owned(),
-        format!("{}", opt.shuffle_partitions),
-    );
-    let config = BallistaConfig::new(config)
+    let config = BallistaConfig::builder()
+        .set(
+            BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
+            &format!("{}", opt.shuffle_partitions),
+        )
+        .build()
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+
     let ctx =
         BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), &config);
 

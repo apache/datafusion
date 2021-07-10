@@ -52,6 +52,32 @@ impl ConfigEntry {
     }
 }
 
+/// Ballista configuration builder
+pub struct BallistaConfigBuilder {
+    settings: HashMap<String, String>,
+}
+
+impl Default for BallistaConfigBuilder {
+    /// Create a new config builder
+    fn default() -> Self {
+        Self { settings: HashMap::new() }
+    }
+}
+
+impl BallistaConfigBuilder {
+
+    /// Create a new config with an additional setting
+    pub fn set(&self, k: &str, v: &str) -> Self {
+        let mut settings = self.settings.clone();
+        settings.insert(k.to_owned(), v.to_owned());
+        Self { settings }
+    }
+
+    pub fn build(&self) -> Result<BallistaConfig> {
+        BallistaConfig::with_settings(self.settings.clone())
+    }
+}
+
 /// Ballista configuration
 #[derive(Debug, Clone)]
 pub struct BallistaConfig {
@@ -60,8 +86,19 @@ pub struct BallistaConfig {
 }
 
 impl BallistaConfig {
+
+    /// Create a default configuration
+    pub fn new() -> Result<Self> {
+        Self::with_settings(HashMap::new())
+    }
+
+    /// Create a configuration builder
+    pub fn builder() -> BallistaConfigBuilder {
+        BallistaConfigBuilder::default()
+    }
+
     /// Create a new configuration based on key-value pairs
-    pub fn new(settings: HashMap<String, String>) -> Result<Self> {
+    pub fn with_settings(settings: HashMap<String, String>) -> Result<Self> {
         let supported_entries = BallistaConfig::valid_entries();
         for (name, entry) in &supported_entries {
             if let Some(v) = settings.get(name) {
@@ -120,31 +157,24 @@ mod tests {
 
     #[test]
     fn default_config() -> Result<()> {
-        let config = BallistaConfig::new(HashMap::new())?;
+        let config = BallistaConfig::new()?;
         assert_eq!(2, config.default_shuffle_partitions());
         Ok(())
     }
 
     #[test]
     fn custom_config() -> Result<()> {
-        let mut settings = HashMap::new();
-        settings.insert(
-            BALLISTA_DEFAULT_SHUFFLE_PARTITIONS.to_string(),
-            "123".to_string(),
-        );
-        let config = BallistaConfig::new(settings)?;
+        let config = BallistaConfig::builder()
+            .set(BALLISTA_DEFAULT_SHUFFLE_PARTITIONS, "123")
+            .build()?;
         assert_eq!(123, config.default_shuffle_partitions());
         Ok(())
     }
 
     #[test]
     fn custom_config_invalid() -> Result<()> {
-        let mut settings = HashMap::new();
-        settings.insert(
-            BALLISTA_DEFAULT_SHUFFLE_PARTITIONS.to_string(),
-            "true".to_string(),
-        );
-        let config = BallistaConfig::new(settings);
+        let config = BallistaConfig::builder()
+            .set(BALLISTA_DEFAULT_SHUFFLE_PARTITIONS, "true").build();
         assert!(config.is_err());
         assert_eq!("General(\"Failed to parse user-supplied value 'ballista.shuffle.partitions' for configuration setting 'true': ParseIntError { kind: InvalidDigit }\")", format!("{:?}", config.unwrap_err()));
         Ok(())
