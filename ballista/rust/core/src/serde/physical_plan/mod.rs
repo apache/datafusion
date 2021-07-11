@@ -195,7 +195,7 @@ mod roundtrip_tests {
         roundtrip_test(Arc::new(ShuffleWriterExec::try_new(
             "job123".to_string(),
             123,
-            Arc::new(EmptyExec::new(false, schema.clone())),
+            Arc::new(EmptyExec::new(false, schema)),
             "".to_string(),
             Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 4)),
         )?))
