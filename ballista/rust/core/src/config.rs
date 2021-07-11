@@ -60,12 +60,13 @@ pub struct BallistaConfigBuilder {
 impl Default for BallistaConfigBuilder {
     /// Create a new config builder
     fn default() -> Self {
-        Self { settings: HashMap::new() }
+        Self {
+            settings: HashMap::new(),
+        }
     }
 }
 
 impl BallistaConfigBuilder {
-
     /// Create a new config with an additional setting
     pub fn set(&self, k: &str, v: &str) -> Self {
         let mut settings = self.settings.clone();
@@ -86,7 +87,6 @@ pub struct BallistaConfig {
 }
 
 impl BallistaConfig {
-
     /// Create a default configuration
     pub fn new() -> Result<Self> {
         Self::with_settings(HashMap::new())
@@ -174,7 +174,8 @@ mod tests {
     #[test]
     fn custom_config_invalid() -> Result<()> {
         let config = BallistaConfig::builder()
-            .set(BALLISTA_DEFAULT_SHUFFLE_PARTITIONS, "true").build();
+            .set(BALLISTA_DEFAULT_SHUFFLE_PARTITIONS, "true")
+            .build();
         assert!(config.is_err());
         assert_eq!("General(\"Failed to parse user-supplied value 'ballista.shuffle.partitions' for configuration setting 'true': ParseIntError { kind: InvalidDigit }\")", format!("{:?}", config.unwrap_err()));
         Ok(())

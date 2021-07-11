@@ -82,7 +82,6 @@ use self::state::{ConfigBackendClient, SchedulerState};
 use ballista_core::config::BallistaConfig;
 use ballista_core::utils::create_datafusion_context;
 use datafusion::physical_plan::parquet::ParquetExec;
-use std::collections::HashMap;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
@@ -298,11 +297,11 @@ impl SchedulerGrpc for SchedulerServer {
         } = request.into_inner()
         {
             // parse config
-            let mut config = HashMap::new();
+            let mut config_builder = BallistaConfig::builder();
             for kv_pair in &settings {
-                config.insert(kv_pair.key.clone(), kv_pair.value.clone());
+                config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
             }
-            let config = BallistaConfig::new(config).map_err(|e| {
+            let config = config_builder.build().map_err(|e| {
                 let msg = format!("Could not parse configs: {}", e);
                 error!("{}", msg);
                 tonic::Status::internal(msg)
