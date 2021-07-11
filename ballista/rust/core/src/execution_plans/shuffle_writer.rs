@@ -126,7 +126,10 @@ impl ExecutionPlan for ShuffleWriterExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        self.plan.output_partitioning()
+        match &self.shuffle_output_partitioning {
+            Some(p) => p.clone(),
+            _ => Partitioning::UnknownPartitioning(1),
+        }
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -143,7 +146,7 @@ impl ExecutionPlan for ShuffleWriterExec {
             self.stage_id,
             children[0].clone(),
             self.work_dir.clone(),
-            None,
+            self.shuffle_output_partitioning.clone(),
         )?))
     }
 
