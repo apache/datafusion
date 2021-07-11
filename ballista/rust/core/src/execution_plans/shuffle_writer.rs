@@ -234,7 +234,7 @@ impl ExecutionPlan for ShuffleWriterExec {
                         indices[(*hash % num_output_partitions as u64) as usize]
                             .push(index as u64)
                     }
-                    for (output_partition_num, partition_indices) in
+                    for (output_partition, partition_indices) in
                         indices.into_iter().enumerate()
                     {
                         let indices = partition_indices.into();
@@ -254,13 +254,13 @@ impl ExecutionPlan for ShuffleWriterExec {
 
                         // write batch out
                         let start = Instant::now();
-                        match &mut writers[output_partition_num] {
+                        match &mut writers[output_partition] {
                             Some(w) => {
                                 w.write(&output_batch)?;
                             }
                             None => {
                                 let mut path = path.clone();
-                                path.push(&format!("{}", output_partition_num));
+                                path.push(&format!("{}", output_partition));
                                 std::fs::create_dir_all(&path)?;
 
                                 path.push("data.arrow");
@@ -271,7 +271,7 @@ impl ExecutionPlan for ShuffleWriterExec {
                                     ShuffleWriter::new(path, stream.schema().as_ref())?;
 
                                 writer.write(&output_batch)?;
-                                writers[output_partition_num] = Some(writer);
+                                writers[output_partition] = Some(writer);
                             }
                         }
                         self.metrics.write_time.add_elapsed(start);
