@@ -457,7 +457,7 @@ mod tests {
         let file1 = path.value(1);
         assert!(
             file1.ends_with("/jobOne/1/1/data.arrow")
-                || file0.ends_with("\\jobOne\\1\\1\\data.arrow")
+                || file1.ends_with("\\jobOne\\1\\1\\data.arrow")
         );
 
         let stats = batch.columns()[2]
