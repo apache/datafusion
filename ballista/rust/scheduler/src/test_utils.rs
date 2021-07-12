@@ -26,7 +26,8 @@ pub const TPCH_TABLES: &[&str] = &[
 ];
 
 pub fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
-    let config = ExecutionConfig::new().with_concurrency(2); // TODO: this is hack to enable partitioned joins
+    let default_shuffle_partitions = 2;
+    let config = ExecutionConfig::new().with_concurrency(default_shuffle_partitions);
     let mut ctx = ExecutionContext::with_config(config);
     for table in TPCH_TABLES {
         let schema = get_tpch_schema(table);

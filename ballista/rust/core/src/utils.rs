@@ -27,6 +27,7 @@ use crate::execution_plans::{ShuffleWriterExec, UnresolvedShuffleExec};
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
+use crate::config::BallistaConfig;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
     array::{
@@ -233,8 +234,9 @@ fn build_exec_plan_diagram(
 }
 
 /// Create a DataFusion context that is compatible with Ballista
-pub fn create_datafusion_context() -> ExecutionContext {
-    let config = ExecutionConfig::new().with_concurrency(2); // TODO: this is hack to enable partitioned joins
+pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
+    let config =
+        ExecutionConfig::new().with_concurrency(config.default_shuffle_partitions());
     ExecutionContext::with_config(config)
 }
 

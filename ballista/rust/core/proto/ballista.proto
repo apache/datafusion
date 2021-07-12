@@ -803,7 +803,9 @@ message ExecuteQueryParams {
   oneof query {
     LogicalPlanNode logical_plan = 1;
     string sql = 2;
-  }}
+  }
+  repeated KeyValuePair settings = 3;
+}
 
 message ExecuteSqlParams {
   string sql = 1;
