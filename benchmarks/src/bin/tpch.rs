@@ -28,21 +28,21 @@ use std::{
 use futures::StreamExt;
 
 use ballista::context::BallistaContext;
+use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
-
 use datafusion::datasource::parquet::ParquetTable;
 use datafusion::datasource::{CsvFile, MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
-use datafusion::physical_plan::{collect, displayable};
-use datafusion::prelude::*;
-
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::{collect, displayable};
+use datafusion::prelude::*;
+
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -94,6 +94,10 @@ struct BallistaBenchmarkOpt {
     /// Ballista executor port
     #[structopt(long = "port")]
     port: Option<u16>,
+
+    /// Number of shuffle partitions
+    #[structopt(short, long, default_value = "2")]
+    shuffle_partitions: usize,
 }
 
 #[derive(Debug, StructOpt, Clone)]
@@ -252,7 +256,16 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
 async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     println!("Running benchmarks with the following options: {:?}", opt);
 
-    let ctx = BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap());
+    let config = BallistaConfig::builder()
+        .set(
+            BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
+            &format!("{}", opt.shuffle_partitions),
+        )
+        .build()
+        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+
+    let ctx =
+        BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), &config);
 
     // register tables with Ballista context
     let path = opt.path.to_str().unwrap();
