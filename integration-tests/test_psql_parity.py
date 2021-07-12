@@ -14,13 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pandas as pd
-import numpy as np
 import io
 import os
 import subprocess
 from pathlib import Path
-import unittest
+
+import numpy as np
+import pandas as pd
+import pytest
 
 pg_db, pg_user, pg_host, pg_port = [
     os.environ.get(i)
@@ -70,22 +71,16 @@ def generate_csv_from_psql(fname: str):
     )
 
 
-class PsqlParityTest(unittest.TestCase):
-    def test_parity(self):
-        root = Path(os.path.dirname(__file__)) / "sqls"
-        files = set(root.glob("*.sql"))
-        self.assertEqual(len(files), 14, msg="tests are missed")
-        for fname in files:
-            with self.subTest(fname=fname):
-                datafusion_output = pd.read_csv(
-                    io.BytesIO(generate_csv_from_datafusion(fname))
-                )
-                psql_output = pd.read_csv(io.BytesIO(generate_csv_from_psql(fname)))
-                self.assertTrue(
-                    np.allclose(datafusion_output, psql_output, equal_nan=True),
-                    msg=f"datafusion output=\n{datafusion_output}, psql_output=\n{psql_output}",
-                )
+root = Path(os.path.dirname(__file__)) / "sqls"
+test_files = set(root.glob("*.sql"))
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestPsqlParity:
+    def test_tests_count(self):
+        assert len(test_files) == 14, "tests are missed"
+
+    @pytest.mark.parametrize("fname", test_files)
+    def test_sql_file(self, fname):
+        datafusion_output = pd.read_csv(io.BytesIO(generate_csv_from_datafusion(fname)))
+        psql_output = pd.read_csv(io.BytesIO(generate_csv_from_psql(fname)))
+        np.testing.assert_allclose(datafusion_output, psql_output, equal_nan=True)
