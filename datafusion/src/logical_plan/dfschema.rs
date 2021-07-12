@@ -152,7 +152,7 @@ impl DFSchema {
         qualifier: Option<&str>,
         name: &str,
     ) -> Result<usize> {
-        let matches: Vec<usize> = self
+        let mut matches = self
             .fields
             .iter()
             .enumerate()
@@ -164,24 +164,26 @@ impl DFSchema {
                 // field to lookup is qualified but current field is unqualified.
                 (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier
-                _ => field.name() == name,
+                (None, Some(_)) | (None, None) => field.name() == name,
             })
-            .map(|(idx, _)| idx)
-            .collect();
+            .map(|(idx, _)| idx);
 
-        match matches.len() {
-            0 => Err(DataFusionError::Plan(format!(
+        match matches.next() {
+            None => Err(DataFusionError::Plan(format!(
                 "No field named '{}.{}'. Valid fields are {}.",
                 qualifier.unwrap_or(""),
                 name,
                 self.get_field_names()
             ))),
-            1 => Ok(matches[0]),
-            _ => Err(DataFusionError::Internal(format!(
-                "Ambiguous reference to qualified field named '{}.{}'",
-                qualifier.unwrap_or(""),
-                name
-            ))),
+            Some(idx) => match matches.next() {
+                None => Ok(idx),
+                // found more than one matches
+                Some(_) => Err(DataFusionError::Internal(format!(
+                    "Ambiguous reference to qualified field named '{}.{}'",
+                    qualifier.unwrap_or(""),
+                    name
+                ))),
+            },
         }
     }
 
