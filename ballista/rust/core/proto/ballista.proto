@@ -424,6 +424,7 @@ message PhysicalPlanNode {
     UnresolvedShuffleExecNode unresolved = 15;
     RepartitionExecNode repartition = 16;
     WindowAggExecNode window = 17;
+    ShuffleWriterExecNode shuffle_writer = 18;
   }
 }
 
@@ -627,6 +628,15 @@ message HashAggregateExecNode {
   repeated string aggr_expr_name = 6;
   // we need the input schema to the partial aggregate to pass to the final aggregate
   Schema input_schema = 7;
+}
+
+message ShuffleWriterExecNode {
+  //TODO it seems redundant to provide job and stage id here since we also have them
+  // in the TaskDefinition that wraps this plan
+  string job_id = 1;
+  uint32 stage_id = 2;
+  PhysicalPlanNode input = 3;
+  PhysicalHashRepartition output_partitioning = 4;
 }
 
 message ShuffleReaderExecNode {

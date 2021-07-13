@@ -55,7 +55,9 @@ use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
 use protobuf::physical_plan_node::PhysicalPlanType;
 
-use crate::execution_plans::{ShuffleReaderExec, UnresolvedShuffleExec};
+use crate::execution_plans::{
+    ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
+};
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{protobuf, BallistaError};
@@ -353,6 +355,35 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                     protobuf::SortExecNode {
                         input: Some(Box::new(input)),
                         expr,
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<ShuffleWriterExec>() {
+            let input: protobuf::PhysicalPlanNode =
+                exec.children()[0].to_owned().try_into()?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::ShuffleWriter(Box::new(
+                    protobuf::ShuffleWriterExecNode {
+                        job_id: exec.job_id().to_string(),
+                        stage_id: exec.stage_id() as u32,
+                        input: Some(Box::new(input)),
+                        output_partitioning: match exec.output_partitioning() {
+                            Partitioning::Hash(exprs, partition_count) => {
+                                Some(protobuf::PhysicalHashRepartition {
+                                    hash_expr: exprs
+                                        .iter()
+                                        .map(|expr| expr.clone().try_into())
+                                        .collect::<Result<Vec<_>, BallistaError>>()?,
+                                    partition_count: partition_count as u64,
+                                })
+                            }
+                            other => {
+                                return Err(BallistaError::General(format!(
+                                    "physical_plan::to_proto() invalid partitioning for ShuffleWriterExec: {:?}",
+                                    other
+                                )))
+                            }
+                        },
                     },
                 ))),
             })
