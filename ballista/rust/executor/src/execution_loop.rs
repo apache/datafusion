@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::{sync::Arc, time::Duration};
 
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr};
 use log::{debug, error, info, warn};
 use tonic::transport::Channel;
 
@@ -108,13 +108,27 @@ async fn run_received_tasks(
     available_tasks_slots.fetch_sub(1, Ordering::SeqCst);
     let plan: Arc<dyn ExecutionPlan> = (&task.plan.unwrap()).try_into().unwrap();
 
+    let shuffle_output_partitioning = match task.shuffle_output_partitioning {
+        Some(hash_part) => {
+            let expr = hash_part
+                .hash_expr
+                .iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>().unwrap(); //TODO err handling
+
+            Some(Partitioning::Hash(expr, hash_part.partition_count as usize))
+        },
+        _ => None
+    };
+
     tokio::spawn(async move {
         let execution_result = executor
-            .execute_partition(
+            .execute_shuffle_write(
                 task_id.job_id.clone(),
                 task_id.stage_id as usize,
                 task_id.partition_id as usize,
                 plan,
+                shuffle_output_partitioning,
             )
             .await;
         info!("Done with task {}", task_id_log);

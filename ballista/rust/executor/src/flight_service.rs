@@ -107,11 +107,12 @@ impl FlightService for BallistaFlightService {
                     let executor = self.executor.clone();
                     tasks.push(tokio::spawn(async move {
                         let results = executor
-                            .execute_partition(
+                            .execute_shuffle_write(
                                 partition.job_id.clone(),
                                 partition.stage_id,
                                 part,
                                 partition.plan.clone(),
+                                None //TODO
                             )
                             .await?;
                         let results = vec![results];

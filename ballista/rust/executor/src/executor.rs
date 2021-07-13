@@ -24,7 +24,7 @@ use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::utils;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 
 /// Ballista executor
 pub struct Executor {
@@ -45,19 +45,20 @@ impl Executor {
     /// Execute one partition of a query stage and persist the result to disk in IPC format. On
     /// success, return a RecordBatch containing metadata about the results, including path
     /// and statistics.
-    pub async fn execute_partition(
+    pub async fn execute_shuffle_write(
         &self,
         job_id: String,
         stage_id: usize,
         part: usize,
         plan: Arc<dyn ExecutionPlan>,
+        shuffle_output_partitioning: Option<Partitioning>,
     ) -> Result<RecordBatch, BallistaError> {
         let exec = ShuffleWriterExec::try_new(
             job_id,
             stage_id,
             plan,
             self.work_dir.clone(),
-            None,
+            shuffle_output_partitioning,
         )?;
         let mut stream = exec.execute(part).await?;
         let batches = utils::collect_stream(&mut stream).await?;

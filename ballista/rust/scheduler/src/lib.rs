@@ -48,7 +48,7 @@ use ballista_core::serde::protobuf::{
 use ballista_core::serde::scheduler::ExecutorMeta;
 
 use clap::arg_enum;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 #[cfg(feature = "sled")]
 extern crate sled_package as sled;
 
@@ -80,9 +80,12 @@ use tonic::{Request, Response};
 
 use self::state::{ConfigBackendClient, SchedulerState};
 use ballista_core::config::BallistaConfig;
+use ballista_core::serde::protobuf;
 use ballista_core::utils::create_datafusion_context;
 use datafusion::physical_plan::parquet::ParquetExec;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use ballista_core::execution_plans::ShuffleWriterExec;
+use datafusion::physical_plan::expressions::Column;
 
 #[derive(Clone)]
 pub struct SchedulerServer {
@@ -229,9 +232,47 @@ impl SchedulerGrpc for SchedulerServer {
                         partition_id.partition_id
                     );
                 }
-                plan.map(|(status, plan)| TaskDefinition {
-                    plan: Some(plan.try_into().unwrap()),
-                    task_id: status.partition_id,
+                plan.map(|(status, plan)| {
+                    if let Some(shuffle_writer) = plan.as_any().downcast_ref::<ShuffleWriterExec>() {
+                        let shuffle_child = plan.children()[0].clone();
+                        match shuffle_writer.output_partitioning() {
+                            Partitioning::Hash(expr, n) => {
+                                let shuffle_output_partitioning = Some(protobuf::PhysicalHashRepartition {
+                                    hash_expr: expr.iter().map(|e| {
+                                        if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                                            protobuf::PhysicalExprNode {
+                                                expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
+                                                    //TODO should implement Into for this type?
+                                                    protobuf::PhysicalColumn {
+                                                        name: col.name().to_string(),
+                                                        index: col.index() as u32,
+                                                    }))
+                                            }
+                                        } else {
+                                            todo!()
+                                        }
+                                    }).collect::<Vec<_>>(),
+                                    partition_count: n as u64
+                                });
+
+                                TaskDefinition {
+                                    plan: Some(shuffle_child.try_into().unwrap()),
+                                    task_id: status.partition_id,
+                                    shuffle_output_partitioning,
+                                }
+                            }
+                            Partitioning::UnknownPartitioning(1) => {
+                                TaskDefinition {
+                                    plan: Some(shuffle_child.try_into().unwrap()),
+                                    task_id: status.partition_id,
+                                    shuffle_output_partitioning: None,
+                                }
+                            }
+                            _ => todo!()
+                        }
+                    } else {
+                        unreachable!()
+                    }
                 })
             } else {
                 None
@@ -431,12 +472,12 @@ impl SchedulerGrpc for SchedulerServer {
                     }));
 
                 // save stages into state
-                for stage in stages {
+                for shuffle_writer in stages {
                     fail_job!(state
                         .save_stage_plan(
                             &job_id_spawn,
-                            stage.stage_id(),
-                            stage.children()[0].clone()
+                            shuffle_writer.stage_id(),
+                            shuffle_writer.clone()
                         )
                         .await
                         .map_err(|e| {
@@ -444,12 +485,12 @@ impl SchedulerGrpc for SchedulerServer {
                             error!("{}", msg);
                             tonic::Status::internal(msg)
                         }));
-                    let num_partitions = stage.output_partitioning().partition_count();
+                    let num_partitions = shuffle_writer.output_partitioning().partition_count();
                     for partition_id in 0..num_partitions {
                         let pending_status = TaskStatus {
                             partition_id: Some(PartitionId {
                                 job_id: job_id_spawn.clone(),
-                                stage_id: stage.stage_id() as u32,
+                                stage_id: shuffle_writer.stage_id() as u32,
                                 partition_id: partition_id as u32,
                             }),
                             status: None,
