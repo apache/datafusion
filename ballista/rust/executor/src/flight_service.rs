@@ -307,8 +307,8 @@ where
         let batch_flight_data: Vec<_> = batch
             .map(|b| create_flight_iter(&b, &options).collect())
             .map_err(|e| from_arrow_err(&e))?;
-        for batch in &batch_flight_data {
-            send_response(&tx, batch.clone()).await?;
+        for flight_data in &batch_flight_data {
+            send_response(&tx, flight_data.clone()).await?;
         }
     }
     Ok(())

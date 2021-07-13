@@ -48,7 +48,7 @@ use datafusion::physical_plan::{
 };
 use futures::StreamExt;
 use hashbrown::HashMap;
-use log::info;
+use log::{debug, info};
 use uuid::Uuid;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
@@ -241,6 +241,7 @@ impl ExecutionPlan for ShuffleWriterExec {
                         indices.into_iter().enumerate()
                     {
                         let indices = partition_indices.into();
+
                         // Produce batches based on indices
                         let columns = input_batch
                             .columns()
@@ -255,7 +256,10 @@ impl ExecutionPlan for ShuffleWriterExec {
                         let output_batch =
                             RecordBatch::try_new(input_batch.schema(), columns)?;
 
-                        // write batch out
+                        println!("Writing batch with {} rows", output_batch.num_rows());
+
+                        // write non-empty batch out
+                        //if output_batch.num_rows() > 0 {
                         let start = Instant::now();
                         match &mut writers[output_partition] {
                             Some(w) => {
@@ -278,6 +282,7 @@ impl ExecutionPlan for ShuffleWriterExec {
                             }
                         }
                         self.metrics.write_time.add_elapsed(start);
+                        //}
                     }
                 }
 
@@ -293,6 +298,13 @@ impl ExecutionPlan for ShuffleWriterExec {
                     match w {
                         Some(w) => {
                             w.finish()?;
+                            println!(
+                                "Finished writing {}. Batches: {}. Rows: {}. Bytes: {}.",
+                                w.path(),
+                                w.num_batches,
+                                w.num_rows,
+                                w.num_bytes
+                            );
                             path_builder.append_value(w.path())?;
                             partition_builder.append_value(i as u32)?;
                             num_rows_builder.append_value(w.num_rows)?;
@@ -327,6 +339,8 @@ impl ExecutionPlan for ShuffleWriterExec {
                     vec![partition_num, path, stats],
                 )
                 .map_err(DataFusionError::ArrowError)?;
+
+                debug!("RESULTS METADATA:\n{:?}", batch);
 
                 Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
             }
