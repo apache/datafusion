@@ -16,6 +16,7 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
+use std::collections::HashMap;
 use std::{sync::Arc, vec};
 
 use crate::{
@@ -55,12 +56,38 @@ impl OptimizerRule for AggregateStatistics {
                 // aggregations that can not be replaced
                 // using statistics
                 let mut agg = vec![];
+                let mut max_values = HashMap::new();
+                let mut min_values = HashMap::new();
+
                 // expressions that can be replaced by constants
                 let mut projections = vec![];
                 if let Some(num_rows) = match input.as_ref() {
-                    LogicalPlan::TableScan { source, .. }
-                        if source.has_exact_statistics() =>
-                    {
+                    LogicalPlan::TableScan {
+                        table_name, source, ..
+                    } if source.has_exact_statistics() => {
+                        let schema = source.schema();
+                        let fields = schema.fields();
+                        if let Some(column_statistics) =
+                            source.statistics().column_statistics
+                        {
+                            for (i, field) in fields.iter().enumerate() {
+                                if let Some(max_value) =
+                                    column_statistics[i].max_value.clone()
+                                {
+                                    let max_key =
+                                        format!("{}.{}", table_name, field.name());
+                                    max_values.insert(max_key, max_value);
+                                }
+                                if let Some(min_value) =
+                                    column_statistics[i].min_value.clone()
+                                {
+                                    let min_key =
+                                        format!("{}.{}", table_name, field.name());
+                                    min_values.insert(min_key, min_value);
+                                }
+                            }
+                        }
+
                         source.statistics().num_rows
                     }
                     _ => None,
@@ -81,6 +108,60 @@ impl OptimizerRule for AggregateStatistics {
                                     "COUNT(Uint8(1))".to_string(),
                                 ));
                             }
+                            Expr::AggregateFunction {
+                                fun: AggregateFunction::Max,
+                                args,
+                                ..
+                            } => match &args[0] {
+                                Expr::Column(c) => match max_values.get(&c.flat_name()) {
+                                    Some(max_value) => {
+                                        if !max_value.is_null() {
+                                            let name = format!("MAX({})", c.name);
+                                            projections.push(Expr::Alias(
+                                                Box::new(Expr::Literal(
+                                                    max_value.clone(),
+                                                )),
+                                                name,
+                                            ));
+                                        } else {
+                                            agg.push(expr.clone());
+                                        }
+                                    }
+                                    None => {
+                                        agg.push(expr.clone());
+                                    }
+                                },
+                                _ => {
+                                    agg.push(expr.clone());
+                                }
+                            },
+                            Expr::AggregateFunction {
+                                fun: AggregateFunction::Min,
+                                args,
+                                ..
+                            } => match &args[0] {
+                                Expr::Column(c) => match min_values.get(&c.flat_name()) {
+                                    Some(min_value) => {
+                                        if !min_value.is_null() {
+                                            let name = format!("MIN({})", c.name);
+                                            projections.push(Expr::Alias(
+                                                Box::new(Expr::Literal(
+                                                    min_value.clone(),
+                                                )),
+                                                name,
+                                            ));
+                                        } else {
+                                            agg.push(expr.clone());
+                                        }
+                                    }
+                                    None => {
+                                        agg.push(expr.clone());
+                                    }
+                                },
+                                _ => {
+                                    agg.push(expr.clone());
+                                }
+                            },
                             _ => {
                                 agg.push(expr.clone());
                             }

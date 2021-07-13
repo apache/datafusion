@@ -61,7 +61,7 @@ pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
 pub use lead_lag::{lag, lead};
 pub use literal::{lit, Literal};
-pub use min_max::{Max, Min};
+pub use min_max::{Max, MaxAccumulator, Min, MinAccumulator};
 pub use negative::{negative, NegativeExpr};
 pub use not::{not, NotExpr};
 pub use nth_value::NthValue;
