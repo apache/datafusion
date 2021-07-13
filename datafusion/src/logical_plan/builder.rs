@@ -17,7 +17,10 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use arrow::{
     datatypes::{Schema, SchemaRef},
@@ -220,10 +223,7 @@ impl LogicalPlanBuilder {
         for e in expr {
             match e {
                 Expr::Wildcard => {
-                    (0..input_schema.fields().len()).for_each(|i| {
-                        projected_expr
-                            .push(Expr::Column(input_schema.field(i).qualified_column()))
-                    });
+                    projected_expr.extend(expand_wildcard(input_schema, &self.plan)?)
                 }
                 _ => projected_expr
                     .push(columnize_expr(normalize_col(e, &self.plan)?, input_schema)),
@@ -508,6 +508,47 @@ pub fn union_with_alias(
     })
 }
 
+/// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
+pub(crate) fn expand_wildcard(
+    schema: &DFSchema,
+    plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    let using_columns = plan.using_columns()?;
+    let columns_to_skip = using_columns
+        .into_iter()
+        // For each USING JOIN condition, only expand to one column in projection
+        .map(|cols| {
+            let mut cols = cols.into_iter().collect::<Vec<_>>();
+            // sort join columns to make sure we consistently keep the same
+            // qualified column
+            cols.sort();
+            cols.into_iter().skip(1)
+        })
+        .flatten()
+        .collect::<HashSet<_>>();
+
+    if columns_to_skip.is_empty() {
+        Ok(schema
+            .fields()
+            .iter()
+            .map(|f| Expr::Column(f.qualified_column()))
+            .collect::<Vec<Expr>>())
+    } else {
+        Ok(schema
+            .fields()
+            .iter()
+            .filter_map(|f| {
+                let col = f.qualified_column();
+                if !columns_to_skip.contains(&col) {
+                    Some(Expr::Column(col))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<Expr>>())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
@@ -581,6 +622,27 @@ mod tests {
 
         let expected = "Sort: #employee_csv.state ASC NULLS FIRST, #employee_csv.salary DESC NULLS LAST\
         \n  TableScan: employee_csv projection=Some([3, 4])";
+
+        assert_eq!(expected, format!("{:?}", plan));
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_using_join_wildcard_projection() -> Result<()> {
+        let t2 = LogicalPlanBuilder::scan_empty(Some("t2"), &employee_schema(), None)?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::scan_empty(Some("t1"), &employee_schema(), None)?
+            .join_using(&t2, JoinType::Inner, vec!["id"])?
+            .project(vec![Expr::Wildcard])?
+            .build()?;
+
+        // id column should only show up once in projection
+        let expected = "Projection: #t1.id, #t1.first_name, #t1.last_name, #t1.state, #t1.salary, #t2.first_name, #t2.last_name, #t2.state, #t2.salary\
+        \n  Join: Using #t1.id = #t2.id\
+        \n    TableScan: t1 projection=None\
+        \n    TableScan: t2 projection=None";
 
         assert_eq!(expected, format!("{:?}", plan));
 
