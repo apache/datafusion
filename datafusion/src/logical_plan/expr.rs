@@ -34,7 +34,7 @@ use std::fmt;
 use std::sync::Arc;
 
 /// A named reference to a qualified field in a schema.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     /// relation/table name.
     pub relation: Option<String>,

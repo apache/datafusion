@@ -25,8 +25,8 @@ use crate::error::DataFusionError;
 use crate::logical_plan::dfschema::DFSchemaRef;
 use crate::sql::parser::FileType;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use std::collections::HashSet;
 use std::{
+    collections::HashSet,
     fmt::{self, Display},
     sync::Arc,
 };
