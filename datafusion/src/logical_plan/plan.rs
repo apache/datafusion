@@ -375,7 +375,7 @@ impl LogicalPlan {
                 {
                     self.using_columns.push(
                         on.iter()
-                            .map(|entry| std::array::IntoIter::new([&entry.0, &entry.1]))
+                            .map(|entry| [&entry.0, &entry.1])
                             .flatten()
                             .cloned()
                             .collect::<HashSet<Column>>(),
