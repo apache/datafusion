@@ -17,6 +17,7 @@
 
 use std::pin::Pin;
 
+use arrow_flight::SchemaAsIpc;
 use futures::Stream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
@@ -67,10 +68,7 @@ impl FlightService for FlightServiceImpl {
         let table = ParquetTable::try_new(&request.path[0], num_cpus::get()).unwrap();
 
         let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
-        let schema_result = arrow_flight::utils::flight_schema_from_arrow_schema(
-            table.schema().as_ref(),
-            &options,
-        );
+        let schema_result = SchemaAsIpc::new(table.schema().as_ref(), &options).into();
 
         Ok(Response::new(schema_result))
     }
@@ -108,10 +106,7 @@ impl FlightService for FlightServiceImpl {
                 // add an initial FlightData message that sends schema
                 let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
                 let schema_flight_data =
-                    arrow_flight::utils::flight_data_from_arrow_schema(
-                        &df.schema().clone().into(),
-                        &options,
-                    );
+                    SchemaAsIpc::new(&df.schema().clone().into(), &options).into();
 
                 let mut flights: Vec<Result<FlightData, Status>> =
                     vec![Ok(schema_flight_data)];
