@@ -108,7 +108,7 @@ impl DistributedPlanner {
             let query_stage = create_shuffle_writer(
                 job_id,
                 self.next_stage_id(),
-                coalesce.children()[0].clone(),
+                children[0].clone(),
                 None,
             )?;
             let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
@@ -127,7 +127,7 @@ impl DistributedPlanner {
             let query_stage = create_shuffle_writer(
                 job_id,
                 self.next_stage_id(),
-                repart.children()[0].clone(),
+                children[0].clone(),
                 Some(repart.partitioning().to_owned()),
             )?;
             let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
@@ -215,6 +215,7 @@ mod test {
     use ballista_core::error::BallistaError;
     use ballista_core::execution_plans::UnresolvedShuffleExec;
     use ballista_core::serde::protobuf;
+    use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use datafusion::physical_plan::sort::SortExec;
     use datafusion::physical_plan::{
@@ -264,9 +265,7 @@ mod test {
           ProjectionExec: expr=[l_returnflag@0 as l_returnflag, SUM(lineitem.l_extendedprice Multiply Int64(1))@1 as sum_disc_price]
             HashAggregateExec: mode=FinalPartitioned, gby=[l_returnflag@0 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
               CoalesceBatchesExec: target_batch_size=4096
-                RepartitionExec: partitioning=Hash([Column { name: "l_returnflag", index: 0 }], 2)
-                  HashAggregateExec: mode=Partial, gby=[l_returnflag@1 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
-                    CsvExec: source=Path(testdata/lineitem: [testdata/lineitem/partition0.tbl,testdata/lineitem/partition1.tbl]), has_header=false
+                UnresolvedShuffleExec
 
         ShuffleWriterExec: None
           SortExec: [l_returnflag@0 ASC]
@@ -287,6 +286,12 @@ mod test {
         let final_hash = projection.children()[0].clone();
         let final_hash = downcast_exec!(final_hash, HashAggregateExec);
         assert!(*final_hash.mode() == AggregateMode::FinalPartitioned);
+        let coalesce = final_hash.children()[0].clone();
+        let coalesce = downcast_exec!(coalesce, CoalesceBatchesExec);
+        let unresolved_shuffle = coalesce.children()[0].clone();
+        let unresolved_shuffle =
+            downcast_exec!(unresolved_shuffle, UnresolvedShuffleExec);
+        assert_eq!(unresolved_shuffle.query_stage_ids, vec![1]);
 
         // verify stage 2
         let stage2 = stages[2].children()[0].clone();

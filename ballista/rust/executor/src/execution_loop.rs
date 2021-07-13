@@ -114,11 +114,12 @@ async fn run_received_tasks(
                 .hash_expr
                 .iter()
                 .map(|e| e.try_into())
-                .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>().unwrap(); //TODO err handling
+                .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()
+                .unwrap(); //TODO err handling
 
             Some(Partitioning::Hash(expr, hash_part.partition_count as usize))
-        },
-        _ => None
+        }
+        _ => None,
     };
 
     tokio::spawn(async move {

@@ -112,7 +112,7 @@ impl FlightService for BallistaFlightService {
                                 partition.stage_id,
                                 part,
                                 partition.plan.clone(),
-                                None //TODO
+                                None, //TODO
                             )
                             .await?;
                         let results = vec![results];

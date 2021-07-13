@@ -80,12 +80,12 @@ use tonic::{Request, Response};
 
 use self::state::{ConfigBackendClient, SchedulerState};
 use ballista_core::config::BallistaConfig;
+use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf;
 use ballista_core::utils::create_datafusion_context;
+use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::parquet::ParquetExec;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use ballista_core::execution_plans::ShuffleWriterExec;
-use datafusion::physical_plan::expressions::Column;
 
 #[derive(Clone)]
 pub struct SchedulerServer {
@@ -485,7 +485,8 @@ impl SchedulerGrpc for SchedulerServer {
                             error!("{}", msg);
                             tonic::Status::internal(msg)
                         }));
-                    let num_partitions = shuffle_writer.output_partitioning().partition_count();
+                    let num_partitions =
+                        shuffle_writer.output_partitioning().partition_count();
                     for partition_id in 0..num_partitions {
                         let pending_status = TaskStatus {
                             partition_id: Some(PartitionId {
