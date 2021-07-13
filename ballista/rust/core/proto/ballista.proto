@@ -734,6 +734,7 @@ message PartitionId {
   string job_id = 1;
   uint32 stage_id = 2;
   uint32 partition_id = 4;
+  string path = 5;
 }
 
 message PartitionStats {
@@ -782,6 +783,17 @@ message FailedTask {
 
 message CompletedTask {
   string executor_id = 1;
+  // TODO tasks are currently always shuffle writes but this will not always be the case
+  // so we might want to think about some refactoring of the task definitions
+  repeated ShuffleWritePartition partitions = 2;
+}
+
+message ShuffleWritePartition {
+  uint64 output_partition_id = 1;
+  string path = 2;
+  uint64 num_batches = 3;
+  uint64 num_rows = 4;
+  uint64 num_bytes = 5;
 }
 
 message TaskStatus {
@@ -804,7 +816,7 @@ message TaskDefinition {
   PartitionId task_id = 1;
   PhysicalPlanNode plan = 2;
   // TODO tasks are currently always shuffle writes but this will not always be the case
-  // so we might want to think about some refactoring of the task definition
+  // so we might want to think about some refactoring of the task definitions
   PhysicalHashRepartition shuffle_output_partitioning = 3;
 }
 

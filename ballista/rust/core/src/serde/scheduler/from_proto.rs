@@ -68,6 +68,7 @@ impl TryInto<PartitionId> for protobuf::PartitionId {
             &self.job_id,
             self.stage_id as usize,
             self.partition_id as usize,
+            &self.path,
         ))
     }
 }

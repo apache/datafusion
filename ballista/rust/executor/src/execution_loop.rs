@@ -156,6 +156,7 @@ fn as_task_status(
                 partition_id: Some(task_id),
                 status: Some(task_status::Status::Completed(CompletedTask {
                     executor_id,
+                    partitions: vec![], // TODO populate
                 })),
             }
         }

@@ -493,6 +493,7 @@ impl SchedulerGrpc for SchedulerServer {
                                 job_id: job_id_spawn.clone(),
                                 stage_id: shuffle_writer.stage_id() as u32,
                                 partition_id: partition_id as u32,
+                                path: "".to_owned(),
                             }),
                             status: None,
                         };

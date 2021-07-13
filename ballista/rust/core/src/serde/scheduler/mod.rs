@@ -47,14 +47,16 @@ pub struct PartitionId {
     pub job_id: String,
     pub stage_id: usize,
     pub partition_id: usize,
+    pub path: String,
 }
 
 impl PartitionId {
-    pub fn new(job_id: &str, stage_id: usize, partition_id: usize) -> Self {
+    pub fn new(job_id: &str, stage_id: usize, partition_id: usize, path: &str) -> Self {
         Self {
             job_id: job_id.to_string(),
             stage_id,
             partition_id,
+            path: path.to_owned(),
         }
     }
 }

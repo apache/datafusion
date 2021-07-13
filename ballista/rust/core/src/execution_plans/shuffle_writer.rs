@@ -39,6 +39,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::arrow::ipc::writer::FileWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
@@ -152,11 +153,11 @@ impl ExecutionPlan for ShuffleWriterExec {
 
     async fn execute(
         &self,
-        partition: usize,
+        input_partition: usize,
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
         let now = Instant::now();
 
-        let mut stream = self.plan.execute(partition).await?;
+        let mut stream = self.plan.execute(input_partition).await?;
 
         let mut path = PathBuf::from(&self.work_dir);
         path.push(&self.job_id);
@@ -164,7 +165,7 @@ impl ExecutionPlan for ShuffleWriterExec {
 
         match &self.shuffle_output_partitioning {
             None => {
-                path.push(&format!("{}", partition));
+                path.push(&format!("{}", input_partition));
                 std::fs::create_dir_all(&path)?;
                 path.push("data.arrow");
                 let path = path.to_str().unwrap();
@@ -181,7 +182,7 @@ impl ExecutionPlan for ShuffleWriterExec {
 
                 info!(
                     "Executed partition {} in {} seconds. Statistics: {}",
-                    partition,
+                    input_partition,
                     now.elapsed().as_secs(),
                     stats
                 );
@@ -190,7 +191,7 @@ impl ExecutionPlan for ShuffleWriterExec {
 
                 // build result set with summary of the partition execution status
                 let mut part_builder = UInt32Builder::new(1);
-                part_builder.append_value(partition as u32)?;
+                part_builder.append_value(input_partition as u32)?;
                 let part: ArrayRef = Arc::new(part_builder.finish());
 
                 let mut path_builder = StringBuilder::new(1);
@@ -256,8 +257,6 @@ impl ExecutionPlan for ShuffleWriterExec {
                         let output_batch =
                             RecordBatch::try_new(input_batch.schema(), columns)?;
 
-                        println!("Writing batch with {} rows", output_batch.num_rows());
-
                         // write non-empty batch out
                         //if output_batch.num_rows() > 0 {
                         let start = Instant::now();
@@ -270,7 +269,7 @@ impl ExecutionPlan for ShuffleWriterExec {
                                 path.push(&format!("{}", output_partition));
                                 std::fs::create_dir_all(&path)?;
 
-                                path.push("data.arrow");
+                                path.push(format!("data-{}.arrow", input_partition));
                                 let path = path.to_str().unwrap();
                                 info!("Writing results to {}", path);
 
@@ -305,6 +304,27 @@ impl ExecutionPlan for ShuffleWriterExec {
                                 w.num_rows,
                                 w.num_bytes
                             );
+
+                            // now read file back in to verify it
+                            println!("Verifying {}", w.path());
+                            let file = File::open(w.path()).unwrap();
+                            let reader = FileReader::try_new(file).unwrap();
+                            let mut batch_count: u64 = 0;
+                            let mut row_count = 0;
+                            reader.for_each(|batch| {
+                                let batch = batch.unwrap();
+                                row_count += batch.num_rows() as u64;
+                                batch_count += 1;
+                            });
+                            println!(
+                                "Finished verifying {}. Batches: {}. Rows: {}.",
+                                w.path(),
+                                batch_count,
+                                row_count,
+                            );
+                            assert_eq!(batch_count, w.num_batches);
+                            assert_eq!(row_count, w.num_rows);
+
                             path_builder.append_value(w.path())?;
                             partition_builder.append_value(i as u32)?;
                             num_rows_builder.append_value(w.num_rows)?;

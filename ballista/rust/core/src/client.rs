@@ -132,9 +132,14 @@ impl BallistaClient {
         job_id: &str,
         stage_id: usize,
         partition_id: usize,
+        path: &str,
     ) -> Result<SendableRecordBatchStream> {
-        let action =
-            Action::FetchPartition(PartitionId::new(job_id, stage_id, partition_id));
+        let action = Action::FetchPartition(PartitionId::new(
+            job_id,
+            stage_id,
+            partition_id,
+            path,
+        ));
         self.execute_action(&action).await
     }
 

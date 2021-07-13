@@ -166,6 +166,7 @@ async fn fetch_partition(
             &partition_id.job_id,
             partition_id.stage_id as usize,
             partition_id.partition_id as usize,
+            &partition_id.path,
         )
         .await
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)

@@ -254,9 +254,9 @@ impl SchedulerState {
         executors: &[ExecutorMeta],
     ) -> Result<bool> {
         let executor_id: &str = match &task_status.status {
-            Some(task_status::Status::Completed(CompletedTask { executor_id })) => {
-                executor_id
-            }
+            Some(task_status::Status::Completed(CompletedTask {
+                executor_id, ..
+            })) => executor_id,
             Some(task_status::Status::Running(RunningTask { executor_id })) => {
                 executor_id
             }
@@ -318,7 +318,10 @@ impl SchedulerState {
                             if task_is_dead {
                                 continue 'tasks;
                             } else if let Some(task_status::Status::Completed(
-                                CompletedTask { executor_id },
+                                CompletedTask {
+                                    executor_id,
+                                    partitions,
+                                },
                             )) = &referenced_task.status
                             {
                                 let empty = vec![];
@@ -329,18 +332,26 @@ impl SchedulerState {
                                     .find(|exec| exec.id == *executor_id)
                                     .unwrap()
                                     .clone();
-                                locations.push(vec![
-                                    ballista_core::serde::scheduler::PartitionLocation {
-                                        partition_id:
-                                            ballista_core::serde::scheduler::PartitionId {
-                                                job_id: partition.job_id.clone(),
-                                                stage_id,
-                                                partition_id,
+
+                                //TODO review this
+                                for p in partitions {
+                                    let executor_meta = executor_meta.clone();
+                                    if p.output_partition_id as usize == partition_id {
+                                        locations.push(vec![
+                                            ballista_core::serde::scheduler::PartitionLocation {
+                                                partition_id:
+                                                ballista_core::serde::scheduler::PartitionId {
+                                                    job_id: partition.job_id.clone(),
+                                                    stage_id,
+                                                    partition_id,
+                                                    path: p.path.clone(),
+                                                },
+                                                executor_meta,
+                                                partition_stats: PartitionStats::new(Some(p.num_rows), Some(p.num_batches), Some(p.num_bytes)),
                                             },
-                                        executor_meta,
-                                        partition_stats: PartitionStats::default(),
-                                    },
-                                ]);
+                                        ]);
+                                    }
+                                }
                             } else {
                                 continue 'tasks;
                             }
@@ -453,9 +464,10 @@ impl SchedulerState {
         let mut job_status = statuses
             .iter()
             .map(|status| match &status.status {
-                Some(task_status::Status::Completed(CompletedTask { executor_id })) => {
-                    Ok((status, executor_id))
-                }
+                Some(task_status::Status::Completed(CompletedTask {
+                    executor_id,
+                    ..
+                })) => Ok((status, executor_id)),
                 _ => Err(BallistaError::General("Task not completed".to_string())),
             })
             .collect::<Result<Vec<_>>>()
@@ -681,6 +693,7 @@ mod test {
                 job_id: "job".to_owned(),
                 stage_id: 1,
                 partition_id: 2,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -707,6 +720,7 @@ mod test {
                 job_id: "job".to_owned(),
                 stage_id: 1,
                 partition_id: 2,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -746,11 +760,13 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 0,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -762,6 +778,7 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 1,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -785,11 +802,13 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 0,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -799,6 +818,7 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 1,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -822,22 +842,26 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 0,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 1,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -864,22 +888,26 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 0,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 1,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -906,11 +934,13 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 0,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -922,6 +952,7 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 1,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -931,6 +962,7 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 2,
+                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
