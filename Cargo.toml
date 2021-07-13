@@ -28,3 +28,6 @@ members = [
 ]
 
 exclude = ["python"]
+
+[patch.crates-io]
+arrow = { git = "https://github.com/e-dard/arrow-rs", branch = "er/4.4.0/patch-dyncomparator"}

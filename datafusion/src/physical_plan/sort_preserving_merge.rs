@@ -649,8 +649,7 @@ mod tests {
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
         _test_merge(
-            b1,
-            b2,
+            &[vec![b1], vec![b2]],
             &[
                 "+----+---+-------------------------------+",
                 "| a  | b | c                             |",
@@ -696,8 +695,7 @@ mod tests {
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
         _test_merge(
-            b1,
-            b2,
+            &[vec![b1], vec![b2]],
             &[
                 "+-----+---+-------------------------------+",
                 "| a   | b | c                             |",
@@ -743,8 +741,7 @@ mod tests {
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
         _test_merge(
-            b1,
-            b2,
+            &[vec![b1], vec![b2]],
             &[
                 "+----+---+-------------------------------+",
                 "| a  | b | c                             |",
@@ -765,8 +762,71 @@ mod tests {
         .await;
     }
 
-    async fn _test_merge(b1: RecordBatch, b2: RecordBatch, exp: &[&str]) {
-        let schema = b1.schema();
+    #[tokio::test]
+    async fn test_merge_three_partitions() {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
+        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+            Some("a"),
+            Some("b"),
+            Some("c"),
+            Some("d"),
+            Some("f"),
+        ]));
+        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
+        let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
+
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 70, 90, 30]));
+        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+            Some("e"),
+            Some("g"),
+            Some("h"),
+            Some("i"),
+            Some("j"),
+        ]));
+        let c: ArrayRef =
+            Arc::new(TimestampNanosecondArray::from(vec![40, 60, 20, 20, 60]));
+        let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
+
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 700, 900, 300]));
+        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+            Some("f"),
+            Some("g"),
+            Some("h"),
+            Some("i"),
+            Some("j"),
+        ]));
+        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![4, 6, 2, 2, 6]));
+        let b3 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
+
+        _test_merge(
+            &[vec![b1], vec![b2], vec![b3]],
+            &[
+                "+-----+---+-------------------------------+",
+                "| a   | b | c                             |",
+                "+-----+---+-------------------------------+",
+                "| 1   | a | 1970-01-01 00:00:00.000000008 |",
+                "| 2   | b | 1970-01-01 00:00:00.000000007 |",
+                "| 7   | c | 1970-01-01 00:00:00.000000006 |",
+                "| 9   | d | 1970-01-01 00:00:00.000000005 |",
+                "| 10  | e | 1970-01-01 00:00:00.000000040 |",
+                "| 100 | f | 1970-01-01 00:00:00.000000004 |",
+                "| 3   | f | 1970-01-01 00:00:00.000000008 |",
+                "| 200 | g | 1970-01-01 00:00:00.000000006 |",
+                "| 20  | g | 1970-01-01 00:00:00.000000060 |",
+                "| 700 | h | 1970-01-01 00:00:00.000000002 |",
+                "| 70  | h | 1970-01-01 00:00:00.000000020 |",
+                "| 900 | i | 1970-01-01 00:00:00.000000002 |",
+                "| 90  | i | 1970-01-01 00:00:00.000000020 |",
+                "| 300 | j | 1970-01-01 00:00:00.000000006 |",
+                "| 30  | j | 1970-01-01 00:00:00.000000060 |",
+                "+-----+---+-------------------------------+",
+            ],
+        )
+        .await;
+    }
+
+    async fn _test_merge(partitions: &[Vec<RecordBatch>], exp: &[&str]) {
+        let schema = partitions[0][0].schema();
         let sort = vec![
             PhysicalSortExpr {
                 expr: col("b", &schema).unwrap(),
@@ -777,7 +837,7 @@ mod tests {
                 options: Default::default(),
             },
         ];
-        let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
+        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), 1024));
 
         let collected = collect(merge).await.unwrap();
