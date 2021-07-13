@@ -45,6 +45,7 @@ mod roundtrip_tests {
 
     use super::super::super::error::Result;
     use super::super::protobuf;
+    use crate::execution_plans::ShuffleWriterExec;
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let proto: protobuf::PhysicalPlanNode = exec_plan.clone().try_into()?;
@@ -182,6 +183,21 @@ mod roundtrip_tests {
         roundtrip_test(Arc::new(SortExec::try_new(
             sort_exprs,
             Arc::new(EmptyExec::new(false, schema)),
+        )?))
+    }
+
+    #[test]
+    fn roundtrip_shuffle_writer() -> Result<()> {
+        let field_a = Field::new("a", DataType::Int64, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+        roundtrip_test(Arc::new(ShuffleWriterExec::try_new(
+            "job123".to_string(),
+            123,
+            Arc::new(EmptyExec::new(false, schema)),
+            "".to_string(),
+            Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 4)),
         )?))
     }
 }
