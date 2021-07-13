@@ -375,12 +375,10 @@ impl LogicalPlan {
                 {
                     self.using_columns.push(
                         on.iter()
-                            .map(|entry| {
-                                std::iter::once(entry.0.clone())
-                                    .chain(std::iter::once(entry.1.clone()))
-                            })
+                            .map(|entry| [&entry.0, &entry.1])
                             .flatten()
-                            .collect::<HashSet<_>>(),
+                            .cloned()
+                            .collect::<HashSet<Column>>(),
                     );
                 }
                 Ok(true)

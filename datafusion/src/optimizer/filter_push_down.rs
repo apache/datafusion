@@ -97,9 +97,11 @@ fn get_join_predicates<'a>(
         .fields()
         .iter()
         .map(|f| {
-            std::iter::once(f.qualified_column())
+            [
+                f.qualified_column(),
                 // we need to push down filter using unqualified column as well
-                .chain(std::iter::once(f.unqualified_column()))
+                f.unqualified_column(),
+            ]
         })
         .flatten()
         .collect::<HashSet<_>>();
@@ -107,8 +109,11 @@ fn get_join_predicates<'a>(
         .fields()
         .iter()
         .map(|f| {
-            std::iter::once(f.qualified_column())
-                .chain(std::iter::once(f.unqualified_column()))
+            [
+                f.qualified_column(),
+                // we need to push down filter using unqualified column as well
+                f.unqualified_column(),
+            ]
         })
         .flatten()
         .collect::<HashSet<_>>();
