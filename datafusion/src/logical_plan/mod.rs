@@ -21,7 +21,7 @@
 //! Logical query plans can then be optimized and executed directly, or translated into
 //! physical query plans and executed.
 
-mod builder;
+pub(crate) mod builder;
 mod dfschema;
 mod display;
 mod expr;

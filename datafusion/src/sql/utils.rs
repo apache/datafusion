@@ -17,59 +17,13 @@
 
 //! SQL Utility Functions
 
-use crate::logical_plan::{DFSchema, Expr, LogicalPlan};
+use crate::logical_plan::{Expr, LogicalPlan};
 use crate::scalar::ScalarValue;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
 };
-use std::collections::{HashMap, HashSet};
-
-/// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
-pub(crate) fn expand_wildcard(
-    expr: &Expr,
-    schema: &DFSchema,
-    using_columns: &[HashSet<Column>],
-) -> Vec<Expr> {
-    match expr {
-        Expr::Wildcard => {
-            let columns_to_skip = using_columns
-                .iter()
-                // For each USING JOIN condition, only expand to one column in projection
-                .map(|cols| {
-                    let mut cols = cols.iter().collect::<Vec<_>>();
-                    // sort join columns to make sure we consistently keep the same
-                    // qualified column
-                    cols.sort();
-                    cols.into_iter().skip(1)
-                })
-                .flatten()
-                .collect::<HashSet<_>>();
-
-            if columns_to_skip.is_empty() {
-                schema
-                    .fields()
-                    .iter()
-                    .map(|f| Expr::Column(f.qualified_column()))
-                    .collect::<Vec<Expr>>()
-            } else {
-                schema
-                    .fields()
-                    .iter()
-                    .filter_map(|f| {
-                        let col = f.qualified_column();
-                        if !columns_to_skip.contains(&col) {
-                            Some(Expr::Column(col))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<Expr>>()
-            }
-        }
-        _ => vec![expr.clone()],
-    }
-}
+use std::collections::HashMap;
 
 /// Collect all deeply nested `Expr::AggregateFunction` and
 /// `Expr::AggregateUDF`. They are returned in order of occurrence (depth

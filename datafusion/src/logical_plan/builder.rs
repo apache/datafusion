@@ -223,33 +223,7 @@ impl LogicalPlanBuilder {
         for e in expr {
             match e {
                 Expr::Wildcard => {
-                    let columns_to_skip = self
-                        .plan
-                        .using_columns()?
-                        .into_iter()
-                        // For each USING JOIN condition, only expand to one column in projection
-                        .map(|cols| {
-                            let mut cols = cols.into_iter().collect::<Vec<_>>();
-                            // sort join columns to make sure we consistently keep the same
-                            // qualified column
-                            cols.sort();
-                            cols.into_iter().skip(1)
-                        })
-                        .flatten()
-                        .collect::<HashSet<_>>();
-
-                    if columns_to_skip.is_empty() {
-                        input_schema.fields().iter().for_each(|f| {
-                            projected_expr.push(Expr::Column(f.qualified_column()))
-                        })
-                    } else {
-                        input_schema.fields().iter().for_each(|f| {
-                            let col = f.qualified_column();
-                            if !columns_to_skip.contains(&col) {
-                                projected_expr.push(Expr::Column(col))
-                            }
-                        })
-                    }
+                    projected_expr.extend(expand_wildcard(input_schema, &self.plan)?)
                 }
                 _ => projected_expr
                     .push(columnize_expr(normalize_col(e, &self.plan)?, input_schema)),
@@ -532,6 +506,47 @@ pub fn union_with_alias(
         inputs,
         alias,
     })
+}
+
+/// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
+pub(crate) fn expand_wildcard(
+    schema: &DFSchema,
+    plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    let using_columns = plan.using_columns()?;
+    let columns_to_skip = using_columns
+        .into_iter()
+        // For each USING JOIN condition, only expand to one column in projection
+        .map(|cols| {
+            let mut cols = cols.into_iter().collect::<Vec<_>>();
+            // sort join columns to make sure we consistently keep the same
+            // qualified column
+            cols.sort();
+            cols.into_iter().skip(1)
+        })
+        .flatten()
+        .collect::<HashSet<_>>();
+
+    if columns_to_skip.is_empty() {
+        Ok(schema
+            .fields()
+            .iter()
+            .map(|f| Expr::Column(f.qualified_column()))
+            .collect::<Vec<Expr>>())
+    } else {
+        Ok(schema
+            .fields()
+            .iter()
+            .filter_map(|f| {
+                let col = f.qualified_column();
+                if !columns_to_skip.contains(&col) {
+                    Some(Expr::Column(col))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<Expr>>())
+    }
 }
 
 #[cfg(test)]
