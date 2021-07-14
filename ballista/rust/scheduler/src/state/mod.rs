@@ -27,16 +27,13 @@ use prost::Message;
 use tokio::sync::OwnedMutexGuard;
 
 use ballista_core::serde::protobuf::{
-    job_status, task_status, CompletedJob, CompletedTask, ExecutorHeartbeat,
+    self, job_status, task_status, CompletedJob, CompletedTask, ExecutorHeartbeat,
     ExecutorMetadata, FailedJob, FailedTask, JobStatus, PhysicalPlanNode, RunningJob,
     RunningTask, TaskStatus,
 };
 use ballista_core::serde::scheduler::PartitionStats;
 use ballista_core::{error::BallistaError, serde::scheduler::ExecutorMeta};
-use ballista_core::{
-    error::Result, execution_plans::UnresolvedShuffleExec,
-    serde::protobuf::PartitionLocation,
-};
+use ballista_core::{error::Result, execution_plans::UnresolvedShuffleExec};
 
 use super::planner::remove_unresolved_shuffles;
 
@@ -348,7 +345,10 @@ impl SchedulerState {
                                             executor_meta,
                                             partition_stats: PartitionStats::new(Some(p.num_rows), Some(p.num_batches), Some(p.num_bytes)),
                                         };
-                                        println!("Scheduler storing partition location: {:?}", partition_location);
+                                        println!(
+                                            "Scheduler storing partition location: {:?}",
+                                            partition_location
+                                        );
                                         locations.push(vec![partition_location]);
                                     }
                                 }
@@ -466,23 +466,37 @@ impl SchedulerState {
             .map(|status| match &status.status {
                 Some(task_status::Status::Completed(CompletedTask {
                     executor_id,
-                    ..
-                })) => Ok((status, executor_id)),
+                    partitions,
+                })) => Ok((status, executor_id, partitions)),
                 _ => Err(BallistaError::General("Task not completed".to_string())),
             })
             .collect::<Result<Vec<_>>>()
             .ok()
             .map(|info| {
-                let partition_location = info
-                    .into_iter()
-                    .map(|(status, execution_id)| PartitionLocation {
-                        partition_id: status.partition_id.to_owned(),
-                        executor_meta: executors
-                            .get(execution_id)
-                            .map(|e| e.clone().into()),
-                        partition_stats: None,
-                    })
-                    .collect();
+                let mut partition_location = vec![];
+                for (status, executor_id, partitions) in info {
+                    for shuffle_write_partition in partitions {
+                        let status = status.clone();
+                        let x = status.partition_id.as_ref().unwrap(); //TODO unwrap
+                        partition_location.push(protobuf::PartitionLocation {
+                            partition_id: Some(protobuf::PartitionId {
+                                job_id: x.job_id.clone(),
+                                stage_id: x.stage_id,
+                                partition_id: x.partition_id,
+                                path: shuffle_write_partition.path.clone(), // we can't use path from status.partition_id
+                            }),
+                            executor_meta: executors
+                                .get(executor_id)
+                                .map(|e| e.clone().into()),
+                            partition_stats: Some(protobuf::PartitionStats {
+                                num_batches: shuffle_write_partition.num_batches as i64,
+                                num_rows: shuffle_write_partition.num_rows as i64,
+                                num_bytes: shuffle_write_partition.num_bytes as i64,
+                                column_stats: vec![],
+                            }),
+                        });
+                    }
+                }
                 job_status::Status::Completed(CompletedJob { partition_location })
             });
 

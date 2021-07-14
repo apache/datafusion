@@ -62,7 +62,7 @@ impl Into<protobuf::PartitionId> for PartitionId {
             job_id: self.job_id,
             stage_id: self.stage_id as u32,
             partition_id: self.partition_id as u32,
-            path: self.path.clone(),
+            path: self.path,
         }
     }
 }

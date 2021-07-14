@@ -95,7 +95,7 @@ impl FlightService for BallistaFlightService {
                 path.push(&partition_id.job_id);
                 path.push(&format!("{}", partition_id.stage_id));
                 path.push(&format!("{}", partition_id.partition_id));
-                path.push("data.arrow");
+                path.push(&partition_id.path);
                 let path = path.to_str().unwrap();
 
                 info!("FetchPartition {:?} reading {}", partition_id, path);

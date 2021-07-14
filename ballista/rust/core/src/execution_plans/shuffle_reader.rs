@@ -23,6 +23,7 @@ use crate::client::BallistaClient;
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionLocation;
 
+use crate::error::BallistaError;
 use crate::utils::WrappedStream;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -57,6 +58,14 @@ impl ShuffleReaderExec {
         partition: Vec<Vec<PartitionLocation>>,
         schema: SchemaRef,
     ) -> Result<Self> {
+        for a in &partition {
+            for b in a {
+                if b.partition_id.path.is_empty() {
+                    return Err(DataFusionError::Internal("Missing path".to_string()));
+                }
+            }
+        }
+
         Ok(Self {
             partition,
             schema,
@@ -127,11 +136,12 @@ impl ExecutionPlan for ShuffleReaderExec {
                         x.iter()
                             .map(|l| {
                                 format!(
-                                    "[executor={} part={}:{}:{} stats={}]",
+                                    "[executor={} part={}:{}:{} file={} stats={}]",
                                     l.executor_meta.id,
                                     l.partition_id.job_id,
                                     l.partition_id.stage_id,
                                     l.partition_id.partition_id,
+                                    l.partition_id.path,
                                     l.partition_stats
                                 )
                             })
@@ -157,6 +167,13 @@ async fn fetch_partition(
 ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
     let metadata = &location.executor_meta;
     let partition_id = &location.partition_id;
+
+    if partition_id.path.is_empty() {
+        return Err(DataFusionError::Internal(
+            "Can fetch partition without path".to_string(),
+        ));
+    }
+
     let mut ballista_client =
         BallistaClient::try_new(metadata.host.as_str(), metadata.port as u16)
             .await
