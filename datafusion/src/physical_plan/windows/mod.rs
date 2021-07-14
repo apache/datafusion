@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution plan for window functions
+//! Physical expressions for window functions
 
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
+use crate::logical_plan::window_frames::WindowFrame;
 use crate::physical_plan::{
     aggregates,
     expressions::{
@@ -29,14 +29,10 @@ use crate::physical_plan::{
         signature_for_built_in, BuiltInWindowFunction, BuiltInWindowFunctionExpr,
         WindowFunction,
     },
-    Accumulator, AggregateExpr, PhysicalExpr, WindowExpr,
+    PhysicalExpr, WindowExpr,
 };
-use arrow::{
-    array::ArrayRef,
-    datatypes::{Field, Schema},
-    record_batch::RecordBatch,
-};
-use std::any::Any;
+use crate::scalar::ScalarValue;
+use arrow::datatypes::Schema;
 use std::convert::TryInto;
 use std::ops::Range;
 use std::sync::Arc;
@@ -60,25 +56,32 @@ pub fn create_window_expr(
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunction::AggregateFunction(fun) => Arc::new(AggregateWindowExpr {
-            aggregate: aggregates::create_aggregate_expr(
-                fun,
-                false,
-                args,
-                input_schema,
-                name,
-            )?,
-            partition_by: partition_by.to_vec(),
-            order_by: order_by.to_vec(),
+        WindowFunction::AggregateFunction(fun) => Arc::new(AggregateWindowExpr::new(
+            aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?,
+            partition_by,
+            order_by,
             window_frame,
-        }),
-        WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr {
-            fun: fun.clone(),
-            expr: create_built_in_window_expr(fun, args, input_schema, name)?,
-            partition_by: partition_by.to_vec(),
-            order_by: order_by.to_vec(),
+        )),
+        WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
+            fun.clone(),
+            create_built_in_window_expr(fun, args, input_schema, name)?,
+            partition_by,
+            order_by,
             window_frame,
-        }),
+        )),
+    })
+}
+
+fn get_scalar_value_from_args(
+    args: &[Arc<dyn PhysicalExpr>],
+    index: usize,
+) -> Option<ScalarValue> {
+    args.get(index).map(|v| {
+        v.as_any()
+            .downcast_ref::<Literal>()
+            .unwrap()
+            .value()
+            .clone()
     })
 }
 
@@ -96,13 +99,21 @@ fn create_built_in_window_expr(
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Arc::new(lag(name, data_type, arg))
+            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)
+                .map(|v| v.try_into())
+                .and_then(|v| v.ok());
+            let default_value = get_scalar_value_from_args(&coerced_args, 2);
+            Arc::new(lag(name, data_type, arg, shift_offset, default_value))
         }
         BuiltInWindowFunction::Lead => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Arc::new(lead(name, data_type, arg))
+            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)
+                .map(|v| v.try_into())
+                .and_then(|v| v.ok());
+            let default_value = get_scalar_value_from_args(&coerced_args, 2);
+            Arc::new(lead(name, data_type, arg, shift_offset, default_value))
         }
         BuiltInWindowFunction::NthValue => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
@@ -168,6 +179,7 @@ mod tests {
     use crate::test;
     use arrow::array::*;
     use arrow::datatypes::SchemaRef;
+    use arrow::record_batch::RecordBatch;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
         let schema = test::aggr_test_schema();

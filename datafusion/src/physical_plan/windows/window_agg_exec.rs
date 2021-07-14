@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Stream and channel implementations for window function expressions.
+
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     common, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,

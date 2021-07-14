@@ -15,21 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Physical exec for aggregate window function expressions.
+
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::physical_plan::windows::find_ranges_in_range;
 use crate::physical_plan::{
-    expressions::PhysicalSortExpr,
-    window_functions::{
-        signature_for_built_in, BuiltInWindowFunction, BuiltInWindowFunctionExpr,
-        WindowFunction,
-    },
-    Accumulator, AggregateExpr, PhysicalExpr, WindowExpr,
+    expressions::PhysicalSortExpr, Accumulator, AggregateExpr, PhysicalExpr, WindowExpr,
 };
 use arrow::compute::concat;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use std::any::Any;
+use std::iter::IntoIterator;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -43,6 +41,21 @@ pub struct AggregateWindowExpr {
 }
 
 impl AggregateWindowExpr {
+    /// create a new aggregate window function expression
+    pub(super) fn new(
+        aggregate: Arc<dyn AggregateExpr>,
+        partition_by: &[Arc<dyn PhysicalExpr>],
+        order_by: &[PhysicalSortExpr],
+        window_frame: Option<WindowFrame>,
+    ) -> Self {
+        Self {
+            aggregate,
+            partition_by: partition_by.to_vec(),
+            order_by: order_by.to_vec(),
+            window_frame,
+        }
+    }
+
     /// the aggregate window function operates based on window frame, and by default the mode is
     /// "range".
     fn evaluation_mode(&self) -> WindowFrameUnits {
