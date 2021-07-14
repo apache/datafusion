@@ -21,11 +21,13 @@
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
+use crate::scalar::ScalarValue;
 use arrow::array::ArrayRef;
-use arrow::compute::kernels::window::shift;
+use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use std::any::Any;
+use std::ops::Neg;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -36,6 +38,7 @@ pub struct WindowShift {
     data_type: DataType,
     shift_offset: i64,
     expr: Arc<dyn PhysicalExpr>,
+    default_value: Option<ScalarValue>,
 }
 
 /// lead() window function
@@ -43,12 +46,15 @@ pub fn lead(
     name: String,
     data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
+    shift_offset: Option<i64>,
+    default_value: Option<ScalarValue>,
 ) -> WindowShift {
     WindowShift {
         name,
         data_type,
-        shift_offset: -1,
+        shift_offset: shift_offset.map(|v| v.neg()).unwrap_or(-1),
         expr,
+        default_value,
     }
 }
 
@@ -57,12 +63,15 @@ pub fn lag(
     name: String,
     data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
+    shift_offset: Option<i64>,
+    default_value: Option<ScalarValue>,
 ) -> WindowShift {
     WindowShift {
         name,
         data_type,
-        shift_offset: 1,
+        shift_offset: shift_offset.unwrap_or(1),
         expr,
+        default_value,
     }
 }
 
@@ -98,6 +107,7 @@ impl BuiltInWindowFunctionExpr for WindowShift {
         Ok(Box::new(WindowShiftEvaluator {
             shift_offset: self.shift_offset,
             values,
+            default_value: self.default_value.clone(),
         }))
     }
 }
@@ -105,13 +115,63 @@ impl BuiltInWindowFunctionExpr for WindowShift {
 pub(crate) struct WindowShiftEvaluator {
     shift_offset: i64,
     values: Vec<ArrayRef>,
+    default_value: Option<ScalarValue>,
+}
+
+fn create_empty_array(
+    value: &Option<ScalarValue>,
+    data_type: &DataType,
+    size: usize,
+) -> Result<ArrayRef> {
+    use arrow::array::new_null_array;
+    let array = value
+        .as_ref()
+        .map(|scalar| scalar.to_array_of_size(size))
+        .unwrap_or_else(|| new_null_array(data_type, size));
+    if array.data_type() != data_type {
+        cast(&array, data_type).map_err(DataFusionError::ArrowError)
+    } else {
+        Ok(array)
+    }
+}
+
+// TODO: change the original arrow::compute::kernels::window::shift impl to support an optional default value
+fn shift_with_default_value(
+    array: &ArrayRef,
+    offset: i64,
+    value: &Option<ScalarValue>,
+) -> Result<ArrayRef> {
+    use arrow::compute::concat;
+
+    let value_len = array.len() as i64;
+    if offset == 0 {
+        Ok(arrow::array::make_array(array.data_ref().clone()))
+    } else if offset == i64::MIN || offset.abs() >= value_len {
+        create_empty_array(value, array.data_type(), array.len())
+    } else {
+        let slice_offset = (-offset).clamp(0, value_len) as usize;
+        let length = array.len() - offset.abs() as usize;
+        let slice = array.slice(slice_offset, length);
+
+        // Generate array with remaining `null` items
+        let nulls = offset.abs() as usize;
+        let default_values = create_empty_array(value, slice.data_type(), nulls)?;
+        // Concatenate both arrays, add nulls after if shift > 0 else before
+        if offset > 0 {
+            concat(&[default_values.as_ref(), slice.as_ref()])
+                .map_err(DataFusionError::ArrowError)
+        } else {
+            concat(&[slice.as_ref(), default_values.as_ref()])
+                .map_err(DataFusionError::ArrowError)
+        }
+    }
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
     fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
         let value = &self.values[0];
         let value = value.slice(partition.start, partition.end - partition.start);
-        shift(value.as_ref(), self.shift_offset).map_err(DataFusionError::ArrowError)
+        shift_with_default_value(&value, self.shift_offset, &self.default_value)
     }
 }
 
@@ -142,6 +202,8 @@ mod tests {
                 "lead".to_owned(),
                 DataType::Float32,
                 Arc::new(Column::new("c3", 0)),
+                None,
+                None,
             ),
             vec![
                 Some(-2),
@@ -162,9 +224,33 @@ mod tests {
                 "lead".to_owned(),
                 DataType::Float32,
                 Arc::new(Column::new("c3", 0)),
+                None,
+                None,
             ),
             vec![
                 None,
+                Some(1),
+                Some(-2),
+                Some(3),
+                Some(-4),
+                Some(5),
+                Some(-6),
+                Some(7),
+            ]
+            .iter()
+            .collect::<Int32Array>(),
+        )?;
+
+        test_i32_result(
+            lag(
+                "lead".to_owned(),
+                DataType::Int32,
+                Arc::new(Column::new("c3", 0)),
+                None,
+                Some(ScalarValue::Int32(Some(100))),
+            ),
+            vec![
+                Some(100),
                 Some(1),
                 Some(-2),
                 Some(3),
