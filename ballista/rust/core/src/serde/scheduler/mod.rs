@@ -46,6 +46,7 @@ pub enum Action {
 pub struct PartitionId {
     pub job_id: String,
     pub stage_id: usize,
+    /// Output partition
     pub partition_id: usize,
     pub path: String,
 }
@@ -100,9 +101,9 @@ impl From<protobuf::ExecutorMetadata> for ExecutorMeta {
 /// Summary of executed partition
 #[derive(Debug, Copy, Clone)]
 pub struct PartitionStats {
-    num_rows: Option<u64>,
-    num_batches: Option<u64>,
-    num_bytes: Option<u64>,
+    pub(crate) num_rows: Option<u64>,
+    pub(crate) num_batches: Option<u64>,
+    pub(crate) num_bytes: Option<u64>,
 }
 
 impl Default for PartitionStats {

@@ -336,20 +336,20 @@ impl SchedulerState {
                                 //TODO review this
                                 for p in partitions {
                                     let executor_meta = executor_meta.clone();
-                                    if p.output_partition_id as usize == partition_id {
-                                        locations.push(vec![
-                                            ballista_core::serde::scheduler::PartitionLocation {
-                                                partition_id:
-                                                ballista_core::serde::scheduler::PartitionId {
-                                                    job_id: partition.job_id.clone(),
-                                                    stage_id,
-                                                    partition_id,
-                                                    path: p.path.clone(),
-                                                },
-                                                executor_meta,
-                                                partition_stats: PartitionStats::new(Some(p.num_rows), Some(p.num_batches), Some(p.num_bytes)),
+                                    if p.partition_id as usize == partition_id {
+                                        let partition_location = ballista_core::serde::scheduler::PartitionLocation {
+                                            partition_id:
+                                            ballista_core::serde::scheduler::PartitionId {
+                                                job_id: partition.job_id.clone(),
+                                                stage_id,
+                                                partition_id,
+                                                path: p.path.clone(),
                                             },
-                                        ]);
+                                            executor_meta,
+                                            partition_stats: PartitionStats::new(Some(p.num_rows), Some(p.num_batches), Some(p.num_bytes)),
+                                        };
+                                        println!("Scheduler storing partition location: {:?}", partition_location);
+                                        locations.push(vec![partition_location]);
                                     }
                                 }
                             } else {

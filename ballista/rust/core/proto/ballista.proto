@@ -789,7 +789,7 @@ message CompletedTask {
 }
 
 message ShuffleWritePartition {
-  uint64 output_partition_id = 1;
+  uint64 partition_id = 1;
   string path = 2;
   uint64 num_batches = 3;
   uint64 num_rows = 4;

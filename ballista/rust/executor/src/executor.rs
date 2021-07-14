@@ -21,8 +21,7 @@ use std::sync::Arc;
 
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
-use ballista_core::utils;
-use datafusion::arrow::record_batch::RecordBatch;
+use ballista_core::serde::protobuf::ShuffleWritePartition;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 
@@ -52,7 +51,7 @@ impl Executor {
         part: usize,
         plan: Arc<dyn ExecutionPlan>,
         shuffle_output_partitioning: Option<Partitioning>,
-    ) -> Result<RecordBatch, BallistaError> {
+    ) -> Result<Vec<ShuffleWritePartition>, BallistaError> {
         let exec = ShuffleWriterExec::try_new(
             job_id,
             stage_id,
@@ -60,8 +59,7 @@ impl Executor {
             self.work_dir.clone(),
             shuffle_output_partitioning,
         )?;
-        let mut stream = exec.execute(part).await?;
-        let batches = utils::collect_stream(&mut stream).await?;
+        let partitions = exec.execute_shuffle(part).await?;
 
         println!(
             "=== Physical plan with metrics ===\n{}\n",
@@ -70,9 +68,11 @@ impl Executor {
                 .to_string()
         );
 
-        // the output should be a single batch containing metadata (path and statistics)
-        assert!(batches.len() == 1);
-        Ok(batches[0].clone())
+        partitions.iter().for_each(|p| {
+            println!("{:?}", p);
+        });
+
+        Ok(partitions)
     }
 
     pub fn work_dir(&self) -> &str {
