@@ -128,13 +128,11 @@ fn get_valid_types(
             }
             vec![(0..*number).map(|i| current_types[i].clone()).collect()]
         }
-        Signature::OneOf(types) => {
-            let mut r = vec![];
-            for s in types {
-                r.extend(get_valid_types(s, current_types)?);
-            }
-            r
-        }
+        Signature::OneOf(types) => types
+            .iter()
+            .filter_map(|t| get_valid_types(t, current_types).ok())
+            .flatten()
+            .collect::<Vec<_>>(),
     };
 
     Ok(valid_types)
@@ -364,6 +362,29 @@ mod tests {
                 )));
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_valid_types_one_of() -> Result<()> {
+        let signature = Signature::OneOf(vec![Signature::Any(1), Signature::Any(2)]);
+
+        let invalid_types = get_valid_types(
+            &signature,
+            &[DataType::Int32, DataType::Int32, DataType::Int32],
+        )?;
+        assert_eq!(invalid_types.len(), 0);
+
+        let args = vec![DataType::Int32, DataType::Int32];
+        let valid_types = get_valid_types(&signature, &args)?;
+        assert_eq!(valid_types.len(), 1);
+        assert_eq!(valid_types[0], args);
+
+        let args = vec![DataType::Int32];
+        let valid_types = get_valid_types(&signature, &args)?;
+        assert_eq!(valid_types.len(), 1);
+        assert_eq!(valid_types[0], args);
 
         Ok(())
     }

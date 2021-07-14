@@ -201,10 +201,16 @@ pub(super) fn signature_for_built_in(fun: &BuiltInWindowFunction) -> Signature {
         | BuiltInWindowFunction::DenseRank
         | BuiltInWindowFunction::PercentRank
         | BuiltInWindowFunction::CumeDist => Signature::Any(0),
-        BuiltInWindowFunction::Lag
-        | BuiltInWindowFunction::Lead
-        | BuiltInWindowFunction::FirstValue
-        | BuiltInWindowFunction::LastValue => Signature::Any(1),
+        BuiltInWindowFunction::Lag | BuiltInWindowFunction::Lead => {
+            Signature::OneOf(vec![
+                Signature::Any(1),
+                Signature::Any(2),
+                Signature::Any(3),
+            ])
+        }
+        BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
+            Signature::Any(1)
+        }
         BuiltInWindowFunction::Ntile => Signature::Exact(vec![DataType::UInt64]),
         BuiltInWindowFunction::NthValue => Signature::Any(2),
     }

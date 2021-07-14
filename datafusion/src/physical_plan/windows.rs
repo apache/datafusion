@@ -32,6 +32,7 @@ use crate::physical_plan::{
     Accumulator, AggregateExpr, Distribution, ExecutionPlan, Partitioning, PhysicalExpr,
     RecordBatchStream, SendableRecordBatchStream, WindowExpr,
 };
+use crate::scalar::ScalarValue;
 use arrow::compute::concat;
 use arrow::{
     array::ArrayRef,
@@ -96,6 +97,19 @@ pub fn create_window_expr(
     })
 }
 
+fn get_scalar_value_from_args(
+    args: &[Arc<dyn PhysicalExpr>],
+    index: usize,
+) -> Option<ScalarValue> {
+    args.get(index).map(|v| {
+        v.as_any()
+            .downcast_ref::<Literal>()
+            .unwrap()
+            .value()
+            .clone()
+    })
+}
+
 fn create_built_in_window_expr(
     fun: &BuiltInWindowFunction,
     args: &[Arc<dyn PhysicalExpr>],
@@ -110,13 +124,21 @@ fn create_built_in_window_expr(
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Arc::new(lag(name, data_type, arg))
+            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)
+                .map(|v| v.try_into())
+                .and_then(|v| v.ok());
+            let default_value = get_scalar_value_from_args(&coerced_args, 2);
+            Arc::new(lag(name, data_type, arg, shift_offset, default_value))
         }
         BuiltInWindowFunction::Lead => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Arc::new(lead(name, data_type, arg))
+            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)
+                .map(|v| v.try_into())
+                .and_then(|v| v.ok());
+            let default_value = get_scalar_value_from_args(&coerced_args, 2);
+            Arc::new(lead(name, data_type, arg, shift_offset, default_value))
         }
         BuiltInWindowFunction::NthValue => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
@@ -590,6 +612,47 @@ mod tests {
 
         let input = Arc::new(csv);
         Ok((input, schema))
+    }
+
+    #[test]
+    fn test_create_window_exp_lead_no_args() -> Result<()> {
+        let (_, schema) = create_test_schema(1)?;
+
+        let expr = create_window_expr(
+            &WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
+            "prev".to_owned(),
+            &[col("c2", &schema)?],
+            &[],
+            &[],
+            Some(WindowFrame::default()),
+            schema.as_ref(),
+        )?;
+
+        assert_eq!(expr.name(), "prev");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_window_exp_lead_with_args() -> Result<()> {
+        let (_, schema) = create_test_schema(1)?;
+
+        let expr = create_window_expr(
+            &WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
+            "prev".to_owned(),
+            &[
+                col("c2", &schema)?,
+                Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+            ],
+            &[],
+            &[],
+            Some(WindowFrame::default()),
+            schema.as_ref(),
+        )?;
+
+        assert_eq!(expr.name(), "prev");
+
+        Ok(())
     }
 
     #[tokio::test]
