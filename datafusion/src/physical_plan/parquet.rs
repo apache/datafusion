@@ -179,8 +179,8 @@ impl ParquetExec {
         let mut fields = Vec::new();
         let mut total_byte_size = 0;
         let mut null_counts = Vec::new();
-        let mut max_values: Vec<MaxAccumulator> = Vec::new();
-        let mut min_values: Vec<MinAccumulator> = Vec::new();
+        let mut max_values: Vec<Option<MaxAccumulator>> = Vec::new();
+        let mut min_values: Vec<Option<MinAccumulator>> = Vec::new();
         let mut limit_exhausted = false;
         for chunk in chunks {
             let mut filenames: Vec<String> =
@@ -201,13 +201,13 @@ impl ParquetExec {
                     max_values = schema
                         .fields()
                         .iter()
-                        .map(|field| MaxAccumulator::try_new(field.data_type()))
-                        .collect::<Result<Vec<_>>>()?;
+                        .map(|field| MaxAccumulator::try_new(field.data_type()).ok())
+                        .collect::<Vec<_>>();
                     min_values = schema
                         .fields()
                         .iter()
-                        .map(|field| MinAccumulator::try_new(field.data_type()))
-                        .collect::<Result<Vec<_>>>()?;
+                        .map(|field| MinAccumulator::try_new(field.data_type()).ok())
+                        .collect::<Vec<_>>();
                     schemas.push(schema);
                 }
 
@@ -231,52 +231,76 @@ impl ParquetExec {
                             match stat {
                                 ParquetStatistics::Boolean(s) => {
                                     if let DataType::Boolean = fields[i].data_type() {
-                                        max_values[i].update(&[ScalarValue::Boolean(
-                                            Some(*s.max()),
-                                        )])?;
-                                        min_values[i].update(&[ScalarValue::Boolean(
-                                            Some(*s.min()),
-                                        )])?;
+                                        if let Some(max_value) = &mut max_values[i] {
+                                            let _ = max_value.update(&[
+                                                ScalarValue::Boolean(Some(*s.max())),
+                                            ]);
+                                        }
+                                        if let Some(min_value) = &mut min_values[i] {
+                                            let _ = min_value.update(&[
+                                                ScalarValue::Boolean(Some(*s.min())),
+                                            ]);
+                                        }
                                     }
                                 }
                                 ParquetStatistics::Int32(s) => {
                                     if let DataType::Int32 = fields[i].data_type() {
-                                        max_values[i].update(&[ScalarValue::Int32(
-                                            Some(*s.max()),
-                                        )])?;
-                                        min_values[i].update(&[ScalarValue::Int32(
-                                            Some(*s.min()),
-                                        )])?;
+                                        if let Some(max_value) = &mut max_values[i] {
+                                            let _ =
+                                                max_value.update(&[ScalarValue::Int32(
+                                                    Some(*s.max()),
+                                                )]);
+                                        }
+                                        if let Some(min_value) = &mut min_values[i] {
+                                            let _ =
+                                                min_value.update(&[ScalarValue::Int32(
+                                                    Some(*s.min()),
+                                                )]);
+                                        }
                                     }
                                 }
                                 ParquetStatistics::Int64(s) => {
                                     if let DataType::Int64 = fields[i].data_type() {
-                                        max_values[i].update(&[ScalarValue::Int64(
-                                            Some(*s.max()),
-                                        )])?;
-                                        min_values[i].update(&[ScalarValue::Int64(
-                                            Some(*s.min()),
-                                        )])?;
+                                        if let Some(max_value) = &mut max_values[i] {
+                                            let _ =
+                                                max_value.update(&[ScalarValue::Int64(
+                                                    Some(*s.max()),
+                                                )]);
+                                        }
+                                        if let Some(min_value) = &mut min_values[i] {
+                                            let _ =
+                                                min_value.update(&[ScalarValue::Int64(
+                                                    Some(*s.min()),
+                                                )]);
+                                        }
                                     }
                                 }
                                 ParquetStatistics::Float(s) => {
                                     if let DataType::Float32 = fields[i].data_type() {
-                                        max_values[i].update(&[ScalarValue::Float32(
-                                            Some(*s.max()),
-                                        )])?;
-                                        min_values[i].update(&[ScalarValue::Float32(
-                                            Some(*s.min()),
-                                        )])?;
+                                        if let Some(max_value) = &mut max_values[i] {
+                                            let _ = max_value.update(&[
+                                                ScalarValue::Float32(Some(*s.max())),
+                                            ]);
+                                        }
+                                        if let Some(min_value) = &mut min_values[i] {
+                                            let _ = min_value.update(&[
+                                                ScalarValue::Float32(Some(*s.min())),
+                                            ]);
+                                        }
                                     }
                                 }
                                 ParquetStatistics::Double(s) => {
                                     if let DataType::Float64 = fields[i].data_type() {
-                                        max_values[i].update(&[ScalarValue::Float64(
-                                            Some(*s.max()),
-                                        )])?;
-                                        min_values[i].update(&[ScalarValue::Float64(
-                                            Some(*s.min()),
-                                        )])?;
+                                        if let Some(max_value) = &mut max_values[i] {
+                                            let _ = max_value.update(&[
+                                                ScalarValue::Float64(Some(*s.max())),
+                                            ]);
+                                        }
+                                        if let Some(min_value) = &mut min_values[i] {
+                                            let _ = min_value.update(&[
+                                                ScalarValue::Float64(Some(*s.min())),
+                                            ]);
+                                        }
                                     }
                                 }
                                 _ => {}
@@ -290,13 +314,22 @@ impl ParquetExec {
                     }
                 }
             }
-
             let column_stats = (0..num_fields)
-                .map(|i| ColumnStatistics {
-                    null_count: Some(null_counts[i] as usize),
-                    max_value: max_values[i].evaluate().ok(),
-                    min_value: min_values[i].evaluate().ok(),
-                    distinct_count: None,
+                .map(|i| {
+                    let max_value = match &max_values[i] {
+                        Some(max_value) => max_value.evaluate().ok(),
+                        None => None,
+                    };
+                    let min_value = match &min_values[i] {
+                        Some(min_value) => min_value.evaluate().ok(),
+                        None => None,
+                    };
+                    ColumnStatistics {
+                        null_count: Some(null_counts[i] as usize),
+                        max_value,
+                        min_value,
+                        distinct_count: None,
+                    }
                 })
                 .collect();
 
@@ -381,15 +414,13 @@ impl ParquetExec {
         let mut max_values = schema
             .fields()
             .iter()
-            .map(|field| MaxAccumulator::try_new(field.data_type()))
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+            .map(|field| MaxAccumulator::try_new(field.data_type()).ok())
+            .collect::<Vec<_>>();
         let mut min_values = schema
             .fields()
             .iter()
-            .map(|field| MinAccumulator::try_new(field.data_type()))
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+            .map(|field| MinAccumulator::try_new(field.data_type()).ok())
+            .collect::<Vec<_>>();
         for part in &partitions {
             if let Some(n) = part.statistics.num_rows {
                 num_rows = Some(num_rows.unwrap_or(0) + n)
@@ -410,10 +441,14 @@ impl ParquetExec {
                 for &i in projection.iter() {
                     null_counts[i] = part_nulls[i].unwrap_or(0);
                     if let Some(part_max_value) = part_max_values[i].clone() {
-                        let _ = max_values[i].update(&[part_max_value]);
+                        if let Some(max_value) = &mut max_values[i] {
+                            let _ = max_value.update(&[part_max_value]);
+                        }
                     }
                     if let Some(part_min_value) = part_min_values[i].clone() {
-                        let _ = min_values[i].update(&[part_min_value]);
+                        if let Some(min_value) = &mut min_values[i] {
+                            let _ = min_value.update(&[part_min_value]);
+                        }
                     }
                 }
             }
@@ -422,11 +457,21 @@ impl ParquetExec {
         let column_stats = if has_statistics {
             Some(
                 (0..schema.fields().len())
-                    .map(|i| ColumnStatistics {
-                        null_count: Some(null_counts[i] as usize),
-                        max_value: max_values[i].evaluate().ok(),
-                        min_value: min_values[i].evaluate().ok(),
-                        distinct_count: None,
+                    .map(|i| {
+                        let max_value = match &max_values[i] {
+                            Some(max_value) => max_value.evaluate().ok(),
+                            None => None,
+                        };
+                        let min_value = match &min_values[i] {
+                            Some(min_value) => min_value.evaluate().ok(),
+                            None => None,
+                        };
+                        ColumnStatistics {
+                            null_count: Some(null_counts[i] as usize),
+                            max_value,
+                            min_value,
+                            distinct_count: None,
+                        }
                     })
                     .collect(),
             )
