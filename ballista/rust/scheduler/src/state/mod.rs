@@ -296,11 +296,13 @@ impl SchedulerState {
                 let unresolved_shuffles = find_unresolved_shuffles(&plan)?;
                 let mut partition_locations: HashMap<
                     usize, // stage id
-                    HashMap<usize, // partition id
-                        Vec<ballista_core::serde::scheduler::PartitionLocation>>,
+                    HashMap<
+                        usize, // partition id
+                        Vec<ballista_core::serde::scheduler::PartitionLocation>,
+                    >,
                 > = HashMap::new();
                 for unresolved_shuffle in unresolved_shuffles {
-                    let stage_id= unresolved_shuffle.query_stage_ids;
+                    let stage_id = unresolved_shuffle.query_stage_ids;
                     for partition_id in 0..unresolved_shuffle.partition_count {
                         let referenced_task = tasks
                             .get(&get_task_status_key(
@@ -322,33 +324,38 @@ impl SchedulerState {
                             },
                         )) = &referenced_task.status
                         {
-                            let locations =
-                                partition_locations.entry(stage_id).or_insert(HashMap::new());
+                            let locations = partition_locations
+                                .entry(stage_id)
+                                .or_insert_with(HashMap::new);
                             let executor_meta = executors
                                 .iter()
                                 .find(|exec| exec.id == *executor_id)
                                 .unwrap()
                                 .clone();
 
-                            let temp = locations.entry(partition_id).or_insert(vec![]);
+                            let temp =
+                                locations.entry(partition_id).or_insert_with(Vec::new);
                             for p in partitions {
                                 let executor_meta = executor_meta.clone();
-                                let partition_location = ballista_core::serde::scheduler::PartitionLocation {
+                                let partition_location =
+                                    ballista_core::serde::scheduler::PartitionLocation {
                                         partition_id:
-                                        ballista_core::serde::scheduler::PartitionId {
-                                            job_id: partition.job_id.clone(),
-                                            stage_id,
-                                            partition_id,
-                                        },
+                                            ballista_core::serde::scheduler::PartitionId {
+                                                job_id: partition.job_id.clone(),
+                                                stage_id,
+                                                partition_id,
+                                            },
                                         executor_meta,
-                                        partition_stats: PartitionStats::new(Some(p.num_rows), Some(p.num_batches), Some(p.num_bytes)),
+                                        partition_stats: PartitionStats::new(
+                                            Some(p.num_rows),
+                                            Some(p.num_batches),
+                                            Some(p.num_bytes),
+                                        ),
                                         path: p.path.clone(),
                                     };
                                 info!(
                                     "Scheduler storing stage {} partition {} path: {}",
-                                    stage_id,
-                                    partition_id,
-                                    partition_location.path
+                                    stage_id, partition_id, partition_location.path
                                 );
                                 temp.push(partition_location);
                             }

@@ -45,6 +45,8 @@ use datafusion::arrow::ipc::writer::FileWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::hash_join::create_hashes;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::Partitioning::RoundRobinBatch;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream, SQLMetric,
 };
@@ -52,8 +54,6 @@ use futures::StreamExt;
 use hashbrown::HashMap;
 use log::{debug, info};
 use uuid::Uuid;
-use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::Partitioning::RoundRobinBatch;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
 /// can be executed as one unit with each partition being executed in parallel. The output of each
@@ -342,54 +342,52 @@ impl ExecutionPlan for ShuffleWriterExec {
 
     async fn execute(
         &self,
-        _input_partition: usize,
+        input_partition: usize,
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-        // let part_loc = self.execute_shuffle(input_partition).await?;
-        //
-        // // build metadata result batch
-        // let num_writers = part_loc.len();
-        // let mut partition_builder = UInt32Builder::new(num_writers);
-        // let mut path_builder = StringBuilder::new(num_writers);
-        // let mut num_rows_builder = UInt64Builder::new(num_writers);
-        // let mut num_batches_builder = UInt64Builder::new(num_writers);
-        // let mut num_bytes_builder = UInt64Builder::new(num_writers);
-        //
-        // for loc in &part_loc {
-        //     path_builder.append_value(loc.path.clone())?;
-        //     partition_builder.append_value(loc.partition_id as u32)?;
-        //     num_rows_builder.append_value(loc.num_rows)?;
-        //     num_batches_builder.append_value(loc.num_batches)?;
-        //     num_bytes_builder.append_value(loc.num_bytes)?;
-        // }
-        //
-        // // build arrays
-        // let partition_num: ArrayRef = Arc::new(partition_builder.finish());
-        // let path: ArrayRef = Arc::new(path_builder.finish());
-        // let field_builders: Vec<Box<dyn ArrayBuilder>> = vec![
-        //     Box::new(num_rows_builder),
-        //     Box::new(num_batches_builder),
-        //     Box::new(num_bytes_builder),
-        // ];
-        // let mut stats_builder = StructBuilder::new(
-        //     PartitionStats::default().arrow_struct_fields(),
-        //     field_builders,
-        // );
-        // for _ in 0..num_writers {
-        //     stats_builder.append(true)?;
-        // }
-        // let stats = Arc::new(stats_builder.finish());
-        //
-        // // build result batch containing metadata
-        // let schema = result_schema();
-        // let batch =
-        //     RecordBatch::try_new(schema.clone(), vec![partition_num, path, stats])
-        //         .map_err(DataFusionError::ArrowError)?;
-        //
-        // debug!("RESULTS METADATA:\n{:?}", batch);
-        //
-        // Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
+        let part_loc = self.execute_shuffle(input_partition).await?;
 
-        unimplemented!()
+        // build metadata result batch
+        let num_writers = part_loc.len();
+        let mut partition_builder = UInt32Builder::new(num_writers);
+        let mut path_builder = StringBuilder::new(num_writers);
+        let mut num_rows_builder = UInt64Builder::new(num_writers);
+        let mut num_batches_builder = UInt64Builder::new(num_writers);
+        let mut num_bytes_builder = UInt64Builder::new(num_writers);
+
+        for loc in &part_loc {
+            path_builder.append_value(loc.path.clone())?;
+            partition_builder.append_value(loc.partition_id as u32)?;
+            num_rows_builder.append_value(loc.num_rows)?;
+            num_batches_builder.append_value(loc.num_batches)?;
+            num_bytes_builder.append_value(loc.num_bytes)?;
+        }
+
+        // build arrays
+        let partition_num: ArrayRef = Arc::new(partition_builder.finish());
+        let path: ArrayRef = Arc::new(path_builder.finish());
+        let field_builders: Vec<Box<dyn ArrayBuilder>> = vec![
+            Box::new(num_rows_builder),
+            Box::new(num_batches_builder),
+            Box::new(num_bytes_builder),
+        ];
+        let mut stats_builder = StructBuilder::new(
+            PartitionStats::default().arrow_struct_fields(),
+            field_builders,
+        );
+        for _ in 0..num_writers {
+            stats_builder.append(true)?;
+        }
+        let stats = Arc::new(stats_builder.finish());
+
+        // build result batch containing metadata
+        let schema = result_schema();
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![partition_num, path, stats])
+                .map_err(DataFusionError::ArrowError)?;
+
+        debug!("RESULTS METADATA:\n{:?}", batch);
+
+        Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
     }
 
     fn metrics(&self) -> HashMap<String, SQLMetric> {
@@ -417,14 +415,14 @@ impl ExecutionPlan for ShuffleWriterExec {
     }
 }
 
-// fn result_schema() -> SchemaRef {
-//     let stats = PartitionStats::default();
-//     Arc::new(Schema::new(vec![
-//         Field::new("partition", DataType::UInt32, false),
-//         Field::new("path", DataType::Utf8, false),
-//         stats.arrow_struct_repr(),
-//     ]))
-// }
+fn result_schema() -> SchemaRef {
+    let stats = PartitionStats::default();
+    Arc::new(Schema::new(vec![
+        Field::new("partition", DataType::UInt32, false),
+        Field::new("path", DataType::Utf8, false),
+        stats.arrow_struct_repr(),
+    ]))
+}
 
 struct ShuffleWriter {
     path: String,
@@ -511,13 +509,13 @@ mod tests {
 
         let file0 = path.value(0);
         assert!(
-            file0.ends_with("/jobOne/1/0/data.arrow")
-                || file0.ends_with("\\jobOne\\1\\0\\data.arrow")
+            file0.ends_with("/jobOne/1/0/data-0.arrow")
+                || file0.ends_with("\\jobOne\\1\\0\\data-0.arrow")
         );
         let file1 = path.value(1);
         assert!(
-            file1.ends_with("/jobOne/1/1/data.arrow")
-                || file1.ends_with("\\jobOne\\1\\1\\data.arrow")
+            file1.ends_with("/jobOne/1/1/data-0.arrow")
+                || file1.ends_with("\\jobOne\\1\\1\\data-0.arrow")
         );
 
         let stats = batch.columns()[2]

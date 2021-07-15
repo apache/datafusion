@@ -51,10 +51,10 @@ impl TryInto<Action> for protobuf::Action {
                 )))
             }
             Some(ActionType::FetchPartition(fetch)) => Ok(Action::FetchPartition {
-                job_id: fetch.job_id.to_string(),
+                job_id: fetch.job_id,
                 stage_id: fetch.stage_id as usize,
                 partition_id: fetch.partition_id as usize,
-                path: fetch.path.to_string(),
+                path: fetch.path,
             }),
             _ => Err(BallistaError::General(
                 "scheduler::from_proto(Action) invalid or missing action".to_owned(),

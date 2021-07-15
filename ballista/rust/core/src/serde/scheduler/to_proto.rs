@@ -40,10 +40,10 @@ impl TryInto<protobuf::Action> for Action {
                 path,
             } => Ok(protobuf::Action {
                 action_type: Some(ActionType::FetchPartition(protobuf::FetchPartition {
-                    job_id: job_id.to_string(),
+                    job_id: job_id,
                     stage_id: stage_id as u32,
                     partition_id: partition_id as u32,
-                    path: path.to_string(),
+                    path: path,
                 })),
                 settings: vec![],
             }),

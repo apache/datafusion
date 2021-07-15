@@ -166,7 +166,8 @@ pub fn remove_unresolved_shuffles(
             child.as_any().downcast_ref::<UnresolvedShuffleExec>()
         {
             let mut relevant_locations = vec![];
-            let p = partition_locations.get(&unresolved_shuffle.query_stage_ids)
+            let p = partition_locations
+                .get(&unresolved_shuffle.query_stage_ids)
                 .ok_or_else(|| {
                     BallistaError::General(
                         "Missing partition location. Could not remove unresolved shuffles"
@@ -182,7 +183,14 @@ pub fn remove_unresolved_shuffles(
                     relevant_locations.push(vec![]);
                 }
             }
-            println!("create shuffle reader with {:?}", relevant_locations.iter().map(|c| format!("{:?}", c)).collect::<Vec<_>>().join("\n"));
+            println!(
+                "create shuffle reader with {:?}",
+                relevant_locations
+                    .iter()
+                    .map(|c| format!("{:?}", c))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
             new_children.push(Arc::new(ShuffleReaderExec::try_new(
                 relevant_locations,
                 unresolved_shuffle.schema().clone(),
@@ -261,7 +269,7 @@ mod test {
 
         /* Expected result:
 
-        ShuffleWriterExec: Some(Hash([Column { name: "l_returnflag", index: 0 }], 4))
+        ShuffleWriterExec: Some(Hash([Column { name: "l_returnflag", index: 0 }], 2))
           HashAggregateExec: mode=Partial, gby=[l_returnflag@1 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
             CsvExec: source=Path(testdata/lineitem: [testdata/lineitem/partition0.tbl,testdata/lineitem/partition1.tbl]), has_header=false
 

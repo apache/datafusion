@@ -488,8 +488,9 @@ impl SchedulerGrpc for SchedulerServer {
 
                     // note that we execute INPUT partitions on the shuffle, which is
                     // different from other operators
-                    let num_partitions =
-                        shuffle_writer.children()[0].output_partitioning().partition_count();
+                    let num_partitions = shuffle_writer.children()[0]
+                        .output_partitioning()
+                        .partition_count();
                     println!("shuffle writer has {} input partitions", num_partitions);
 
                     for partition_id in 0..num_partitions {
