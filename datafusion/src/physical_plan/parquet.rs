@@ -135,7 +135,7 @@ impl ParquetExec {
         let filenames = common::build_file_list(path, ".parquet")?;
         if filenames.is_empty() {
             Err(DataFusionError::Plan(format!(
-                "No Parquet files found at path {}",
+                "No Parquet files (with .parquet extension) found at path {}",
                 path
             )))
         } else {
