@@ -73,6 +73,7 @@ struct RepartitionMetrics {
     repart_nanos: Arc<SQLMetric>,
     /// Time in nanos for sending resulting batches to channels
     send_nanos: Arc<SQLMetric>,
+    input_rows: Arc<SQLMetric>,
 }
 
 impl RepartitionMetrics {
@@ -81,6 +82,7 @@ impl RepartitionMetrics {
             fetch_nanos: SQLMetric::time_nanos(),
             repart_nanos: SQLMetric::time_nanos(),
             send_nanos: SQLMetric::time_nanos(),
+            input_rows: SQLMetric::counter(),
         }
     }
     /// Convert into the external metrics form
@@ -92,6 +94,7 @@ impl RepartitionMetrics {
             self.repart_nanos.as_ref().clone(),
         );
         metrics.insert("sendTime".to_owned(), self.send_nanos.as_ref().clone());
+        metrics.insert("inputRows".to_owned(), self.input_rows.as_ref().clone());
         metrics
     }
 }
@@ -268,6 +271,9 @@ impl RepartitionExec {
                 break;
             }
             let result: ArrowResult<RecordBatch> = result.unwrap();
+            if let Ok(x) = &result {
+                metrics.input_rows.add(x.num_rows());
+            }
 
             match &partitioning {
                 Partitioning::RoundRobinBatch(_) => {

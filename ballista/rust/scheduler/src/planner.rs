@@ -112,7 +112,7 @@ impl DistributedPlanner {
                 None,
             )?;
             let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
-                vec![query_stage.stage_id()],
+                query_stage.stage_id(),
                 query_stage.schema(),
                 query_stage.output_partitioning().partition_count(),
             ));
@@ -131,7 +131,7 @@ impl DistributedPlanner {
                 Some(repart.partitioning().to_owned()),
             )?;
             let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
-                vec![query_stage.stage_id()],
+                query_stage.stage_id(),
                 query_stage.schema(),
                 query_stage.output_partitioning().partition_count(),
             ));
@@ -158,7 +158,7 @@ impl DistributedPlanner {
 
 pub fn remove_unresolved_shuffles(
     stage: &dyn ExecutionPlan,
-    partition_locations: &HashMap<usize, Vec<Vec<PartitionLocation>>>,
+    partition_locations: &HashMap<usize, HashMap<usize, Vec<PartitionLocation>>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
     for child in stage.children() {
@@ -166,19 +166,23 @@ pub fn remove_unresolved_shuffles(
             child.as_any().downcast_ref::<UnresolvedShuffleExec>()
         {
             let mut relevant_locations = vec![];
-            for id in &unresolved_shuffle.query_stage_ids {
-                relevant_locations.append(
-                    &mut partition_locations
-                        .get(id)
-                        .ok_or_else(|| {
-                            BallistaError::General(
-                                "Missing partition location. Could not remove unresolved shuffles"
-                                    .to_owned(),
-                            )
-                        })?
-                        .clone(),
-                );
+            let p = partition_locations.get(&unresolved_shuffle.query_stage_ids)
+                .ok_or_else(|| {
+                    BallistaError::General(
+                        "Missing partition location. Could not remove unresolved shuffles"
+                            .to_owned(),
+                    )
+                })?
+                .clone();
+
+            for i in 0..unresolved_shuffle.partition_count {
+                if let Some(x) = p.get(&i) {
+                    relevant_locations.push(x.to_owned());
+                } else {
+                    relevant_locations.push(vec![]);
+                }
             }
+            println!("create shuffle reader with {:?}", relevant_locations.iter().map(|c| format!("{:?}", c)).collect::<Vec<_>>().join("\n"));
             new_children.push(Arc::new(ShuffleReaderExec::try_new(
                 relevant_locations,
                 unresolved_shuffle.schema().clone(),
@@ -257,7 +261,7 @@ mod test {
 
         /* Expected result:
 
-        ShuffleWriterExec: Some(Hash([Column { name: "l_returnflag", index: 0 }], 2))
+        ShuffleWriterExec: Some(Hash([Column { name: "l_returnflag", index: 0 }], 4))
           HashAggregateExec: mode=Partial, gby=[l_returnflag@1 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
             CsvExec: source=Path(testdata/lineitem: [testdata/lineitem/partition0.tbl,testdata/lineitem/partition1.tbl]), has_header=false
 
@@ -291,7 +295,8 @@ mod test {
         let unresolved_shuffle = coalesce.children()[0].clone();
         let unresolved_shuffle =
             downcast_exec!(unresolved_shuffle, UnresolvedShuffleExec);
-        assert_eq!(unresolved_shuffle.query_stage_ids, vec![1]);
+        assert_eq!(unresolved_shuffle.query_stage_ids, 1);
+        assert_eq!(unresolved_shuffle.partition_count, 2);
 
         // verify stage 2
         let stage2 = stages[2].children()[0].clone();
@@ -302,7 +307,8 @@ mod test {
         let unresolved_shuffle = coalesce_partitions.children()[0].clone();
         let unresolved_shuffle =
             downcast_exec!(unresolved_shuffle, UnresolvedShuffleExec);
-        assert_eq!(unresolved_shuffle.query_stage_ids, vec![2]);
+        assert_eq!(unresolved_shuffle.query_stage_ids, 2);
+        assert_eq!(unresolved_shuffle.partition_count, 1);
 
         Ok(())
     }

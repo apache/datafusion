@@ -209,13 +209,13 @@ fn build_exec_plan_diagram(
     for child in plan.children() {
         if let Some(shuffle) = child.as_any().downcast_ref::<UnresolvedShuffleExec>() {
             if !draw_entity {
-                for y in &shuffle.query_stage_ids {
+                //for y in &shuffle.query_stage_ids {
                     writeln!(
                         w,
                         "\tstage_{}_exec_1 -> stage_{}_exec_{};",
-                        y, stage_id, node_id
+                        shuffle.query_stage_ids, stage_id, node_id
                     )?;
-                }
+                //}
             }
         } else {
             // relationships within same entity

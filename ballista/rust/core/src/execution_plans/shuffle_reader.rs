@@ -58,14 +58,6 @@ impl ShuffleReaderExec {
         partition: Vec<Vec<PartitionLocation>>,
         schema: SchemaRef,
     ) -> Result<Self> {
-        for a in &partition {
-            for b in a {
-                if b.partition_id.path.is_empty() {
-                    return Err(DataFusionError::Internal("Missing path".to_string()));
-                }
-            }
-        }
-
         Ok(Self {
             partition,
             schema,
@@ -105,7 +97,11 @@ impl ExecutionPlan for ShuffleReaderExec {
         &self,
         partition: usize,
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-        info!("ShuffleReaderExec::execute({})", partition);
+        info!(
+            "ShuffleReaderExec::execute({}) fetching {} shuffle partitions",
+            partition,
+            self.partition.len()
+        );
 
         let start = Instant::now();
         let partition_locations = &self.partition[partition];
@@ -141,7 +137,7 @@ impl ExecutionPlan for ShuffleReaderExec {
                                     l.partition_id.job_id,
                                     l.partition_id.stage_id,
                                     l.partition_id.partition_id,
-                                    l.partition_id.path,
+                                    l.path,
                                     l.partition_stats
                                 )
                             })
@@ -168,11 +164,11 @@ async fn fetch_partition(
     let metadata = &location.executor_meta;
     let partition_id = &location.partition_id;
 
-    if partition_id.path.is_empty() {
-        return Err(DataFusionError::Internal(
-            "Can fetch partition without path".to_string(),
-        ));
-    }
+    // if partition_id.path.is_empty() {
+    //     return Err(DataFusionError::Internal(
+    //         "Can fetch partition without path".to_string(),
+    //     ));
+    // }
 
     let mut ballista_client =
         BallistaClient::try_new(metadata.host.as_str(), metadata.port as u16)
@@ -183,7 +179,7 @@ async fn fetch_partition(
             &partition_id.job_id,
             partition_id.stage_id as usize,
             partition_id.partition_id as usize,
-            &partition_id.path,
+            &location.path,
         )
         .await
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)

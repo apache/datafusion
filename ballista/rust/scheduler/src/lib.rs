@@ -485,15 +485,19 @@ impl SchedulerGrpc for SchedulerServer {
                             error!("{}", msg);
                             tonic::Status::internal(msg)
                         }));
+
+                    // note that we execute INPUT partitions on the shuffle, which is
+                    // different from other operators
                     let num_partitions =
-                        shuffle_writer.output_partitioning().partition_count();
+                        shuffle_writer.children()[0].output_partitioning().partition_count();
+                    println!("shuffle writer has {} input partitions", num_partitions);
+
                     for partition_id in 0..num_partitions {
                         let pending_status = TaskStatus {
                             partition_id: Some(PartitionId {
                                 job_id: job_id_spawn.clone(),
                                 stage_id: shuffle_writer.stage_id() as u32,
                                 partition_id: partition_id as u32,
-                                path: "tbd".to_owned(),
                             }),
                             status: None,
                         };

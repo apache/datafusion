@@ -542,7 +542,7 @@ message PhysicalNegativeNode {
 }
 
 message UnresolvedShuffleExecNode {
-  repeated uint32 query_stage_ids = 1;
+  uint32 query_stage_ids = 1;
   Schema schema = 2;
   uint32 partition_count = 3;
 }
@@ -706,7 +706,7 @@ message Action {
     ExecutePartition execute_partition = 2;
 
     // Fetch a partition from an executor
-    PartitionId fetch_partition = 3;
+    FetchPartition fetch_partition = 3;
   }
 
   // configuration settings
@@ -722,11 +722,19 @@ message ExecutePartition {
   repeated PartitionLocation partition_location = 5;
 }
 
+message FetchPartition {
+  string job_id = 1;
+  uint32 stage_id = 2;
+  uint32 partition_id = 3;
+  string path = 4;
+}
+
 // Mapping from partition id to executor id
 message PartitionLocation {
   PartitionId partition_id = 1;
   ExecutorMetadata executor_meta = 2;
   PartitionStats partition_stats = 3;
+  string path = 4;
 }
 
 // Unique identifier for a materialized partition of data
@@ -734,7 +742,7 @@ message PartitionId {
   string job_id = 1;
   uint32 stage_id = 2;
   uint32 partition_id = 4;
-  string path = 5;
+//  string path = 5;
 }
 
 message PartitionStats {

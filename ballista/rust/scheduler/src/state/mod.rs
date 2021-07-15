@@ -295,66 +295,65 @@ impl SchedulerState {
                 // Let's try to resolve any unresolved shuffles we find
                 let unresolved_shuffles = find_unresolved_shuffles(&plan)?;
                 let mut partition_locations: HashMap<
-                    usize,
-                    Vec<Vec<ballista_core::serde::scheduler::PartitionLocation>>,
+                    usize, // stage id
+                    HashMap<usize, // partition id
+                        Vec<ballista_core::serde::scheduler::PartitionLocation>>,
                 > = HashMap::new();
                 for unresolved_shuffle in unresolved_shuffles {
-                    for stage_id in unresolved_shuffle.query_stage_ids {
-                        for partition_id in 0..unresolved_shuffle.partition_count {
-                            let referenced_task = tasks
-                                .get(&get_task_status_key(
-                                    &self.namespace,
-                                    &partition.job_id,
+                    let stage_id= unresolved_shuffle.query_stage_ids;
+                    for partition_id in 0..unresolved_shuffle.partition_count {
+                        let referenced_task = tasks
+                            .get(&get_task_status_key(
+                                &self.namespace,
+                                &partition.job_id,
+                                stage_id,
+                                partition_id,
+                            ))
+                            .unwrap();
+                        let task_is_dead = self
+                            .reschedule_dead_task(&referenced_task, &executors)
+                            .await?;
+                        if task_is_dead {
+                            continue 'tasks;
+                        } else if let Some(task_status::Status::Completed(
+                            CompletedTask {
+                                executor_id,
+                                partitions,
+                            },
+                        )) = &referenced_task.status
+                        {
+                            let locations =
+                                partition_locations.entry(stage_id).or_insert(HashMap::new());
+                            let executor_meta = executors
+                                .iter()
+                                .find(|exec| exec.id == *executor_id)
+                                .unwrap()
+                                .clone();
+
+                            let temp = locations.entry(partition_id).or_insert(vec![]);
+                            for p in partitions {
+                                let executor_meta = executor_meta.clone();
+                                let partition_location = ballista_core::serde::scheduler::PartitionLocation {
+                                        partition_id:
+                                        ballista_core::serde::scheduler::PartitionId {
+                                            job_id: partition.job_id.clone(),
+                                            stage_id,
+                                            partition_id,
+                                        },
+                                        executor_meta,
+                                        partition_stats: PartitionStats::new(Some(p.num_rows), Some(p.num_batches), Some(p.num_bytes)),
+                                        path: p.path.clone(),
+                                    };
+                                info!(
+                                    "Scheduler storing stage {} partition {} path: {}",
                                     stage_id,
                                     partition_id,
-                                ))
-                                .unwrap();
-                            let task_is_dead = self
-                                .reschedule_dead_task(&referenced_task, &executors)
-                                .await?;
-                            if task_is_dead {
-                                continue 'tasks;
-                            } else if let Some(task_status::Status::Completed(
-                                CompletedTask {
-                                    executor_id,
-                                    partitions,
-                                },
-                            )) = &referenced_task.status
-                            {
-                                let empty = vec![];
-                                let locations =
-                                    partition_locations.entry(stage_id).or_insert(empty);
-                                let executor_meta = executors
-                                    .iter()
-                                    .find(|exec| exec.id == *executor_id)
-                                    .unwrap()
-                                    .clone();
-
-                                //TODO review this
-                                for p in partitions {
-                                    let executor_meta = executor_meta.clone();
-                                    if p.partition_id as usize == partition_id {
-                                        let partition_location = ballista_core::serde::scheduler::PartitionLocation {
-                                            partition_id:
-                                            ballista_core::serde::scheduler::PartitionId {
-                                                job_id: partition.job_id.clone(),
-                                                stage_id,
-                                                partition_id,
-                                                path: p.path.clone(),
-                                            },
-                                            executor_meta,
-                                            partition_stats: PartitionStats::new(Some(p.num_rows), Some(p.num_batches), Some(p.num_bytes)),
-                                        };
-                                        println!(
-                                            "Scheduler storing partition location: {:?}",
-                                            partition_location
-                                        );
-                                        locations.push(vec![partition_location]);
-                                    }
-                                }
-                            } else {
-                                continue 'tasks;
+                                    partition_location.path
+                                );
+                                temp.push(partition_location);
                             }
+                        } else {
+                            continue 'tasks;
                         }
                     }
                 }
@@ -476,14 +475,12 @@ impl SchedulerState {
                 let mut partition_location = vec![];
                 for (status, executor_id, partitions) in info {
                     for shuffle_write_partition in partitions {
-                        let status = status.clone();
-                        let x = status.partition_id.as_ref().unwrap(); //TODO unwrap
+                        let partition_id = status.partition_id.as_ref().unwrap(); //TODO unwrap
                         partition_location.push(protobuf::PartitionLocation {
                             partition_id: Some(protobuf::PartitionId {
-                                job_id: x.job_id.clone(),
-                                stage_id: x.stage_id,
-                                partition_id: x.partition_id,
-                                path: shuffle_write_partition.path.clone(), // we can't use path from status.partition_id
+                                job_id: partition_id.job_id.clone(),
+                                stage_id: partition_id.stage_id,
+                                partition_id: partition_id.partition_id,
                             }),
                             executor_meta: executors
                                 .get(executor_id)
@@ -494,6 +491,7 @@ impl SchedulerState {
                                 num_bytes: shuffle_write_partition.num_bytes as i64,
                                 column_stats: vec![],
                             }),
+                            path: shuffle_write_partition.path.clone(),
                         });
                     }
                 }
@@ -707,7 +705,6 @@ mod test {
                 job_id: "job".to_owned(),
                 stage_id: 1,
                 partition_id: 2,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -734,7 +731,6 @@ mod test {
                 job_id: "job".to_owned(),
                 stage_id: 1,
                 partition_id: 2,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -780,7 +776,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 0,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -792,7 +787,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 1,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -822,7 +816,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 0,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -832,7 +825,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 1,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -862,7 +854,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 0,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -875,7 +866,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 1,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -908,7 +898,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 0,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -921,7 +910,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 1,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -954,7 +942,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 0,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -966,7 +953,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 1,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;
@@ -976,7 +962,6 @@ mod test {
                 job_id: job_id.to_owned(),
                 stage_id: 0,
                 partition_id: 2,
-                path: "".to_owned(),
             }),
         };
         state.save_task_status(&meta).await?;

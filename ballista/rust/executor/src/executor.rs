@@ -53,7 +53,7 @@ impl Executor {
         shuffle_output_partitioning: Option<Partitioning>,
     ) -> Result<Vec<ShuffleWritePartition>, BallistaError> {
         let exec = ShuffleWriterExec::try_new(
-            job_id,
+            job_id.clone(),
             stage_id,
             plan,
             self.work_dir.clone(),
@@ -62,7 +62,9 @@ impl Executor {
         let partitions = exec.execute_shuffle(part).await?;
 
         println!(
-            "=== Physical plan with metrics ===\n{}\n",
+            "=== Job {} stage {} physical plan with metrics ===\n{}\n",
+            job_id,
+            stage_id,
             DisplayableExecutionPlan::with_metrics(&exec)
                 .indent()
                 .to_string()

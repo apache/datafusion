@@ -52,6 +52,8 @@ use futures::StreamExt;
 use hashbrown::HashMap;
 use log::{debug, info};
 use uuid::Uuid;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::Partitioning::RoundRobinBatch;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
 /// can be executed as one unit with each partition being executed in parallel. The output of each
@@ -77,12 +79,16 @@ pub struct ShuffleWriterExec {
 struct ShuffleWriteMetrics {
     /// Time spend writing batches to shuffle files
     write_time: Arc<SQLMetric>,
+    input_rows: Arc<SQLMetric>,
+    output_rows: Arc<SQLMetric>,
 }
 
 impl ShuffleWriteMetrics {
     fn new() -> Self {
         Self {
             write_time: SQLMetric::time_nanos(),
+            input_rows: SQLMetric::counter(),
+            output_rows: SQLMetric::counter(),
         }
     }
 }
@@ -173,8 +179,12 @@ impl ShuffleWriterExec {
 
                 let hashes_buf = &mut vec![];
                 let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+
                 while let Some(result) = stream.next().await {
                     let input_batch = result?;
+
+                    self.metrics.input_rows.add(input_batch.num_rows());
+
                     let arrays = exprs
                         .iter()
                         .map(|expr| {
@@ -234,6 +244,7 @@ impl ShuffleWriterExec {
                                 writers[output_partition] = Some(writer);
                             }
                         }
+                        self.metrics.output_rows.add(output_batch.num_rows());
                         self.metrics.write_time.add_elapsed(start);
                         //}
                     }
@@ -245,7 +256,7 @@ impl ShuffleWriterExec {
                     match w {
                         Some(w) => {
                             w.finish()?;
-                            println!(
+                            info!(
                                 "Finished writing {}. Batches: {}. Rows: {}. Bytes: {}.",
                                 w.path(),
                                 w.num_batches,
@@ -331,56 +342,60 @@ impl ExecutionPlan for ShuffleWriterExec {
 
     async fn execute(
         &self,
-        input_partition: usize,
+        _input_partition: usize,
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-        let part_loc = self.execute_shuffle(input_partition).await?;
+        // let part_loc = self.execute_shuffle(input_partition).await?;
+        //
+        // // build metadata result batch
+        // let num_writers = part_loc.len();
+        // let mut partition_builder = UInt32Builder::new(num_writers);
+        // let mut path_builder = StringBuilder::new(num_writers);
+        // let mut num_rows_builder = UInt64Builder::new(num_writers);
+        // let mut num_batches_builder = UInt64Builder::new(num_writers);
+        // let mut num_bytes_builder = UInt64Builder::new(num_writers);
+        //
+        // for loc in &part_loc {
+        //     path_builder.append_value(loc.path.clone())?;
+        //     partition_builder.append_value(loc.partition_id as u32)?;
+        //     num_rows_builder.append_value(loc.num_rows)?;
+        //     num_batches_builder.append_value(loc.num_batches)?;
+        //     num_bytes_builder.append_value(loc.num_bytes)?;
+        // }
+        //
+        // // build arrays
+        // let partition_num: ArrayRef = Arc::new(partition_builder.finish());
+        // let path: ArrayRef = Arc::new(path_builder.finish());
+        // let field_builders: Vec<Box<dyn ArrayBuilder>> = vec![
+        //     Box::new(num_rows_builder),
+        //     Box::new(num_batches_builder),
+        //     Box::new(num_bytes_builder),
+        // ];
+        // let mut stats_builder = StructBuilder::new(
+        //     PartitionStats::default().arrow_struct_fields(),
+        //     field_builders,
+        // );
+        // for _ in 0..num_writers {
+        //     stats_builder.append(true)?;
+        // }
+        // let stats = Arc::new(stats_builder.finish());
+        //
+        // // build result batch containing metadata
+        // let schema = result_schema();
+        // let batch =
+        //     RecordBatch::try_new(schema.clone(), vec![partition_num, path, stats])
+        //         .map_err(DataFusionError::ArrowError)?;
+        //
+        // debug!("RESULTS METADATA:\n{:?}", batch);
+        //
+        // Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
 
-        // build metadata result batch
-        let num_writers = part_loc.len();
-        let mut partition_builder = UInt32Builder::new(num_writers);
-        let mut path_builder = StringBuilder::new(num_writers);
-        let mut num_rows_builder = UInt64Builder::new(num_writers);
-        let mut num_batches_builder = UInt64Builder::new(num_writers);
-        let mut num_bytes_builder = UInt64Builder::new(num_writers);
-
-        for loc in &part_loc {
-            path_builder.append_value(loc.path.clone())?;
-            partition_builder.append_value(loc.partition_id as u32)?;
-            num_rows_builder.append_value(loc.num_rows)?;
-            num_batches_builder.append_value(loc.num_batches)?;
-            num_bytes_builder.append_value(loc.num_bytes)?;
-        }
-
-        // build arrays
-        let partition_num: ArrayRef = Arc::new(partition_builder.finish());
-        let path: ArrayRef = Arc::new(path_builder.finish());
-        let field_builders: Vec<Box<dyn ArrayBuilder>> = vec![
-            Box::new(num_rows_builder),
-            Box::new(num_batches_builder),
-            Box::new(num_bytes_builder),
-        ];
-        let mut stats_builder = StructBuilder::new(
-            PartitionStats::default().arrow_struct_fields(),
-            field_builders,
-        );
-        for _ in 0..num_writers {
-            stats_builder.append(true)?;
-        }
-        let stats = Arc::new(stats_builder.finish());
-
-        // build result batch containing metadata
-        let schema = result_schema();
-        let batch =
-            RecordBatch::try_new(schema.clone(), vec![partition_num, path, stats])
-                .map_err(DataFusionError::ArrowError)?;
-
-        debug!("RESULTS METADATA:\n{:?}", batch);
-
-        Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
+        unimplemented!()
     }
 
     fn metrics(&self) -> HashMap<String, SQLMetric> {
         let mut metrics = HashMap::new();
+        metrics.insert("inputRows".to_owned(), (*self.metrics.input_rows).clone());
+        metrics.insert("outputRows".to_owned(), (*self.metrics.output_rows).clone());
         metrics.insert("writeTime".to_owned(), (*self.metrics.write_time).clone());
         metrics
     }
@@ -402,14 +417,14 @@ impl ExecutionPlan for ShuffleWriterExec {
     }
 }
 
-fn result_schema() -> SchemaRef {
-    let stats = PartitionStats::default();
-    Arc::new(Schema::new(vec![
-        Field::new("partition", DataType::UInt32, false),
-        Field::new("path", DataType::Utf8, false),
-        stats.arrow_struct_repr(),
-    ]))
-}
+// fn result_schema() -> SchemaRef {
+//     let stats = PartitionStats::default();
+//     Arc::new(Schema::new(vec![
+//         Field::new("partition", DataType::UInt32, false),
+//         Field::new("path", DataType::Utf8, false),
+//         stats.arrow_struct_repr(),
+//     ]))
+// }
 
 struct ShuffleWriter {
     path: String,

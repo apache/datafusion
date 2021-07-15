@@ -26,7 +26,7 @@ pub const TPCH_TABLES: &[&str] = &[
 ];
 
 pub fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
-    let default_shuffle_partitions = 2;
+    let default_shuffle_partitions = 4;
     let config = ExecutionConfig::new().with_concurrency(default_shuffle_partitions);
     let mut ctx = ExecutionContext::with_config(config);
     for table in TPCH_TABLES {

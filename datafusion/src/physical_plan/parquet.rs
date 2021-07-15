@@ -501,9 +501,10 @@ impl ExecutionPlan for ParquetExec {
 
                 write!(
                     f,
-                    "ParquetExec: batch_size={}, limit={:?}, partitions=[{}]",
+                    "ParquetExec: batch_size={}, limit={:?}, partitions({})=[{}]",
                     self.batch_size,
                     self.limit,
+                    self.partitions.len(),
                     files.join(", ")
                 )
             }

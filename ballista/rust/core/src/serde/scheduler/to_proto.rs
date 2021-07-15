@@ -33,8 +33,18 @@ impl TryInto<protobuf::Action> for Action {
                 action_type: Some(ActionType::ExecutePartition(partition.try_into()?)),
                 settings: vec![],
             }),
-            Action::FetchPartition(partition_id) => Ok(protobuf::Action {
-                action_type: Some(ActionType::FetchPartition(partition_id.into())),
+            Action::FetchPartition {
+                job_id,
+                stage_id,
+                partition_id,
+                path,
+            } => Ok(protobuf::Action {
+                action_type: Some(ActionType::FetchPartition(protobuf::FetchPartition {
+                    job_id: job_id.to_string(),
+                    stage_id: stage_id as u32,
+                    partition_id: partition_id as u32,
+                    path: path.to_string(),
+                })),
                 settings: vec![],
             }),
         }
@@ -62,7 +72,6 @@ impl Into<protobuf::PartitionId> for PartitionId {
             job_id: self.job_id,
             stage_id: self.stage_id as u32,
             partition_id: self.partition_id as u32,
-            path: self.path,
         }
     }
 }
@@ -75,6 +84,7 @@ impl TryInto<protobuf::PartitionLocation> for PartitionLocation {
             partition_id: Some(self.partition_id.into()),
             executor_meta: Some(self.executor_meta.into()),
             partition_stats: Some(self.partition_stats.into()),
+            path: self.path.to_string(),
         })
     }
 }

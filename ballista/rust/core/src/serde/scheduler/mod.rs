@@ -38,7 +38,12 @@ pub enum Action {
     /// Execute a query and store the results in memory
     ExecutePartition(ExecutePartition),
     /// Collect a shuffle partition
-    FetchPartition(PartitionId),
+    FetchPartition {
+        job_id: String,
+        stage_id: usize,
+        partition_id: usize,
+        path: String,
+    },
 }
 
 /// Unique identifier for the output partition of an operator.
@@ -46,18 +51,15 @@ pub enum Action {
 pub struct PartitionId {
     pub job_id: String,
     pub stage_id: usize,
-    /// Output partition
     pub partition_id: usize,
-    pub path: String,
 }
 
 impl PartitionId {
-    pub fn new(job_id: &str, stage_id: usize, partition_id: usize, path: &str) -> Self {
+    pub fn new(job_id: &str, stage_id: usize, partition_id: usize) -> Self {
         Self {
             job_id: job_id.to_string(),
             stage_id,
             partition_id,
-            path: path.to_owned(),
         }
     }
 }
@@ -67,6 +69,7 @@ pub struct PartitionLocation {
     pub partition_id: PartitionId,
     pub executor_meta: ExecutorMeta,
     pub partition_stats: PartitionStats,
+    pub path: String,
 }
 
 /// Meta-data for an executor, used when fetching shuffle partitions from other executors
