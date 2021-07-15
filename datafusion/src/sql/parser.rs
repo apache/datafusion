@@ -25,6 +25,7 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
+use std::str::FromStr;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -42,6 +43,22 @@ pub enum FileType {
     Parquet,
     /// Comma separated values
     CSV,
+}
+
+impl FromStr for FileType {
+    type Err = ParserError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "PARQUET" => Ok(Self::Parquet),
+            "NDJSON" => Ok(Self::NdJson),
+            "CSV" => Ok(Self::CSV),
+            other => Err(ParserError::ParserError(format!(
+                "expect one of PARQUET, NDJSON, or CSV, found: {}",
+                other
+            ))),
+        }
+    }
 }
 
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
@@ -268,12 +285,7 @@ impl<'a> DFParser<'a> {
     /// Parses the set of valid formats
     fn parse_file_format(&mut self) -> Result<FileType, ParserError> {
         match self.parser.next_token() {
-            Token::Word(w) => match &*w.value {
-                "PARQUET" => Ok(FileType::Parquet),
-                "NDJSON" => Ok(FileType::NdJson),
-                "CSV" => Ok(FileType::CSV),
-                _ => self.expected("one of PARQUET, NDJSON, or CSV", Token::Word(w)),
-            },
+            Token::Word(w) => w.value.parse(),
             unexpected => self.expected("one of PARQUET, NDJSON, or CSV", unexpected),
         }
     }
@@ -367,13 +379,21 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
+        // positive case: it is ok for parquet files to be other than upper case
+        let sql = "CREATE EXTERNAL TABLE t STORED AS parqueT LOCATION 'foo.parquet'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![],
+            file_type: FileType::Parquet,
+            has_header: false,
+            location: "foo.parquet".into(),
+        });
+        expect_parse_ok(sql, expected)?;
+
         // Error cases: Invalid type
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS UNKNOWN_TYPE LOCATION 'foo.csv'";
-        expect_parse_error(
-            sql,
-            "Expected one of PARQUET, NDJSON, or CSV, found: UNKNOWN_TYPE",
-        );
+        expect_parse_error(sql, "expect one of PARQUET, NDJSON, or CSV");
 
         Ok(())
     }
