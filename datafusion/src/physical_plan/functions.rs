@@ -468,7 +468,18 @@ pub fn return_type(
         | BuiltinScalarFunction::Sin
         | BuiltinScalarFunction::Sqrt
         | BuiltinScalarFunction::Tan
-        | BuiltinScalarFunction::Trunc => Ok(DataType::Float64),
+        | BuiltinScalarFunction::Trunc => {
+            if arg_types.is_empty() {
+                return Err(DataFusionError::Internal(format!(
+                    "builtin scalar function {} does not support empty arguments",
+                    fun
+                )));
+            }
+            match arg_types[0] {
+                DataType::Float32 => Ok(DataType::Float32),
+                _ => Ok(DataType::Float64),
+            }
+        }
     }
 }
 
@@ -1427,8 +1438,8 @@ mod tests {
     };
     use arrow::{
         array::{
-            Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float64Array,
-            Int32Array, StringArray, UInt32Array, UInt64Array,
+            Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float32Array,
+            Float64Array, Int32Array, StringArray, UInt32Array, UInt64Array,
         },
         datatypes::Field,
         record_batch::RecordBatch,
@@ -1857,10 +1868,10 @@ mod tests {
         test_function!(
             Exp,
             &[lit(ScalarValue::Float32(Some(1.0)))],
-            Ok(Some((1.0_f32).exp() as f64)),
-            f64,
-            Float64,
-            Float64Array
+            Ok(Some((1.0_f32).exp())),
+            f32,
+            Float32,
+            Float32Array
         );
         test_function!(
             InitCap,
