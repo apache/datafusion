@@ -391,11 +391,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Unresolved(
                     protobuf::UnresolvedShuffleExecNode {
-                        query_stage_ids: exec
-                            .query_stage_ids
-                            .iter()
-                            .map(|id| *id as u32)
-                            .collect(),
+                        stage_id: exec.stage_id as u32,
                         schema: Some(exec.schema().as_ref().into()),
                         partition_count: exec.partition_count as u32,
                     },

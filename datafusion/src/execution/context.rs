@@ -916,9 +916,10 @@ mod tests {
         physical_plan::expressions::AvgAccumulator,
     };
     use arrow::array::{
-        Array, ArrayRef, BinaryArray, DictionaryArray, Float64Array, Int32Array,
-        Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
-        TimestampNanosecondArray,
+        Array, ArrayRef, BinaryArray, DictionaryArray, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+        LargeStringArray, StringArray, TimestampNanosecondArray, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::compute::add;
     use arrow::datatypes::*;
@@ -2362,6 +2363,75 @@ mod tests {
             .await
             .unwrap();
         assert_batches_sorted_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn case_builtin_math_expression() {
+        let mut ctx = ExecutionContext::new();
+
+        let type_values = vec![
+            (
+                DataType::Int8,
+                Arc::new(Int8Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Int16,
+                Arc::new(Int16Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Int32,
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Int64,
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt8,
+                Arc::new(UInt8Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt16,
+                Arc::new(UInt16Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt32,
+                Arc::new(UInt32Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt64,
+                Arc::new(UInt64Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Float32,
+                Arc::new(Float32Array::from(vec![1.0_f32])) as ArrayRef,
+            ),
+            (
+                DataType::Float64,
+                Arc::new(Float64Array::from(vec![1.0_f64])) as ArrayRef,
+            ),
+        ];
+
+        for (data_type, array) in type_values.iter() {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("v", data_type.clone(), false)]));
+            let batch =
+                RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
+            let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+            ctx.register_table("t", Arc::new(provider)).unwrap();
+            let expected = vec![
+                "+---------+",
+                "| sqrt(v) |",
+                "+---------+",
+                "| 1       |",
+                "+---------+",
+            ];
+            let results = plan_and_collect(&mut ctx, "SELECT sqrt(v) FROM t")
+                .await
+                .unwrap();
+
+            assert_batches_sorted_eq!(expected, &results);
+        }
     }
 
     #[tokio::test]
