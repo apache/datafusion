@@ -21,7 +21,7 @@
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
-    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
+    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, Expr, LogicalPlan,
     LogicalPlanBuilder, ToDFSchema,
 };
 use crate::optimizer::optimizer::OptimizerRule;
@@ -45,6 +45,8 @@ impl OptimizerRule for ProjectionPushDown {
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
+        println!("before optimize: {:?}", plan);
+
         // set of all columns refered by the plan (and thus considered required by the root)
         let required_columns = plan
             .schema()
@@ -52,7 +54,10 @@ impl OptimizerRule for ProjectionPushDown {
             .iter()
             .map(|f| f.qualified_column())
             .collect::<HashSet<Column>>();
-        optimize_plan(self, plan, &required_columns, false, execution_props)
+        let optimized =
+            optimize_plan(self, plan, &required_columns, false, execution_props)?;
+        println!("after optimize: {:?}", optimized);
+        Ok(optimized)
     }
 
     fn name(&self) -> &str {
@@ -173,7 +178,26 @@ fn optimize_plan(
                 true,
                 execution_props,
             )?;
-            if new_fields.is_empty() {
+
+            let new_required_columns_optimized = new_input
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.qualified_column())
+                .collect::<HashSet<Column>>();
+
+            println!("a:\t{:?}", required_columns);
+            println!("b:\t{:?}", new_required_columns);
+            println!("c:\t{:?}", new_required_columns_optimized);
+
+            let is_all_column_expr =
+                expr.iter().all(|expr| matches!(expr, Expr::Column(_)));
+            println!("d: {}", is_all_column_expr);
+
+            if new_fields.is_empty()
+                || (new_required_columns_optimized.is_subset(required_columns)
+                    && is_all_column_expr)
+            {
                 // no need for an expression at all
                 Ok(new_input)
             } else {
@@ -497,6 +521,20 @@ mod tests {
     }
 
     #[test]
+    fn redundunt_project() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .project(vec![col("a"), col("c"), col("b")])?
+            .build()?;
+
+        assert_optimized_plan_eq(&plan, "TableScan: test projection=Some([0, 1, 2])");
+
+        Ok(())
+    }
+
+    #[test]
     fn join_schema_trim_full_join_column_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
 
@@ -644,8 +682,7 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 
-        let expected = "Projection: #test.a, #test.b\
-        \n  TableScan: test projection=Some([0, 1])";
+        let expected = "TableScan: test projection=Some([0, 1])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -695,8 +732,7 @@ mod tests {
         assert_fields_eq(&plan, vec!["c", "a"]);
 
         let expected = "Limit: 5\
-        \n  Projection: #test.c, #test.a\
-        \n    TableScan: test projection=Some([0, 2])";
+        \n  TableScan: test projection=Some([0, 2])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -744,8 +780,7 @@ mod tests {
         let expected = "\
         Aggregate: groupBy=[[#test.c]], aggr=[[MAX(#test.a)]]\
         \n  Filter: #test.c Gt Int32(1)\
-        \n    Projection: #test.c, #test.a\
-        \n      TableScan: test projection=Some([0, 2])";
+        \n    TableScan: test projection=Some([0, 2])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -812,11 +847,9 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["c", "a", "MAX(test.b)"]);
 
-        let expected = "\
-        Projection: #test.c, #test.a, #MAX(test.b)\
-        \n  Filter: #test.c Gt Int32(1)\
-        \n    Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b)]]\
-        \n      TableScan: test projection=Some([0, 1, 2])";
+        let expected = "Filter: #test.c Gt Int32(1)\
+        \n  Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b)]]\
+        \n    TableScan: test projection=Some([0, 1, 2])";
 
         assert_optimized_plan_eq(&plan, expected);
 
