@@ -234,8 +234,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.sql_statement_to_plan(statement)?;
 
         let stringified_plans = vec![StringifiedPlan::new(
-            PlanType::LogicalPlan,
-            format!("{:#?}", plan),
+            PlanType::InitialLogicalPlan,
+            plan.display_indent().to_string(),
         )];
 
         let schema = LogicalPlan::explain_schema();

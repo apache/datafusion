@@ -240,8 +240,13 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
         logical_plan: &LogicalPlan,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = self.create_initial_plan(logical_plan, ctx_state)?;
-        self.optimize_plan(plan, ctx_state)
+        match self.handle_explain(logical_plan, ctx_state)? {
+            Some(plan) => Ok(plan),
+            None => {
+                let plan = self.create_initial_plan(logical_plan, ctx_state)?;
+                self.optimize_plan(plan, ctx_state)
+            }
+        }
     }
 
     /// Create a physical expression from a logical expression
@@ -280,7 +285,7 @@ impl DefaultPhysicalPlanner {
         Self { extension_planners }
     }
 
-    /// Optimize a physical plan
+    /// Optimize a physical plan by applying each physical optimizer
     fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -749,32 +754,9 @@ impl DefaultPhysicalPlanner {
                     "Unsupported logical plan: CreateExternalTable".to_string(),
                 ))
             }
-            LogicalPlan::Explain {
-                verbose,
-                plan,
-                stringified_plans,
-                schema,
-            } => {
-                let input = self.create_initial_plan(plan, ctx_state)?;
-
-                let mut stringified_plans = stringified_plans
-                    .iter()
-                    .filter(|s| s.should_display(*verbose))
-                    .cloned()
-                    .collect::<Vec<_>>();
-
-                // add in the physical plan if requested
-                if *verbose {
-                    stringified_plans.push(StringifiedPlan::new(
-                        PlanType::PhysicalPlan,
-                        displayable(input.as_ref()).indent().to_string(),
-                    ));
-                }
-                Ok(Arc::new(ExplainExec::new(
-                    SchemaRef::new(schema.as_ref().to_owned().into()),
-                    stringified_plans,
-                )))
-            }
+            LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
+                "Unsupported logical plan: Explain must be root of the plan".to_string(),
+            )),
             LogicalPlan::Extension { node } => {
                 let physical_inputs = node
                     .inputs()
@@ -1314,6 +1296,60 @@ impl DefaultPhysicalPlanner {
             )?,
             options,
         })
+    }
+
+    /// Handles capturing the various plans for EXPLAIN queries
+    ///
+    /// Returns
+    /// Some(plan) if optimized, and None if logical_plan was not an
+    /// explain (and thus needs to be optimized as normal)
+    fn handle_explain(
+        &self,
+        logical_plan: &LogicalPlan,
+        ctx_state: &ExecutionContextState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let LogicalPlan::Explain {
+            verbose,
+            plan,
+            stringified_plans,
+            schema,
+        } = logical_plan
+        {
+            let final_logical_plan = StringifiedPlan::new(
+                PlanType::FinalLogicalPlan,
+                plan.display_indent().to_string(),
+            );
+
+            let input = self.create_initial_plan(plan, ctx_state)?;
+
+            let initial_physical_plan = StringifiedPlan::new(
+                PlanType::InitialPhysicalPlan,
+                displayable(input.as_ref()).indent().to_string(),
+            );
+
+            let input = self.optimize_plan(input, ctx_state)?;
+
+            let final_physical_plan = StringifiedPlan::new(
+                PlanType::FinalPhysicalPlan,
+                displayable(input.as_ref()).indent().to_string(),
+            );
+
+            let stringified_plans = stringified_plans
+                .iter()
+                .cloned()
+                .chain(std::iter::once(final_logical_plan))
+                .chain(std::iter::once(initial_physical_plan))
+                .chain(std::iter::once(final_physical_plan))
+                .collect::<Vec<_>>();
+
+            Ok(Some(Arc::new(ExplainExec::new(
+                SchemaRef::new(schema.as_ref().to_owned().into()),
+                stringified_plans,
+                *verbose,
+            ))))
+        } else {
+            Ok(None)
+        }
     }
 }
 

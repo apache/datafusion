@@ -47,6 +47,41 @@ use datafusion::{
 };
 use datafusion::{execution::context::ExecutionContext, physical_plan::displayable};
 
+/// Copied from datafusion/test/mod.rs
+/// TODO: consolidate
+///
+/// Compares formatted output of a record batch with an expected
+/// vector of strings, with the result of pretty formatting record
+/// batches. This is a macro so errors appear on the correct line
+///
+/// Designed so that failure output can be directly copy/pasted
+/// into the test code as expected results.
+///
+/// Expects to be called about like this:
+///
+/// `assert_batch_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
+#[macro_export]
+macro_rules! assert_batches_eq_normalized {
+    ($EXPECTED_LINES: expr, $CHUNKS: expr) => {
+        let expected_lines: Vec<String> =
+            $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
+
+        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS).unwrap();
+
+        let actual_lines: Vec<String> = formatted
+            .trim()
+            .lines()
+            .map(normalize_for_explain)
+            .collect();
+
+        assert_eq!(
+            expected_lines, actual_lines,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected_lines, actual_lines
+        );
+    };
+}
+
 #[tokio::test]
 async fn nyc() -> Result<()> {
     // schema for nyxtaxi csv files
@@ -1971,19 +2006,28 @@ async fn csv_explain() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec![
-        "logical_plan",
-        "Projection: #aggregate_test_100.c1\
-            \n  Filter: #aggregate_test_100.c2 Gt Int64(10)\
-            \n    TableScan: aggregate_test_100 projection=None",
-    ]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        "| plan_type     | plan                                                                                                                                                                                      |",
+        "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        "| logical_plan  | Projection: #aggregate_test_100.c1                                                                                                                                                        |",
+        "|               |   Filter: #aggregate_test_100.c2 Gt Int64(10)                                                                                                                                             |",
+        "|               |     TableScan: aggregate_test_100 projection=Some([0, 1])                                                                                                                                 |",
+        "| physical_plan | ProjectionExec: expr=[c1@0 as c1]                                                                                                                                                         |",
+        "|               |   CoalesceBatchesExec: target_batch_size=4096                                                                                                                                             |",
+        "|               |     FilterExec: CAST(c2@1 AS Int64) > 10                                                                                                                                                  |",
+        "|               |       RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)                                                                                                                                   |",
+        "|               |         CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true |",
+        "+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+    ];
+
+    assert_batches_eq_normalized!(expected, &actual);
 
     // Also, expect same result with lowercase explain
     let sql = "explain SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute(&mut ctx, sql).await;
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq_normalized!(expected, &actual);
 }
 
 #[tokio::test]
@@ -2476,7 +2520,7 @@ fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
 
 /// Execute query and return result set as 2-d table of Vecs
 /// `result[row][column]`
-async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
+async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<RecordBatch> {
     let msg = format!("Creating logical plan for '{}'", sql);
     let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
@@ -2492,8 +2536,13 @@ async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
     let results = collect(plan).await.expect(&msg);
 
     assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+    results
+}
 
-    result_vec(&results)
+/// Execute query and return result set as 2-d table of Vecs
+/// `result[row][column]`
+async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
+    result_vec(&execute_to_batches(ctx, sql).await)
 }
 
 /// Specialised String representation
@@ -3920,4 +3969,17 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let err = physical_plan.unwrap_err();
     assert_eq!(err.to_string(), "Error during planning: Invalid or wrong number of arguments passed to aggregate: 'COUNT(DISTINCT )'");
     Ok(())
+}
+
+// Normalizes parts of an explain plan that vary from run to run (such as path)
+fn normalize_for_explain(s: &str) -> String {
+    // Convert things like /Users/alamb/Software/arrow/testing/data/csv/aggregate_test_100.csv
+    // to ARROW_TEST_DATA/csv/aggregate_test_100.csv
+    let data_path = datafusion::test_util::arrow_test_data();
+    let s = s.replace(&data_path, "ARROW_TEST_DATA");
+
+    // convert things like partitioning=RoundRobinBatch(16)
+    // to partitioning=RoundRobinBatch(NUM_CORES)
+    let needle = format!("RoundRobinBatch({})", num_cpus::get());
+    s.replace(&needle, "RoundRobinBatch(NUM_CORES)")
 }
