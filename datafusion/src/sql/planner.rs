@@ -907,6 +907,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Err(_) => Ok(lit(n.parse::<f64>().unwrap())),
             },
             SQLExpr::Value(Value::SingleQuotedString(ref s)) => Ok(lit(s.clone())),
+            SQLExpr::Value(Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
 
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(*n)),
 
