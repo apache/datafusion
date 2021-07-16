@@ -700,10 +700,10 @@ message Action {
 
   oneof ActionType {
     // Execute a logical query plan
-    LogicalPlanNode query = 1;
+    //LogicalPlanNode query = 1;
 
     // Execute one partition of a physical query plan
-    ExecutePartition execute_partition = 2;
+    //ExecutePartition execute_partition = 2;
 
     // Fetch a partition from an executor
     PartitionId fetch_partition = 3;

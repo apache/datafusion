@@ -32,24 +32,6 @@ impl TryInto<Action> for protobuf::Action {
 
     fn try_into(self) -> Result<Action, Self::Error> {
         match self.action_type {
-            Some(ActionType::ExecutePartition(partition)) => {
-                Ok(Action::ExecutePartition(ExecutePartition::new(
-                    partition.job_id,
-                    partition.stage_id as usize,
-                    partition.partition_id.iter().map(|n| *n as usize).collect(),
-                    partition
-                        .plan
-                        .as_ref()
-                        .ok_or_else(|| {
-                            BallistaError::General(
-                                "PhysicalPlanNode in ExecutePartition is missing"
-                                    .to_owned(),
-                            )
-                        })?
-                        .try_into()?,
-                    HashMap::new(),
-                )))
-            }
             Some(ActionType::FetchPartition(partition)) => {
                 Ok(Action::FetchPartition(partition.try_into()?))
             }
