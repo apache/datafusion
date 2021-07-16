@@ -75,57 +75,6 @@ impl BallistaClient {
         Ok(Self { flight_client })
     }
 
-    /// Execute one partition of a physical query plan against the executor
-    pub async fn execute_partition(
-        &mut self,
-        job_id: String,
-        stage_id: usize,
-        partition_id: Vec<usize>,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<Vec<ExecutePartitionResult>> {
-        let action = Action::ExecutePartition(ExecutePartition {
-            job_id,
-            stage_id,
-            partition_id,
-            plan,
-            shuffle_locations: Default::default(),
-        });
-        let stream = self.execute_action(&action).await?;
-        let batches = collect(stream).await?;
-
-        batches
-            .iter()
-            .map(|batch| {
-                if batch.num_rows() != 1 {
-                    Err(BallistaError::General(
-                        "execute_partition received wrong number of rows".to_owned(),
-                    ))
-                } else {
-                    let path = batch
-                        .column(0)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .expect(
-                            "execute_partition expected column 0 to be a StringArray",
-                        );
-
-                    let stats = batch
-                        .column(1)
-                        .as_any()
-                        .downcast_ref::<StructArray>()
-                        .expect(
-                            "execute_partition expected column 1 to be a StructArray",
-                        );
-
-                    Ok(ExecutePartitionResult::new(
-                        path.value(0),
-                        PartitionStats::from_arrow_struct_array(stats),
-                    ))
-                }
-            })
-            .collect::<Result<Vec<_>>>()
-    }
-
     /// Fetch a partition from an executor
     pub async fn fetch_partition(
         &mut self,
