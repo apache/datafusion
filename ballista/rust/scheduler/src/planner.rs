@@ -112,7 +112,7 @@ impl DistributedPlanner {
                 None,
             )?;
             let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
-                vec![query_stage.stage_id()],
+                query_stage.stage_id(),
                 query_stage.schema(),
                 query_stage.output_partitioning().partition_count(),
             ));
@@ -131,7 +131,7 @@ impl DistributedPlanner {
                 Some(repart.partitioning().to_owned()),
             )?;
             let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
-                vec![query_stage.stage_id()],
+                query_stage.stage_id(),
                 query_stage.schema(),
                 query_stage.output_partitioning().partition_count(),
             ));
@@ -166,19 +166,17 @@ pub fn remove_unresolved_shuffles(
             child.as_any().downcast_ref::<UnresolvedShuffleExec>()
         {
             let mut relevant_locations = vec![];
-            for id in &unresolved_shuffle.query_stage_ids {
-                relevant_locations.append(
-                    &mut partition_locations
-                        .get(id)
-                        .ok_or_else(|| {
-                            BallistaError::General(
-                                "Missing partition location. Could not remove unresolved shuffles"
-                                    .to_owned(),
-                            )
-                        })?
-                        .clone(),
-                );
-            }
+            relevant_locations.append(
+                &mut partition_locations
+                    .get(&unresolved_shuffle.stage_id)
+                    .ok_or_else(|| {
+                        BallistaError::General(
+                            "Missing partition location. Could not remove unresolved shuffles"
+                                .to_owned(),
+                        )
+                    })?
+                    .clone(),
+            );
             new_children.push(Arc::new(ShuffleReaderExec::try_new(
                 relevant_locations,
                 unresolved_shuffle.schema().clone(),
@@ -297,7 +295,7 @@ mod test {
         let unresolved_shuffle = coalesce_partitions.children()[0].clone();
         let unresolved_shuffle =
             downcast_exec!(unresolved_shuffle, UnresolvedShuffleExec);
-        assert_eq!(unresolved_shuffle.query_stage_ids, vec![2]);
+        assert_eq!(unresolved_shuffle.stage_id, 2);
 
         Ok(())
     }

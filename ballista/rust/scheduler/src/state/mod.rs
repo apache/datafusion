@@ -302,48 +302,47 @@ impl SchedulerState {
                     Vec<Vec<ballista_core::serde::scheduler::PartitionLocation>>,
                 > = HashMap::new();
                 for unresolved_shuffle in unresolved_shuffles {
-                    for stage_id in unresolved_shuffle.query_stage_ids {
-                        for partition_id in 0..unresolved_shuffle.partition_count {
-                            let referenced_task = tasks
-                                .get(&get_task_status_key(
-                                    &self.namespace,
-                                    &partition.job_id,
-                                    stage_id,
-                                    partition_id,
-                                ))
-                                .unwrap();
-                            let task_is_dead = self
-                                .reschedule_dead_task(&referenced_task, &executors)
-                                .await?;
-                            if task_is_dead {
-                                continue 'tasks;
-                            } else if let Some(task_status::Status::Completed(
-                                CompletedTask { executor_id },
-                            )) = &referenced_task.status
-                            {
-                                let empty = vec![];
-                                let locations =
-                                    partition_locations.entry(stage_id).or_insert(empty);
-                                let executor_meta = executors
-                                    .iter()
-                                    .find(|exec| exec.id == *executor_id)
-                                    .unwrap()
-                                    .clone();
-                                locations.push(vec![
-                                    ballista_core::serde::scheduler::PartitionLocation {
-                                        partition_id:
-                                            ballista_core::serde::scheduler::PartitionId {
-                                                job_id: partition.job_id.clone(),
-                                                stage_id,
-                                                partition_id,
-                                            },
-                                        executor_meta,
-                                        partition_stats: PartitionStats::default(),
-                                    },
-                                ]);
-                            } else {
-                                continue 'tasks;
-                            }
+                    for partition_id in 0..unresolved_shuffle.partition_count {
+                        let referenced_task = tasks
+                            .get(&get_task_status_key(
+                                &self.namespace,
+                                &partition.job_id,
+                                unresolved_shuffle.stage_id,
+                                partition_id,
+                            ))
+                            .unwrap();
+                        let task_is_dead = self
+                            .reschedule_dead_task(&referenced_task, &executors)
+                            .await?;
+                        if task_is_dead {
+                            continue 'tasks;
+                        } else if let Some(task_status::Status::Completed(
+                            CompletedTask { executor_id },
+                        )) = &referenced_task.status
+                        {
+                            let empty = vec![];
+                            let locations = partition_locations
+                                .entry(unresolved_shuffle.stage_id)
+                                .or_insert(empty);
+                            let executor_meta = executors
+                                .iter()
+                                .find(|exec| exec.id == *executor_id)
+                                .unwrap()
+                                .clone();
+                            locations.push(vec![
+                                ballista_core::serde::scheduler::PartitionLocation {
+                                    partition_id:
+                                        ballista_core::serde::scheduler::PartitionId {
+                                            job_id: partition.job_id.clone(),
+                                            stage_id: unresolved_shuffle.stage_id,
+                                            partition_id,
+                                        },
+                                    executor_meta,
+                                    partition_stats: PartitionStats::default(),
+                                },
+                            ]);
+                        } else {
+                            continue 'tasks;
                         }
                     }
                 }

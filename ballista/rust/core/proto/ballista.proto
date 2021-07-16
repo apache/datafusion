@@ -542,7 +542,7 @@ message PhysicalNegativeNode {
 }
 
 message UnresolvedShuffleExecNode {
-  repeated uint32 query_stage_ids = 1;
+  uint32 stage_id = 1;
   Schema schema = 2;
   uint32 partition_count = 3;
 }

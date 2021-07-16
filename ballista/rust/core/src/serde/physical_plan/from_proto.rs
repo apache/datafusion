@@ -464,11 +464,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
             PhysicalPlanType::Unresolved(unresolved_shuffle) => {
                 let schema = Arc::new(convert_required!(unresolved_shuffle.schema)?);
                 Ok(Arc::new(UnresolvedShuffleExec {
-                    query_stage_ids: unresolved_shuffle
-                        .query_stage_ids
-                        .iter()
-                        .map(|id| *id as usize)
-                        .collect(),
+                    stage_id: unresolved_shuffle.stage_id as usize,
                     schema,
                     partition_count: unresolved_shuffle.partition_count as usize,
                 }))
