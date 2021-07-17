@@ -778,7 +778,7 @@ impl ScalarValue {
                 keys_col.data_type()
             ))
         })?;
-        Self::try_from_array(&dict_array.values(), values_index)
+        Self::try_from_array(dict_array.values(), values_index)
     }
 }
 

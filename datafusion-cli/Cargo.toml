@@ -31,4 +31,4 @@ clap = "2.33"
 rustyline = "8.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 datafusion = { path = "../datafusion" }
-arrow = { version = "4.0"  }
+arrow = { version = "5.0"  }

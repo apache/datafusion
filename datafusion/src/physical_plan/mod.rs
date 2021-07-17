@@ -505,8 +505,9 @@ pub trait WindowExpr: Send + Sync + Debug {
                 end: num_rows,
             }])
         } else {
-            lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)
+            Ok(lexicographical_partition_ranges(partition_columns)
+                .map_err(DataFusionError::ArrowError)?
+                .collect::<Vec<_>>())
         }
     }
 
