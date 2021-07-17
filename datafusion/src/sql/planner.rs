@@ -476,15 +476,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         if let Some(columns_alias) = columns_alias {
-            if columns_alias.len() != plan.schema().fields().len() {
+            if columns_alias.is_empty() {
+                // sqlparser-rs encodes AS t as an empty list of column alias
+                Ok(plan)
+            } else if columns_alias.len() != plan.schema().fields().len() {
                 return Err(DataFusionError::Plan(format!(
                     "Source table contains {} fields but column alias {}",
                     plan.schema().fields().len(),
                     columns_alias.len(),
                 )));
-            } else if columns_alias.is_empty() {
-                // sqlparser-rs encodes AS t as an empty list of column alias
-                Ok(plan)
             } else {
                 let fields = plan.schema().fields().clone();
                 LogicalPlanBuilder::from(plan)
