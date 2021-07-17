@@ -482,6 +482,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     plan.schema().fields().len(),
                     columns_alias.len(),
                 )));
+            } else if columns_alias.is_empty() {
+                // sqlparser-rs encodes AS t as an empty list of column alias
+                Ok(plan)
             } else {
                 let fields = plan.schema().fields().clone();
                 LogicalPlanBuilder::from(plan)
