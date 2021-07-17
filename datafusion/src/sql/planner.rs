@@ -1916,6 +1916,27 @@ mod tests {
     }
 
     #[test]
+    fn table_with_column_alias() {
+        let sql = "SELECT a, b, c
+                   FROM lineitem l (a, b, c)";
+        let expected = "Projection: #a, #b, #c\
+                        \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c\
+                        \n    TableScan: lineitem projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn table_with_column_alias_number_cols() {
+        let sql = "SELECT a, b, c
+                   FROM lineitem l (a, b)";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Source table contains 3 fields but column alias 2\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
     fn select_with_having() {
         let sql = "SELECT id, age
                    FROM person
@@ -2091,16 +2112,6 @@ mod tests {
                         \n  Filter: #MAX(person.age) Gt Int64(2) And #MAX(person.age) Lt Int64(5) And #person.first_name Eq Utf8(\"M\") And #person.first_name Eq Utf8(\"N\")\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        quick_test(sql, expected);
-    }
-
-    #[test]
-    fn table_with_column_alias() {
-        let sql = "SELECT a, b, c
-                   FROM lineitem l (a, b, c)";
-        let expected = "Projection: #a, #b, #c\
-                        \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c\
-                        \n    TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
 
