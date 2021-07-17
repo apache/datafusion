@@ -1934,7 +1934,7 @@ mod tests {
                    FROM lineitem l (a, b)";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Source table contains 2 columns but only 3 names given as column alias\")",
+            "Plan(\"Source table contains 3 columns but only 2 names given as column alias\")",
             format!("{:?}", err)
         );
     }
