@@ -43,8 +43,8 @@ tokio-stream = { version = "0.1", features = ["net"] }
 tonic = "0.4"
 uuid = { version = "0.8", features = ["v4"] }
 
-arrow = { version = "4.0"  }
-arrow-flight = { version = "4.0"  }
+arrow = { version = "5.0"  }
+arrow-flight = { version = "5.0"  }
 
 datafusion = { path = "../../../datafusion" }
 

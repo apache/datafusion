@@ -23,6 +23,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::executor::Executor;
+use arrow_flight::SchemaAsIpc;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::decode_protobuf;
 use ballista_core::serde::scheduler::Action as BallistaAction;
@@ -218,10 +219,7 @@ where
     T: Read + Seek,
 {
     let options = arrow::ipc::writer::IpcWriteOptions::default();
-    let schema_flight_data = arrow_flight::utils::flight_data_from_arrow_schema(
-        reader.schema().as_ref(),
-        &options,
-    );
+    let schema_flight_data = SchemaAsIpc::new(reader.schema().as_ref(), &options).into();
     send_response(&tx, Ok(schema_flight_data)).await?;
 
     for batch in reader {
