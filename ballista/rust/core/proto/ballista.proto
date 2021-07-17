@@ -721,6 +721,7 @@ message PartitionLocation {
   PartitionId partition_id = 1;
   ExecutorMetadata executor_meta = 2;
   PartitionStats partition_stats = 3;
+  string path = 4;
 }
 
 // Unique identifier for a materialized partition of data

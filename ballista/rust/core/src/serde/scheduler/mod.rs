@@ -62,6 +62,7 @@ pub struct PartitionLocation {
     pub partition_id: PartitionId,
     pub executor_meta: ExecutorMeta,
     pub partition_stats: PartitionStats,
+    pub path: String,
 }
 
 /// Meta-data for an executor, used when fetching shuffle partitions from other executors

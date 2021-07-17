@@ -108,6 +108,10 @@ impl DistributedPlanner {
             let query_stage = create_shuffle_writer(
                 job_id,
                 self.next_stage_id(),
+                //TODO should be children[0].clone() so that we replace this
+                // with an UnresolvedShuffleExec instead of just executing this
+                // part of the plan again
+                // see https://github.com/apache/arrow-datafusion/issues/707
                 coalesce.children()[0].clone(),
                 None,
             )?;
@@ -127,6 +131,10 @@ impl DistributedPlanner {
             let query_stage = create_shuffle_writer(
                 job_id,
                 self.next_stage_id(),
+                //TODO should be children[0].clone() so that we replace this
+                // with an UnresolvedShuffleExec instead of just executing this
+                // part of the plan again
+                // see https://github.com/apache/arrow-datafusion/issues/707
                 repart.children()[0].clone(),
                 Some(repart.partitioning().to_owned()),
             )?;
@@ -158,7 +166,7 @@ impl DistributedPlanner {
 
 pub fn remove_unresolved_shuffles(
     stage: &dyn ExecutionPlan,
-    partition_locations: &HashMap<usize, Vec<Vec<PartitionLocation>>>,
+    partition_locations: &HashMap<usize, HashMap<usize, Vec<PartitionLocation>>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
     for child in stage.children() {
@@ -166,16 +174,30 @@ pub fn remove_unresolved_shuffles(
             child.as_any().downcast_ref::<UnresolvedShuffleExec>()
         {
             let mut relevant_locations = vec![];
-            relevant_locations.append(
-                &mut partition_locations
-                    .get(&unresolved_shuffle.stage_id)
-                    .ok_or_else(|| {
-                        BallistaError::General(
-                            "Missing partition location. Could not remove unresolved shuffles"
-                                .to_owned(),
-                        )
-                    })?
-                    .clone(),
+            let p = partition_locations
+                .get(&unresolved_shuffle.stage_id)
+                .ok_or_else(|| {
+                    BallistaError::General(
+                        "Missing partition location. Could not remove unresolved shuffles"
+                            .to_owned(),
+                    )
+                })?
+                .clone();
+
+            for i in 0..unresolved_shuffle.partition_count {
+                if let Some(x) = p.get(&i) {
+                    relevant_locations.push(x.to_owned());
+                } else {
+                    relevant_locations.push(vec![]);
+                }
+            }
+            println!(
+                "create shuffle reader with {:?}",
+                relevant_locations
+                    .iter()
+                    .map(|c| format!("{:?}", c))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             );
             new_children.push(Arc::new(ShuffleReaderExec::try_new(
                 relevant_locations,

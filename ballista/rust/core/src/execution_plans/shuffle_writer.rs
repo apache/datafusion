@@ -122,6 +122,11 @@ impl ShuffleWriterExec {
         self.stage_id
     }
 
+    /// Get the true output partitioning
+    pub fn shuffle_output_partitioning(&self) -> Option<&Partitioning> {
+        self.shuffle_output_partitioning.as_ref()
+    }
+
     pub async fn execute_shuffle_write(
         &self,
         input_partition: usize,
