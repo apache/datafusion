@@ -776,6 +776,17 @@ message FailedTask {
 
 message CompletedTask {
   string executor_id = 1;
+  // TODO tasks are currently always shuffle writes but this will not always be the case
+  // so we might want to think about some refactoring of the task definitions
+  repeated ShuffleWritePartition partitions = 2;
+}
+
+message ShuffleWritePartition {
+  uint64 partition_id = 1;
+  string path = 2;
+  uint64 num_batches = 3;
+  uint64 num_rows = 4;
+  uint64 num_bytes = 5;
 }
 
 message TaskStatus {

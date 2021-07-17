@@ -254,9 +254,9 @@ impl SchedulerState {
         executors: &[ExecutorMeta],
     ) -> Result<bool> {
         let executor_id: &str = match &task_status.status {
-            Some(task_status::Status::Completed(CompletedTask { executor_id })) => {
-                executor_id
-            }
+            Some(task_status::Status::Completed(CompletedTask {
+                executor_id, ..
+            })) => executor_id,
             Some(task_status::Status::Running(RunningTask { executor_id })) => {
                 executor_id
             }
@@ -317,9 +317,13 @@ impl SchedulerState {
                         if task_is_dead {
                             continue 'tasks;
                         } else if let Some(task_status::Status::Completed(
-                            CompletedTask { executor_id },
+                            CompletedTask { executor_id, .. },
                         )) = &referenced_task.status
                         {
+                            //TODO: this logic is incorrect and is ignoring the shuffle write
+                            // meta-data in the CompletedTask
+                            // see https://github.com/apache/arrow-datafusion/issues/707
+
                             let empty = vec![];
                             let locations = partition_locations
                                 .entry(unresolved_shuffle.stage_id)
@@ -452,9 +456,10 @@ impl SchedulerState {
         let mut job_status = statuses
             .iter()
             .map(|status| match &status.status {
-                Some(task_status::Status::Completed(CompletedTask { executor_id })) => {
-                    Ok((status, executor_id))
-                }
+                Some(task_status::Status::Completed(CompletedTask {
+                    executor_id,
+                    ..
+                })) => Ok((status, executor_id)),
                 _ => Err(BallistaError::General("Task not completed".to_string())),
             })
             .collect::<Result<Vec<_>>>()
@@ -462,12 +467,18 @@ impl SchedulerState {
             .map(|info| {
                 let partition_location = info
                     .into_iter()
-                    .map(|(status, execution_id)| PartitionLocation {
-                        partition_id: status.partition_id.to_owned(),
-                        executor_meta: executors
-                            .get(execution_id)
-                            .map(|e| e.clone().into()),
-                        partition_stats: None,
+                    .map(|(status, execution_id)| {
+                        //TODO: this logic is incorrect and is ignoring the shuffle write
+                        // meta-data in the CompletedTask
+                        // see https://github.com/apache/arrow-datafusion/issues/707
+
+                        PartitionLocation {
+                            partition_id: status.partition_id.to_owned(),
+                            executor_meta: executors
+                                .get(execution_id)
+                                .map(|e| e.clone().into()),
+                            partition_stats: None,
+                        }
                     })
                     .collect();
                 job_status::Status::Completed(CompletedJob { partition_location })
@@ -745,6 +756,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -784,6 +796,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -821,6 +834,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -832,6 +846,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -863,6 +878,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -874,6 +890,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -905,6 +922,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
