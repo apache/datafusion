@@ -481,7 +481,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(plan)
             } else if columns_alias.len() != plan.schema().fields().len() {
                 return Err(DataFusionError::Plan(format!(
-                    "Source table contains {} fields but column alias {}",
+                    "Source table contains {} columns but only {} names given as column alias",
                     plan.schema().fields().len(),
                     columns_alias.len(),
                 )));
@@ -1934,7 +1934,7 @@ mod tests {
                    FROM lineitem l (a, b)";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Source table contains 3 fields but column alias 2\")",
+            "Plan(\"Source table contains 2 columns but only 3 names given as column alias\")",
             format!("{:?}", err)
         );
     }
