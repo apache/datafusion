@@ -297,10 +297,11 @@ impl ExecutionPlan for ShuffleWriterExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        match &self.shuffle_output_partitioning {
-            Some(p) => p.clone(),
-            _ => Partitioning::UnknownPartitioning(1),
-        }
+        // This operator needs to be executed once for each *input* partition and there
+        // isn't really a mechanism yet in DataFusion to support this use case so we report
+        // the input partitioning as the output partitioning here. The executor reports
+        // output partition meta data back to the scheduler.
+        self.plan.output_partitioning()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
