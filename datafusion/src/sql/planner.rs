@@ -1924,7 +1924,7 @@ mod tests {
                    FROM lineitem l (a, b, c)";
         let expected = "Projection: #a, #b, #c\
                         \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c\
-                        \n    TableScan: lineitem projection=None";
+                        \n    TableScan: l projection=None";
         quick_test(sql, expected);
     }
 
