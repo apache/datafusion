@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 /// Expression representing a column on the existing plan.
 #[pyfunction]
-#[pyo3(text_signature = "(name)")]
+#[text_signature = "(name)"]
 fn col(name: &str) -> expression::Expression {
     expression::Expression {
         expr: logical_plan::col(name),
@@ -34,7 +34,7 @@ fn col(name: &str) -> expression::Expression {
 
 /// Expression representing a constant value
 #[pyfunction]
-#[pyo3(text_signature = "(value)")]
+#[text_signature = "(value)"]
 fn lit(value: i32) -> expression::Expression {
     expression::Expression {
         expr: logical_plan::lit(value),
