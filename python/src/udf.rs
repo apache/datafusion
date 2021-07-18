@@ -30,33 +30,31 @@ use crate::to_rust::to_rust;
 pub fn array_udf(func: PyObject) -> ScalarFunctionImplementation {
     make_scalar_function(
         move |args: &[array::ArrayRef]| -> Result<array::ArrayRef, DataFusionError> {
-            // get GIL
-            let gil = pyo3::Python::acquire_gil();
-            let py = gil.python();
+            Python::with_gil(|py| {
+                // 1. cast args to Pyarrow arrays
+                // 2. call function
+                // 3. cast to arrow::array::Array
 
-            // 1. cast args to Pyarrow arrays
-            // 2. call function
-            // 3. cast to arrow::array::Array
+                // 1.
+                let py_args = args
+                    .iter()
+                    .map(|arg| {
+                        // remove unwrap
+                        to_py_array(arg, py).unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let py_args = PyTuple::new(py, py_args);
 
-            // 1.
-            let py_args = args
-                .iter()
-                .map(|arg| {
-                    // remove unwrap
-                    to_py_array(arg, py).unwrap()
-                })
-                .collect::<Vec<_>>();
-            let py_args = PyTuple::new(py, py_args);
+                // 2.
+                let value = func.as_ref(py).call(py_args, None);
+                let value = match value {
+                    Ok(n) => Ok(n),
+                    Err(error) => Err(DataFusionError::Execution(format!("{:?}", error))),
+                }?;
 
-            // 2.
-            let value = func.as_ref(py).call(py_args, None);
-            let value = match value {
-                Ok(n) => Ok(n),
-                Err(error) => Err(DataFusionError::Execution(format!("{:?}", error))),
-            }?;
-
-            let array = to_rust(value).unwrap();
-            Ok(array)
+                let array = to_rust(value).unwrap();
+                Ok(array)
+            })
         },
     )
 }
