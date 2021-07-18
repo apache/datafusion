@@ -1098,18 +1098,22 @@ mod tests {
 
         let optimized_plan = ctx.optimize(&logical_plan)?;
         match &optimized_plan {
-            LogicalPlan::TableScan {
-                source,
-                projected_schema,
-                ..
-            } => {
-                assert_eq!(source.schema().fields().len(), 3);
-                assert_eq!(projected_schema.fields().len(), 1);
-            }
-            _ => panic!("input to projection should be TableScan"),
+            LogicalPlan::Projection { input, .. } => match &**input {
+                LogicalPlan::TableScan {
+                    source,
+                    projected_schema,
+                    ..
+                } => {
+                    assert_eq!(source.schema().fields().len(), 3);
+                    assert_eq!(projected_schema.fields().len(), 1);
+                }
+                _ => panic!("input to projection should be TableScan"),
+            },
+            _ => panic!("expect optimized_plan to be projection"),
         }
 
-        let expected = "TableScan: test projection=Some([1])";
+        let expected = "Projection: #test.c2\
+        \n  TableScan: test projection=Some([1])";
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
         let physical_plan = ctx.create_physical_plan(&optimized_plan)?;
@@ -1167,18 +1171,26 @@ mod tests {
         let ctx = ExecutionContext::new();
         let optimized_plan = ctx.optimize(&plan)?;
         match &optimized_plan {
-            LogicalPlan::TableScan {
-                source,
-                projected_schema,
-                ..
-            } => {
-                assert_eq!(source.schema().fields().len(), 3);
-                assert_eq!(projected_schema.fields().len(), 1);
-            }
-            _ => panic!("input to projection should be InMemoryScan"),
+            LogicalPlan::Projection { input, .. } => match &**input {
+                LogicalPlan::TableScan {
+                    source,
+                    projected_schema,
+                    ..
+                } => {
+                    assert_eq!(source.schema().fields().len(), 3);
+                    assert_eq!(projected_schema.fields().len(), 1);
+                }
+                _ => panic!("input to projection should be InMemoryScan"),
+            },
+            _ => panic!("expect optimized_plan to be projection"),
         }
 
-        let expected = format!("TableScan: {} projection=Some([1])", UNNAMED_TABLE);
+        // let expected = format!("TableScan: {} projection=Some([1])", UNNAMED_TABLE);
+        let expected = format!(
+            "Projection: #{}.b\
+        \n  TableScan: {} projection=Some([1])",
+            UNNAMED_TABLE, UNNAMED_TABLE
+        );
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
         let physical_plan = ctx.create_physical_plan(&optimized_plan)?;
