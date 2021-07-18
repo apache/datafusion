@@ -424,46 +424,80 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         relation: &TableFactor,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
-        match relation {
+        let (plan, columns_alias) = match relation {
             TableFactor::Table { name, alias, .. } => {
                 let table_name = name.to_string();
                 let cte = ctes.get(&table_name);
-                match (
-                    cte,
-                    self.schema_provider.get_table_provider(name.try_into()?),
-                ) {
-                    (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                    (_, Some(provider)) => LogicalPlanBuilder::scan(
-                        // take alias into account to support `JOIN table1 as table2`
-                        alias
-                            .as_ref()
-                            .map(|a| a.name.value.as_str())
-                            .unwrap_or(&table_name),
-                        provider,
-                        None,
-                    )?
-                    .build(),
-                    (None, None) => Err(DataFusionError::Plan(format!(
-                        "Table or CTE with name '{}' not found",
-                        name
-                    ))),
-                }
+                let columns_alias = alias.clone().map(|x| x.columns);
+                (
+                    match (
+                        cte,
+                        self.schema_provider.get_table_provider(name.try_into()?),
+                    ) {
+                        (Some(cte_plan), _) => Ok(cte_plan.clone()),
+                        (_, Some(provider)) => LogicalPlanBuilder::scan(
+                            // take alias into account to support `JOIN table1 as table2`
+                            alias
+                                .as_ref()
+                                .map(|a| a.name.value.as_str())
+                                .unwrap_or(&table_name),
+                            provider,
+                            None,
+                        )?
+                        .build(),
+                        (None, None) => Err(DataFusionError::Plan(format!(
+                            "Table or CTE with name '{}' not found",
+                            name
+                        ))),
+                    }?,
+                    columns_alias,
+                )
             }
             TableFactor::Derived {
                 subquery, alias, ..
-            } => self.query_to_plan_with_alias(
-                subquery,
-                alias.as_ref().map(|a| a.name.value.to_string()),
-                ctes,
+            } => (
+                self.query_to_plan_with_alias(
+                    subquery,
+                    alias.as_ref().map(|a| a.name.value.to_string()),
+                    ctes,
+                )?,
+                alias.clone().map(|x| x.columns),
             ),
             TableFactor::NestedJoin(table_with_joins) => {
-                self.plan_table_with_joins(table_with_joins, ctes)
+                (self.plan_table_with_joins(table_with_joins, ctes)?, None)
             }
             // @todo Support TableFactory::TableFunction?
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported ast node {:?} in create_relation",
-                relation
-            ))),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported ast node {:?} in create_relation",
+                    relation
+                )))
+            }
+        };
+
+        if let Some(columns_alias) = columns_alias {
+            if columns_alias.is_empty() {
+                // sqlparser-rs encodes AS t as an empty list of column alias
+                Ok(plan)
+            } else if columns_alias.len() != plan.schema().fields().len() {
+                return Err(DataFusionError::Plan(format!(
+                    "Source table contains {} columns but only {} names given as column alias",
+                    plan.schema().fields().len(),
+                    columns_alias.len(),
+                )));
+            } else {
+                let fields = plan.schema().fields().clone();
+                LogicalPlanBuilder::from(plan)
+                    .project(
+                        fields
+                            .iter()
+                            .zip(columns_alias.iter())
+                            .map(|(field, ident)| col(field.name()).alias(&ident.value)),
+                    )?
+                    .build()
+            }
+        } else {
+            Ok(plan)
         }
     }
 
@@ -1882,6 +1916,27 @@ mod tests {
                         \n        TableScan: person projection=None";
 
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn table_with_column_alias() {
+        let sql = "SELECT a, b, c
+                   FROM lineitem l (a, b, c)";
+        let expected = "Projection: #a, #b, #c\
+                        \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c\
+                        \n    TableScan: l projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn table_with_column_alias_number_cols() {
+        let sql = "SELECT a, b, c
+                   FROM lineitem l (a, b)";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Source table contains 3 columns but only 2 names given as column alias\")",
+            format!("{:?}", err)
+        );
     }
 
     #[test]
