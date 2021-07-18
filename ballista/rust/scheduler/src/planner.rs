@@ -130,23 +130,31 @@ impl DistributedPlanner {
         } else if let Some(repart) =
             execution_plan.as_any().downcast_ref::<RepartitionExec>()
         {
-            let shuffle_writer = create_shuffle_writer(
-                job_id,
-                self.next_stage_id(),
-                children[0].clone(),
-                Some(repart.partitioning().to_owned()),
-            )?;
-            let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
-                shuffle_writer.stage_id(),
-                shuffle_writer.schema(),
-                shuffle_writer.output_partitioning().partition_count(),
-                shuffle_writer
-                    .shuffle_output_partitioning()
-                    .map(|p| p.partition_count())
-                    .unwrap_or(1),
-            ));
-            stages.push(shuffle_writer);
-            Ok((unresolved_shuffle, stages))
+            match repart.output_partitioning() {
+                Partitioning::Hash(_, _) => {
+                    let shuffle_writer = create_shuffle_writer(
+                        job_id,
+                        self.next_stage_id(),
+                        children[0].clone(),
+                        Some(repart.partitioning().to_owned()),
+                    )?;
+                    let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
+                        shuffle_writer.stage_id(),
+                        shuffle_writer.schema(),
+                        shuffle_writer.output_partitioning().partition_count(),
+                        shuffle_writer
+                            .shuffle_output_partitioning()
+                            .map(|p| p.partition_count())
+                            .unwrap_or(1),
+                    ));
+                    stages.push(shuffle_writer);
+                    Ok((unresolved_shuffle, stages))
+                }
+                _ => {
+                    // remove any non-hash repartition from the distributed plan
+                    Ok((children[0].clone(), stages))
+                }
+            }
         } else if let Some(window) =
             execution_plan.as_any().downcast_ref::<WindowAggExec>()
         {
@@ -241,6 +249,7 @@ mod test {
     use ballista_core::error::BallistaError;
     use ballista_core::execution_plans::UnresolvedShuffleExec;
     use ballista_core::serde::protobuf;
+    use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use datafusion::physical_plan::sort::SortExec;
     use datafusion::physical_plan::{
@@ -290,9 +299,7 @@ mod test {
           ProjectionExec: expr=[l_returnflag@0 as l_returnflag, SUM(lineitem.l_extendedprice Multiply Int64(1))@1 as sum_disc_price]
             HashAggregateExec: mode=FinalPartitioned, gby=[l_returnflag@0 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
               CoalesceBatchesExec: target_batch_size=4096
-                RepartitionExec: partitioning=Hash([Column { name: "l_returnflag", index: 0 }], 2)
-                  HashAggregateExec: mode=Partial, gby=[l_returnflag@1 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
-                    CsvExec: source=Path(testdata/lineitem: [testdata/lineitem/partition0.tbl,testdata/lineitem/partition1.tbl]), has_header=false
+                UnresolvedShuffleExec
 
         ShuffleWriterExec: None
           SortExec: [l_returnflag@0 ASC]
@@ -313,6 +320,14 @@ mod test {
         let final_hash = projection.children()[0].clone();
         let final_hash = downcast_exec!(final_hash, HashAggregateExec);
         assert!(*final_hash.mode() == AggregateMode::FinalPartitioned);
+        let coalesce = final_hash.children()[0].clone();
+        let coalesce = downcast_exec!(coalesce, CoalesceBatchesExec);
+        let unresolved_shuffle = coalesce.children()[0].clone();
+        let unresolved_shuffle =
+            downcast_exec!(unresolved_shuffle, UnresolvedShuffleExec);
+        assert_eq!(unresolved_shuffle.stage_id, 1);
+        assert_eq!(unresolved_shuffle.input_partition_count, 2);
+        assert_eq!(unresolved_shuffle.output_partition_count, 2);
 
         // verify stage 2
         let stage2 = stages[2].children()[0].clone();
@@ -324,6 +339,8 @@ mod test {
         let unresolved_shuffle =
             downcast_exec!(unresolved_shuffle, UnresolvedShuffleExec);
         assert_eq!(unresolved_shuffle.stage_id, 2);
+        assert_eq!(unresolved_shuffle.input_partition_count, 2);
+        assert_eq!(unresolved_shuffle.output_partition_count, 1);
 
         Ok(())
     }

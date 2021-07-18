@@ -22,6 +22,7 @@ use std::sync::Arc;
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf;
+use datafusion::error::DataFusionError;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 
@@ -52,23 +53,24 @@ impl Executor {
         plan: Arc<dyn ExecutionPlan>,
         _shuffle_output_partitioning: Option<Partitioning>,
     ) -> Result<Vec<protobuf::ShuffleWritePartition>, BallistaError> {
-        let shuffle_output_partitioning = if let Some(shuffle_writer) =
+        let exec = if let Some(shuffle_writer) =
             plan.as_any().downcast_ref::<ShuffleWriterExec>()
         {
-            shuffle_writer
-                .shuffle_output_partitioning()
-                .map(|x| x.to_owned())
+            // recreate the shuffle writer with the correct working directory
+            ShuffleWriterExec::try_new(
+                job_id.clone(),
+                stage_id,
+                plan.children()[0].clone(),
+                self.work_dir.clone(),
+                shuffle_writer.shuffle_output_partitioning().cloned(),
+            )
         } else {
-            panic!()
-        };
+            Err(DataFusionError::Internal(
+                "Plan passed to execute_shuffle_write is not a ShuffleWriterExec"
+                    .to_string(),
+            ))
+        }?;
 
-        let exec = ShuffleWriterExec::try_new(
-            job_id.clone(),
-            stage_id,
-            plan.children()[0].clone(), //TODO refactor to avoid this terrible hack to remove nested shuffle writers
-            self.work_dir.clone(),
-            shuffle_output_partitioning,
-        )?;
         let partitions = exec.execute_shuffle_write(part).await?;
 
         println!(
