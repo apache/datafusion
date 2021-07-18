@@ -48,24 +48,13 @@ fn data_type_id(id: &i32) -> Result<DataType, errors::DataFusionError> {
         7 => DataType::Int32,
         8 => DataType::UInt64,
         9 => DataType::Int64,
-
         10 => DataType::Float16,
         11 => DataType::Float32,
         12 => DataType::Float64,
-
-        //13 => DataType::Decimal,
-
-        // 14 => DataType::Date32(),
-        // 15 => DataType::Date64(),
-        // 16 => DataType::Timestamp(),
-        // 17 => DataType::Time32(),
-        // 18 => DataType::Time64(),
-        // 19 => DataType::Duration()
-        20 => DataType::Binary,
-        21 => DataType::Utf8,
-        22 => DataType::LargeBinary,
-        23 => DataType::LargeUtf8,
-
+        13 => DataType::Utf8,
+        14 => DataType::Binary,
+        34 => DataType::LargeUtf8,
+        35 => DataType::LargeBinary,
         other => {
             return Err(errors::DataFusionError::Common(format!(
                 "The type {} is not valid",
