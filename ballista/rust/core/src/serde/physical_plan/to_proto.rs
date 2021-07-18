@@ -397,7 +397,8 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                     protobuf::UnresolvedShuffleExecNode {
                         stage_id: exec.stage_id as u32,
                         schema: Some(exec.schema().as_ref().into()),
-                        partition_count: exec.partition_count as u32,
+                        input_partition_count: exec.input_partition_count as u32,
+                        output_partition_count: exec.output_partition_count as u32,
                     },
                 )),
             })

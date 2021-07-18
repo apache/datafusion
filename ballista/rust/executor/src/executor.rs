@@ -23,7 +23,7 @@ use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 
 /// Ballista executor
 pub struct Executor {
@@ -50,23 +50,32 @@ impl Executor {
         stage_id: usize,
         part: usize,
         plan: Arc<dyn ExecutionPlan>,
+        _shuffle_output_partitioning: Option<Partitioning>,
     ) -> Result<Vec<protobuf::ShuffleWritePartition>, BallistaError> {
-        // TODO to enable shuffling we need to specify the output partitioning here and
-        // until we do that there is always a single output partition
-        // see https://github.com/apache/arrow-datafusion/issues/707
-        let shuffle_output_partitioning = None;
+        let shuffle_output_partitioning = if let Some(shuffle_writer) =
+            plan.as_any().downcast_ref::<ShuffleWriterExec>()
+        {
+            shuffle_writer
+                .shuffle_output_partitioning()
+                .map(|x| x.to_owned())
+        } else {
+            panic!()
+        };
 
         let exec = ShuffleWriterExec::try_new(
-            job_id,
+            job_id.clone(),
             stage_id,
-            plan,
+            plan.children()[0].clone(), //TODO refactor to avoid this terrible hack to remove nested shuffle writers
             self.work_dir.clone(),
             shuffle_output_partitioning,
         )?;
         let partitions = exec.execute_shuffle_write(part).await?;
 
         println!(
-            "=== Physical plan with metrics ===\n{}\n",
+            "=== [{}/{}/{}] Physical plan with metrics ===\n{}\n",
+            job_id,
+            stage_id,
+            part,
             DisplayableExecutionPlan::with_metrics(&exec)
                 .indent()
                 .to_string()

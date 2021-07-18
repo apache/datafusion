@@ -105,22 +105,24 @@ impl DistributedPlanner {
             .as_any()
             .downcast_ref::<CoalescePartitionsExec>()
         {
-            let query_stage = create_shuffle_writer(
+            let shuffle_writer = create_shuffle_writer(
                 job_id,
                 self.next_stage_id(),
-                //TODO should be children[0].clone() so that we replace this
-                // with an UnresolvedShuffleExec instead of just executing this
-                // part of the plan again
-                // see https://github.com/apache/arrow-datafusion/issues/707
-                coalesce.children()[0].clone(),
+                children[0].clone(),
                 None,
             )?;
             let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
-                query_stage.stage_id(),
-                query_stage.schema(),
-                query_stage.output_partitioning().partition_count(),
+                shuffle_writer.stage_id(),
+                shuffle_writer.schema(),
+                coalesce.children()[0]
+                    .output_partitioning()
+                    .partition_count(),
+                shuffle_writer
+                    .shuffle_output_partitioning()
+                    .map(|p| p.partition_count())
+                    .unwrap_or(1),
             ));
-            stages.push(query_stage);
+            stages.push(shuffle_writer);
             Ok((
                 coalesce.with_new_children(vec![unresolved_shuffle])?,
                 stages,
@@ -128,22 +130,22 @@ impl DistributedPlanner {
         } else if let Some(repart) =
             execution_plan.as_any().downcast_ref::<RepartitionExec>()
         {
-            let query_stage = create_shuffle_writer(
+            let shuffle_writer = create_shuffle_writer(
                 job_id,
                 self.next_stage_id(),
-                //TODO should be children[0].clone() so that we replace this
-                // with an UnresolvedShuffleExec instead of just executing this
-                // part of the plan again
-                // see https://github.com/apache/arrow-datafusion/issues/707
-                repart.children()[0].clone(),
+                children[0].clone(),
                 Some(repart.partitioning().to_owned()),
             )?;
             let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
-                query_stage.stage_id(),
-                query_stage.schema(),
-                query_stage.output_partitioning().partition_count(),
+                shuffle_writer.stage_id(),
+                shuffle_writer.schema(),
+                shuffle_writer.output_partitioning().partition_count(),
+                shuffle_writer
+                    .shuffle_output_partitioning()
+                    .map(|p| p.partition_count())
+                    .unwrap_or(1),
             ));
-            stages.push(query_stage);
+            stages.push(shuffle_writer);
             Ok((unresolved_shuffle, stages))
         } else if let Some(window) =
             execution_plan.as_any().downcast_ref::<WindowAggExec>()
@@ -184,18 +186,22 @@ pub fn remove_unresolved_shuffles(
                 })?
                 .clone();
 
-            for i in 0..unresolved_shuffle.partition_count {
+            for i in 0..unresolved_shuffle.input_partition_count {
                 if let Some(x) = p.get(&i) {
                     relevant_locations.push(x.to_owned());
                 } else {
                     relevant_locations.push(vec![]);
                 }
             }
-            println!(
-                "create shuffle reader with {:?}",
+            info!(
+                "Creating shuffle reader: {}",
                 relevant_locations
                     .iter()
-                    .map(|c| format!("{:?}", c))
+                    .map(|c| c
+                        .iter()
+                        .map(|l| l.path.clone())
+                        .collect::<Vec<_>>()
+                        .join(", "))
                     .collect::<Vec<_>>()
                     .join("\n")
             );
