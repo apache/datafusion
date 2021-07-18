@@ -18,3 +18,8 @@ maturin
 toml
 pyarrow
 pytest
+black
+isort
+mypy
+numpy
+pandas
