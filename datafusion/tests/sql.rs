@@ -1976,10 +1976,17 @@ async fn csv_explain() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Projection: #aggregate_test_100.c1\n  Filter: #aggregate_test_100.c2 Gt Int64(10)\n    TableScan: aggregate_test_100 projection=Some([0, 1])"
+            "Projection: #aggregate_test_100.c1\
+             \n  Filter: #aggregate_test_100.c2 Gt Int64(10)\
+             \n    TableScan: aggregate_test_100 projection=Some([0, 1])"
         ],
         vec!["physical_plan",
-             "ProjectionExec: expr=[c1@0 as c1]\n  CoalesceBatchesExec: target_batch_size=4096\n    FilterExec: CAST(c2@1 AS Int64) > 10\n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\n        CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true\n"
+             "ProjectionExec: expr=[c1@0 as c1]\
+              \n  CoalesceBatchesExec: target_batch_size=4096\
+              \n    FilterExec: CAST(c2@1 AS Int64) > 10\
+              \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
+              \n        CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true\
+              \n"
     ]];
     assert_eq!(expected, actual);
 
@@ -3940,12 +3947,12 @@ fn normalize_for_explain(s: &str) -> String {
 }
 
 /// Applies normalize_for_explain to every line
-fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>>
-{
-    v
-        .into_iter()
+fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    v.into_iter()
         .map(|l| {
-            l.into_iter().map(|s|normalize_for_explain(&s)).collect::<Vec<_>>()
+            l.into_iter()
+                .map(|s| normalize_for_explain(&s))
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>()
 }
