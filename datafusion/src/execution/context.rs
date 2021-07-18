@@ -1185,7 +1185,6 @@ mod tests {
             _ => panic!("expect optimized_plan to be projection"),
         }
 
-        // let expected = format!("TableScan: {} projection=Some([1])", UNNAMED_TABLE);
         let expected = format!(
             "Projection: #{}.b\
         \n  TableScan: {} projection=Some([1])",

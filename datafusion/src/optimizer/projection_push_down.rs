@@ -21,7 +21,7 @@
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
-    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, Expr, LogicalPlan,
+    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
     LogicalPlanBuilder, ToDFSchema,
 };
 use crate::optimizer::optimizer::OptimizerRule;
@@ -45,8 +45,6 @@ impl OptimizerRule for ProjectionPushDown {
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
-        println!("before optimize: {:?}", plan);
-
         // set of all columns refered by the plan (and thus considered required by the root)
         let required_columns = plan
             .schema()
@@ -54,16 +52,7 @@ impl OptimizerRule for ProjectionPushDown {
             .iter()
             .map(|f| f.qualified_column())
             .collect::<HashSet<Column>>();
-        let optimized =
-            optimize_plan(self, plan, &required_columns, false, execution_props)?;
-        println!("after optimize:\n{:?}", optimized);
-
-        // let eliminated =
-        //     eliminate_projection(&optimized, plan.expressions(), &required_columns)?;
-        // println!("after eliminated:\n{:?}", eliminated);
-        // Ok(eliminated)
-
-        Ok(optimized)
+        optimize_plan(self, plan, &required_columns, false, execution_props)
     }
 
     fn name(&self) -> &str {
@@ -138,178 +127,6 @@ fn get_projected_schema(
     Ok((projection, projected_fields.to_dfschema_ref()?))
 }
 
-// check and remove redundent projection.
-fn eliminate_projection(
-    plan: &LogicalPlan,
-    new_expr: Vec<Expr>,
-    // new_fields: Vec<DFField>,
-    required_columns: &HashSet<Column>,
-) -> Result<LogicalPlan> {
-    let is_all_column_expr = new_expr.iter().all(|expr| matches!(expr, Expr::Column(_)));
-    println!("all column: {}", is_all_column_expr);
-
-    println!("enter plan: {:?}", plan);
-
-    // if &new_required_columns_optimized == required_columns
-    //     && is_all_column_expr
-    //     && !matches!(new_input, LogicalPlan::TableScan { .. })
-    // {
-    //     return Ok(plan);
-    // }
-
-    match plan {
-        LogicalPlan::Projection {
-            input,
-            expr,
-            schema,
-        } => {
-            let new_required_columns = input
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| f.qualified_column())
-                .collect::<HashSet<Column>>();
-
-            // println!("new fields: {:?}", new_fields);
-
-            // if &new_required_columns != required_columns {
-            // if schema.fields() == input.schema().fields() {
-            if required_columns == &new_required_columns {
-                return Ok(eliminate_projection(input, new_expr, required_columns)?);
-            } else {
-                let expr = expr.clone();
-                let new_input =
-                    eliminate_projection(input, expr.clone(), required_columns)?;
-                return Ok(LogicalPlan::Projection {
-                    input: Arc::new(new_input),
-                    expr,
-                    schema: schema.clone(),
-                });
-            }
-
-            // Ok((
-            //     true,
-            //     LogicalPlan::Projection {
-            //         input: input.clone(),
-            //         expr: new_expr,
-            //         schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
-            //     },
-            // ))
-        }
-        LogicalPlan::Window {
-            input,
-            window_expr,
-            schema,
-        } =>
-        //
-        // {
-        //     Ok(LogicalPlan::Window {
-        //         input: input.clone(),
-        //         window_expr: window_expr.clone(),
-        //         schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
-        //     })
-        // }
-        {
-            // eliminate_projection(input, new_expr, new_fields, required_columns)
-            eliminate_projection(plan, new_expr, required_columns)
-        }
-        LogicalPlan::Aggregate {
-            input,
-            group_expr,
-            aggr_expr,
-            schema,
-        } => todo!(),
-        // Ok(LogicalPlan::Aggregate {
-        //     input: input.clone(),
-        //     group_expr: group_expr.clone(),
-        //     aggr_expr: aggr_expr.clone(),
-        //     schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
-        // }),
-        LogicalPlan::Join {
-            left,
-            right,
-            on,
-            join_type,
-            join_constraint,
-            schema,
-        } => todo!(),
-        // Ok(LogicalPlan::Join {
-        //     left: left.clone(),
-        //     right: right.clone(),
-        //     on: on.clone(),
-        //     join_type: join_type.clone(),
-        //     join_constraint: join_constraint.clone(),
-        //     schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
-        // }),
-        LogicalPlan::CrossJoin {
-            left,
-            right,
-            schema,
-        } => todo!(),
-        // Ok(LogicalPlan::CrossJoin {
-        //     left: left.clone(),
-        //     right: right.clone(),
-        //     schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
-        // }),
-        LogicalPlan::Union {
-            inputs,
-            schema,
-            alias,
-        } => todo!(),
-        //  Ok(LogicalPlan::Union {
-        //     inputs: inputs.clone(),
-        //     schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
-        //     alias: alias.clone(),
-        // }),
-        LogicalPlan::TableScan { .. } => Ok(plan.to_owned()),
-        LogicalPlan::EmptyRelation {
-            produce_one_row,
-            schema,
-        } => todo!(),
-        // Ok(LogicalPlan::EmptyRelation {
-        //     produce_one_row: *produce_one_row,
-        //     schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
-        // }),
-        LogicalPlan::Explain {
-            verbose,
-            plan,
-            stringified_plans,
-            schema,
-        } => todo!(),
-        // Ok(LogicalPlan::Explain {
-        //     verbose: *verbose,
-        //     plan: plan.clone(),
-        //     stringified_plans: stringified_plans.clone(),
-        //     schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
-        // }),
-        LogicalPlan::Filter { .. }
-        | LogicalPlan::Extension { .. }
-        | LogicalPlan::Sort { .. }
-        | LogicalPlan::Repartition { .. }
-        | LogicalPlan::Limit { .. }
-        | LogicalPlan::CreateExternalTable { .. } =>
-        // Ok((
-        //     true,
-        //     utils::from_plan(plan, &plan.expressions(), &plan.inputs())?,
-        // )),
-        {
-            let expr = plan.expressions();
-            let inputs = plan.inputs();
-            let new_inputs = inputs
-                .iter()
-                .map(|input_plan| {
-                    eliminate_projection(input_plan, new_expr.clone(), required_columns)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            // eliminate_projection(plan, new_expr, new_fields, required_columns)
-
-            utils::from_plan(plan, &expr, &new_inputs)
-        }
-    }
-
-    // todo!()
-}
-
 /// Recursively transverses the logical plan removing expressions and that are not needed.
 fn optimize_plan(
     optimizer: &ProjectionPushDown,
@@ -364,20 +181,10 @@ fn optimize_plan(
                 .map(|f| f.qualified_column())
                 .collect::<HashSet<Column>>();
 
-            println!("a:\t{:?}", required_columns);
-            println!("b:\t{:?}", new_required_columns);
-            println!("c:\t{:?}", new_required_columns_optimized);
-
-            let is_all_column_expr =
-                expr.iter().all(|expr| matches!(expr, Expr::Column(_)));
-            println!("d: {}", is_all_column_expr);
-
-            if new_fields.is_empty() {
-                // no need for an expression at all
-                Ok(new_input)
-            } else if &new_required_columns_optimized == required_columns
-                && has_projection
+            if new_fields.is_empty()
+                || (has_projection && &new_required_columns_optimized == required_columns)
             {
+                // no need for an expression at all
                 Ok(new_input)
             } else {
                 Ok(LogicalPlan::Projection {
