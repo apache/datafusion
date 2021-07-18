@@ -19,31 +19,42 @@ import pyarrow as pa
 import pytest
 from datafusion import ExecutionContext
 from datafusion import functions as f
+import numpy as np
 
 
 @pytest.fixture
 def df():
     ctx = ExecutionContext()
-
     # create a RecordBatch and a new DataFrame from it
-    batch = pa.RecordBatch.from_arrays(
-        [pa.array(["Hello", "World", "!"]), pa.array([4, 5, 6])],
-        names=["a", "b"],
-    )
-
+    batch = pa.RecordBatch.from_arrays([pa.array([0.1, -0.7, 0.55])], names=["value"])
     return ctx.create_dataframe([[batch]])
 
 
-def test_string_functions(df):
-    df = df.select(f.md5(f.col("a")), f.lower(f.col("a")))
+def test_math_functions(df):
+    values = np.array([0.1, -0.7, 0.55])
+    col_v = f.col("value")
+    df = df.select(
+        f.abs(col_v),
+        f.sin(col_v),
+        f.cos(col_v),
+        f.tan(col_v),
+        f.asin(col_v),
+        f.acos(col_v),
+        f.exp(col_v),
+        f.ln(col_v + f.lit(1)),
+        f.log2(col_v + f.lit(1)),
+        f.log10(col_v + f.lit(1)),
+    )
     result = df.collect()
     assert len(result) == 1
     result = result[0]
-    assert result.column(0) == pa.array(
-        [
-            "8b1a9953c4611296a827abf8c47804d7",
-            "f5a7924e621e84c9280a9a27e1bcb7f6",
-            "9033e0e305f247c0c3c80d0c7848c8b3",
-        ]
-    )
-    assert result.column(1) == pa.array(["hello", "world", "!"])
+    assert result.column(0) == pa.array(np.abs(values))
+    assert result.column(1) == pa.array(np.sin(values))
+    assert result.column(2) == pa.array(np.cos(values))
+    assert result.column(3) == pa.array(np.tan(values))
+    assert result.column(4) == pa.array(np.arcsin(values))
+    assert result.column(5) == pa.array(np.arccos(values))
+    assert result.column(6) == pa.array(np.exp(values))
+    assert result.column(7) == pa.array(np.log(values + 1.0))
+    assert result.column(8) == pa.array(np.log2(values + 1.0))
+    assert result.column(9) == pa.array(np.log10(values + 1.0))

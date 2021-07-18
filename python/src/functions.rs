@@ -63,7 +63,25 @@ fn in_list(
     }
 }
 
-macro_rules! define_function {
+/// Current date and time
+#[pyfunction]
+fn now() -> expression::Expression {
+    expression::Expression {
+        // here lit(0) is a stub for conform to arity
+        expr: logical_plan::now(logical_plan::lit(0)),
+    }
+}
+
+/// Returns a random value in the range 0.0 <= x < 1.0
+#[pyfunction]
+fn random() -> expression::Expression {
+    expression::Expression {
+        // here lit(0) is a stub for conform to arity
+        expr: logical_plan::random(logical_plan::lit(0)),
+    }
+}
+
+macro_rules! define_unary_function {
     ($NAME: ident) => {
         #[doc = "This function is not documented yet"]
         #[pyfunction]
@@ -83,6 +101,24 @@ macro_rules! define_function {
         }
     };
 }
+
+define_unary_function!(sqrt, "sqrt");
+define_unary_function!(sin, "sin");
+define_unary_function!(cos, "cos");
+define_unary_function!(tan, "tan");
+define_unary_function!(asin, "asin");
+define_unary_function!(acos, "acos");
+define_unary_function!(atan, "atan");
+define_unary_function!(floor, "floor");
+define_unary_function!(ceil, "ceil");
+define_unary_function!(round, "round");
+define_unary_function!(trunc, "trunc");
+define_unary_function!(abs, "abs");
+define_unary_function!(signum, "signum");
+define_unary_function!(exp, "exp");
+define_unary_function!(ln, "ln");
+define_unary_function!(log2, "log2");
+define_unary_function!(log10, "log10");
 
 define_unary_function!(ascii, "Returns the numeric code of the first character of the argument. In UTF8 encoding, returns the Unicode code point of the character. In other multibyte encodings, the argument must be an ASCII character.");
 define_unary_function!(sum);
@@ -106,9 +142,7 @@ define_unary_function!(
     md5,
     "Computes the MD5 hash of the argument, with the result written in hexadecimal."
 );
-define_unary_function!(now);
 define_unary_function!(octet_length, "Returns number of bytes in the string. Since this version of the function accepts type character directly, it will not strip trailing spaces.");
-define_unary_function!(random, "Returns a random value in the range 0.0 <= x < 1.0");
 define_unary_function!(
     replace,
     "Replaces all occurrences in string of substring from with substring to."
@@ -263,5 +297,23 @@ pub fn init(module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(max, module)?)?;
     module.add_function(wrap_pyfunction!(avg, module)?)?;
     module.add_function(wrap_pyfunction!(udaf, module)?)?;
+    module.add_function(wrap_pyfunction!(sqrt, module)?)?;
+    module.add_function(wrap_pyfunction!(sin, module)?)?;
+    module.add_function(wrap_pyfunction!(cos, module)?)?;
+    module.add_function(wrap_pyfunction!(tan, module)?)?;
+    module.add_function(wrap_pyfunction!(asin, module)?)?;
+    module.add_function(wrap_pyfunction!(acos, module)?)?;
+    module.add_function(wrap_pyfunction!(atan, module)?)?;
+    module.add_function(wrap_pyfunction!(floor, module)?)?;
+    module.add_function(wrap_pyfunction!(ceil, module)?)?;
+    module.add_function(wrap_pyfunction!(round, module)?)?;
+    module.add_function(wrap_pyfunction!(trunc, module)?)?;
+    module.add_function(wrap_pyfunction!(abs, module)?)?;
+    module.add_function(wrap_pyfunction!(signum, module)?)?;
+    module.add_function(wrap_pyfunction!(exp, module)?)?;
+    module.add_function(wrap_pyfunction!(ln, module)?)?;
+    module.add_function(wrap_pyfunction!(log2, module)?)?;
+    module.add_function(wrap_pyfunction!(log10, module)?)?;
+
     Ok(())
 }
