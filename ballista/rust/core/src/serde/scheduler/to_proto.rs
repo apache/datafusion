@@ -70,6 +70,7 @@ impl TryInto<protobuf::PartitionLocation> for PartitionLocation {
             partition_id: Some(self.partition_id.into()),
             executor_meta: Some(self.executor_meta.into()),
             partition_stats: Some(self.partition_stats.into()),
+            path: self.path,
         })
     }
 }
