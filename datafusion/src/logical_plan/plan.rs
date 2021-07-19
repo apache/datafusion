@@ -819,14 +819,14 @@ pub enum PlanType {
     PhysicalPlan,
 }
 
-impl From<&PlanType> for String {
-    fn from(t: &PlanType) -> Self {
-        match t {
-            PlanType::LogicalPlan => "logical_plan".into(),
+impl fmt::Display for PlanType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PlanType::LogicalPlan => write!(f, "logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {
-                format!("logical_plan after {}", optimizer_name)
+                write!(f, "logical_plan after {}", optimizer_name)
             }
-            PlanType::PhysicalPlan => "physical_plan".into(),
+            PlanType::PhysicalPlan => write!(f, "physical_plan"),
         }
     }
 }
