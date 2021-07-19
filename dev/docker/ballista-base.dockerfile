@@ -1,3 +1,5 @@
+# syntax = docker/dockerfile:1.2
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -27,6 +29,18 @@ FROM rust:1.53.0-buster AS builder
 
 RUN apt update && apt -y install musl musl-dev musl-tools libssl-dev openssl
 
+ARG SCCACHE_TAR_URL=https://github.com/mozilla/sccache/releases/download/v0.2.15/sccache-v0.2.15-x86_64-unknown-linux-musl.tar.gz
+
+RUN curl -LsSf ${SCCACHE_TAR_URL} > /tmp/sccache.tar.gz && \
+	tar axvf /tmp/sccache.tar.gz --strip-components=1 -C /usr/local/bin --wildcards --no-anchored 'sccache' && \
+	chmod +x /usr/local/bin/sccache && \
+	sccache --version && \
+	rm -rf /tmp/sccache.tar.gz
+
+ENV RUSTC_WRAPPER=/usr/local/bin/sccache
+ENV CARGO_INCREMENTAL=0
+ENV SCCACHE_CACHE_SIZE=1G
+
 #NOTE: the following was copied from https://github.com/emk/rust-musl-builder/blob/master/Dockerfile under Apache 2.0 license
 
 # The OpenSSL version to use. We parameterize this because many Rust
@@ -41,7 +55,8 @@ ARG OPENSSL_VERSION=1.1.1b
 # necessarily the right ones) in an effort to compile OpenSSL 1.1's "engine"
 # component. It's possible that this will cause bizarre and terrible things to
 # happen. There may be "sanitized" header
-RUN echo "Building OpenSSL" && \
+RUN --mount=type=cache,target=/root/.cache/sccache \
+    echo "Building OpenSSL" && \
     mkdir -p /usr/local/musl/include && \
     ln -s /usr/include/linux /usr/local/musl/include/linux && \
     ln -s /usr/include/x86_64-linux-gnu/asm /usr/local/musl/include/asm && \
@@ -49,28 +64,30 @@ RUN echo "Building OpenSSL" && \
     cd /tmp && \
     curl -LO "https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz" && \
     tar xzf "openssl-$OPENSSL_VERSION.tar.gz" && cd "openssl-$OPENSSL_VERSION" && \
-    env CC=musl-gcc ./Configure no-shared no-zlib -fPIC --prefix=/usr/local/musl -DOPENSSL_NO_SECURE_MEMORY linux-x86_64 && \
+    env CC="sccache musl-gcc" ./Configure no-shared no-zlib -fPIC --prefix=/usr/local/musl -DOPENSSL_NO_SECURE_MEMORY linux-x86_64 && \
     env C_INCLUDE_PATH=/usr/local/musl/include/ make -s depend && \
     env C_INCLUDE_PATH=/usr/local/musl/include/ make -s && \
     make -s install 1>/dev/null && \
     rm /usr/local/musl/include/linux /usr/local/musl/include/asm /usr/local/musl/include/asm-generic && \
     rm -r /tmp/*
 
-RUN echo "Building zlib" && \
+RUN --mount=type=cache,target=/root/.cache/sccache \
+    echo "Building zlib" && \
     cd /tmp && \
     ZLIB_VERSION=1.2.11 && \
     curl -LO "http://zlib.net/zlib-$ZLIB_VERSION.tar.gz" && \
     tar xzf "zlib-$ZLIB_VERSION.tar.gz" && cd "zlib-$ZLIB_VERSION" && \
-    CC=musl-gcc ./configure --static --prefix=/usr/local/musl && \
+    CC="sccache musl-gcc" ./configure --static --prefix=/usr/local/musl && \
     make -s && make -s install 1>/dev/null && \
     rm -r /tmp/*
 
-RUN echo "Building libpq" && \
+RUN --mount=type=cache,target=/root/.cache/sccache \
+    echo "Building libpq" && \
     cd /tmp && \
     POSTGRESQL_VERSION=11.2 && \
     curl -LO "https://ftp.postgresql.org/pub/source/v$POSTGRESQL_VERSION/postgresql-$POSTGRESQL_VERSION.tar.gz" && \
     tar xzf "postgresql-$POSTGRESQL_VERSION.tar.gz" && cd "postgresql-$POSTGRESQL_VERSION" && \
-    CC=musl-gcc CPPFLAGS=-I/usr/local/musl/include LDFLAGS=-L/usr/local/musl/lib ./configure --with-openssl --without-readline --prefix=/usr/local/musl && \
+    CC="sccache musl-gcc" CPPFLAGS=-I/usr/local/musl/include LDFLAGS=-L/usr/local/musl/lib ./configure --with-openssl --without-readline --prefix=/usr/local/musl && \
     cd src/interfaces/libpq && make -s all-static-lib && make -s install-lib-static && \
     cd ../../bin/pg_config && make -s && make -s install && \
     rm -r /tmp/*
@@ -91,8 +108,10 @@ ENV OPENSSL_DIR=/usr/local/musl/ \
 
 ## Download the target for static linking.
 RUN rustup target add x86_64-unknown-linux-musl
-RUN cargo install cargo-build-deps
+RUN --mount=type=cache,target=/root/.cache/sccache \
+    cargo install cargo-build-deps
 
 # prepare toolchain
-RUN rustup update && \
+RUN --mount=type=cache,target=/root/.cache/sccache \
+    rustup update && \
     rustup component add rustfmt
