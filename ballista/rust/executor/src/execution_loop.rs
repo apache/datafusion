@@ -27,7 +27,8 @@ use tonic::transport::Channel;
 use ballista_core::serde::protobuf::ExecutorRegistration;
 use ballista_core::serde::protobuf::{
     self, scheduler_grpc_client::SchedulerGrpcClient, task_status, FailedTask,
-    PartitionId, PollWorkParams, PollWorkResult, TaskDefinition, TaskStatus,
+    PartitionId, PollWorkParams, PollWorkResult, ShuffleWritePartition, TaskDefinition,
+    TaskStatus,
 };
 use protobuf::CompletedTask;
 
@@ -110,7 +111,7 @@ async fn run_received_tasks(
 
     tokio::spawn(async move {
         let execution_result = executor
-            .execute_partition(
+            .execute_shuffle_write(
                 task_id.job_id.clone(),
                 task_id.stage_id as usize,
                 task_id.partition_id as usize,
@@ -121,7 +122,7 @@ async fn run_received_tasks(
         debug!("Statistics: {:?}", execution_result);
         available_tasks_slots.fetch_add(1, Ordering::SeqCst);
         let _ = task_status_sender.send(as_task_status(
-            execution_result.map(|_| ()),
+            execution_result,
             executor_id,
             task_id,
         ));
@@ -129,18 +130,19 @@ async fn run_received_tasks(
 }
 
 fn as_task_status(
-    execution_result: ballista_core::error::Result<()>,
+    execution_result: ballista_core::error::Result<Vec<ShuffleWritePartition>>,
     executor_id: String,
     task_id: PartitionId,
 ) -> TaskStatus {
     match execution_result {
-        Ok(_) => {
+        Ok(partitions) => {
             info!("Task {:?} finished", task_id);
 
             TaskStatus {
                 partition_id: Some(task_id),
                 status: Some(task_status::Status::Completed(CompletedTask {
                     executor_id,
+                    partitions,
                 })),
             }
         }

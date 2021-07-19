@@ -27,16 +27,13 @@ use prost::Message;
 use tokio::sync::OwnedMutexGuard;
 
 use ballista_core::serde::protobuf::{
-    job_status, task_status, CompletedJob, CompletedTask, ExecutorHeartbeat,
+    self, job_status, task_status, CompletedJob, CompletedTask, ExecutorHeartbeat,
     ExecutorMetadata, FailedJob, FailedTask, JobStatus, PhysicalPlanNode, RunningJob,
     RunningTask, TaskStatus,
 };
 use ballista_core::serde::scheduler::PartitionStats;
 use ballista_core::{error::BallistaError, serde::scheduler::ExecutorMeta};
-use ballista_core::{
-    error::Result, execution_plans::UnresolvedShuffleExec,
-    serde::protobuf::PartitionLocation,
-};
+use ballista_core::{error::Result, execution_plans::UnresolvedShuffleExec};
 
 use super::planner::remove_unresolved_shuffles;
 
@@ -254,9 +251,9 @@ impl SchedulerState {
         executors: &[ExecutorMeta],
     ) -> Result<bool> {
         let executor_id: &str = match &task_status.status {
-            Some(task_status::Status::Completed(CompletedTask { executor_id })) => {
-                executor_id
-            }
+            Some(task_status::Status::Completed(CompletedTask {
+                executor_id, ..
+            })) => executor_id,
             Some(task_status::Status::Running(RunningTask { executor_id })) => {
                 executor_id
             }
@@ -298,8 +295,11 @@ impl SchedulerState {
                 // Let's try to resolve any unresolved shuffles we find
                 let unresolved_shuffles = find_unresolved_shuffles(&plan)?;
                 let mut partition_locations: HashMap<
-                    usize,
-                    Vec<Vec<ballista_core::serde::scheduler::PartitionLocation>>,
+                    usize, // stage id
+                    HashMap<
+                        usize,                                                   // shuffle input partition id
+                        Vec<ballista_core::serde::scheduler::PartitionLocation>, // shuffle output partitions
+                    >,
                 > = HashMap::new();
                 for unresolved_shuffle in unresolved_shuffles {
                     for partition_id in 0..unresolved_shuffle.partition_count {
@@ -317,30 +317,49 @@ impl SchedulerState {
                         if task_is_dead {
                             continue 'tasks;
                         } else if let Some(task_status::Status::Completed(
-                            CompletedTask { executor_id },
+                            CompletedTask {
+                                executor_id,
+                                partitions,
+                            },
                         )) = &referenced_task.status
                         {
-                            let empty = vec![];
                             let locations = partition_locations
                                 .entry(unresolved_shuffle.stage_id)
-                                .or_insert(empty);
+                                .or_insert_with(HashMap::new);
                             let executor_meta = executors
                                 .iter()
                                 .find(|exec| exec.id == *executor_id)
                                 .unwrap()
                                 .clone();
-                            locations.push(vec![
-                                ballista_core::serde::scheduler::PartitionLocation {
-                                    partition_id:
-                                        ballista_core::serde::scheduler::PartitionId {
-                                            job_id: partition.job_id.clone(),
-                                            stage_id: unresolved_shuffle.stage_id,
-                                            partition_id,
-                                        },
-                                    executor_meta,
-                                    partition_stats: PartitionStats::default(),
-                                },
-                            ]);
+
+                            let temp =
+                                locations.entry(partition_id).or_insert_with(Vec::new);
+                            for p in partitions {
+                                let executor_meta = executor_meta.clone();
+                                let partition_location =
+                                    ballista_core::serde::scheduler::PartitionLocation {
+                                        partition_id:
+                                            ballista_core::serde::scheduler::PartitionId {
+                                                job_id: partition.job_id.clone(),
+                                                stage_id: unresolved_shuffle.stage_id,
+                                                partition_id,
+                                            },
+                                        executor_meta,
+                                        partition_stats: PartitionStats::new(
+                                            Some(p.num_rows),
+                                            Some(p.num_batches),
+                                            Some(p.num_bytes),
+                                        ),
+                                        path: p.path.clone(),
+                                    };
+                                info!(
+                                    "Scheduler storing stage {} partition {} path: {}",
+                                    unresolved_shuffle.stage_id,
+                                    partition_id,
+                                    partition_location.path
+                                );
+                                temp.push(partition_location);
+                            }
                         } else {
                             continue 'tasks;
                         }
@@ -452,24 +471,39 @@ impl SchedulerState {
         let mut job_status = statuses
             .iter()
             .map(|status| match &status.status {
-                Some(task_status::Status::Completed(CompletedTask { executor_id })) => {
-                    Ok((status, executor_id))
-                }
+                Some(task_status::Status::Completed(CompletedTask {
+                    executor_id,
+                    partitions,
+                })) => Ok((status, executor_id, partitions)),
                 _ => Err(BallistaError::General("Task not completed".to_string())),
             })
             .collect::<Result<Vec<_>>>()
             .ok()
             .map(|info| {
-                let partition_location = info
-                    .into_iter()
-                    .map(|(status, execution_id)| PartitionLocation {
-                        partition_id: status.partition_id.to_owned(),
-                        executor_meta: executors
-                            .get(execution_id)
-                            .map(|e| e.clone().into()),
-                        partition_stats: None,
-                    })
-                    .collect();
+                let mut partition_location = vec![];
+                for (status, executor_id, partitions) in info {
+                    let input_partition_id = status.partition_id.as_ref().unwrap(); //TODO unwrap
+                    let executor_meta =
+                        executors.get(executor_id).map(|e| e.clone().into());
+                    for shuffle_write_partition in partitions {
+                        let shuffle_input_partition_id = Some(protobuf::PartitionId {
+                            job_id: input_partition_id.job_id.clone(),
+                            stage_id: input_partition_id.stage_id,
+                            partition_id: input_partition_id.partition_id,
+                        });
+                        partition_location.push(protobuf::PartitionLocation {
+                            partition_id: shuffle_input_partition_id.clone(),
+                            executor_meta: executor_meta.clone(),
+                            partition_stats: Some(protobuf::PartitionStats {
+                                num_batches: shuffle_write_partition.num_batches as i64,
+                                num_rows: shuffle_write_partition.num_rows as i64,
+                                num_bytes: shuffle_write_partition.num_bytes as i64,
+                                column_stats: vec![],
+                            }),
+                            path: shuffle_write_partition.path.clone(),
+                        });
+                    }
+                }
                 job_status::Status::Completed(CompletedJob { partition_location })
             });
 
@@ -745,6 +779,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -784,6 +819,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -821,6 +857,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -832,6 +869,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -863,6 +901,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -874,6 +913,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
@@ -905,6 +945,7 @@ mod test {
         let meta = TaskStatus {
             status: Some(task_status::Status::Completed(CompletedTask {
                 executor_id: "".to_owned(),
+                partitions: vec![],
             })),
             partition_id: Some(PartitionId {
                 job_id: job_id.to_owned(),
