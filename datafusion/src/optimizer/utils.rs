@@ -542,7 +542,7 @@ mod tests {
             &optimizer,
             true,
             &empty_plan,
-            &[StringifiedPlan::new(PlanType::LogicalPlan, "...")],
+            &[StringifiedPlan::new(PlanType::InitialLogicalPlan, "...")],
             schema.as_ref(),
             &ExecutionProps::new(),
         )?;
@@ -556,7 +556,7 @@ mod tests {
                 assert!(*verbose);
 
                 let expected_stringified_plans = vec![
-                    StringifiedPlan::new(PlanType::LogicalPlan, "..."),
+                    StringifiedPlan::new(PlanType::InitialLogicalPlan, "..."),
                     StringifiedPlan::new(
                         PlanType::OptimizedLogicalPlan {
                             optimizer_name: "test_optimizer".into(),

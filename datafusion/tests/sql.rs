@@ -1972,17 +1972,28 @@ async fn csv_explain() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
     let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec![
-        "logical_plan",
-        "Projection: #aggregate_test_100.c1\
-            \n  Filter: #aggregate_test_100.c2 Gt Int64(10)\
-            \n    TableScan: aggregate_test_100 projection=None",
+    let actual = normalize_vec_for_explain(actual);
+    let expected = vec![
+        vec![
+            "logical_plan",
+            "Projection: #aggregate_test_100.c1\
+             \n  Filter: #aggregate_test_100.c2 Gt Int64(10)\
+             \n    TableScan: aggregate_test_100 projection=Some([0, 1])"
+        ],
+        vec!["physical_plan",
+             "ProjectionExec: expr=[c1@0 as c1]\
+              \n  CoalesceBatchesExec: target_batch_size=4096\
+              \n    FilterExec: CAST(c2@1 AS Int64) > 10\
+              \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
+              \n        CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true\
+              \n"
     ]];
     assert_eq!(expected, actual);
 
     // Also, expect same result with lowercase explain
     let sql = "explain SELECT c1 FROM aggregate_test_100 where c2 > 10";
     let actual = execute(&mut ctx, sql).await;
+    let actual = normalize_vec_for_explain(actual);
     assert_eq!(expected, actual);
 }
 
@@ -3920,4 +3931,28 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let err = physical_plan.unwrap_err();
     assert_eq!(err.to_string(), "Error during planning: Invalid or wrong number of arguments passed to aggregate: 'COUNT(DISTINCT )'");
     Ok(())
+}
+
+// Normalizes parts of an explain plan that vary from run to run (such as path)
+fn normalize_for_explain(s: &str) -> String {
+    // Convert things like /Users/alamb/Software/arrow/testing/data/csv/aggregate_test_100.csv
+    // to ARROW_TEST_DATA/csv/aggregate_test_100.csv
+    let data_path = datafusion::test_util::arrow_test_data();
+    let s = s.replace(&data_path, "ARROW_TEST_DATA");
+
+    // convert things like partitioning=RoundRobinBatch(16)
+    // to partitioning=RoundRobinBatch(NUM_CORES)
+    let needle = format!("RoundRobinBatch({})", num_cpus::get());
+    s.replace(&needle, "RoundRobinBatch(NUM_CORES)")
+}
+
+/// Applies normalize_for_explain to every line
+fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    v.into_iter()
+        .map(|l| {
+            l.into_iter()
+                .map(|s| normalize_for_explain(&s))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
 }

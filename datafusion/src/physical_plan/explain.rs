@@ -40,14 +40,21 @@ pub struct ExplainExec {
     schema: SchemaRef,
     /// The strings to be printed
     stringified_plans: Vec<StringifiedPlan>,
+    /// control which plans to print
+    verbose: bool,
 }
 
 impl ExplainExec {
     /// Create a new ExplainExec
-    pub fn new(schema: SchemaRef, stringified_plans: Vec<StringifiedPlan>) -> Self {
+    pub fn new(
+        schema: SchemaRef,
+        stringified_plans: Vec<StringifiedPlan>,
+        verbose: bool,
+    ) -> Self {
         ExplainExec {
             schema,
             stringified_plans,
+            verbose,
         }
     }
 
@@ -103,8 +110,13 @@ impl ExecutionPlan for ExplainExec {
         let mut type_builder = StringBuilder::new(self.stringified_plans.len());
         let mut plan_builder = StringBuilder::new(self.stringified_plans.len());
 
-        for p in &self.stringified_plans {
-            type_builder.append_value(&p.plan_type.to_string())?;
+        let plans_to_print = self
+            .stringified_plans
+            .iter()
+            .filter(|s| s.should_display(self.verbose));
+
+        for p in plans_to_print {
+            type_builder.append_value(p.plan_type.to_string())?;
             plan_builder.append_value(&*p.plan)?;
         }
 
