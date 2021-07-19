@@ -26,6 +26,7 @@ use std::{
     sync::Arc,
 };
 
+use datafusion::logical_plan::JoinType;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::csv::CsvExec;
 use datafusion::physical_plan::expressions::{
@@ -35,7 +36,6 @@ use datafusion::physical_plan::expressions::{CastExpr, TryCastExpr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::AggregateMode;
 use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
-use datafusion::physical_plan::hash_utils::JoinType;
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::parquet::ParquetExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -55,7 +55,9 @@ use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
 use protobuf::physical_plan_node::PhysicalPlanType;
 
-use crate::execution_plans::{ShuffleReaderExec, UnresolvedShuffleExec};
+use crate::execution_plans::{
+    ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
+};
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{protobuf, BallistaError};
@@ -135,18 +137,13 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                     }),
                 })
                 .collect();
-            let join_type = match exec.join_type() {
-                JoinType::Inner => protobuf::JoinType::Inner,
-                JoinType::Left => protobuf::JoinType::Left,
-                JoinType::Right => protobuf::JoinType::Right,
-                JoinType::Full => protobuf::JoinType::Full,
-                JoinType::Semi => protobuf::JoinType::Semi,
-                JoinType::Anti => protobuf::JoinType::Anti,
-            };
+            let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+
             let partition_mode = match exec.partition_mode() {
                 PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
                 PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
             };
+
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
                     protobuf::HashJoinExecNode {
@@ -361,15 +358,40 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                     },
                 ))),
             })
+        } else if let Some(exec) = plan.downcast_ref::<ShuffleWriterExec>() {
+            let input: protobuf::PhysicalPlanNode =
+                exec.children()[0].to_owned().try_into()?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::ShuffleWriter(Box::new(
+                    protobuf::ShuffleWriterExecNode {
+                        job_id: exec.job_id().to_string(),
+                        stage_id: exec.stage_id() as u32,
+                        input: Some(Box::new(input)),
+                        output_partitioning: match exec.output_partitioning() {
+                            Partitioning::Hash(exprs, partition_count) => {
+                                Some(protobuf::PhysicalHashRepartition {
+                                    hash_expr: exprs
+                                        .iter()
+                                        .map(|expr| expr.clone().try_into())
+                                        .collect::<Result<Vec<_>, BallistaError>>()?,
+                                    partition_count: partition_count as u64,
+                                })
+                            }
+                            other => {
+                                return Err(BallistaError::General(format!(
+                                    "physical_plan::to_proto() invalid partitioning for ShuffleWriterExec: {:?}",
+                                    other
+                                )))
+                            }
+                        },
+                    },
+                ))),
+            })
         } else if let Some(exec) = plan.downcast_ref::<UnresolvedShuffleExec>() {
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Unresolved(
                     protobuf::UnresolvedShuffleExecNode {
-                        query_stage_ids: exec
-                            .query_stage_ids
-                            .iter()
-                            .map(|id| *id as u32)
-                            .collect(),
+                        stage_id: exec.stage_id as u32,
                         schema: Some(exec.schema().as_ref().into()),
                         partition_count: exec.partition_count as u32,
                     },

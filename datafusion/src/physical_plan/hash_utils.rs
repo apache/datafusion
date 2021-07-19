@@ -21,24 +21,8 @@ use crate::error::{DataFusionError, Result};
 use arrow::datatypes::{Field, Schema};
 use std::collections::HashSet;
 
+use crate::logical_plan::JoinType;
 use crate::physical_plan::expressions::Column;
-
-/// All valid types of joins.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum JoinType {
-    /// Inner Join
-    Inner,
-    /// Left Join
-    Left,
-    /// Right Join
-    Right,
-    /// Full Join
-    Full,
-    /// Semi Join
-    Semi,
-    /// Anti Join
-    Anti,
-}
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;
@@ -104,46 +88,11 @@ fn check_join_set_is_valid(
 
 /// Creates a schema for a join operation.
 /// The fields from the left side are first
-pub fn build_join_schema(
-    left: &Schema,
-    right: &Schema,
-    on: JoinOnRef,
-    join_type: &JoinType,
-) -> Schema {
+pub fn build_join_schema(left: &Schema, right: &Schema, join_type: &JoinType) -> Schema {
     let fields: Vec<Field> = match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Full => {
-            // remove right-side join keys if they have the same names as the left-side
-            let duplicate_keys = &on
-                .iter()
-                .filter(|(l, r)| l.name() == r.name())
-                .map(|on| on.1.name())
-                .collect::<HashSet<_>>();
-
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
             let left_fields = left.fields().iter();
-
-            let right_fields = right
-                .fields()
-                .iter()
-                .filter(|f| !duplicate_keys.contains(f.name().as_str()));
-
-            // left then right
-            left_fields.chain(right_fields).cloned().collect()
-        }
-        JoinType::Right => {
-            // remove left-side join keys if they have the same names as the right-side
-            let duplicate_keys = &on
-                .iter()
-                .filter(|(l, r)| l.name() == r.name())
-                .map(|on| on.1.name())
-                .collect::<HashSet<_>>();
-
-            let left_fields = left
-                .fields()
-                .iter()
-                .filter(|f| !duplicate_keys.contains(f.name().as_str()));
-
             let right_fields = right.fields().iter();
-
             // left then right
             left_fields.chain(right_fields).cloned().collect()
         }

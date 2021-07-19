@@ -27,8 +27,9 @@ use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
-    and, lit, union_with_alias, Column, DFSchema, Expr, LogicalPlan, LogicalPlanBuilder,
-    Operator, PlanType, StringifiedPlan, ToDFSchema,
+    and, builder::expand_wildcard, col, lit, normalize_col, union_with_alias, Column,
+    DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType, StringifiedPlan,
+    ToDFSchema,
 };
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
@@ -56,7 +57,7 @@ use sqlparser::parser::ParserError::ParserError;
 use super::{
     parser::DFParser,
     utils::{
-        can_columns_satisfy_exprs, expand_wildcard, expr_as_column_expr, extract_aliases,
+        can_columns_satisfy_exprs, expr_as_column_expr, extract_aliases,
         find_aggregate_exprs, find_column_exprs, find_window_exprs,
         group_window_expr_by_sort_keys, rebase_expr, resolve_aliases_to_exprs,
         resolve_positions_to_exprs,
@@ -368,15 +369,34 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // parse ON expression
                 let expr = self.sql_to_rex(sql_expr, &join_schema)?;
 
+                // expression that didn't match equi-join pattern
+                let mut filter = vec![];
+
                 // extract join keys
-                extract_join_keys(&expr, &mut keys)?;
+                extract_join_keys(&expr, &mut keys, &mut filter);
 
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
                 // return the logical plan representing the join
-                LogicalPlanBuilder::from(left)
-                    .join(right, join_type, left_keys, right_keys)?
+                let join = LogicalPlanBuilder::from(left)
+                    .join(right, join_type, left_keys, right_keys)?;
+
+                if filter.is_empty() {
+                    join.build()
+                } else if join_type == JoinType::Inner {
+                    join.filter(
+                        filter
+                            .iter()
+                            .skip(1)
+                            .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
+                    )?
                     .build()
+                } else {
+                    Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported expressions in {:?} JOIN: {:?}",
+                        join_type, filter
+                    )))
+                }
             }
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
@@ -404,46 +424,80 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         relation: &TableFactor,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
-        match relation {
+        let (plan, columns_alias) = match relation {
             TableFactor::Table { name, alias, .. } => {
                 let table_name = name.to_string();
                 let cte = ctes.get(&table_name);
-                match (
-                    cte,
-                    self.schema_provider.get_table_provider(name.try_into()?),
-                ) {
-                    (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                    (_, Some(provider)) => LogicalPlanBuilder::scan(
-                        // take alias into account to support `JOIN table1 as table2`
-                        alias
-                            .as_ref()
-                            .map(|a| a.name.value.as_str())
-                            .unwrap_or(&table_name),
-                        provider,
-                        None,
-                    )?
-                    .build(),
-                    (None, None) => Err(DataFusionError::Plan(format!(
-                        "Table or CTE with name '{}' not found",
-                        name
-                    ))),
-                }
+                let columns_alias = alias.clone().map(|x| x.columns);
+                (
+                    match (
+                        cte,
+                        self.schema_provider.get_table_provider(name.try_into()?),
+                    ) {
+                        (Some(cte_plan), _) => Ok(cte_plan.clone()),
+                        (_, Some(provider)) => LogicalPlanBuilder::scan(
+                            // take alias into account to support `JOIN table1 as table2`
+                            alias
+                                .as_ref()
+                                .map(|a| a.name.value.as_str())
+                                .unwrap_or(&table_name),
+                            provider,
+                            None,
+                        )?
+                        .build(),
+                        (None, None) => Err(DataFusionError::Plan(format!(
+                            "Table or CTE with name '{}' not found",
+                            name
+                        ))),
+                    }?,
+                    columns_alias,
+                )
             }
             TableFactor::Derived {
                 subquery, alias, ..
-            } => self.query_to_plan_with_alias(
-                subquery,
-                alias.as_ref().map(|a| a.name.value.to_string()),
-                ctes,
+            } => (
+                self.query_to_plan_with_alias(
+                    subquery,
+                    alias.as_ref().map(|a| a.name.value.to_string()),
+                    ctes,
+                )?,
+                alias.clone().map(|x| x.columns),
             ),
             TableFactor::NestedJoin(table_with_joins) => {
-                self.plan_table_with_joins(table_with_joins, ctes)
+                (self.plan_table_with_joins(table_with_joins, ctes)?, None)
             }
             // @todo Support TableFactory::TableFunction?
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported ast node {:?} in create_relation",
-                relation
-            ))),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported ast node {:?} in create_relation",
+                    relation
+                )))
+            }
+        };
+
+        if let Some(columns_alias) = columns_alias {
+            if columns_alias.is_empty() {
+                // sqlparser-rs encodes AS t as an empty list of column alias
+                Ok(plan)
+            } else if columns_alias.len() != plan.schema().fields().len() {
+                return Err(DataFusionError::Plan(format!(
+                    "Source table contains {} columns but only {} names given as column alias",
+                    plan.schema().fields().len(),
+                    columns_alias.len(),
+                )));
+            } else {
+                let fields = plan.schema().fields().clone();
+                LogicalPlanBuilder::from(plan)
+                    .project(
+                        fields
+                            .iter()
+                            .zip(columns_alias.iter())
+                            .map(|(field, ident)| col(field.name()).alias(&ident.value)),
+                    )?
+                    .build()
+            }
+        } else {
+            Ok(plan)
         }
     }
 
@@ -477,12 +531,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let right_schema = right.schema();
                     let mut join_keys = vec![];
                     for (l, r) in &possible_join_keys {
-                        if left_schema.field_from_qualified_column(l).is_ok()
-                            && right_schema.field_from_qualified_column(r).is_ok()
+                        if left_schema.field_from_column(l).is_ok()
+                            && right_schema.field_from_column(r).is_ok()
                         {
                             join_keys.push((l.clone(), r.clone()));
-                        } else if left_schema.field_from_qualified_column(r).is_ok()
-                            && right_schema.field_from_qualified_column(l).is_ok()
+                        } else if left_schema.field_from_column(r).is_ok()
+                            && right_schema.field_from_column(l).is_ok()
                         {
                             join_keys.push((r.clone(), l.clone()));
                         }
@@ -560,7 +614,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 //   SELECT c1 AS m FROM t HAVING c1 > 10;
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
-                resolve_aliases_to_exprs(&having_expr, &alias_map)
+                let having_expr = resolve_aliases_to_exprs(&having_expr, &alias_map)?;
+                normalize_col(having_expr, &projected_plan)
             })
             .transpose()?;
 
@@ -584,6 +639,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let group_by_expr =
                     resolve_positions_to_exprs(&group_by_expr, &select_exprs)
                         .unwrap_or(group_by_expr);
+                let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                 self.validate_schema_satisfies_exprs(
                     plan.schema(),
                     &[group_by_expr.clone()],
@@ -662,13 +718,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Vec<Expr>> {
         let input_schema = plan.schema();
 
-        Ok(projection
+        projection
             .iter()
             .map(|expr| self.sql_select_to_rex(expr, input_schema))
             .collect::<Result<Vec<Expr>>>()?
-            .iter()
-            .flat_map(|expr| expand_wildcard(expr, input_schema))
-            .collect::<Vec<Expr>>())
+            .into_iter()
+            .map(|expr| {
+                Ok(match expr {
+                    Expr::Wildcard => expand_wildcard(input_schema, plan)?,
+                    _ => vec![normalize_col(expr, plan)?],
+                })
+            })
+            .flat_map(|res| match res {
+                Ok(v) => v.into_iter().map(Ok).collect(),
+                Err(e) => vec![Err(e)],
+            })
+            .collect::<Result<Vec<Expr>>>()
     }
 
     /// Wrap a plan in a projection
@@ -816,20 +881,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         find_column_exprs(exprs)
             .iter()
             .try_for_each(|col| match col {
-                Expr::Column(col) => {
-                    match &col.relation {
-                        Some(r) => schema.field_with_qualified_name(r, &col.name),
-                        None => schema.field_with_unqualified_name(&col.name),
+                Expr::Column(col) => match &col.relation {
+                    Some(r) => {
+                        schema.field_with_qualified_name(r, &col.name)?;
+                        Ok(())
                     }
-                    .map_err(|_| {
-                        DataFusionError::Plan(format!(
-                            "Invalid identifier '{}' for schema {}",
-                            col,
-                            schema.to_string()
-                        ))
-                    })?;
-                    Ok(())
+                    None => {
+                        if !schema.fields_with_unqualified_name(&col.name).is_empty() {
+                            Ok(())
+                        } else {
+                            Err(DataFusionError::Plan(format!(
+                                "No field with unqualified name '{}'",
+                                &col.name
+                            )))
+                        }
+                    }
                 }
+                .map_err(|_: DataFusionError| {
+                    DataFusionError::Plan(format!(
+                        "Invalid identifier '{}' for schema {}",
+                        col,
+                        schema.to_string()
+                    ))
+                }),
                 _ => Err(DataFusionError::Internal("Not a column".to_string())),
             })
     }
@@ -907,11 +981,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let var_names = vec![id.value.clone()];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
-                    Ok(Expr::Column(
-                        schema
-                            .field_with_unqualified_name(&id.value)?
-                            .qualified_column(),
-                    ))
+                    // create a column expression based on raw user input, this column will be
+                    // normalized with qualifer later by the SQL planner.
+                    Ok(col(&id.value))
                 }
             }
 
@@ -1550,39 +1622,41 @@ fn remove_join_expressions(
     }
 }
 
-/// Parse equijoin ON condition which could be a single Eq or multiple conjunctive Eqs
+/// Extracts equijoin ON condition be a single Eq or multiple conjunctive Eqs
+/// Filters matching this pattern are added to `accum`
+/// Filters that don't match this pattern are added to `accum_filter`
+/// Examples:
 ///
-/// Examples
+/// foo = bar => accum=[(foo, bar)] accum_filter=[]
+/// foo = bar AND bar = baz => accum=[(foo, bar), (bar, baz)] accum_filter=[]
+/// foo = bar AND baz > 1 => accum=[(foo, bar)] accum_filter=[baz > 1]
 ///
-/// foo = bar
-/// foo = bar AND bar = baz AND ...
-///
-fn extract_join_keys(expr: &Expr, accum: &mut Vec<(Column, Column)>) -> Result<()> {
+fn extract_join_keys(
+    expr: &Expr,
+    accum: &mut Vec<(Column, Column)>,
+    accum_filter: &mut Vec<Expr>,
+) {
     match expr {
         Expr::BinaryExpr { left, op, right } => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => {
                     accum.push((l.clone(), r.clone()));
-                    Ok(())
                 }
-                other => Err(DataFusionError::SQL(ParserError(format!(
-                    "Unsupported expression '{:?}' in JOIN condition",
-                    other
-                )))),
+                _other => {
+                    accum_filter.push(expr.clone());
+                }
             },
             Operator::And => {
-                extract_join_keys(left, accum)?;
-                extract_join_keys(right, accum)
+                extract_join_keys(left, accum, accum_filter);
+                extract_join_keys(right, accum, accum_filter);
             }
-            other => Err(DataFusionError::SQL(ParserError(format!(
-                "Unsupported expression '{:?}' in JOIN condition",
-                other
-            )))),
+            _other => {
+                accum_filter.push(expr.clone());
+            }
         },
-        other => Err(DataFusionError::SQL(ParserError(format!(
-            "Unsupported expression '{:?}' in JOIN condition",
-            other
-        )))),
+        _other => {
+            accum_filter.push(expr.clone());
+        }
     }
 }
 
@@ -1651,7 +1725,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
+            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
         ));
     }
 
@@ -1709,7 +1783,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
+            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
         ));
     }
 
@@ -1719,7 +1793,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'x'"),
+            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#x' for schema "),
         ));
     }
 
@@ -1842,6 +1916,27 @@ mod tests {
                         \n        TableScan: person projection=None";
 
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn table_with_column_alias() {
+        let sql = "SELECT a, b, c
+                   FROM lineitem l (a, b, c)";
+        let expected = "Projection: #a, #b, #c\
+                        \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c\
+                        \n    TableScan: l projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn table_with_column_alias_number_cols() {
+        let sql = "SELECT a, b, c
+                   FROM lineitem l (a, b)";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Source table contains 3 columns but only 2 names given as column alias\")",
+            format!("{:?}", err)
+        );
     }
 
     #[test]
@@ -2190,7 +2285,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
+            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
         ));
     }
 
@@ -2280,7 +2375,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
+            DataFusionError::Plan(msg) if msg.contains("Column #doesnotexist not found in provided schemas"),
         ));
     }
 
@@ -2290,7 +2385,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert!(matches!(
             err,
-            DataFusionError::Plan(msg) if msg.contains("No field with unqualified name 'doesnotexist'"),
+            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
         ));
     }
 
@@ -2703,6 +2798,20 @@ mod tests {
     }
 
     #[test]
+    fn equijoin_unsupported_expression() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            JOIN orders \
+            ON id = customer_id AND order_id > 1 ";
+        let expected = "Projection: #person.id, #orders.order_id\
+        \n  Filter: #orders.order_id Gt Int64(1)\
+        \n    Join: #person.id = #orders.customer_id\
+        \n      TableScan: person projection=None\
+        \n      TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn join_with_table_name() {
         let sql = "SELECT id, order_id \
             FROM person \
@@ -2722,9 +2831,22 @@ mod tests {
             JOIN person as person2 \
             USING (id)";
         let expected = "Projection: #person.first_name, #person.id\
-        \n  Join: #person.id = #person2.id\
+        \n  Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
         \n    TableScan: person2 projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn project_wildcard_on_join_with_using() {
+        let sql = "SELECT * \
+            FROM lineitem \
+            JOIN lineitem as lineitem2 \
+            USING (l_item_id)";
+        let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
+        \n  Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
+        \n    TableScan: lineitem projection=None\
+        \n    TableScan: lineitem2 projection=None";
         quick_test(sql, expected);
     }
 

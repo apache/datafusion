@@ -17,25 +17,13 @@
 
 //! SQL Utility Functions
 
-use crate::logical_plan::{DFSchema, Expr, LogicalPlan};
+use crate::logical_plan::{Expr, LogicalPlan};
 use crate::scalar::ScalarValue;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
 };
 use std::collections::HashMap;
-
-/// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
-pub(crate) fn expand_wildcard(expr: &Expr, schema: &DFSchema) -> Vec<Expr> {
-    match expr {
-        Expr::Wildcard => schema
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
-            .collect::<Vec<Expr>>(),
-        _ => vec![expr.clone()],
-    }
-}
 
 /// Collect all deeply nested `Expr::AggregateFunction` and
 /// `Expr::AggregateUDF`. They are returned in order of occurrence (depth

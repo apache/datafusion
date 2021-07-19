@@ -23,6 +23,7 @@ use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::utils;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::ExecutionPlan;
 
 /// Ballista executor
@@ -60,6 +61,14 @@ impl Executor {
         )?;
         let mut stream = exec.execute(part).await?;
         let batches = utils::collect_stream(&mut stream).await?;
+
+        println!(
+            "=== Physical plan with metrics ===\n{}\n",
+            DisplayableExecutionPlan::with_metrics(&exec)
+                .indent()
+                .to_string()
+        );
+
         // the output should be a single batch containing metadata (path and statistics)
         assert!(batches.len() == 1);
         Ok(batches[0].clone())

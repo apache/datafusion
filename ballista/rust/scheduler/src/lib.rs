@@ -79,6 +79,7 @@ use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use tonic::{Request, Response};
 
 use self::state::{ConfigBackendClient, SchedulerState};
+use ballista_core::config::BallistaConfig;
 use ballista_core::utils::create_datafusion_context;
 use datafusion::physical_plan::parquet::ParquetExec;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -290,7 +291,22 @@ impl SchedulerGrpc for SchedulerServer {
         &self,
         request: Request<ExecuteQueryParams>,
     ) -> std::result::Result<Response<ExecuteQueryResult>, tonic::Status> {
-        if let ExecuteQueryParams { query: Some(query) } = request.into_inner() {
+        if let ExecuteQueryParams {
+            query: Some(query),
+            settings,
+        } = request.into_inner()
+        {
+            // parse config
+            let mut config_builder = BallistaConfig::builder();
+            for kv_pair in &settings {
+                config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
+            }
+            let config = config_builder.build().map_err(|e| {
+                let msg = format!("Could not parse configs: {}", e);
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?;
+
             let plan = match query {
                 Query::LogicalPlan(logical_plan) => {
                     // parse protobuf
@@ -303,7 +319,7 @@ impl SchedulerGrpc for SchedulerServer {
                 Query::Sql(sql) => {
                     //TODO we can't just create a new context because we need a context that has
                     // tables registered from previous SQL statements that have been executed
-                    let mut ctx = create_datafusion_context();
+                    let mut ctx = create_datafusion_context(&config);
                     let df = ctx.sql(&sql).map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
@@ -339,7 +355,7 @@ impl SchedulerGrpc for SchedulerServer {
             let job_id_spawn = job_id.clone();
             tokio::spawn(async move {
                 // create physical plan using DataFusion
-                let datafusion_ctx = create_datafusion_context();
+                let datafusion_ctx = create_datafusion_context(&config);
                 macro_rules! fail_job {
                     ($code :expr) => {{
                         match $code {

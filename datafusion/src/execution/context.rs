@@ -144,7 +144,7 @@ impl ExecutionContext {
 
             let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
                 Arc::new(CatalogWithInformationSchema::new(
-                    catalog_list.clone(),
+                    Arc::downgrade(&catalog_list),
                     Arc::new(default_catalog),
                 ))
             } else {
@@ -346,7 +346,7 @@ impl ExecutionContext {
         let state = self.state.lock().unwrap();
         let catalog = if state.config.information_schema {
             Arc::new(CatalogWithInformationSchema::new(
-                state.catalog_list.clone(),
+                Arc::downgrade(&state.catalog_list),
                 catalog,
             ))
         } else {
@@ -916,14 +916,16 @@ mod tests {
         physical_plan::expressions::AvgAccumulator,
     };
     use arrow::array::{
-        Array, ArrayRef, BinaryArray, DictionaryArray, Float64Array, Int32Array,
-        Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
-        TimestampNanosecondArray,
+        Array, ArrayRef, BinaryArray, DictionaryArray, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+        LargeStringArray, StringArray, TimestampNanosecondArray, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::compute::add;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use std::fs::File;
+    use std::sync::Weak;
     use std::thread::{self, JoinHandle};
     use std::{io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
@@ -1274,6 +1276,96 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(results.len(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn left_join_using() -> Result<()> {
+        let results = execute(
+            "SELECT t1.c1, t2.c2 FROM test t1 JOIN test t2 USING (c2) ORDER BY t2.c2",
+            1,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+",
+            "| c1 | c2 |",
+            "+----+----+",
+            "| 0  | 1  |",
+            "| 0  | 2  |",
+            "| 0  | 3  |",
+            "| 0  | 4  |",
+            "| 0  | 5  |",
+            "| 0  | 6  |",
+            "| 0  | 7  |",
+            "| 0  | 8  |",
+            "| 0  | 9  |",
+            "| 0  | 10 |",
+            "+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn left_join_using_join_key_projection() -> Result<()> {
+        let results = execute(
+            "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 USING (c2) ORDER BY t2.c2",
+            1,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+----+",
+            "| c1 | c2 | c2 |",
+            "+----+----+----+",
+            "| 0  | 1  | 1  |",
+            "| 0  | 2  | 2  |",
+            "| 0  | 3  | 3  |",
+            "| 0  | 4  | 4  |",
+            "| 0  | 5  | 5  |",
+            "| 0  | 6  | 6  |",
+            "| 0  | 7  | 7  |",
+            "| 0  | 8  | 8  |",
+            "| 0  | 9  | 9  |",
+            "| 0  | 10 | 10 |",
+            "+----+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn left_join() -> Result<()> {
+        let results = execute(
+            "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 ON t1.c2 = t2.c2 ORDER BY t1.c2",
+            1,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+----+----+----+",
+            "| c1 | c2 | c2 |",
+            "+----+----+----+",
+            "| 0  | 1  | 1  |",
+            "| 0  | 2  | 2  |",
+            "| 0  | 3  | 3  |",
+            "| 0  | 4  | 4  |",
+            "| 0  | 5  | 5  |",
+            "| 0  | 6  | 6  |",
+            "| 0  | 7  | 7  |",
+            "| 0  | 8  | 8  |",
+            "| 0  | 9  | 9  |",
+            "| 0  | 10 | 10 |",
+            "+----+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &results);
         Ok(())
     }
 
@@ -2271,6 +2363,75 @@ mod tests {
             .await
             .unwrap();
         assert_batches_sorted_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn case_builtin_math_expression() {
+        let mut ctx = ExecutionContext::new();
+
+        let type_values = vec![
+            (
+                DataType::Int8,
+                Arc::new(Int8Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Int16,
+                Arc::new(Int16Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Int32,
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Int64,
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt8,
+                Arc::new(UInt8Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt16,
+                Arc::new(UInt16Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt32,
+                Arc::new(UInt32Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt64,
+                Arc::new(UInt64Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Float32,
+                Arc::new(Float32Array::from(vec![1.0_f32])) as ArrayRef,
+            ),
+            (
+                DataType::Float64,
+                Arc::new(Float64Array::from(vec![1.0_f64])) as ArrayRef,
+            ),
+        ];
+
+        for (data_type, array) in type_values.iter() {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("v", data_type.clone(), false)]));
+            let batch =
+                RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
+            let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+            ctx.register_table("t", Arc::new(provider)).unwrap();
+            let expected = vec![
+                "+---------+",
+                "| sqrt(v) |",
+                "+---------+",
+                "| 1       |",
+                "+---------+",
+            ];
+            let results = plan_and_collect(&mut ctx, "SELECT sqrt(v) FROM t")
+                .await
+                .unwrap();
+
+            assert_batches_sorted_eq!(expected, &results);
+        }
     }
 
     #[tokio::test]
@@ -3362,6 +3523,29 @@ mod tests {
             .expect("Query empty table");
         let expected = vec!["++", "++"];
         assert_batches_sorted_eq!(expected, &result);
+    }
+
+    #[tokio::test]
+    async fn catalogs_not_leaked() {
+        // the information schema used to introduce cyclic Arcs
+        let ctx = ExecutionContext::with_config(
+            ExecutionConfig::new().with_information_schema(true),
+        );
+
+        // register a single catalog
+        let catalog = Arc::new(MemoryCatalogProvider::new());
+        let catalog_weak = Arc::downgrade(&catalog);
+        ctx.register_catalog("my_catalog", catalog);
+
+        let catalog_list_weak = {
+            let state = ctx.state.lock().unwrap();
+            Arc::downgrade(&state.catalog_list)
+        };
+
+        drop(ctx);
+
+        assert_eq!(Weak::strong_count(&catalog_list_weak), 0);
+        assert_eq!(Weak::strong_count(&catalog_weak), 0);
     }
 
     struct MyPhysicalPlanner {}

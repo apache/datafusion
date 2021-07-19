@@ -27,6 +27,7 @@ use crate::execution_plans::{ShuffleWriterExec, UnresolvedShuffleExec};
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
+use crate::config::BallistaConfig;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
     array::{
@@ -53,15 +54,17 @@ use datafusion::physical_plan::parquet::ParquetExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sort::SortExec;
 use datafusion::physical_plan::{
-    AggregateExpr, ExecutionPlan, PhysicalExpr, RecordBatchStream,
+    AggregateExpr, ExecutionPlan, PhysicalExpr, RecordBatchStream, SQLMetric,
 };
 use futures::{future, Stream, StreamExt};
+use std::time::Instant;
 
 /// Stream data to disk in Arrow IPC format
 
 pub async fn write_stream_to_disk(
     stream: &mut Pin<Box<dyn RecordBatchStream + Send + Sync>>,
     path: &str,
+    disk_write_metric: Arc<SQLMetric>,
 ) -> Result<PartitionStats> {
     let file = File::create(&path).map_err(|e| {
         BallistaError::General(format!(
@@ -86,9 +89,14 @@ pub async fn write_stream_to_disk(
         num_batches += 1;
         num_rows += batch.num_rows();
         num_bytes += batch_size_bytes;
+
+        let start = Instant::now();
         writer.write(&batch)?;
+        disk_write_metric.add_elapsed(start);
     }
+    let start = Instant::now();
     writer.finish()?;
+    disk_write_metric.add_elapsed(start);
     Ok(PartitionStats::new(
         Some(num_rows as u64),
         Some(num_batches),
@@ -201,13 +209,11 @@ fn build_exec_plan_diagram(
     for child in plan.children() {
         if let Some(shuffle) = child.as_any().downcast_ref::<UnresolvedShuffleExec>() {
             if !draw_entity {
-                for y in &shuffle.query_stage_ids {
-                    writeln!(
-                        w,
-                        "\tstage_{}_exec_1 -> stage_{}_exec_{};",
-                        y, stage_id, node_id
-                    )?;
-                }
+                writeln!(
+                    w,
+                    "\tstage_{}_exec_1 -> stage_{}_exec_{};",
+                    shuffle.stage_id, stage_id, node_id
+                )?;
             }
         } else {
             // relationships within same entity
@@ -226,8 +232,9 @@ fn build_exec_plan_diagram(
 }
 
 /// Create a DataFusion context that is compatible with Ballista
-pub fn create_datafusion_context() -> ExecutionContext {
-    let config = ExecutionConfig::new().with_concurrency(2); // TODO: this is hack to enable partitioned joins
+pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
+    let config =
+        ExecutionConfig::new().with_concurrency(config.default_shuffle_partitions());
     ExecutionContext::with_config(config)
 }
 

@@ -20,7 +20,7 @@
 
 use std::{convert::TryInto, io::Cursor};
 
-use datafusion::logical_plan::Operator;
+use datafusion::logical_plan::{JoinConstraint, JoinType, Operator};
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 
@@ -288,6 +288,50 @@ impl Into<datafusion::arrow::datatypes::DataType> for protobuf::PrimitiveScalarT
                 DataType::Time64(TimeUnit::Nanosecond)
             }
             protobuf::PrimitiveScalarType::Null => DataType::Null,
+        }
+    }
+}
+
+impl From<protobuf::JoinType> for JoinType {
+    fn from(t: protobuf::JoinType) -> Self {
+        match t {
+            protobuf::JoinType::Inner => JoinType::Inner,
+            protobuf::JoinType::Left => JoinType::Left,
+            protobuf::JoinType::Right => JoinType::Right,
+            protobuf::JoinType::Full => JoinType::Full,
+            protobuf::JoinType::Semi => JoinType::Semi,
+            protobuf::JoinType::Anti => JoinType::Anti,
+        }
+    }
+}
+
+impl From<JoinType> for protobuf::JoinType {
+    fn from(t: JoinType) -> Self {
+        match t {
+            JoinType::Inner => protobuf::JoinType::Inner,
+            JoinType::Left => protobuf::JoinType::Left,
+            JoinType::Right => protobuf::JoinType::Right,
+            JoinType::Full => protobuf::JoinType::Full,
+            JoinType::Semi => protobuf::JoinType::Semi,
+            JoinType::Anti => protobuf::JoinType::Anti,
+        }
+    }
+}
+
+impl From<protobuf::JoinConstraint> for JoinConstraint {
+    fn from(t: protobuf::JoinConstraint) -> Self {
+        match t {
+            protobuf::JoinConstraint::On => JoinConstraint::On,
+            protobuf::JoinConstraint::Using => JoinConstraint::Using,
+        }
+    }
+}
+
+impl From<JoinConstraint> for protobuf::JoinConstraint {
+    fn from(t: JoinConstraint) -> Self {
+        match t {
+            JoinConstraint::On => protobuf::JoinConstraint::On,
+            JoinConstraint::Using => protobuf::JoinConstraint::Using,
         }
     }
 }
