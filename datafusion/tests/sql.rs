@@ -35,6 +35,7 @@ use arrow::{
     util::display::array_value_to_string,
 };
 
+use datafusion::assert_batches_eq;
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::prelude::*;
 use datafusion::{
@@ -112,19 +113,23 @@ async fn parquet_query() {
     // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
     // so we need an explicit cast
     let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["4", "0"],
-        vec!["5", "1"],
-        vec!["6", "0"],
-        vec!["7", "1"],
-        vec!["2", "0"],
-        vec!["3", "1"],
-        vec!["0", "0"],
-        vec!["1", "1"],
+        "+----+--------------------------+",
+        "| id | CAST(string_col AS Utf8) |",
+        "+----+--------------------------+",
+        "| 4  | 0                        |",
+        "| 5  | 1                        |",
+        "| 6  | 0                        |",
+        "| 7  | 1                        |",
+        "| 2  | 0                        |",
+        "| 3  | 1                        |",
+        "| 0  | 0                        |",
+        "| 1  | 1                        |",
+        "+----+--------------------------+",
     ];
 
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -2487,7 +2492,7 @@ fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
 
 /// Execute query and return result set as 2-d table of Vecs
 /// `result[row][column]`
-async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
+async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<RecordBatch> {
     let msg = format!("Creating logical plan for '{}'", sql);
     let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
@@ -2503,8 +2508,13 @@ async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
     let results = collect(plan).await.expect(&msg);
 
     assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+    results
+}
 
-    result_vec(&results)
+/// Execute query and return result set as 2-d table of Vecs
+/// `result[row][column]`
+async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
+    result_vec(&execute_to_batches(ctx, sql).await)
 }
 
 /// Specialised String representation
