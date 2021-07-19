@@ -322,10 +322,11 @@ impl ExecutionContext {
     /// Registers a Parquet data source so that it can be referenced from SQL statements
     /// executed against this context.
     pub fn register_parquet(&mut self, name: &str, filename: &str) -> Result<()> {
-        let table = ParquetTable::try_new(
-            filename,
-            self.state.lock().unwrap().config.concurrency,
-        )?;
+        let table = {
+            let m = self.state.lock().unwrap();
+            ParquetTable::try_new(filename, m.config.concurrency)?
+                .with_enable_pruning(m.config.parquet_pruning)
+        };
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
@@ -633,6 +634,8 @@ pub struct ExecutionConfig {
     /// Should DataFusion repartition data using the partition keys to execute window functions in
     /// parallel using the provided `concurrency` level
     pub repartition_windows: bool,
+    /// Should Datafusion parquet reader using the predicate to prune data
+    parquet_pruning: bool,
 }
 
 impl Default for ExecutionConfig {
@@ -663,6 +666,7 @@ impl Default for ExecutionConfig {
             repartition_joins: true,
             repartition_aggregations: true,
             repartition_windows: true,
+            parquet_pruning: true,
         }
     }
 }
@@ -763,6 +767,12 @@ impl ExecutionConfig {
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
     pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
         self.repartition_windows = enabled;
+        self
+    }
+
+    /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
+    pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
+        self.parquet_pruning = enabled;
         self
     }
 }
