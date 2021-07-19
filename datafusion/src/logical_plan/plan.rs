@@ -805,28 +805,35 @@ impl fmt::Debug for LogicalPlan {
     }
 }
 
-/// Represents which type of plan
+/// Represents which type of plan, when storing multiple
+/// for use in EXPLAIN plans
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
-    LogicalPlan,
+    InitialLogicalPlan,
     /// The LogicalPlan which results from applying an optimizer pass
     OptimizedLogicalPlan {
         /// The name of the optimizer which produced this plan
         optimizer_name: String,
     },
-    /// The physical plan, prepared for execution
-    PhysicalPlan,
+    /// The final, fully optimized LogicalPlan that was converted to a physical plan
+    FinalLogicalPlan,
+    /// The initial physical plan, prepared for execution
+    InitialPhysicalPlan,
+    /// The final, fully optimized physical which would be executed
+    FinalPhysicalPlan,
 }
 
 impl fmt::Display for PlanType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PlanType::LogicalPlan => write!(f, "logical_plan"),
+            PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {
                 write!(f, "logical_plan after {}", optimizer_name)
             }
-            PlanType::PhysicalPlan => write!(f, "physical_plan"),
+            PlanType::FinalLogicalPlan => write!(f, "logical_plan"),
+            PlanType::InitialPhysicalPlan => write!(f, "initial_physical_plan"),
+            PlanType::FinalPhysicalPlan => write!(f, "physical_plan"),
         }
     }
 }
@@ -854,7 +861,10 @@ impl StringifiedPlan {
     /// returns true if this plan should be displayed. Generally
     /// `verbose_mode = true` will display all available plans
     pub fn should_display(&self, verbose_mode: bool) -> bool {
-        self.plan_type == PlanType::LogicalPlan || verbose_mode
+        match self.plan_type {
+            PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan => true,
+            _ => verbose_mode,
+        }
     }
 }
 
