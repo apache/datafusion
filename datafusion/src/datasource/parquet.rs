@@ -38,6 +38,7 @@ pub struct ParquetTable {
     schema: SchemaRef,
     statistics: Statistics,
     max_concurrency: usize,
+    enable_pruning: bool,
 }
 
 impl ParquetTable {
@@ -51,12 +52,24 @@ impl ParquetTable {
             schema,
             statistics: parquet_exec.statistics().to_owned(),
             max_concurrency,
+            enable_pruning: true,
         })
     }
 
     /// Get the path for the Parquet file(s) represented by this ParquetTable instance
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    /// Get parquet pruning option
+    pub fn get_enable_pruning(&self) -> bool {
+        self.enable_pruning
+    }
+
+    /// Set parquet pruning option
+    pub fn with_enable_pruning(mut self, enable_pruning: bool) -> Self {
+        self.enable_pruning = enable_pruning;
+        self
     }
 }
 
@@ -86,7 +99,14 @@ impl TableProvider for ParquetTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let predicate = combine_filters(filters);
+        // If enable pruning then combine the filters to build the predicate.
+        // If disable pruning then set the predicate to None, thus readers
+        // will not prune data based on the statistics.
+        let predicate = if self.enable_pruning {
+            combine_filters(filters)
+        } else {
+            None
+        };
         Ok(Arc::new(ParquetExec::try_from_path(
             &self.path,
             projection.clone(),
