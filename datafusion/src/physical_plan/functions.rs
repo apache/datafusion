@@ -3723,7 +3723,6 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let ctx_state = ExecutionContextState::new();
 
-        // concat(value, value)
         let col_value: ArrayRef = Arc::new(StringArray::from(vec!["aaa-555"]));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
         let columns: Vec<ArrayRef> = vec![col_value];
@@ -3763,7 +3762,6 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let ctx_state = ExecutionContextState::new();
 
-        // concat(value, value)
         let col_value = lit(ScalarValue::Utf8(Some("aaa-555".to_string())));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
         let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
