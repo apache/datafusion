@@ -23,7 +23,6 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::LogicalPlan;
 use crate::optimizer::optimizer::OptimizerRule;
 use std::sync::Arc;
-use utils::optimize_explain;
 
 /// Optimization rule that tries pushes down LIMIT n
 /// where applicable to reduce the amount of scanned / processed data
@@ -43,25 +42,6 @@ fn limit_push_down(
     execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
     match (plan, upper_limit) {
-        (
-            LogicalPlan::Explain {
-                verbose,
-                schema,
-                plan,
-                stringified_plans,
-            },
-            _,
-        ) => {
-            let schema = schema.as_ref().to_owned().into();
-            optimize_explain(
-                optimizer,
-                *verbose,
-                plan,
-                stringified_plans,
-                &schema,
-                execution_props,
-            )
-        }
         (LogicalPlan::Limit { n, input }, upper_limit) => {
             let smallest = upper_limit.map(|x| std::cmp::min(x, *n)).unwrap_or(*n);
             Ok(LogicalPlan::Limit {

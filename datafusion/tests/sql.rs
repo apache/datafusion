@@ -2507,6 +2507,11 @@ async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<Record
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
     let results = collect(plan).await.expect(&msg);
 
+    println!(
+        "AAL\n\n{}",
+        arrow::util::pretty::pretty_format_batches(&results).unwrap()
+    );
+
     assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
     results
 }

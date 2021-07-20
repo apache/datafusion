@@ -21,6 +21,7 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
+    logical_plan::{PlanType, StringifiedPlan},
     optimizer::{
         aggregate_statistics::AggregateStatistics, eliminate_limit::EliminateLimit,
         hash_build_probe_order::HashBuildProbeOrder,
@@ -446,19 +447,32 @@ impl ExecutionContext {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let state = &mut self.state.lock().unwrap();
-        let execution_props = &mut state.execution_props.clone();
-        let optimizers = &state.config.optimizers;
+        if let LogicalPlan::Explain {
+            verbose,
+            plan,
+            stringified_plans,
+            schema,
+        } = plan
+        {
+            let mut stringified_plans = stringified_plans.clone();
 
-        let execution_props = execution_props.start_execution();
+            // optimize the child plan, capturing the output of each optimizer
+            let plan = self.optimize_internal(plan, |optimized_plan, optimizer| {
+                let optimizer_name = optimizer.name().to_string();
+                let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
+                let plan_string = format!("{:#?}", optimized_plan);
+                stringified_plans.push(StringifiedPlan::new(plan_type, plan_string));
+            })?;
 
-        let mut new_plan = plan.clone();
-        debug!("Logical plan:\n {:?}", plan);
-        for optimizer in optimizers {
-            new_plan = optimizer.optimize(&new_plan, execution_props)?;
+            Ok(LogicalPlan::Explain {
+                verbose: *verbose,
+                plan: Arc::new(plan),
+                stringified_plans,
+                schema: schema.clone(),
+            })
+        } else {
+            self.optimize_internal(plan, |_, _| {})
         }
-        debug!("Optimized logical plan:\n {:?}", new_plan);
-        Ok(new_plan)
     }
 
     /// Creates a physical plan from a logical plan.
@@ -555,6 +569,32 @@ impl ExecutionContext {
                 path, e
             ))),
         }
+    }
+
+    /// Optimizes the logical plan by applying optimizer rules, and
+    /// invoking observer function after each call
+    fn optimize_internal<F>(
+        &self,
+        plan: &LogicalPlan,
+        mut observer: F,
+    ) -> Result<LogicalPlan>
+    where
+        F: FnMut(&LogicalPlan, &dyn OptimizerRule),
+    {
+        let state = &mut self.state.lock().unwrap();
+        let execution_props = &mut state.execution_props.clone();
+        let optimizers = &state.config.optimizers;
+
+        let execution_props = execution_props.start_execution();
+
+        let mut new_plan = plan.clone();
+        debug!("Logical plan:\n {:?}", plan);
+        for optimizer in optimizers {
+            new_plan = optimizer.optimize(&new_plan, execution_props)?;
+            observer(&new_plan, optimizer.as_ref());
+        }
+        debug!("Optimized logical plan:\n {:?}", new_plan);
+        Ok(new_plan)
     }
 }
 
