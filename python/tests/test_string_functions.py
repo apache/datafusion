@@ -46,10 +46,4 @@ def test_string_functions(df):
             "9033e0e305f247c0c3c80d0c7848c8b3",
         ]
     )
-    assert result.column(1) == pa.array(
-        [
-            "hello",
-            "world",
-            "!",
-        ]
-    )
+    assert result.column(1) == pa.array(["hello", "world", "!"])
