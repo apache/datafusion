@@ -115,9 +115,20 @@ impl ExecutionPlan for ExplainExec {
             .iter()
             .filter(|s| s.should_display(self.verbose));
 
+        // Identify plans that are not changed
+        let mut prev: Option<&StringifiedPlan> = None;
+
         for p in plans_to_print {
             type_builder.append_value(p.plan_type.to_string())?;
-            plan_builder.append_value(&*p.plan)?;
+            match prev {
+                Some(prev) if p.plan == prev.plan => {
+                    plan_builder.append_value("SAME")?;
+                }
+                Some(_) | None => {
+                    plan_builder.append_value(&*p.plan)?;
+                }
+            }
+            prev = Some(p);
         }
 
         let record_batch = RecordBatch::try_new(
