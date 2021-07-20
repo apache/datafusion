@@ -2206,7 +2206,13 @@ async fn csv_explain_verbose() {
         actual
     );
 
-    assert!(false, "TODO: add test for NO CHANGE");
+    // ensure the "same text as above" optimization is working
+    assert!(
+        actual.contains("logical_plan after limit_push_down        | SAME TEXT AS ABOVE"),
+        "Actual: '{}'",
+        actual
+    );
+
 }
 
 #[tokio::test]
@@ -2508,11 +2514,6 @@ async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<Record
 
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
     let results = collect(plan).await.expect(&msg);
-
-    println!(
-        "AAL\n\n{}",
-        arrow::util::pretty::pretty_format_batches(&results).unwrap()
-    );
 
     assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
     results

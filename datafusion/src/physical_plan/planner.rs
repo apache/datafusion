@@ -1644,6 +1644,38 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_explain() {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+        ]);
+
+        let logical_plan = LogicalPlanBuilder::scan_empty(
+              Some("employee"),
+              &schema,
+              None,
+        )
+            .unwrap()
+            .explain(true)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = plan(&logical_plan).unwrap();
+        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+            let stringified_plans = plan.stringified_plans();
+            assert!(stringified_plans.len() >= 4);
+            assert!(stringified_plans.iter().any(|p| matches!(p.plan_type, PlanType::FinalLogicalPlan)));
+            assert!(stringified_plans.iter().any(|p| matches!(p.plan_type, PlanType::InitialPhysicalPlan)));
+            assert!(stringified_plans.iter().any(|p| matches!(p.plan_type, PlanType::OptimizedPhysicalPlan{..})));
+            assert!(stringified_plans.iter().any(|p| matches!(p.plan_type, PlanType::FinalPhysicalPlan)));
+        }
+        else {
+            panic!("Plan was not an explain plan: {}", displayable(plan.as_ref()).indent());
+        }
+    }
+
+
     /// An example extension node that doesn't do anything
     struct NoOpExtensionNode {
         schema: DFSchemaRef,

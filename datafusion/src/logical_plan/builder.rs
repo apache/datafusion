@@ -548,6 +548,8 @@ pub(crate) fn expand_wildcard(
 mod tests {
     use arrow::datatypes::{DataType, Field};
 
+    use crate::logical_plan::StringifiedPlan;
+
     use super::super::{col, lit, sum};
     use super::*;
 

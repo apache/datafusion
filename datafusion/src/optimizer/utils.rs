@@ -441,7 +441,7 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::{col, LogicalPlanBuilder};
+    use crate::logical_plan::col;
     use arrow::datatypes::DataType;
     use std::collections::HashSet;
 
