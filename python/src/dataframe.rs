@@ -159,12 +159,7 @@ impl DataFrame {
             }
         };
 
-        let builder = errors::wrap(builder.join(
-            &right.plan,
-            join_type,
-            on.clone(),
-            on,
-        ))?;
+        let builder = errors::wrap(builder.join(&right.plan, join_type, on.clone(), on))?;
 
         let plan = errors::wrap(builder.build())?;
 

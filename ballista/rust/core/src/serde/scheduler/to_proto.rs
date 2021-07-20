@@ -29,10 +29,6 @@ impl TryInto<protobuf::Action> for Action {
 
     fn try_into(self) -> Result<protobuf::Action, Self::Error> {
         match self {
-            Action::ExecutePartition(partition) => Ok(protobuf::Action {
-                action_type: Some(ActionType::ExecutePartition(partition.try_into()?)),
-                settings: vec![],
-            }),
             Action::FetchPartition(partition_id) => Ok(protobuf::Action {
                 action_type: Some(ActionType::FetchPartition(partition_id.into())),
                 settings: vec![],
@@ -74,6 +70,7 @@ impl TryInto<protobuf::PartitionLocation> for PartitionLocation {
             partition_id: Some(self.partition_id.into()),
             executor_meta: Some(self.executor_meta.into()),
             partition_stats: Some(self.partition_stats.into()),
+            path: self.path,
         })
     }
 }

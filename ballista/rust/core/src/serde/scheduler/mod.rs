@@ -35,8 +35,6 @@ pub mod to_proto;
 /// Action that can be sent to an executor
 #[derive(Debug, Clone)]
 pub enum Action {
-    /// Execute a query and store the results in memory
-    ExecutePartition(ExecutePartition),
     /// Collect a shuffle partition
     FetchPartition(PartitionId),
 }
@@ -64,6 +62,7 @@ pub struct PartitionLocation {
     pub partition_id: PartitionId,
     pub executor_meta: ExecutorMeta,
     pub partition_stats: PartitionStats,
+    pub path: String,
 }
 
 /// Meta-data for an executor, used when fetching shuffle partitions from other executors
@@ -98,9 +97,9 @@ impl From<protobuf::ExecutorMetadata> for ExecutorMeta {
 /// Summary of executed partition
 #[derive(Debug, Copy, Clone)]
 pub struct PartitionStats {
-    num_rows: Option<u64>,
-    num_batches: Option<u64>,
-    num_bytes: Option<u64>,
+    pub(crate) num_rows: Option<u64>,
+    pub(crate) num_batches: Option<u64>,
+    pub(crate) num_bytes: Option<u64>,
 }
 
 impl Default for PartitionStats {

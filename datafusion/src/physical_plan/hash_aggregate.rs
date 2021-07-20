@@ -508,7 +508,7 @@ fn dictionary_create_key_for_col<K: ArrowDictionaryKeyType>(
         ))
     })?;
 
-    create_key_for_col(&dict_col.values(), values_index, vec)
+    create_key_for_col(dict_col.values(), values_index, vec)
 }
 
 /// Appends a sequence of [u8] bytes for the value in `col[row]` to
@@ -1104,7 +1104,7 @@ fn dictionary_create_group_by_value<K: ArrowDictionaryKeyType>(
         ))
     })?;
 
-    create_group_by_value(&dict_col.values(), values_index)
+    create_group_by_value(dict_col.values(), values_index)
 }
 
 /// Extract the value in `col[row]` as a GroupByScalar

@@ -399,7 +399,7 @@ impl LogicalPlanBuilder {
     /// Create an expression to represent the explanation of the plan
     pub fn explain(&self, verbose: bool) -> Result<Self> {
         let stringified_plans = vec![StringifiedPlan::new(
-            PlanType::LogicalPlan,
+            PlanType::InitialLogicalPlan,
             format!("{:#?}", self.plan.clone()),
         )];
 
@@ -740,14 +740,24 @@ mod tests {
     #[test]
     fn stringified_plan() {
         let stringified_plan =
-            StringifiedPlan::new(PlanType::LogicalPlan, "...the plan...");
+            StringifiedPlan::new(PlanType::InitialLogicalPlan, "...the plan...");
+        assert!(stringified_plan.should_display(true));
+        assert!(!stringified_plan.should_display(false)); // not in non verbose mode
+
+        let stringified_plan =
+            StringifiedPlan::new(PlanType::FinalLogicalPlan, "...the plan...");
         assert!(stringified_plan.should_display(true));
         assert!(stringified_plan.should_display(false)); // display in non verbose mode too
 
         let stringified_plan =
-            StringifiedPlan::new(PlanType::PhysicalPlan, "...the plan...");
+            StringifiedPlan::new(PlanType::InitialPhysicalPlan, "...the plan...");
         assert!(stringified_plan.should_display(true));
-        assert!(!stringified_plan.should_display(false));
+        assert!(!stringified_plan.should_display(false)); // not in non verbose mode
+
+        let stringified_plan =
+            StringifiedPlan::new(PlanType::FinalPhysicalPlan, "...the plan...");
+        assert!(stringified_plan.should_display(true));
+        assert!(stringified_plan.should_display(false)); // display in non verbose mode
 
         let stringified_plan = StringifiedPlan::new(
             PlanType::OptimizedLogicalPlan {

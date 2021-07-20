@@ -31,14 +31,14 @@ use datafusion::{
 use log::info;
 use std::fmt::Formatter;
 
-/// UnresolvedShuffleExec represents a dependency on the results of several ShuffleWriterExec nodes which haven't been computed yet.
+/// UnresolvedShuffleExec represents a dependency on the results of a ShuffleWriterExec node which hasn't computed yet.
 ///
 /// An ExecutionPlan that contains an UnresolvedShuffleExec isn't ready for execution. The presence of this ExecutionPlan
-/// is used as a signal so the scheduler knows it can't start computation on a specific ShuffleWriterExec.
+/// is used as a signal so the scheduler knows it can't start computation until the dependent shuffle has completed.
 #[derive(Debug, Clone)]
 pub struct UnresolvedShuffleExec {
     // The query stage ids which needs to be computed
-    pub query_stage_ids: Vec<usize>,
+    pub stage_id: usize,
 
     // The schema this node will have once it is replaced with a ShuffleReaderExec
     pub schema: SchemaRef,
@@ -49,13 +49,9 @@ pub struct UnresolvedShuffleExec {
 
 impl UnresolvedShuffleExec {
     /// Create a new UnresolvedShuffleExec
-    pub fn new(
-        query_stage_ids: Vec<usize>,
-        schema: SchemaRef,
-        partition_count: usize,
-    ) -> Self {
+    pub fn new(stage_id: usize, schema: SchemaRef, partition_count: usize) -> Self {
         Self {
-            query_stage_ids,
+            stage_id,
             schema,
             partition_count,
         }
