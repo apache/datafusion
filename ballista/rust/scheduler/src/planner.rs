@@ -253,6 +253,7 @@ mod test {
     use ballista_core::serde::protobuf;
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
+    use datafusion::physical_plan::hash_join::HashJoinExec;
     use datafusion::physical_plan::sort::SortExec;
     use datafusion::physical_plan::{
         coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
@@ -347,6 +348,177 @@ mod test {
         assert_eq!(unresolved_shuffle.stage_id, 2);
         assert_eq!(unresolved_shuffle.input_partition_count, 2);
         assert_eq!(unresolved_shuffle.output_partition_count, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn distributed_join_plan() -> Result<(), BallistaError> {
+        let mut ctx = datafusion_test_context("testdata")?;
+
+        // simplified form of TPC-H query 12
+        let df = ctx.sql(
+            "select
+    l_shipmode,
+    sum(case
+            when o_orderpriority = '1-URGENT'
+                or o_orderpriority = '2-HIGH'
+                then 1
+            else 0
+        end) as high_line_count,
+    sum(case
+            when o_orderpriority <> '1-URGENT'
+                and o_orderpriority <> '2-HIGH'
+                then 1
+            else 0
+        end) as low_line_count
+from
+    lineitem
+        join
+    orders
+    on
+            l_orderkey = o_orderkey
+where
+        l_shipmode in ('MAIL', 'SHIP')
+  and l_commitdate < l_receiptdate
+  and l_shipdate < l_commitdate
+  and l_receiptdate >= date '1994-01-01'
+  and l_receiptdate < date '1995-01-01'
+group by
+    l_shipmode
+order by
+    l_shipmode;
+",
+        )?;
+
+        let plan = df.to_logical_plan();
+        let plan = ctx.optimize(&plan)?;
+        let plan = ctx.create_physical_plan(&plan)?;
+
+        let mut planner = DistributedPlanner::new();
+        let job_uuid = Uuid::new_v4();
+        let stages = planner.plan_query_stages(&job_uuid.to_string(), plan)?;
+        for stage in &stages {
+            println!("{}", displayable(stage.as_ref()).indent().to_string());
+        }
+
+        /* Expected result:
+
+        ShuffleWriterExec: Some(Hash([Column { name: "l_orderkey", index: 0 }], 2))
+          CoalesceBatchesExec: target_batch_size=4096
+            FilterExec: l_shipmode@4 IN ([Literal { value: Utf8("MAIL") }, Literal { value: Utf8("SHIP") }]) AND l_commitdate@2 < l_receiptdate@3 AND l_shipdate@1 < l_commitdate@2 AND l_receiptdate@3 >= 8766 AND l_receiptdate@3 < 9131
+              CsvExec: source=Path(testdata/lineitem: [testdata/lineitem/partition0.tbl,testdata/lineitem/partition1.tbl]), has_header=false
+
+        ShuffleWriterExec: Some(Hash([Column { name: "o_orderkey", index: 0 }], 2))
+          CsvExec: source=Path(testdata/orders: [testdata/orders/orders.tbl]), has_header=false
+
+        ShuffleWriterExec: Some(Hash([Column { name: "l_shipmode", index: 0 }], 2))
+          HashAggregateExec: mode=Partial, gby=[l_shipmode@4 as l_shipmode], aggr=[SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
+            CoalesceBatchesExec: target_batch_size=4096
+              HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: "l_orderkey", index: 0 }, Column { name: "o_orderkey", index: 0 })]
+                CoalesceBatchesExec: target_batch_size=4096
+                  UnresolvedShuffleExec
+                CoalesceBatchesExec: target_batch_size=4096
+                  UnresolvedShuffleExec
+
+        ShuffleWriterExec: None
+          ProjectionExec: expr=[l_shipmode@0 as l_shipmode, SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)@1 as high_line_count, SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)@2 as low_line_count]
+            HashAggregateExec: mode=FinalPartitioned, gby=[l_shipmode@0 as l_shipmode], aggr=[SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
+              CoalesceBatchesExec: target_batch_size=4096
+                UnresolvedShuffleExec
+
+        ShuffleWriterExec: None
+          SortExec: [l_shipmode@0 ASC]
+            CoalescePartitionsExec
+              UnresolvedShuffleExec
+        */
+
+        assert_eq!(5, stages.len());
+
+        // verify partitioning for each stage
+
+        // csv "lineitem" (2 files)
+        assert_eq!(
+            2,
+            stages[0].children()[0]
+                .output_partitioning()
+                .partition_count()
+        );
+        assert_eq!(
+            2,
+            stages[0]
+                .shuffle_output_partitioning()
+                .unwrap()
+                .partition_count()
+        );
+
+        // csv "orders" (1 file)
+        assert_eq!(
+            1,
+            stages[1].children()[0]
+                .output_partitioning()
+                .partition_count()
+        );
+        assert_eq!(
+            2,
+            stages[1]
+                .shuffle_output_partitioning()
+                .unwrap()
+                .partition_count()
+        );
+
+        // join and partial hash aggregate
+        let input = stages[2].children()[0].clone();
+        assert_eq!(2, input.output_partitioning().partition_count());
+        assert_eq!(
+            2,
+            stages[2]
+                .shuffle_output_partitioning()
+                .unwrap()
+                .partition_count()
+        );
+
+        let hash_agg = downcast_exec!(input, HashAggregateExec);
+
+        let coalesce_batches = hash_agg.children()[0].clone();
+        let coalesce_batches = downcast_exec!(coalesce_batches, CoalesceBatchesExec);
+
+        let join = coalesce_batches.children()[0].clone();
+        let join = downcast_exec!(join, HashJoinExec);
+
+        let join_input_1 = join.children()[0].clone();
+        // skip CoalesceBatches
+        let join_input_1 = join_input_1.children()[0].clone();
+        let unresolved_shuffle_reader_1 =
+            downcast_exec!(join_input_1, UnresolvedShuffleExec);
+        assert_eq!(unresolved_shuffle_reader_1.input_partition_count, 2); // lineitem
+        assert_eq!(unresolved_shuffle_reader_1.output_partition_count, 2);
+
+        let join_input_2 = join.children()[1].clone();
+        // skip CoalesceBatches
+        let join_input_2 = join_input_2.children()[0].clone();
+        let unresolved_shuffle_reader_2 =
+            downcast_exec!(join_input_2, UnresolvedShuffleExec);
+        assert_eq!(unresolved_shuffle_reader_2.input_partition_count, 1); //orders
+        assert_eq!(unresolved_shuffle_reader_2.output_partition_count, 2);
+
+        // final partitioned hash aggregate
+        assert_eq!(
+            2,
+            stages[3].children()[0]
+                .output_partitioning()
+                .partition_count()
+        );
+        assert!(stages[3].shuffle_output_partitioning().is_none());
+
+        // coalesce partitions and sort
+        assert_eq!(
+            1,
+            stages[4].children()[0]
+                .output_partitioning()
+                .partition_count()
+        );
+        assert!(stages[4].shuffle_output_partitioning().is_none());
 
         Ok(())
     }
