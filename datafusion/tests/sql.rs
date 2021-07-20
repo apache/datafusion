@@ -1645,10 +1645,10 @@ async fn csv_query_count_one() {
 async fn case_when() -> Result<()> {
     let mut ctx = create_case_context()?;
     let sql = "SELECT \
-               CASE WHEN c1 = 'a' THEN 1 \
-               WHEN c1 = 'b' THEN 2 \
-               END \
-               FROM t1";
+        CASE WHEN c1 = 'a' THEN 1 \
+             WHEN c1 = 'b' THEN 2 \
+             END \
+        FROM t1";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["1"], vec!["2"], vec!["NULL"], vec!["NULL"]];
     assert_eq!(expected, actual);
@@ -1659,10 +1659,10 @@ async fn case_when() -> Result<()> {
 async fn case_when_else() -> Result<()> {
     let mut ctx = create_case_context()?;
     let sql = "SELECT \
-               CASE WHEN c1 = 'a' THEN 1 \
-               WHEN c1 = 'b' THEN 2 \
-               ELSE 999 END \
-               FROM t1";
+        CASE WHEN c1 = 'a' THEN 1 \
+             WHEN c1 = 'b' THEN 2 \
+             ELSE 999 END \
+        FROM t1";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["1"], vec!["2"], vec!["999"], vec!["999"]];
     assert_eq!(expected, actual);
@@ -1673,10 +1673,10 @@ async fn case_when_else() -> Result<()> {
 async fn case_when_with_base_expr() -> Result<()> {
     let mut ctx = create_case_context()?;
     let sql = "SELECT \
-               CASE c1 WHEN 'a' THEN 1 \
-               WHEN 'b' THEN 2 \
-               END \
-               FROM t1";
+        CASE c1 WHEN 'a' THEN 1 \
+             WHEN 'b' THEN 2 \
+             END \
+        FROM t1";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["1"], vec!["2"], vec!["NULL"], vec!["NULL"]];
     assert_eq!(expected, actual);
@@ -1687,10 +1687,10 @@ async fn case_when_with_base_expr() -> Result<()> {
 async fn case_when_else_with_base_expr() -> Result<()> {
     let mut ctx = create_case_context()?;
     let sql = "SELECT \
-               CASE c1 WHEN 'a' THEN 1 \
-               WHEN 'b' THEN 2 \
-               ELSE 999 END \
-               FROM t1";
+        CASE c1 WHEN 'a' THEN 1 \
+             WHEN 'b' THEN 2 \
+             ELSE 999 END \
+        FROM t1";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["1"], vec!["2"], vec!["999"], vec!["999"]];
     assert_eq!(expected, actual);
@@ -1837,11 +1837,11 @@ async fn equijoin_implicit_syntax() -> Result<()> {
 async fn equijoin_implicit_syntax_with_filter() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql = "SELECT t1_id, t1_name, t2_name \
-               FROM t1, t2 \
-               WHERE t1_id > 0 \
-               AND t1_id = t2_id \
-               AND t2_id < 99 \
-               ORDER BY t1_id";
+        FROM t1, t2 \
+        WHERE t1_id > 0 \
+        AND t1_id = t2_id \
+        AND t2_id < 99 \
+        ORDER BY t1_id";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![
         vec!["11", "a", "z"],
@@ -2029,7 +2029,7 @@ async fn csv_explain() {
               \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
               \n        CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true\
               \n"
-        ]];
+    ]];
     assert_eq!(expected, actual);
 
     // Also, expect same result with lowercase explain
