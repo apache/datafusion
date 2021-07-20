@@ -21,6 +21,8 @@
 
 use std::fmt;
 
+use crate::logical_plan::{StringifiedPlan, ToStringifiedPlan};
+
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
@@ -129,5 +131,14 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
     fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         self.indent -= 1;
         Ok(true)
+    }
+}
+
+impl<'a> ToStringifiedPlan for DisplayableExecutionPlan<'a> {
+    fn to_stringified(
+        &self,
+        plan_type: crate::logical_plan::PlanType,
+    ) -> StringifiedPlan {
+        StringifiedPlan::new(plan_type, self.indent().to_string())
     }
 }

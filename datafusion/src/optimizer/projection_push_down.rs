@@ -18,7 +18,7 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
@@ -33,7 +33,6 @@ use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
 };
-use utils::optimize_explain;
 
 /// Optimizer that removes unused projections and aggregations from plans
 /// This reduces both scans and
@@ -354,22 +353,9 @@ fn optimize_plan(
                 limit: *limit,
             })
         }
-        LogicalPlan::Explain {
-            verbose,
-            plan,
-            stringified_plans,
-            schema,
-        } => {
-            let schema = schema.as_ref().to_owned().into();
-            optimize_explain(
-                optimizer,
-                *verbose,
-                &*plan,
-                stringified_plans,
-                &schema,
-                execution_props,
-            )
-        }
+        LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
+            "Unsupported logical plan: Explain must be root of the plan".to_string(),
+        )),
         LogicalPlan::Union {
             inputs,
             schema,

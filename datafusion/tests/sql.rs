@@ -2205,6 +2205,13 @@ async fn csv_explain_verbose() {
         "Actual: '{}'",
         actual
     );
+
+    // ensure the "same text as above" optimization is working
+    assert!(
+        actual.contains("SAME TEXT AS ABOVE"),
+        "Actual 2: '{}'",
+        actual
+    );
 }
 
 #[tokio::test]
