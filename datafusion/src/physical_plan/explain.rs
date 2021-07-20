@@ -121,8 +121,8 @@ impl ExecutionPlan for ExplainExec {
         for p in plans_to_print {
             type_builder.append_value(p.plan_type.to_string())?;
             match prev {
-                Some(prev) if p.plan == prev.plan => {
-                    plan_builder.append_value("SAME")?;
+                Some(prev) if !should_show(prev, p) => {
+                    plan_builder.append_value("SAME TEXT AS ABOVE")?;
                 }
                 Some(_) | None => {
                     plan_builder.append_value(&*p.plan)?;
@@ -156,4 +156,15 @@ impl ExecutionPlan for ExplainExec {
             }
         }
     }
+}
+
+/// If this plan should be shown, given the previous plan that was
+/// displayed.
+///
+/// This is meant to avoid repeating the same plan over and over again
+/// to make clear what is changing
+fn should_show(previous_plan: &StringifiedPlan, this_plan: &StringifiedPlan) -> bool {
+    // if the plans are different, or if they would have been
+    // displayed in the normal explain (aka non verbose) plan
+    (previous_plan.plan != this_plan.plan) || this_plan.should_display(false)
 }

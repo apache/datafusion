@@ -21,7 +21,7 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
-    logical_plan::{PlanType, StringifiedPlan},
+    logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::{
         aggregate_statistics::AggregateStatistics, eliminate_limit::EliminateLimit,
         hash_build_probe_order::HashBuildProbeOrder,
@@ -460,8 +460,7 @@ impl ExecutionContext {
             let plan = self.optimize_internal(plan, |optimized_plan, optimizer| {
                 let optimizer_name = optimizer.name().to_string();
                 let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
-                let plan_string = format!("{:#?}", optimized_plan);
-                stringified_plans.push(StringifiedPlan::new(plan_type, plan_string));
+                stringified_plans.push(optimized_plan.to_stringified(plan_type));
             })?;
 
             Ok(LogicalPlan::Explain {
