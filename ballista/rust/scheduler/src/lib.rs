@@ -239,9 +239,10 @@ impl SchedulerGrpc for SchedulerServer {
                         {
                             shuffle_writer.shuffle_output_partitioning()
                         } else {
-                            //TODO should be error
-                            warn!("Task was not a shuffle writer! {:?}", plan_clone);
-                            None
+                            return Err(Status::invalid_argument(format!(
+                                "Task root plan was not a ShuffleWriterExec: {:?}",
+                                plan_clone
+                            )));
                         };
                         Ok(Some(TaskDefinition {
                             plan: Some(plan.try_into().unwrap()),
