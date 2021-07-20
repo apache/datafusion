@@ -79,6 +79,7 @@ impl ExecutionPlan for UnresolvedShuffleExec {
 
     fn output_partitioning(&self) -> Partitioning {
         //TODO the output partition is known and should be populated here!
+        // see https://github.com/apache/arrow-datafusion/issues/758
         Partitioning::UnknownPartitioning(self.output_partition_count)
     }
 

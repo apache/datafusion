@@ -76,7 +76,8 @@ impl ExecutionPlan for ShuffleReaderExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        // TODO partitioning may be known and could be populated here?
+        // TODO partitioning may be known and could be populated here
+        // see https://github.com/apache/arrow-datafusion/issues/758
         Partitioning::UnknownPartitioning(self.partition.len())
     }
 
