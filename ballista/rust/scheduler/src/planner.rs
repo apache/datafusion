@@ -114,13 +114,13 @@ impl DistributedPlanner {
             let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
                 shuffle_writer.stage_id(),
                 shuffle_writer.schema(),
-                coalesce.children()[0]
-                    .output_partitioning()
-                    .partition_count(),
+                shuffle_writer.output_partitioning().partition_count(),
                 shuffle_writer
                     .shuffle_output_partitioning()
                     .map(|p| p.partition_count())
-                    .unwrap_or(1),
+                    .unwrap_or_else(|| {
+                        shuffle_writer.output_partitioning().partition_count()
+                    }),
             ));
             stages.push(shuffle_writer);
             Ok((
@@ -145,7 +145,9 @@ impl DistributedPlanner {
                         shuffle_writer
                             .shuffle_output_partitioning()
                             .map(|p| p.partition_count())
-                            .unwrap_or(1),
+                            .unwrap_or_else(|| {
+                                shuffle_writer.output_partitioning().partition_count()
+                            }),
                     ));
                     stages.push(shuffle_writer);
                     Ok((unresolved_shuffle, stages))
@@ -194,7 +196,7 @@ pub fn remove_unresolved_shuffles(
                 })?
                 .clone();
 
-            for i in 0..unresolved_shuffle.input_partition_count {
+            for i in 0..unresolved_shuffle.output_partition_count {
                 if let Some(x) = p.get(&i) {
                     relevant_locations.push(x.to_owned());
                 } else {
@@ -335,12 +337,16 @@ mod test {
         let coalesce_partitions = sort.children()[0].clone();
         let coalesce_partitions =
             downcast_exec!(coalesce_partitions, CoalescePartitionsExec);
+        assert_eq!(
+            coalesce_partitions.output_partitioning().partition_count(),
+            1
+        );
         let unresolved_shuffle = coalesce_partitions.children()[0].clone();
         let unresolved_shuffle =
             downcast_exec!(unresolved_shuffle, UnresolvedShuffleExec);
         assert_eq!(unresolved_shuffle.stage_id, 2);
         assert_eq!(unresolved_shuffle.input_partition_count, 2);
-        assert_eq!(unresolved_shuffle.output_partition_count, 1);
+        assert_eq!(unresolved_shuffle.output_partition_count, 2);
 
         Ok(())
     }

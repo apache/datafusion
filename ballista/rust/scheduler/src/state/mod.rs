@@ -302,15 +302,17 @@ impl SchedulerState {
                     >,
                 > = HashMap::new();
                 for unresolved_shuffle in unresolved_shuffles {
-                    // we scheduler one task per *input* partition and each input partition
+                    // we schedule one task per *input* partition and each input partition
                     // can produce multiple output partitions
-                    for partition_id in 0..unresolved_shuffle.input_partition_count {
+                    for shuffle_input_partition_id in
+                        0..unresolved_shuffle.input_partition_count
+                    {
                         let referenced_task = tasks
                             .get(&get_task_status_key(
                                 &self.namespace,
                                 &partition.job_id,
                                 unresolved_shuffle.stage_id,
-                                partition_id,
+                                shuffle_input_partition_id,
                             ))
                             .unwrap();
                         let task_is_dead = self
@@ -325,8 +327,8 @@ impl SchedulerState {
                             },
                         )) = &referenced_task.status
                         {
-                            info!("Task for unresolved shuffle input partition {} completed and produced these shuffle partitions:\n\t{:?}",
-                                partition_id,
+                            debug!("Task for unresolved shuffle input partition {} completed and produced these shuffle partitions:\n\t{}",
+                                shuffle_input_partition_id,
                                 partitions.iter().map(|p| format!("{}={}", p.partition_id, &p.path)).collect::<Vec<_>>().join("\n\t")
                             );
                             let stage_shuffle_partition_locations = partition_locations
@@ -361,7 +363,7 @@ impl SchedulerState {
                                         ),
                                         path: shuffle_write_partition.path.clone(),
                                     };
-                                info!(
+                                debug!(
                                     "Scheduler storing stage {} output partition {} path: {}",
                                     unresolved_shuffle.stage_id,
                                     partition_location.partition_id.partition_id,
@@ -370,6 +372,10 @@ impl SchedulerState {
                                 temp.push(partition_location);
                             }
                         } else {
+                            debug!(
+                                "Stage {} input partition {} has not completed yet",
+                                unresolved_shuffle.stage_id, shuffle_input_partition_id,
+                            );
                             continue 'tasks;
                         }
                     }
