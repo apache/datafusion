@@ -162,7 +162,7 @@ impl ExecutionPlan for ExplainExec {
 /// displayed.
 ///
 /// This is meant to avoid repeating the same plan over and over again
-/// to make clear what is changing
+/// in explain plans to make clear what is changing
 fn should_show(previous_plan: &StringifiedPlan, this_plan: &StringifiedPlan) -> bool {
     // if the plans are different, or if they would have been
     // displayed in the normal explain (aka non verbose) plan

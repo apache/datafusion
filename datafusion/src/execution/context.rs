@@ -982,45 +982,46 @@ mod tests {
 
     #[test]
     fn optimize_explain() {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-        ]);
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
-        let plan = LogicalPlanBuilder::scan_empty(
-              Some("employee"),
-              &schema,
-              None,
-        )
+        let plan = LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
             .unwrap()
             .explain(true)
             .unwrap()
             .build()
             .unwrap();
 
-        if let LogicalPlan::Explain{stringified_plans, ..} = &plan {
+        if let LogicalPlan::Explain {
+            stringified_plans, ..
+        } = &plan
+        {
             assert_eq!(stringified_plans.len(), 1);
-        }
-        else {
+        } else {
             panic!("plan was not an explain: {:?}", plan);
         }
 
         // now optimize the plan and expect to see more plans
         let optimized_plan = ExecutionContext::new().optimize(&plan).unwrap();
-        if let LogicalPlan::Explain{stringified_plans, ..} = &optimized_plan {
+        if let LogicalPlan::Explain {
+            stringified_plans, ..
+        } = &optimized_plan
+        {
             // should have more than one plan
-            assert!(stringified_plans.len() > 1, "plans: {:#?}", stringified_plans);
+            assert!(
+                stringified_plans.len() > 1,
+                "plans: {:#?}",
+                stringified_plans
+            );
             // should have at least one optimized plan
-            let opt  = stringified_plans
+            let opt = stringified_plans
                 .iter()
-                .any(|p| matches!(p.plan_type, PlanType::OptimizedLogicalPlan{..}));
+                .any(|p| matches!(p.plan_type, PlanType::OptimizedLogicalPlan { .. }));
 
             assert!(opt, "plans: {:#?}", stringified_plans);
-        }
-        else {
+        } else {
             panic!("plan was not an explain: {:?}", plan);
         }
     }
-
 
     #[tokio::test]
     async fn parallel_projection() -> Result<()> {
