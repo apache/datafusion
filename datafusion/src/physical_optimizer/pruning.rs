@@ -355,17 +355,18 @@ fn build_statistics_record_batch<S: PruningStatistics>(
 
 struct PruningExpressionBuilder<'a> {
     column: Column,
-    column_expr: &'a Expr,
-    scalar_expr: &'a Expr,
+    column_expr: Expr,
+    op: Operator,
+    scalar_expr: Expr,
     field: &'a Field,
     required_columns: &'a mut RequiredStatColumns,
-    reverse_operator: bool,
 }
 
 impl<'a> PruningExpressionBuilder<'a> {
     fn try_new(
         left: &'a Expr,
         right: &'a Expr,
+        op: Operator,
         schema: &'a Schema,
         required_columns: &'a mut RequiredStatColumns,
     ) -> Result<Self> {
@@ -374,10 +375,10 @@ impl<'a> PruningExpressionBuilder<'a> {
         utils::expr_to_columns(left, &mut left_columns)?;
         let mut right_columns = HashSet::<Column>::new();
         utils::expr_to_columns(right, &mut right_columns)?;
-        let (column_expr, scalar_expr, columns, reverse_operator) =
+        let (column_expr, scalar_expr, columns, correct_operator) =
             match (left_columns.len(), right_columns.len()) {
-                (1, 0) => (left, right, left_columns, false),
-                (0, 1) => (right, left, right_columns, true),
+                (1, 0) => (left, right, left_columns, op),
+                (0, 1) => (right, left, right_columns, reverse_operator(op)),
                 _ => {
                     // if more than one column used in expression - not supported
                     return Err(DataFusionError::Plan(
@@ -385,6 +386,12 @@ impl<'a> PruningExpressionBuilder<'a> {
                             .to_string(),
                     ));
                 }
+            };
+
+        let (column_expr, correct_operator, scalar_expr) =
+            match rewrite_expr_compatible(column_expr, correct_operator, scalar_expr) {
+                Ok(ret) => ret,
+                Err(e) => return Err(e),
             };
         let column = columns.iter().next().unwrap().clone();
         let field = match schema.column_with_name(&column.flat_name()) {
@@ -399,40 +406,67 @@ impl<'a> PruningExpressionBuilder<'a> {
         Ok(Self {
             column,
             column_expr,
+            op: correct_operator,
             scalar_expr,
             field,
             required_columns,
-            reverse_operator,
         })
     }
 
-    fn correct_operator(&self, op: Operator) -> Operator {
-        if !self.reverse_operator {
-            return op;
-        }
-
-        match op {
-            Operator::Lt => Operator::Gt,
-            Operator::Gt => Operator::Lt,
-            Operator::LtEq => Operator::GtEq,
-            Operator::GtEq => Operator::LtEq,
-            _ => op,
-        }
+    fn op(&self) -> Operator {
+        self.op
     }
 
     fn scalar_expr(&self) -> &Expr {
-        self.scalar_expr
+        &self.scalar_expr
     }
 
     fn min_column_expr(&mut self) -> Result<Expr> {
         self.required_columns
-            .min_column_expr(&self.column, self.column_expr, self.field)
+            .min_column_expr(&self.column, &self.column_expr, self.field)
     }
 
     fn max_column_expr(&mut self) -> Result<Expr> {
         self.required_columns
-            .max_column_expr(&self.column, self.column_expr, self.field)
+            .max_column_expr(&self.column, &self.column_expr, self.field)
     }
+}
+
+fn rewrite_expr_compatible(
+    column_expr: &Expr,
+    op: Operator,
+    scalar_expr: &Expr,
+) -> Result<(Expr, Operator, Expr)> {
+    match column_expr {
+        Expr::Column(_) => Ok((column_expr.clone(), op, scalar_expr.clone())),
+        // Expr::BinaryExpr { .. } => todo!(),
+        // Expr::Not(_) => todo!(),
+        Expr::Negative(c) => match c.as_ref() {
+            Expr::Column(_) => Ok((
+                c.as_ref().clone(),
+                reverse_operator(op),
+                Expr::Negative(Box::new(scalar_expr.clone())),
+            )),
+            _ => Err(DataFusionError::Plan(format!(
+                "negative withm complex expression {:?} is not supported",
+                column_expr
+            ))),
+        },
+        // Expr::Between { expr, negated, low, high } => todo!(),
+        // Expr::Cast { expr, data_type } => todo!(),
+        // Expr::TryCast { expr, data_type } => todo!(),
+        // Expr::Sort { expr, asc, nulls_first } => todo!(),
+        // Expr::ScalarFunction { fun, args } => todo!(),
+        // Expr::InList { expr, list, negated } => todo!(),
+        // Expr::Wildcard => todo!(),
+        _ => {
+            return Err(DataFusionError::Plan(format!(
+                "column expression {:?} is not supported",
+                column_expr
+            )))
+        }
+    }
+    // Ok((column_expr.clone(), op, scalar_expr.clone()))
 }
 
 /// replaces a column with an old name with a new name in an expression
@@ -453,6 +487,16 @@ fn rewrite_column_expr(
         }
     }
     utils::rewrite_expression(expr, &expressions)
+}
+
+fn reverse_operator(op: Operator) -> Operator {
+    match op {
+        Operator::Lt => Operator::Gt,
+        Operator::Gt => Operator::Lt,
+        Operator::LtEq => Operator::GtEq,
+        Operator::GtEq => Operator::LtEq,
+        _ => op,
+    }
 }
 
 /// Given a column reference to `column`, returns a pruning
@@ -541,7 +585,7 @@ fn build_predicate_expression(
     }
 
     let expr_builder =
-        PruningExpressionBuilder::try_new(left, right, schema, required_columns);
+        PruningExpressionBuilder::try_new(left, right, op, schema, required_columns);
     let mut expr_builder = match expr_builder {
         Ok(builder) => builder,
         // allow partial failure in predicate expression generation
@@ -550,8 +594,13 @@ fn build_predicate_expression(
             return Ok(unhandled);
         }
     };
-    let corrected_op = expr_builder.correct_operator(op);
-    let statistics_expr = match corrected_op {
+
+    let statistics_expr = build_statistics_expr(&mut expr_builder).unwrap_or(unhandled);
+    Ok(statistics_expr)
+}
+
+fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<Expr> {
+    let statistics_expr = match expr_builder.op() {
         Operator::NotEq => {
             // column != literal => (min, max) = literal =>
             // !(min != literal && max != literal) ==>
@@ -596,7 +645,11 @@ fn build_predicate_expression(
                 .lt_eq(expr_builder.scalar_expr().clone())
         }
         // other expressions are not supported
-        _ => unhandled,
+        _ => {
+            return Err(DataFusionError::Plan(format!(
+                "other expressions than (neq, eq, gt, gteq, lt, lteq) are not superted"
+            )))
+        }
     };
     Ok(statistics_expr)
 }
