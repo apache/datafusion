@@ -805,28 +805,43 @@ impl fmt::Debug for LogicalPlan {
     }
 }
 
-/// Represents which type of plan
+/// Represents which type of plan, when storing multiple
+/// for use in EXPLAIN plans
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
-    LogicalPlan,
+    InitialLogicalPlan,
     /// The LogicalPlan which results from applying an optimizer pass
     OptimizedLogicalPlan {
         /// The name of the optimizer which produced this plan
         optimizer_name: String,
     },
-    /// The physical plan, prepared for execution
-    PhysicalPlan,
+    /// The final, fully optimized LogicalPlan that was converted to a physical plan
+    FinalLogicalPlan,
+    /// The initial physical plan, prepared for execution
+    InitialPhysicalPlan,
+    /// The ExecutionPlan which results from applying an optimizer pass
+    OptimizedPhysicalPlan {
+        /// The name of the optimizer which produced this plan
+        optimizer_name: String,
+    },
+    /// The final, fully optimized physical which would be executed
+    FinalPhysicalPlan,
 }
 
-impl From<&PlanType> for String {
-    fn from(t: &PlanType) -> Self {
-        match t {
-            PlanType::LogicalPlan => "logical_plan".into(),
+impl fmt::Display for PlanType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {
-                format!("logical_plan after {}", optimizer_name)
+                write!(f, "logical_plan after {}", optimizer_name)
             }
-            PlanType::PhysicalPlan => "physical_plan".into(),
+            PlanType::FinalLogicalPlan => write!(f, "logical_plan"),
+            PlanType::InitialPhysicalPlan => write!(f, "initial_physical_plan"),
+            PlanType::OptimizedPhysicalPlan { optimizer_name } => {
+                write!(f, "physical_plan after {}", optimizer_name)
+            }
+            PlanType::FinalPhysicalPlan => write!(f, "physical_plan"),
         }
     }
 }
@@ -854,7 +869,22 @@ impl StringifiedPlan {
     /// returns true if this plan should be displayed. Generally
     /// `verbose_mode = true` will display all available plans
     pub fn should_display(&self, verbose_mode: bool) -> bool {
-        self.plan_type == PlanType::LogicalPlan || verbose_mode
+        match self.plan_type {
+            PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan => true,
+            _ => verbose_mode,
+        }
+    }
+}
+
+/// Trait for something that can be formatted as a stringified plan
+pub trait ToStringifiedPlan {
+    /// Create a stringified plan with the specified type
+    fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
+}
+
+impl ToStringifiedPlan for LogicalPlan {
+    fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan {
+        StringifiedPlan::new(plan_type, self.display_indent().to_string())
     }
 }
 

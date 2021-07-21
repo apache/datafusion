@@ -23,6 +23,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::Partitioning;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -36,7 +37,12 @@ pub mod to_proto;
 #[derive(Debug, Clone)]
 pub enum Action {
     /// Collect a shuffle partition
-    FetchPartition(PartitionId),
+    FetchPartition {
+        job_id: String,
+        stage_id: usize,
+        partition_id: usize,
+        path: String,
+    },
 }
 
 /// Unique identifier for the output partition of an operator.
@@ -62,6 +68,7 @@ pub struct PartitionLocation {
     pub partition_id: PartitionId,
     pub executor_meta: ExecutorMeta,
     pub partition_stats: PartitionStats,
+    pub path: String,
 }
 
 /// Meta-data for an executor, used when fetching shuffle partitions from other executors
@@ -96,9 +103,9 @@ impl From<protobuf::ExecutorMetadata> for ExecutorMeta {
 /// Summary of executed partition
 #[derive(Debug, Copy, Clone)]
 pub struct PartitionStats {
-    num_rows: Option<u64>,
-    num_batches: Option<u64>,
-    num_bytes: Option<u64>,
+    pub(crate) num_rows: Option<u64>,
+    pub(crate) num_batches: Option<u64>,
+    pub(crate) num_bytes: Option<u64>,
 }
 
 impl Default for PartitionStats {
@@ -222,6 +229,8 @@ pub struct ExecutePartition {
     pub plan: Arc<dyn ExecutionPlan>,
     /// Location of shuffle partitions that this query stage may depend on
     pub shuffle_locations: HashMap<PartitionId, ExecutorMeta>,
+    /// Output partitioning for shuffle writes
+    pub output_partitioning: Option<Partitioning>,
 }
 
 impl ExecutePartition {
@@ -231,6 +240,7 @@ impl ExecutePartition {
         partition_id: Vec<usize>,
         plan: Arc<dyn ExecutionPlan>,
         shuffle_locations: HashMap<PartitionId, ExecutorMeta>,
+        output_partitioning: Option<Partitioning>,
     ) -> Self {
         Self {
             job_id,
@@ -238,6 +248,7 @@ impl ExecutePartition {
             partition_id,
             plan,
             shuffle_locations,
+            output_partitioning,
         }
     }
 

@@ -76,10 +76,12 @@ use crate::planner::DistributedPlanner;
 
 use log::{debug, error, info, warn};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
-use tonic::{Request, Response};
+use tonic::{Request, Response, Status};
 
 use self::state::{ConfigBackendClient, SchedulerState};
 use ballista_core::config::BallistaConfig;
+use ballista_core::execution_plans::ShuffleWriterExec;
+use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
 use ballista_core::utils::create_datafusion_context;
 use datafusion::physical_plan::parquet::ParquetExec;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -209,7 +211,7 @@ impl SchedulerGrpc for SchedulerServer {
                         tonic::Status::internal(msg)
                     })?;
             }
-            let task = if can_accept_task {
+            let task: Result<Option<_>, Status> = if can_accept_task {
                 let plan = self
                     .state
                     .assign_next_schedulable_task(&metadata.id)
@@ -229,15 +231,35 @@ impl SchedulerGrpc for SchedulerServer {
                         partition_id.partition_id
                     );
                 }
-                plan.map(|(status, plan)| TaskDefinition {
-                    plan: Some(plan.try_into().unwrap()),
-                    task_id: status.partition_id,
-                })
+                match plan {
+                    Some((status, plan)) => {
+                        let plan_clone = plan.clone();
+                        let output_partitioning = if let Some(shuffle_writer) =
+                            plan_clone.as_any().downcast_ref::<ShuffleWriterExec>()
+                        {
+                            shuffle_writer.shuffle_output_partitioning()
+                        } else {
+                            return Err(Status::invalid_argument(format!(
+                                "Task root plan was not a ShuffleWriterExec: {:?}",
+                                plan_clone
+                            )));
+                        };
+                        Ok(Some(TaskDefinition {
+                            plan: Some(plan.try_into().unwrap()),
+                            task_id: status.partition_id,
+                            output_partitioning: hash_partitioning_to_proto(
+                                output_partitioning,
+                            )
+                            .map_err(|_| Status::internal("TBD".to_string()))?,
+                        }))
+                    }
+                    None => Ok(None),
+                }
             } else {
-                None
+                Ok(None)
             };
             lock.unlock().await;
-            Ok(Response::new(PollWorkResult { task }))
+            Ok(Response::new(PollWorkResult { task: task? }))
         } else {
             warn!("Received invalid executor poll_work request");
             Err(tonic::Status::invalid_argument(
@@ -431,12 +453,12 @@ impl SchedulerGrpc for SchedulerServer {
                     }));
 
                 // save stages into state
-                for stage in stages {
+                for shuffle_writer in stages {
                     fail_job!(state
                         .save_stage_plan(
                             &job_id_spawn,
-                            stage.stage_id(),
-                            stage.children()[0].clone()
+                            shuffle_writer.stage_id(),
+                            shuffle_writer.clone()
                         )
                         .await
                         .map_err(|e| {
@@ -444,12 +466,13 @@ impl SchedulerGrpc for SchedulerServer {
                             error!("{}", msg);
                             tonic::Status::internal(msg)
                         }));
-                    let num_partitions = stage.output_partitioning().partition_count();
+                    let num_partitions =
+                        shuffle_writer.output_partitioning().partition_count();
                     for partition_id in 0..num_partitions {
                         let pending_status = TaskStatus {
                             partition_id: Some(PartitionId {
                                 job_id: job_id_spawn.clone(),
-                                stage_id: stage.stage_id() as u32,
+                                stage_id: shuffle_writer.stage_id() as u32,
                                 partition_id: partition_id as u32,
                             }),
                             status: None,

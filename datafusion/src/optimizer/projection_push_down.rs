@@ -18,7 +18,7 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
@@ -33,7 +33,6 @@ use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
 };
-use utils::optimize_explain;
 
 /// Optimizer that removes unused projections and aggregations from plans
 /// This reduces both scans and
@@ -173,7 +172,17 @@ fn optimize_plan(
                 true,
                 execution_props,
             )?;
-            if new_fields.is_empty() {
+
+            let new_required_columns_optimized = new_input
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.qualified_column())
+                .collect::<HashSet<Column>>();
+
+            if new_fields.is_empty()
+                || (has_projection && &new_required_columns_optimized == required_columns)
+            {
                 // no need for an expression at all
                 Ok(new_input)
             } else {
@@ -344,22 +353,9 @@ fn optimize_plan(
                 limit: *limit,
             })
         }
-        LogicalPlan::Explain {
-            verbose,
-            plan,
-            stringified_plans,
-            schema,
-        } => {
-            let schema = schema.as_ref().to_owned().into();
-            optimize_explain(
-                optimizer,
-                *verbose,
-                &*plan,
-                stringified_plans,
-                &schema,
-                execution_props,
-            )
-        }
+        LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
+            "Unsupported logical plan: Explain must be root of the plan".to_string(),
+        )),
         LogicalPlan::Union {
             inputs,
             schema,
@@ -490,6 +486,60 @@ mod tests {
         let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(#test.b)]]\
         \n  Filter: #test.c\
         \n    TableScan: test projection=Some([1, 2])";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn redundunt_project() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .project(vec![col("a"), col("c"), col("b")])?
+            .build()?;
+        let expected = "Projection: #test.a, #test.c, #test.b\
+        \n  TableScan: test projection=Some([0, 1, 2])";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn reorder_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("c"), col("b"), col("a")])?
+            .build()?;
+        let expected = "Projection: #test.c, #test.b, #test.a\
+        \n  TableScan: test projection=Some([0, 1, 2])";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn noncontiguous_redundunt_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("c"), col("b"), col("a")])?
+            .filter(col("c").gt(lit(1)))?
+            .project(vec![col("c"), col("a"), col("b")])?
+            .filter(col("b").gt(lit(1)))?
+            .filter(col("a").gt(lit(1)))?
+            .project(vec![col("a"), col("c"), col("b")])?
+            .build()?;
+        let expected = "Projection: #test.a, #test.c, #test.b\
+        \n  Filter: #test.a Gt Int32(1)\
+        \n    Filter: #test.b Gt Int32(1)\
+        \n      Filter: #test.c Gt Int32(1)\
+        \n        TableScan: test projection=Some([0, 1, 2])";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -812,8 +862,7 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["c", "a", "MAX(test.b)"]);
 
-        let expected = "\
-        Projection: #test.c, #test.a, #MAX(test.b)\
+        let expected = "Projection: #test.c, #test.a, #MAX(test.b)\
         \n  Filter: #test.c Gt Int32(1)\
         \n    Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b)]]\
         \n      TableScan: test projection=Some([0, 1, 2])";

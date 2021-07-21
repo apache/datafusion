@@ -27,18 +27,15 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
+use crate::{datasource::TableProvider, logical_plan::plan::ToStringifiedPlan};
 use crate::{
     datasource::{empty::EmptyTable, parquet::ParquetTable, CsvFile, MemTable},
     prelude::CsvReadOptions,
 };
 
 use super::dfschema::ToDFSchema;
-use super::{
-    exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType,
-    StringifiedPlan,
-};
+use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
     DFSchemaRef, Partitioning,
@@ -398,10 +395,8 @@ impl LogicalPlanBuilder {
 
     /// Create an expression to represent the explanation of the plan
     pub fn explain(&self, verbose: bool) -> Result<Self> {
-        let stringified_plans = vec![StringifiedPlan::new(
-            PlanType::LogicalPlan,
-            format!("{:#?}", self.plan.clone()),
-        )];
+        let stringified_plans =
+            vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
         let schema = LogicalPlan::explain_schema();
 
@@ -552,6 +547,8 @@ pub(crate) fn expand_wildcard(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
+
+    use crate::logical_plan::StringifiedPlan;
 
     use super::super::{col, lit, sum};
     use super::*;
@@ -740,14 +737,24 @@ mod tests {
     #[test]
     fn stringified_plan() {
         let stringified_plan =
-            StringifiedPlan::new(PlanType::LogicalPlan, "...the plan...");
+            StringifiedPlan::new(PlanType::InitialLogicalPlan, "...the plan...");
+        assert!(stringified_plan.should_display(true));
+        assert!(!stringified_plan.should_display(false)); // not in non verbose mode
+
+        let stringified_plan =
+            StringifiedPlan::new(PlanType::FinalLogicalPlan, "...the plan...");
         assert!(stringified_plan.should_display(true));
         assert!(stringified_plan.should_display(false)); // display in non verbose mode too
 
         let stringified_plan =
-            StringifiedPlan::new(PlanType::PhysicalPlan, "...the plan...");
+            StringifiedPlan::new(PlanType::InitialPhysicalPlan, "...the plan...");
         assert!(stringified_plan.should_display(true));
-        assert!(!stringified_plan.should_display(false));
+        assert!(!stringified_plan.should_display(false)); // not in non verbose mode
+
+        let stringified_plan =
+            StringifiedPlan::new(PlanType::FinalPhysicalPlan, "...the plan...");
+        assert!(stringified_plan.should_display(true));
+        assert!(stringified_plan.should_display(false)); // display in non verbose mode
 
         let stringified_plan = StringifiedPlan::new(
             PlanType::OptimizedLogicalPlan {

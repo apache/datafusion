@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use libc::uintptr_t;
-use pyo3::prelude::*;
-use pyo3::PyErr;
-
-use std::convert::From;
-
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::record_batch::RecordBatch;
+use libc::uintptr_t;
+use pyo3::prelude::*;
+use pyo3::types::PyList;
+use pyo3::PyErr;
+use std::convert::From;
 
 use crate::errors;
 
@@ -64,15 +63,13 @@ fn to_py_batch<'a>(
 
 /// Converts a &[RecordBatch] into a Vec<RecordBatch> represented in PyArrow
 pub fn to_py(batches: &[RecordBatch]) -> PyResult<PyObject> {
-    let gil = pyo3::Python::acquire_gil();
-    let py = gil.python();
-    let pyarrow = PyModule::import(py, "pyarrow")?;
-    let builtins = PyModule::import(py, "builtins")?;
-
-    let mut py_batches = vec![];
-    for batch in batches {
-        py_batches.push(to_py_batch(batch, py, pyarrow)?);
-    }
-    let result = builtins.call1("list", (py_batches,))?;
-    Ok(PyObject::from(result))
+    Python::with_gil(|py| {
+        let pyarrow = PyModule::import(py, "pyarrow")?;
+        let mut py_batches = vec![];
+        for batch in batches {
+            py_batches.push(to_py_batch(batch, py, pyarrow)?);
+        }
+        let list = PyList::new(py, py_batches);
+        Ok(PyObject::from(list))
+    })
 }

@@ -30,10 +30,10 @@ use arrow::{
 };
 use chrono::{Datelike, Duration};
 use datafusion::{
-    datasource::{parquet::ParquetTable, TableProvider},
+    datasource::TableProvider,
     logical_plan::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder},
     physical_plan::{plan_metrics, SQLMetric},
-    prelude::ExecutionContext,
+    prelude::{ExecutionConfig, ExecutionContext},
     scalar::ScalarValue,
 };
 use hashbrown::HashMap;
@@ -136,6 +136,47 @@ async fn prune_date64() {
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }
 
+#[tokio::test]
+async fn prune_disabled() {
+    let query = "SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')";
+    let expected_rows = 10;
+
+    // with pruning
+    let output = ContextWithParquet::new(Scenario::Timestamps)
+        .await
+        .query(query)
+        .await;
+
+    // This should prune one without error
+    assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(output.row_groups_pruned(), Some(1));
+    assert_eq!(
+        output.result_rows,
+        expected_rows,
+        "{}",
+        output.description()
+    );
+
+    // same query, without pruning
+    let config = ExecutionConfig::new().with_parquet_pruning(false);
+
+    let output = ContextWithParquet::with_config(Scenario::Timestamps, config)
+        .await
+        .query(query)
+        .await;
+    println!("{}", output.description());
+
+    // This should not prune any
+    assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(output.row_groups_pruned(), Some(0));
+    assert_eq!(
+        output.result_rows,
+        expected_rows,
+        "{}",
+        output.description()
+    );
+}
+
 // ----------------------
 // Begin test fixture
 // ----------------------
@@ -207,15 +248,18 @@ impl TestOutput {
 /// and the appropriate scenario
 impl ContextWithParquet {
     async fn new(scenario: Scenario) -> Self {
-        let file = make_test_file(scenario).await;
+        Self::with_config(scenario, ExecutionConfig::new()).await
+    }
 
-        // now, setup a the file as a data source and run a query against it
-        let mut ctx = ExecutionContext::new();
+    async fn with_config(scenario: Scenario, config: ExecutionConfig) -> Self {
+        let file = make_test_file(scenario).await;
         let parquet_path = file.path().to_string_lossy();
 
-        let table = ParquetTable::try_new(parquet_path, 4).unwrap();
+        // now, setup a the file as a data source and run a query against it
+        let mut ctx = ExecutionContext::with_config(config);
 
-        let provider = Arc::new(table);
+        ctx.register_parquet("t", &parquet_path).unwrap();
+        let provider = ctx.deregister_table("t").unwrap().unwrap();
         ctx.register_table("t", provider.clone()).unwrap();
 
         Self {
