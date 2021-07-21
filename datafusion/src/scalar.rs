@@ -27,6 +27,8 @@ use arrow::{
         TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
+use std::convert::Infallible;
+use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 /// Represents a dynamically typed, nullable single value.
@@ -851,6 +853,14 @@ impl From<u64> for ScalarValue {
 impl From<&str> for ScalarValue {
     fn from(value: &str) -> Self {
         ScalarValue::Utf8(Some(value.to_string()))
+    }
+}
+
+impl FromStr for ScalarValue {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(s.into())
     }
 }
 
