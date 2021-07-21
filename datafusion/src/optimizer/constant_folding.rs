@@ -27,9 +27,9 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{DFSchemaRef, Expr, ExprRewriter, LogicalPlan, Operator};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
+use crate::physical_plan::datetime_expressions::string_to_timestamp_nanos;
 use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
-use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow::compute::{kernels, DEFAULT_CAST_OPTIONS};
 
 /// Optimizer that simplifies comparison expressions involving boolean literals.

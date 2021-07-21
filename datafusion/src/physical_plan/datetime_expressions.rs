@@ -94,7 +94,7 @@ use chrono::LocalResult;
 /// the system timezone is set to Americas/New_York (UTC-5) the
 /// timestamp will be interpreted as though it were
 /// `1997-01-31T09:26:56.123-05:00`
-fn string_to_timestamp_nanos(s: &str) -> Result<i64> {
+pub(crate) fn string_to_timestamp_nanos(s: &str) -> Result<i64> {
     // Fast path:  RFC3339 timestamp (with a T)
     // Example: 2020-09-08T13:42:29.190855Z
     if let Ok(ts) = DateTime::parse_from_rfc3339(s) {
