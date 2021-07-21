@@ -21,7 +21,7 @@ set -e
 pushd ..
 . ./dev/build-set-env.sh
 popd
-docker build -t ballista-tpchgen:$BALLISTA_VERSION -f tpchgen.dockerfile .
+docker ${BUILD_ARGS[@]} -t ballista-tpchgen:$BALLISTA_VERSION -f tpchgen.dockerfile .
 
 # Generate data into the ./data directory if it does not already exist
 FILE=./data/supplier.tbl

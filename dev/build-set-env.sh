@@ -18,3 +18,22 @@
 # under the License.
 
 export BALLISTA_VERSION=$(awk -F'[ ="]+' '$1 == "version" { print $2 }' ballista/rust/core/Cargo.toml)
+
+# If running within CI, use docker-container driver to cache build cache into
+# local folders so we can share them between runs.
+if [[ "${CI}" = "true" ]] && docker buildx &>/dev/null; then
+    echo "building docker image in CI, saving build cache to local folder ${BUILDX_CACHE_DIR}."
+    BUILDER=ballista-docker-builder
+    docker buildx inspect "${BUILDER}" &>/dev/null || \
+        docker buildx create --driver docker-container --name "${BUILDER}" --use
+    BUILD_ARGS=(buildx build \
+        --builder ${BUILDER} \
+        --cache-from="type=local,src=${BUILDX_CACHE_DIR}" \
+        --cache-to="type=local,mode=max,dest=${BUILDX_CACHE_DIR}" \
+        --load)
+else
+    echo "No docker buildx plugin found, fallback to default docker build command with DOCKER_BUILDKIT=1"
+    echo "To install docker buildx, follow https://github.com/docker/buildx#installing"
+    export DOCKER_BUILDKIT=1
+    BUILD_ARGS=(build)
+fi
