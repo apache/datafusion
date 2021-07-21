@@ -182,9 +182,9 @@ fn naive_datetime_to_timestamp(s: &str, datetime: NaiveDateTime) -> Result<i64> 
     }
 }
 
-// given a function `op` that maps a `&str` to a Result of an arrow native type,
-// returns a `PrimitiveArray` after the application
-// of the function to `args[0]`.
+/// given a function `op` that maps a `&str` to a Result of an arrow native type,
+/// returns a `PrimitiveArray` after the application
+/// of the function to `args[0]`.
 /// # Errors
 /// This function errors iff:
 /// * the number of arguments is not 1 or
