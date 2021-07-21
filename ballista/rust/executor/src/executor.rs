@@ -21,8 +21,7 @@ use std::sync::Arc;
 
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
-use ballista_core::utils;
-use datafusion::arrow::record_batch::RecordBatch;
+use ballista_core::serde::protobuf;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::ExecutionPlan;
 
@@ -45,22 +44,26 @@ impl Executor {
     /// Execute one partition of a query stage and persist the result to disk in IPC format. On
     /// success, return a RecordBatch containing metadata about the results, including path
     /// and statistics.
-    pub async fn execute_partition(
+    pub async fn execute_shuffle_write(
         &self,
         job_id: String,
         stage_id: usize,
         part: usize,
         plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<RecordBatch, BallistaError> {
+    ) -> Result<Vec<protobuf::ShuffleWritePartition>, BallistaError> {
+        // TODO to enable shuffling we need to specify the output partitioning here and
+        // until we do that there is always a single output partition
+        // see https://github.com/apache/arrow-datafusion/issues/707
+        let shuffle_output_partitioning = None;
+
         let exec = ShuffleWriterExec::try_new(
             job_id,
             stage_id,
             plan,
             self.work_dir.clone(),
-            None,
+            shuffle_output_partitioning,
         )?;
-        let mut stream = exec.execute(part).await?;
-        let batches = utils::collect_stream(&mut stream).await?;
+        let partitions = exec.execute_shuffle_write(part).await?;
 
         println!(
             "=== Physical plan with metrics ===\n{}\n",
@@ -69,9 +72,7 @@ impl Executor {
                 .to_string()
         );
 
-        // the output should be a single batch containing metadata (path and statistics)
-        assert!(batches.len() == 1);
-        Ok(batches[0].clone())
+        Ok(partitions)
     }
 
     pub fn work_dir(&self) -> &str {

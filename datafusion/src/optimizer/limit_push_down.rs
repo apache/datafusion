@@ -17,13 +17,12 @@
 
 //! Optimizer rule to push down LIMIT in the query plan
 //! It will push down through projection, limits (taking the smaller limit)
-use std::sync::Arc;
-
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::LogicalPlan;
 use crate::optimizer::optimizer::OptimizerRule;
+use std::sync::Arc;
 
 /// Optimization rule that tries pushes down LIMIT n
 /// where applicable to reduce the amount of scanned / processed data
@@ -37,8 +36,10 @@ impl LimitPushDown {
 }
 
 fn limit_push_down(
+    optimizer: &LimitPushDown,
     upper_limit: Option<usize>,
     plan: &LogicalPlan,
+    execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
     match (plan, upper_limit) {
         (LogicalPlan::Limit { n, input }, upper_limit) => {
@@ -46,7 +47,12 @@ fn limit_push_down(
             Ok(LogicalPlan::Limit {
                 n: smallest,
                 // push down limit to plan (minimum of upper limit and current limit)
-                input: Arc::new(limit_push_down(Some(smallest), input.as_ref())?),
+                input: Arc::new(limit_push_down(
+                    optimizer,
+                    Some(smallest),
+                    input.as_ref(),
+                    execution_props,
+                )?),
             })
         }
         (
@@ -80,7 +86,12 @@ fn limit_push_down(
             // Push down limit directly (projection doesn't change number of rows)
             Ok(LogicalPlan::Projection {
                 expr: expr.clone(),
-                input: Arc::new(limit_push_down(upper_limit, input.as_ref())?),
+                input: Arc::new(limit_push_down(
+                    optimizer,
+                    upper_limit,
+                    input.as_ref(),
+                    execution_props,
+                )?),
                 schema: schema.clone(),
             })
         }
@@ -98,7 +109,12 @@ fn limit_push_down(
                 .map(|x| {
                     Ok(LogicalPlan::Limit {
                         n: upper_limit,
-                        input: Arc::new(limit_push_down(Some(upper_limit), x)?),
+                        input: Arc::new(limit_push_down(
+                            optimizer,
+                            Some(upper_limit),
+                            x,
+                            execution_props,
+                        )?),
                     })
                 })
                 .collect::<Result<_>>()?;
@@ -117,7 +133,7 @@ fn limit_push_down(
             let inputs = plan.inputs();
             let new_inputs = inputs
                 .iter()
-                .map(|plan| limit_push_down(None, plan))
+                .map(|plan| limit_push_down(optimizer, None, plan, execution_props))
                 .collect::<Result<Vec<_>>>()?;
 
             utils::from_plan(plan, &expr, &new_inputs)
@@ -126,14 +142,19 @@ fn limit_push_down(
 }
 
 impl OptimizerRule for LimitPushDown {
-    fn optimize(&self, plan: &LogicalPlan, _: &ExecutionProps) -> Result<LogicalPlan> {
-        limit_push_down(None, plan)
+    fn optimize(
+        &self,
+        plan: &LogicalPlan,
+        execution_props: &ExecutionProps,
+    ) -> Result<LogicalPlan> {
+        limit_push_down(self, None, plan, execution_props)
     }
 
     fn name(&self) -> &str {
         "limit_push_down"
     }
 }
+
 #[cfg(test)]
 mod test {
     use super::*;

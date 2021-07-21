@@ -18,6 +18,8 @@
 //! Ballista Prelude (common imports)
 
 pub use crate::context::BallistaContext;
+pub use ballista_core::config::BallistaConfig;
+pub use ballista_core::config::BALLISTA_DEFAULT_SHUFFLE_PARTITIONS;
 pub use ballista_core::error::{BallistaError, Result};
 
 pub use futures::StreamExt;

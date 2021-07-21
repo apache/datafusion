@@ -163,7 +163,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install --upgrade numpy==1.20.3 pandas==1.2.4
+          python -m pip install -r integration-tests/requirements.txt
       - name: Allow access of psql
         run: |
           # make sure psql can access the server
@@ -194,7 +194,7 @@ jobs:
       - name: Build datafusion-cli
         run: cargo build --bin datafusion-cli
       - name: Test Psql Parity
-        run: python -m unittest -v integration-tests/test_psql_parity.py
+        run: python -m pytest -v integration-tests/test_psql_parity.py
         env:
           POSTGRES_HOST: localhost
           POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}

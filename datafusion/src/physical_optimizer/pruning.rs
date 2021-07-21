@@ -547,7 +547,7 @@ fn build_predicate_expression(
         // allow partial failure in predicate expression generation
         // this can still produce a useful predicate when multiple conditions are joined using AND
         Err(_) => {
-            return Ok(logical_plan::lit(true));
+            return Ok(unhandled);
         }
     };
     let corrected_op = expr_builder.correct_operator(op);
@@ -596,7 +596,7 @@ fn build_predicate_expression(
                 .lt_eq(expr_builder.scalar_expr().clone())
         }
         // other expressions are not supported
-        _ => logical_plan::lit(true),
+        _ => unhandled,
     };
     Ok(statistics_expr)
 }

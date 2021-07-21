@@ -22,7 +22,6 @@ use crate::logical_plan::LogicalPlan;
 use crate::logical_plan::{lit, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use crate::optimizer::utils::optimize_explain;
 use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
 
@@ -278,27 +277,9 @@ impl OptimizerRule for SimplifyExpressions {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
+        _execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
-        match plan {
-            LogicalPlan::Explain {
-                verbose,
-                plan,
-                stringified_plans,
-                schema,
-            } => {
-                let schema = schema.as_ref().to_owned().into();
-                optimize_explain(
-                    self,
-                    *verbose,
-                    &*plan,
-                    stringified_plans,
-                    &schema,
-                    execution_props,
-                )
-            }
-            _ => optimize(plan),
-        }
+        optimize(plan)
     }
 }
 

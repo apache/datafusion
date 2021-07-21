@@ -27,8 +27,9 @@ use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
-    and, col, lit, normalize_col, union_with_alias, Column, DFSchema, Expr, LogicalPlan,
-    LogicalPlanBuilder, Operator, PlanType, StringifiedPlan, ToDFSchema,
+    and, builder::expand_wildcard, col, lit, normalize_col, union_with_alias, Column,
+    DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema,
+    ToStringifiedPlan,
 };
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
@@ -56,7 +57,7 @@ use sqlparser::parser::ParserError::ParserError;
 use super::{
     parser::DFParser,
     utils::{
-        can_columns_satisfy_exprs, expand_wildcard, expr_as_column_expr, extract_aliases,
+        can_columns_satisfy_exprs, expr_as_column_expr, extract_aliases,
         find_aggregate_exprs, find_column_exprs, find_window_exprs,
         group_window_expr_by_sort_keys, rebase_expr, resolve_aliases_to_exprs,
         resolve_positions_to_exprs,
@@ -232,10 +233,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let plan = self.sql_statement_to_plan(statement)?;
 
-        let stringified_plans = vec![StringifiedPlan::new(
-            PlanType::LogicalPlan,
-            format!("{:#?}", plan),
-        )];
+        let stringified_plans = vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
 
         let schema = LogicalPlan::explain_schema();
         let plan = Arc::new(plan);
@@ -423,46 +421,80 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         relation: &TableFactor,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
-        match relation {
+        let (plan, columns_alias) = match relation {
             TableFactor::Table { name, alias, .. } => {
                 let table_name = name.to_string();
                 let cte = ctes.get(&table_name);
-                match (
-                    cte,
-                    self.schema_provider.get_table_provider(name.try_into()?),
-                ) {
-                    (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                    (_, Some(provider)) => LogicalPlanBuilder::scan(
-                        // take alias into account to support `JOIN table1 as table2`
-                        alias
-                            .as_ref()
-                            .map(|a| a.name.value.as_str())
-                            .unwrap_or(&table_name),
-                        provider,
-                        None,
-                    )?
-                    .build(),
-                    (None, None) => Err(DataFusionError::Plan(format!(
-                        "Table or CTE with name '{}' not found",
-                        name
-                    ))),
-                }
+                let columns_alias = alias.clone().map(|x| x.columns);
+                (
+                    match (
+                        cte,
+                        self.schema_provider.get_table_provider(name.try_into()?),
+                    ) {
+                        (Some(cte_plan), _) => Ok(cte_plan.clone()),
+                        (_, Some(provider)) => LogicalPlanBuilder::scan(
+                            // take alias into account to support `JOIN table1 as table2`
+                            alias
+                                .as_ref()
+                                .map(|a| a.name.value.as_str())
+                                .unwrap_or(&table_name),
+                            provider,
+                            None,
+                        )?
+                        .build(),
+                        (None, None) => Err(DataFusionError::Plan(format!(
+                            "Table or CTE with name '{}' not found",
+                            name
+                        ))),
+                    }?,
+                    columns_alias,
+                )
             }
             TableFactor::Derived {
                 subquery, alias, ..
-            } => self.query_to_plan_with_alias(
-                subquery,
-                alias.as_ref().map(|a| a.name.value.to_string()),
-                ctes,
+            } => (
+                self.query_to_plan_with_alias(
+                    subquery,
+                    alias.as_ref().map(|a| a.name.value.to_string()),
+                    ctes,
+                )?,
+                alias.clone().map(|x| x.columns),
             ),
             TableFactor::NestedJoin(table_with_joins) => {
-                self.plan_table_with_joins(table_with_joins, ctes)
+                (self.plan_table_with_joins(table_with_joins, ctes)?, None)
             }
             // @todo Support TableFactory::TableFunction?
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported ast node {:?} in create_relation",
-                relation
-            ))),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported ast node {:?} in create_relation",
+                    relation
+                )))
+            }
+        };
+
+        if let Some(columns_alias) = columns_alias {
+            if columns_alias.is_empty() {
+                // sqlparser-rs encodes AS t as an empty list of column alias
+                Ok(plan)
+            } else if columns_alias.len() != plan.schema().fields().len() {
+                return Err(DataFusionError::Plan(format!(
+                    "Source table contains {} columns but only {} names given as column alias",
+                    plan.schema().fields().len(),
+                    columns_alias.len(),
+                )));
+            } else {
+                let fields = plan.schema().fields().clone();
+                LogicalPlanBuilder::from(plan)
+                    .project(
+                        fields
+                            .iter()
+                            .zip(columns_alias.iter())
+                            .map(|(field, ident)| col(field.name()).alias(&ident.value)),
+                    )?
+                    .build()
+            }
+        } else {
+            Ok(plan)
         }
     }
 
@@ -687,9 +719,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .map(|expr| self.sql_select_to_rex(expr, input_schema))
             .collect::<Result<Vec<Expr>>>()?
-            .iter()
-            .flat_map(|expr| expand_wildcard(expr, input_schema))
-            .map(|expr| normalize_col(expr, plan))
+            .into_iter()
+            .map(|expr| {
+                Ok(match expr {
+                    Expr::Wildcard => expand_wildcard(input_schema, plan)?,
+                    _ => vec![normalize_col(expr, plan)?],
+                })
+            })
+            .flat_map(|res| match res {
+                Ok(v) => v.into_iter().map(Ok).collect(),
+                Err(e) => vec![Err(e)],
+            })
             .collect::<Result<Vec<Expr>>>()
     }
 
@@ -1877,6 +1917,27 @@ mod tests {
     }
 
     #[test]
+    fn table_with_column_alias() {
+        let sql = "SELECT a, b, c
+                   FROM lineitem l (a, b, c)";
+        let expected = "Projection: #a, #b, #c\
+                        \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c\
+                        \n    TableScan: l projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn table_with_column_alias_number_cols() {
+        let sql = "SELECT a, b, c
+                   FROM lineitem l (a, b)";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Source table contains 3 columns but only 2 names given as column alias\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
     fn select_with_having() {
         let sql = "SELECT id, age
                    FROM person
@@ -2771,6 +2832,19 @@ mod tests {
         \n  Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
         \n    TableScan: person2 projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn project_wildcard_on_join_with_using() {
+        let sql = "SELECT * \
+            FROM lineitem \
+            JOIN lineitem as lineitem2 \
+            USING (l_item_id)";
+        let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
+        \n  Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
+        \n    TableScan: lineitem projection=None\
+        \n    TableScan: lineitem2 projection=None";
         quick_test(sql, expected);
     }
 

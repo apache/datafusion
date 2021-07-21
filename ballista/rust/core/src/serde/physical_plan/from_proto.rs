@@ -22,7 +22,9 @@ use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
 use crate::error::BallistaError;
-use crate::execution_plans::{ShuffleReaderExec, UnresolvedShuffleExec};
+use crate::execution_plans::{
+    ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
+};
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::protobuf::ShuffleReaderPartition;
 use crate::serde::scheduler::PartitionLocation;
@@ -370,6 +372,34 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     partition_mode,
                 )?))
             }
+            PhysicalPlanType::ShuffleWriter(shuffle_writer) => {
+                let input: Arc<dyn ExecutionPlan> =
+                    convert_box_required!(shuffle_writer.input)?;
+
+                let output_partitioning = match &shuffle_writer.output_partitioning {
+                    Some(hash_part) => {
+                        let expr = hash_part
+                            .hash_expr
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()?;
+
+                        Some(Partitioning::Hash(
+                            expr,
+                            hash_part.partition_count.try_into().unwrap(),
+                        ))
+                    }
+                    None => None,
+                };
+
+                Ok(Arc::new(ShuffleWriterExec::try_new(
+                    shuffle_writer.job_id.clone(),
+                    shuffle_writer.stage_id as usize,
+                    input,
+                    "".to_string(), // this is intentional but hacky - the executor will fill this in
+                    output_partitioning,
+                )?))
+            }
             PhysicalPlanType::ShuffleReader(shuffle_reader) => {
                 let schema = Arc::new(convert_required!(shuffle_reader.schema)?);
                 let partition_location: Vec<Vec<PartitionLocation>> = shuffle_reader
@@ -434,11 +464,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
             PhysicalPlanType::Unresolved(unresolved_shuffle) => {
                 let schema = Arc::new(convert_required!(unresolved_shuffle.schema)?);
                 Ok(Arc::new(UnresolvedShuffleExec {
-                    query_stage_ids: unresolved_shuffle
-                        .query_stage_ids
-                        .iter()
-                        .map(|id| *id as usize)
-                        .collect(),
+                    stage_id: unresolved_shuffle.stage_id as usize,
                     schema,
                     partition_count: unresolved_shuffle.partition_count as usize,
                 }))

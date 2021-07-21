@@ -21,7 +21,7 @@
 //! Logical query plans can then be optimized and executed directly, or translated into
 //! physical query plans and executed.
 
-mod builder;
+pub(crate) mod builder;
 mod dfschema;
 mod display;
 mod expr;
@@ -50,6 +50,6 @@ pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
 pub use plan::{
     JoinConstraint, JoinType, LogicalPlan, Partitioning, PlanType, PlanVisitor,
-    StringifiedPlan,
 };
+pub(crate) use plan::{StringifiedPlan, ToStringifiedPlan};
 pub use registry::FunctionRegistry;

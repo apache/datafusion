@@ -27,6 +27,7 @@ use crate::execution_plans::{ShuffleWriterExec, UnresolvedShuffleExec};
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
+use crate::config::BallistaConfig;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
     array::{
@@ -208,13 +209,11 @@ fn build_exec_plan_diagram(
     for child in plan.children() {
         if let Some(shuffle) = child.as_any().downcast_ref::<UnresolvedShuffleExec>() {
             if !draw_entity {
-                for y in &shuffle.query_stage_ids {
-                    writeln!(
-                        w,
-                        "\tstage_{}_exec_1 -> stage_{}_exec_{};",
-                        y, stage_id, node_id
-                    )?;
-                }
+                writeln!(
+                    w,
+                    "\tstage_{}_exec_1 -> stage_{}_exec_{};",
+                    shuffle.stage_id, stage_id, node_id
+                )?;
             }
         } else {
             // relationships within same entity
@@ -233,8 +232,9 @@ fn build_exec_plan_diagram(
 }
 
 /// Create a DataFusion context that is compatible with Ballista
-pub fn create_datafusion_context() -> ExecutionContext {
-    let config = ExecutionConfig::new().with_concurrency(2); // TODO: this is hack to enable partitioned joins
+pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
+    let config =
+        ExecutionConfig::new().with_concurrency(config.default_shuffle_partitions());
     ExecutionContext::with_config(config)
 }
 

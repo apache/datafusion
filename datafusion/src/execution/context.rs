@@ -21,6 +21,7 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
+    logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::{
         aggregate_statistics::AggregateStatistics, eliminate_limit::EliminateLimit,
         hash_build_probe_order::HashBuildProbeOrder,
@@ -322,10 +323,11 @@ impl ExecutionContext {
     /// Registers a Parquet data source so that it can be referenced from SQL statements
     /// executed against this context.
     pub fn register_parquet(&mut self, name: &str, filename: &str) -> Result<()> {
-        let table = ParquetTable::try_new(
-            filename,
-            self.state.lock().unwrap().config.concurrency,
-        )?;
+        let table = {
+            let m = self.state.lock().unwrap();
+            ParquetTable::try_new(filename, m.config.concurrency)?
+                .with_enable_pruning(m.config.parquet_pruning)
+        };
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
@@ -445,19 +447,31 @@ impl ExecutionContext {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let state = &mut self.state.lock().unwrap();
-        let execution_props = &mut state.execution_props.clone();
-        let optimizers = &state.config.optimizers;
+        if let LogicalPlan::Explain {
+            verbose,
+            plan,
+            stringified_plans,
+            schema,
+        } = plan
+        {
+            let mut stringified_plans = stringified_plans.clone();
 
-        let execution_props = execution_props.start_execution();
+            // optimize the child plan, capturing the output of each optimizer
+            let plan = self.optimize_internal(plan, |optimized_plan, optimizer| {
+                let optimizer_name = optimizer.name().to_string();
+                let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
+                stringified_plans.push(optimized_plan.to_stringified(plan_type));
+            })?;
 
-        let mut new_plan = plan.clone();
-        debug!("Logical plan:\n {:?}", plan);
-        for optimizer in optimizers {
-            new_plan = optimizer.optimize(&new_plan, execution_props)?;
+            Ok(LogicalPlan::Explain {
+                verbose: *verbose,
+                plan: Arc::new(plan),
+                stringified_plans,
+                schema: schema.clone(),
+            })
+        } else {
+            self.optimize_internal(plan, |_, _| {})
         }
-        debug!("Optimized logical plan:\n {:?}", new_plan);
-        Ok(new_plan)
     }
 
     /// Creates a physical plan from a logical plan.
@@ -566,6 +580,32 @@ impl ExecutionContext {
             ))),
         }
     }
+
+    /// Optimizes the logical plan by applying optimizer rules, and
+    /// invoking observer function after each call
+    fn optimize_internal<F>(
+        &self,
+        plan: &LogicalPlan,
+        mut observer: F,
+    ) -> Result<LogicalPlan>
+    where
+        F: FnMut(&LogicalPlan, &dyn OptimizerRule),
+    {
+        let state = &mut self.state.lock().unwrap();
+        let execution_props = &mut state.execution_props.clone();
+        let optimizers = &state.config.optimizers;
+
+        let execution_props = execution_props.start_execution();
+
+        let mut new_plan = plan.clone();
+        debug!("Logical plan:\n {:?}", plan);
+        for optimizer in optimizers {
+            new_plan = optimizer.optimize(&new_plan, execution_props)?;
+            observer(&new_plan, optimizer.as_ref());
+        }
+        debug!("Optimized logical plan:\n {:?}", new_plan);
+        Ok(new_plan)
+    }
 }
 
 impl From<Arc<Mutex<ExecutionContextState>>> for ExecutionContext {
@@ -644,6 +684,8 @@ pub struct ExecutionConfig {
     /// Should DataFusion repartition data using the partition keys to execute window functions in
     /// parallel using the provided `concurrency` level
     pub repartition_windows: bool,
+    /// Should Datafusion parquet reader using the predicate to prune data
+    parquet_pruning: bool,
 }
 
 impl Default for ExecutionConfig {
@@ -674,6 +716,7 @@ impl Default for ExecutionConfig {
             repartition_joins: true,
             repartition_aggregations: true,
             repartition_windows: true,
+            parquet_pruning: true,
         }
     }
 }
@@ -774,6 +817,12 @@ impl ExecutionConfig {
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
     pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
         self.repartition_windows = enabled;
+        self
+    }
+
+    /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
+    pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
+        self.parquet_pruning = enabled;
         self
     }
 }
@@ -927,9 +976,10 @@ mod tests {
         physical_plan::expressions::AvgAccumulator,
     };
     use arrow::array::{
-        Array, ArrayRef, BinaryArray, DictionaryArray, Float64Array, Int32Array,
-        Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
-        TimestampNanosecondArray,
+        Array, ArrayRef, BinaryArray, DictionaryArray, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+        LargeStringArray, StringArray, TimestampNanosecondArray, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::compute::add;
     use arrow::datatypes::*;
@@ -940,6 +990,49 @@ mod tests {
     use std::{io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
     use test::*;
+
+    #[test]
+    fn optimize_explain() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
+            .unwrap()
+            .explain(true)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        if let LogicalPlan::Explain {
+            stringified_plans, ..
+        } = &plan
+        {
+            assert_eq!(stringified_plans.len(), 1);
+        } else {
+            panic!("plan was not an explain: {:?}", plan);
+        }
+
+        // now optimize the plan and expect to see more plans
+        let optimized_plan = ExecutionContext::new().optimize(&plan).unwrap();
+        if let LogicalPlan::Explain {
+            stringified_plans, ..
+        } = &optimized_plan
+        {
+            // should have more than one plan
+            assert!(
+                stringified_plans.len() > 1,
+                "plans: {:#?}",
+                stringified_plans
+            );
+            // should have at least one optimized plan
+            let opt = stringified_plans
+                .iter()
+                .any(|p| matches!(p.plan_type, PlanType::OptimizedLogicalPlan { .. }));
+
+            assert!(opt, "plans: {:#?}", stringified_plans);
+        } else {
+            panic!("plan was not an explain: {:?}", plan);
+        }
+    }
 
     #[tokio::test]
     async fn parallel_projection() -> Result<()> {
@@ -2373,6 +2466,75 @@ mod tests {
             .await
             .unwrap();
         assert_batches_sorted_eq!(expected, &results);
+    }
+
+    #[tokio::test]
+    async fn case_builtin_math_expression() {
+        let mut ctx = ExecutionContext::new();
+
+        let type_values = vec![
+            (
+                DataType::Int8,
+                Arc::new(Int8Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Int16,
+                Arc::new(Int16Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Int32,
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Int64,
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt8,
+                Arc::new(UInt8Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt16,
+                Arc::new(UInt16Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt32,
+                Arc::new(UInt32Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::UInt64,
+                Arc::new(UInt64Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                DataType::Float32,
+                Arc::new(Float32Array::from(vec![1.0_f32])) as ArrayRef,
+            ),
+            (
+                DataType::Float64,
+                Arc::new(Float64Array::from(vec![1.0_f64])) as ArrayRef,
+            ),
+        ];
+
+        for (data_type, array) in type_values.iter() {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("v", data_type.clone(), false)]));
+            let batch =
+                RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
+            let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+            ctx.register_table("t", Arc::new(provider)).unwrap();
+            let expected = vec![
+                "+---------+",
+                "| sqrt(v) |",
+                "+---------+",
+                "| 1       |",
+                "+---------+",
+            ];
+            let results = plan_and_collect(&mut ctx, "SELECT sqrt(v) FROM t")
+                .await
+                .unwrap();
+
+            assert_batches_sorted_eq!(expected, &results);
+        }
     }
 
     #[tokio::test]

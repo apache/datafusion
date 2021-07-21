@@ -27,7 +27,8 @@ use tonic::transport::Channel;
 use ballista_core::serde::protobuf::ExecutorRegistration;
 use ballista_core::serde::protobuf::{
     self, scheduler_grpc_client::SchedulerGrpcClient, task_status, FailedTask,
-    PartitionId, PollWorkParams, PollWorkResult, TaskDefinition, TaskStatus,
+    PartitionId, PollWorkParams, PollWorkResult, ShuffleWritePartition, TaskDefinition,
+    TaskStatus,
 };
 use protobuf::CompletedTask;
 
@@ -48,6 +49,10 @@ pub async fn poll_loop(
 
         let task_status: Vec<TaskStatus> =
             sample_tasks_status(&mut task_status_receiver).await;
+
+        // Keeps track of whether we received task in last iteration
+        // to avoid going in sleep mode between polling
+        let mut active_job = false;
 
         let poll_work_result: anyhow::Result<
             tonic::Response<PollWorkResult>,
@@ -73,14 +78,18 @@ pub async fn poll_loop(
                         task,
                     )
                     .await;
+                    active_job = true;
+                } else {
+                    active_job = false;
                 }
             }
             Err(error) => {
                 warn!("Executor registration failed. If this continues to happen the executor might be marked as dead by the scheduler. Error: {}", error);
             }
         }
-
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        if !active_job {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 
@@ -102,7 +111,7 @@ async fn run_received_tasks(
 
     tokio::spawn(async move {
         let execution_result = executor
-            .execute_partition(
+            .execute_shuffle_write(
                 task_id.job_id.clone(),
                 task_id.stage_id as usize,
                 task_id.partition_id as usize,
@@ -113,7 +122,7 @@ async fn run_received_tasks(
         debug!("Statistics: {:?}", execution_result);
         available_tasks_slots.fetch_add(1, Ordering::SeqCst);
         let _ = task_status_sender.send(as_task_status(
-            execution_result.map(|_| ()),
+            execution_result,
             executor_id,
             task_id,
         ));
@@ -121,18 +130,19 @@ async fn run_received_tasks(
 }
 
 fn as_task_status(
-    execution_result: ballista_core::error::Result<()>,
+    execution_result: ballista_core::error::Result<Vec<ShuffleWritePartition>>,
     executor_id: String,
     task_id: PartitionId,
 ) -> TaskStatus {
     match execution_result {
-        Ok(_) => {
+        Ok(partitions) => {
             info!("Task {:?} finished", task_id);
 
             TaskStatus {
                 partition_id: Some(task_id),
                 status: Some(task_status::Status::Completed(CompletedTask {
                     executor_id,
+                    partitions,
                 })),
             }
         }

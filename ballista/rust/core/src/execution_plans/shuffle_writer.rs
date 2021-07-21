@@ -31,7 +31,8 @@ use crate::error::BallistaError;
 use crate::memory_stream::MemoryStream;
 use crate::utils;
 
-use crate::serde::scheduler::PartitionStats;
+use crate::serde::protobuf::ShuffleWritePartition;
+use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 use async_trait::async_trait;
 use datafusion::arrow::array::{
     Array, ArrayBuilder, ArrayRef, StringBuilder, StructBuilder, UInt32Builder,
@@ -39,16 +40,19 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::arrow::ipc::writer::FileWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::hash_join::create_hashes;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::Partitioning::RoundRobinBatch;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream, SQLMetric,
 };
 use futures::StreamExt;
 use hashbrown::HashMap;
-use log::info;
+use log::{debug, info};
 use uuid::Uuid;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
@@ -75,12 +79,16 @@ pub struct ShuffleWriterExec {
 struct ShuffleWriteMetrics {
     /// Time spend writing batches to shuffle files
     write_time: Arc<SQLMetric>,
+    input_rows: Arc<SQLMetric>,
+    output_rows: Arc<SQLMetric>,
 }
 
 impl ShuffleWriteMetrics {
     fn new() -> Self {
         Self {
             write_time: SQLMetric::time_nanos(),
+            input_rows: SQLMetric::counter(),
+            output_rows: SQLMetric::counter(),
         }
     }
 }
@@ -113,47 +121,19 @@ impl ShuffleWriterExec {
     pub fn stage_id(&self) -> usize {
         self.stage_id
     }
-}
 
-#[async_trait]
-impl ExecutionPlan for ShuffleWriterExec {
-    fn as_any(&self) -> &dyn Any {
-        self
+    /// Get the true output partitioning
+    pub fn shuffle_output_partitioning(&self) -> Option<&Partitioning> {
+        self.shuffle_output_partitioning.as_ref()
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.plan.schema()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        self.plan.output_partitioning()
-    }
-
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.plan.clone()]
-    }
-
-    fn with_new_children(
+    pub async fn execute_shuffle_write(
         &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert!(children.len() == 1);
-        Ok(Arc::new(ShuffleWriterExec::try_new(
-            self.job_id.clone(),
-            self.stage_id,
-            children[0].clone(),
-            self.work_dir.clone(),
-            None,
-        )?))
-    }
-
-    async fn execute(
-        &self,
-        partition: usize,
-    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
+        input_partition: usize,
+    ) -> Result<Vec<ShuffleWritePartition>> {
         let now = Instant::now();
 
-        let mut stream = self.plan.execute(partition).await?;
+        let mut stream = self.plan.execute(input_partition).await?;
 
         let mut path = PathBuf::from(&self.work_dir);
         path.push(&self.job_id);
@@ -161,7 +141,7 @@ impl ExecutionPlan for ShuffleWriterExec {
 
         match &self.shuffle_output_partitioning {
             None => {
-                path.push(&format!("{}", partition));
+                path.push(&format!("{}", input_partition));
                 std::fs::create_dir_all(&path)?;
                 path.push("data.arrow");
                 let path = path.to_str().unwrap();
@@ -178,29 +158,18 @@ impl ExecutionPlan for ShuffleWriterExec {
 
                 info!(
                     "Executed partition {} in {} seconds. Statistics: {}",
-                    partition,
+                    input_partition,
                     now.elapsed().as_secs(),
                     stats
                 );
 
-                let schema = result_schema();
-
-                // build result set with summary of the partition execution status
-                let mut part_builder = UInt32Builder::new(1);
-                part_builder.append_value(partition as u32)?;
-                let part: ArrayRef = Arc::new(part_builder.finish());
-
-                let mut path_builder = StringBuilder::new(1);
-                path_builder.append_value(&path)?;
-                let path: ArrayRef = Arc::new(path_builder.finish());
-
-                let stats: ArrayRef = stats
-                    .to_arrow_arrayref()
-                    .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-                let batch = RecordBatch::try_new(schema.clone(), vec![part, path, stats])
-                    .map_err(DataFusionError::ArrowError)?;
-
-                Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
+                Ok(vec![ShuffleWritePartition {
+                    partition_id: input_partition as u64,
+                    path: path.to_owned(),
+                    num_batches: stats.num_batches.unwrap_or(0),
+                    num_rows: stats.num_rows.unwrap_or(0),
+                    num_bytes: stats.num_bytes.unwrap_or(0),
+                }])
             }
 
             Some(Partitioning::Hash(exprs, n)) => {
@@ -215,8 +184,12 @@ impl ExecutionPlan for ShuffleWriterExec {
 
                 let hashes_buf = &mut vec![];
                 let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+
                 while let Some(result) = stream.next().await {
                     let input_batch = result?;
+
+                    self.metrics.input_rows.add(input_batch.num_rows());
+
                     let arrays = exprs
                         .iter()
                         .map(|expr| {
@@ -234,10 +207,11 @@ impl ExecutionPlan for ShuffleWriterExec {
                         indices[(*hash % num_output_partitions as u64) as usize]
                             .push(index as u64)
                     }
-                    for (num_output_partition, partition_indices) in
+                    for (output_partition, partition_indices) in
                         indices.into_iter().enumerate()
                     {
                         let indices = partition_indices.into();
+
                         // Produce batches based on indices
                         let columns = input_batch
                             .columns()
@@ -252,18 +226,19 @@ impl ExecutionPlan for ShuffleWriterExec {
                         let output_batch =
                             RecordBatch::try_new(input_batch.schema(), columns)?;
 
-                        // write batch out
+                        // write non-empty batch out
+                        //if output_batch.num_rows() > 0 {
                         let start = Instant::now();
-                        match &mut writers[num_output_partition] {
+                        match &mut writers[output_partition] {
                             Some(w) => {
                                 w.write(&output_batch)?;
                             }
                             None => {
                                 let mut path = path.clone();
-                                path.push(&format!("{}", partition));
+                                path.push(&format!("{}", output_partition));
                                 std::fs::create_dir_all(&path)?;
 
-                                path.push("data.arrow");
+                                path.push(format!("data-{}.arrow", input_partition));
                                 let path = path.to_str().unwrap();
                                 info!("Writing results to {}", path);
 
@@ -271,61 +246,42 @@ impl ExecutionPlan for ShuffleWriterExec {
                                     ShuffleWriter::new(path, stream.schema().as_ref())?;
 
                                 writer.write(&output_batch)?;
-                                writers[num_output_partition] = Some(writer);
+                                writers[output_partition] = Some(writer);
                             }
                         }
+                        self.metrics.output_rows.add(output_batch.num_rows());
                         self.metrics.write_time.add_elapsed(start);
+                        //}
                     }
                 }
 
-                // build metadata result batch
-                let num_writers = writers.iter().filter(|w| w.is_some()).count();
-                let mut partition_builder = UInt32Builder::new(num_writers);
-                let mut path_builder = StringBuilder::new(num_writers);
-                let mut num_rows_builder = UInt64Builder::new(num_writers);
-                let mut num_batches_builder = UInt64Builder::new(num_writers);
-                let mut num_bytes_builder = UInt64Builder::new(num_writers);
+                let mut part_locs = vec![];
 
                 for (i, w) in writers.iter_mut().enumerate() {
                     match w {
                         Some(w) => {
                             w.finish()?;
-                            path_builder.append_value(w.path())?;
-                            partition_builder.append_value(i as u32)?;
-                            num_rows_builder.append_value(w.num_rows)?;
-                            num_batches_builder.append_value(w.num_batches)?;
-                            num_bytes_builder.append_value(w.num_bytes)?;
+                            info!(
+                                "Finished writing shuffle partition {} at {}. Batches: {}. Rows: {}. Bytes: {}.",
+                                i,
+                                w.path(),
+                                w.num_batches,
+                                w.num_rows,
+                                w.num_bytes
+                            );
+
+                            part_locs.push(ShuffleWritePartition {
+                                partition_id: i as u64,
+                                path: w.path().to_owned(),
+                                num_batches: w.num_batches,
+                                num_rows: w.num_rows,
+                                num_bytes: w.num_bytes,
+                            });
                         }
                         None => {}
                     }
                 }
-
-                // build arrays
-                let partition_num: ArrayRef = Arc::new(partition_builder.finish());
-                let path: ArrayRef = Arc::new(path_builder.finish());
-                let field_builders: Vec<Box<dyn ArrayBuilder>> = vec![
-                    Box::new(num_rows_builder),
-                    Box::new(num_batches_builder),
-                    Box::new(num_bytes_builder),
-                ];
-                let mut stats_builder = StructBuilder::new(
-                    PartitionStats::default().arrow_struct_fields(),
-                    field_builders,
-                );
-                for _ in 0..num_writers {
-                    stats_builder.append(true)?;
-                }
-                let stats = Arc::new(stats_builder.finish());
-
-                // build result batch containing metadata
-                let schema = result_schema();
-                let batch = RecordBatch::try_new(
-                    schema.clone(),
-                    vec![partition_num, path, stats],
-                )
-                .map_err(DataFusionError::ArrowError)?;
-
-                Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
+                Ok(part_locs)
             }
 
             _ => Err(DataFusionError::Execution(
@@ -333,9 +289,98 @@ impl ExecutionPlan for ShuffleWriterExec {
             )),
         }
     }
+}
+
+#[async_trait]
+impl ExecutionPlan for ShuffleWriterExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.plan.schema()
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        // This operator needs to be executed once for each *input* partition and there
+        // isn't really a mechanism yet in DataFusion to support this use case so we report
+        // the input partitioning as the output partitioning here. The executor reports
+        // output partition meta data back to the scheduler.
+        self.plan.output_partitioning()
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![self.plan.clone()]
+    }
+
+    fn with_new_children(
+        &self,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert!(children.len() == 1);
+        Ok(Arc::new(ShuffleWriterExec::try_new(
+            self.job_id.clone(),
+            self.stage_id,
+            children[0].clone(),
+            self.work_dir.clone(),
+            self.shuffle_output_partitioning.clone(),
+        )?))
+    }
+
+    async fn execute(
+        &self,
+        input_partition: usize,
+    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
+        let part_loc = self.execute_shuffle_write(input_partition).await?;
+
+        // build metadata result batch
+        let num_writers = part_loc.len();
+        let mut partition_builder = UInt32Builder::new(num_writers);
+        let mut path_builder = StringBuilder::new(num_writers);
+        let mut num_rows_builder = UInt64Builder::new(num_writers);
+        let mut num_batches_builder = UInt64Builder::new(num_writers);
+        let mut num_bytes_builder = UInt64Builder::new(num_writers);
+
+        for loc in &part_loc {
+            path_builder.append_value(loc.path.clone())?;
+            partition_builder.append_value(loc.partition_id as u32)?;
+            num_rows_builder.append_value(loc.num_rows)?;
+            num_batches_builder.append_value(loc.num_batches)?;
+            num_bytes_builder.append_value(loc.num_bytes)?;
+        }
+
+        // build arrays
+        let partition_num: ArrayRef = Arc::new(partition_builder.finish());
+        let path: ArrayRef = Arc::new(path_builder.finish());
+        let field_builders: Vec<Box<dyn ArrayBuilder>> = vec![
+            Box::new(num_rows_builder),
+            Box::new(num_batches_builder),
+            Box::new(num_bytes_builder),
+        ];
+        let mut stats_builder = StructBuilder::new(
+            PartitionStats::default().arrow_struct_fields(),
+            field_builders,
+        );
+        for _ in 0..num_writers {
+            stats_builder.append(true)?;
+        }
+        let stats = Arc::new(stats_builder.finish());
+
+        // build result batch containing metadata
+        let schema = result_schema();
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![partition_num, path, stats])
+                .map_err(DataFusionError::ArrowError)?;
+
+        debug!("RESULTS METADATA:\n{:?}", batch);
+
+        Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
+    }
 
     fn metrics(&self) -> HashMap<String, SQLMetric> {
         let mut metrics = HashMap::new();
+        metrics.insert("inputRows".to_owned(), (*self.metrics.input_rows).clone());
+        metrics.insert("outputRows".to_owned(), (*self.metrics.output_rows).clone());
         metrics.insert("writeTime".to_owned(), (*self.metrics.write_time).clone());
         metrics
     }
@@ -419,20 +464,22 @@ impl ShuffleWriter {
 mod tests {
     use super::*;
     use datafusion::arrow::array::{StringArray, StructArray, UInt32Array, UInt64Array};
+    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::expressions::Column;
+    use datafusion::physical_plan::limit::GlobalLimitExec;
     use datafusion::physical_plan::memory::MemoryExec;
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn test() -> Result<()> {
-        let input_plan = create_input_plan()?;
+        let input_plan = Arc::new(CoalescePartitionsExec::new(create_input_plan()?));
         let work_dir = TempDir::new()?;
         let query_stage = ShuffleWriterExec::try_new(
             "jobOne".to_owned(),
             1,
             input_plan,
             work_dir.into_path().to_str().unwrap().to_owned(),
-            None,
+            Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 2)),
         )?;
         let mut stream = query_stage.execute(0).await?;
         let batches = utils::collect_stream(&mut stream)
@@ -441,17 +488,28 @@ mod tests {
         assert_eq!(1, batches.len());
         let batch = &batches[0];
         assert_eq!(3, batch.num_columns());
-        assert_eq!(1, batch.num_rows());
+        assert_eq!(2, batch.num_rows());
         let path = batch.columns()[1]
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
-        let file = path.value(0);
-        assert!(file.ends_with("data.arrow"));
+
+        let file0 = path.value(0);
+        assert!(
+            file0.ends_with("/jobOne/1/0/data-0.arrow")
+                || file0.ends_with("\\jobOne\\1\\0\\data-0.arrow")
+        );
+        let file1 = path.value(1);
+        assert!(
+            file1.ends_with("/jobOne/1/1/data-0.arrow")
+                || file1.ends_with("\\jobOne\\1\\1\\data-0.arrow")
+        );
+
         let stats = batch.columns()[2]
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();
+
         let num_rows = stats
             .column_by_name("num_rows")
             .unwrap()
@@ -459,6 +517,8 @@ mod tests {
             .downcast_ref::<UInt64Array>()
             .unwrap();
         assert_eq!(4, num_rows.value(0));
+        assert_eq!(4, num_rows.value(1));
+
         Ok(())
     }
 

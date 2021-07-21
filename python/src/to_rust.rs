@@ -48,6 +48,7 @@ pub fn to_rust(ob: &PyAny) -> PyResult<ArrayRef> {
     Ok(array)
 }
 
+/// converts a pyarrow batch into a RecordBatch
 pub fn to_rust_batch(batch: &PyAny) -> PyResult<RecordBatch> {
     let schema = batch.getattr("schema")?;
     let names = schema.getattr("names")?.extract::<Vec<String>>()?;

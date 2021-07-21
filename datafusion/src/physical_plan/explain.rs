@@ -40,14 +40,21 @@ pub struct ExplainExec {
     schema: SchemaRef,
     /// The strings to be printed
     stringified_plans: Vec<StringifiedPlan>,
+    /// control which plans to print
+    verbose: bool,
 }
 
 impl ExplainExec {
     /// Create a new ExplainExec
-    pub fn new(schema: SchemaRef, stringified_plans: Vec<StringifiedPlan>) -> Self {
+    pub fn new(
+        schema: SchemaRef,
+        stringified_plans: Vec<StringifiedPlan>,
+        verbose: bool,
+    ) -> Self {
         ExplainExec {
             schema,
             stringified_plans,
+            verbose,
         }
     }
 
@@ -103,9 +110,25 @@ impl ExecutionPlan for ExplainExec {
         let mut type_builder = StringBuilder::new(self.stringified_plans.len());
         let mut plan_builder = StringBuilder::new(self.stringified_plans.len());
 
-        for p in &self.stringified_plans {
-            type_builder.append_value(&String::from(&p.plan_type))?;
-            plan_builder.append_value(&*p.plan)?;
+        let plans_to_print = self
+            .stringified_plans
+            .iter()
+            .filter(|s| s.should_display(self.verbose));
+
+        // Identify plans that are not changed
+        let mut prev: Option<&StringifiedPlan> = None;
+
+        for p in plans_to_print {
+            type_builder.append_value(p.plan_type.to_string())?;
+            match prev {
+                Some(prev) if !should_show(prev, p) => {
+                    plan_builder.append_value("SAME TEXT AS ABOVE")?;
+                }
+                Some(_) | None => {
+                    plan_builder.append_value(&*p.plan)?;
+                }
+            }
+            prev = Some(p);
         }
 
         let record_batch = RecordBatch::try_new(
@@ -133,4 +156,15 @@ impl ExecutionPlan for ExplainExec {
             }
         }
     }
+}
+
+/// If this plan should be shown, given the previous plan that was
+/// displayed.
+///
+/// This is meant to avoid repeating the same plan over and over again
+/// in explain plans to make clear what is changing
+fn should_show(previous_plan: &StringifiedPlan, this_plan: &StringifiedPlan) -> bool {
+    // if the plans are different, or if they would have been
+    // displayed in the normal explain (aka non verbose) plan
+    (previous_plan.plan != this_plan.plan) || this_plan.should_display(false)
 }
