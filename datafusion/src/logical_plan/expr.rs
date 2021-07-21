@@ -32,6 +32,7 @@ use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fmt;
+use std::ops::Not;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -580,7 +581,7 @@ impl Expr {
     /// Return `!self`
     #[allow(clippy::should_implement_trait)]
     pub fn not(self) -> Expr {
-        Expr::Not(Box::new(self))
+        !self
     }
 
     /// Calculate the modulus of two expressions.
@@ -922,6 +923,14 @@ impl Expr {
 
         // now rewrite this expression itself
         rewriter.mutate(expr)
+    }
+}
+
+impl Not for Expr {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Expr::Not(Box::new(self))
     }
 }
 
@@ -1992,6 +2001,11 @@ mod tests {
 
     fn make_field(relation: &str, column: &str) -> DFField {
         DFField::new(Some(relation), column, DataType::Int8, false)
+    }
+
+    #[test]
+    fn test_not() {
+        assert_eq!(lit(1).not(), !lit(1));
     }
 
     macro_rules! test_unary_scalar_expr {
