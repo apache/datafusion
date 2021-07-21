@@ -30,7 +30,9 @@ use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::{HashMap, HashSet};
+use std::convert::Infallible;
 use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// A named reference to a qualified field in a schema.
@@ -150,6 +152,14 @@ impl Column {
 impl From<&str> for Column {
     fn from(c: &str) -> Self {
         Self::from_qualified_name(c)
+    }
+}
+
+impl FromStr for Column {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(s.into())
     }
 }
 
