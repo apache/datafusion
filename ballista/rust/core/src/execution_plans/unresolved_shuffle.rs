@@ -43,17 +43,26 @@ pub struct UnresolvedShuffleExec {
     // The schema this node will have once it is replaced with a ShuffleReaderExec
     pub schema: SchemaRef,
 
+    // The number of shuffle writer partition tasks that will produce the partitions
+    pub input_partition_count: usize,
+
     // The partition count this node will have once it is replaced with a ShuffleReaderExec
-    pub partition_count: usize,
+    pub output_partition_count: usize,
 }
 
 impl UnresolvedShuffleExec {
     /// Create a new UnresolvedShuffleExec
-    pub fn new(stage_id: usize, schema: SchemaRef, partition_count: usize) -> Self {
+    pub fn new(
+        stage_id: usize,
+        schema: SchemaRef,
+        input_partition_count: usize,
+        output_partition_count: usize,
+    ) -> Self {
         Self {
             stage_id,
             schema,
-            partition_count,
+            input_partition_count,
+            output_partition_count,
         }
     }
 }
@@ -69,7 +78,9 @@ impl ExecutionPlan for UnresolvedShuffleExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partition_count)
+        //TODO the output partition is known and should be populated here!
+        // see https://github.com/apache/arrow-datafusion/issues/758
+        Partitioning::UnknownPartitioning(self.output_partition_count)
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
