@@ -76,6 +76,8 @@ impl ExecutionPlan for ShuffleReaderExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
+        // TODO partitioning may be known and could be populated here
+        // see https://github.com/apache/arrow-datafusion/issues/758
         Partitioning::UnknownPartitioning(self.partition.len())
     }
 
@@ -123,24 +125,26 @@ impl ExecutionPlan for ShuffleReaderExec {
                 let loc_str = self
                     .partition
                     .iter()
-                    .map(|x| {
-                        x.iter()
-                            .map(|l| {
-                                format!(
-                                    "[executor={} part={}:{}:{} stats={}]",
-                                    l.executor_meta.id,
-                                    l.partition_id.job_id,
-                                    l.partition_id.stage_id,
-                                    l.partition_id.partition_id,
-                                    l.partition_stats
-                                )
-                            })
-                            .collect::<Vec<String>>()
-                            .join(",")
+                    .enumerate()
+                    .map(|(partition_id, locations)| {
+                        format!(
+                            "[partition={} paths={}]",
+                            partition_id,
+                            locations
+                                .iter()
+                                .map(|l| l.path.clone())
+                                .collect::<Vec<String>>()
+                                .join(",")
+                        )
                     })
                     .collect::<Vec<String>>()
                     .join(", ");
-                write!(f, "ShuffleReaderExec: partition_locations={}", loc_str)
+                write!(
+                    f,
+                    "ShuffleReaderExec: partition_locations({})={}",
+                    self.partition.len(),
+                    loc_str
+                )
             }
         }
     }
@@ -166,6 +170,7 @@ async fn fetch_partition(
             &partition_id.job_id,
             partition_id.stage_id as usize,
             partition_id.partition_id as usize,
+            &location.path,
         )
         .await
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)

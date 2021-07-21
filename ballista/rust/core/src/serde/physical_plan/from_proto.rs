@@ -376,21 +376,9 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let input: Arc<dyn ExecutionPlan> =
                     convert_box_required!(shuffle_writer.input)?;
 
-                let output_partitioning = match &shuffle_writer.output_partitioning {
-                    Some(hash_part) => {
-                        let expr = hash_part
-                            .hash_expr
-                            .iter()
-                            .map(|e| e.try_into())
-                            .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()?;
-
-                        Some(Partitioning::Hash(
-                            expr,
-                            hash_part.partition_count.try_into().unwrap(),
-                        ))
-                    }
-                    None => None,
-                };
+                let output_partitioning = parse_protobuf_hash_partitioning(
+                    shuffle_writer.output_partitioning.as_ref(),
+                )?;
 
                 Ok(Arc::new(ShuffleWriterExec::try_new(
                     shuffle_writer.job_id.clone(),
@@ -466,7 +454,10 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 Ok(Arc::new(UnresolvedShuffleExec {
                     stage_id: unresolved_shuffle.stage_id as usize,
                     schema,
-                    partition_count: unresolved_shuffle.partition_count as usize,
+                    input_partition_count: unresolved_shuffle.input_partition_count
+                        as usize,
+                    output_partition_count: unresolved_shuffle.output_partition_count
+                        as usize,
                 }))
             }
         }
@@ -678,5 +669,25 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                 Ok(WindowFunction::BuiltInWindowFunction(f.into()))
             }
         }
+    }
+}
+
+pub fn parse_protobuf_hash_partitioning(
+    partitioning: Option<&protobuf::PhysicalHashRepartition>,
+) -> Result<Option<Partitioning>, BallistaError> {
+    match partitioning {
+        Some(hash_part) => {
+            let expr = hash_part
+                .hash_expr
+                .iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()?;
+
+            Ok(Some(Partitioning::Hash(
+                expr,
+                hash_part.partition_count.try_into().unwrap(),
+            )))
+        }
+        None => Ok(None),
     }
 }

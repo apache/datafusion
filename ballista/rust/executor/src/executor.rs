@@ -22,8 +22,9 @@ use std::sync::Arc;
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf;
+use datafusion::error::DataFusionError;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 
 /// Ballista executor
 pub struct Executor {
@@ -50,23 +51,33 @@ impl Executor {
         stage_id: usize,
         part: usize,
         plan: Arc<dyn ExecutionPlan>,
+        _shuffle_output_partitioning: Option<Partitioning>,
     ) -> Result<Vec<protobuf::ShuffleWritePartition>, BallistaError> {
-        // TODO to enable shuffling we need to specify the output partitioning here and
-        // until we do that there is always a single output partition
-        // see https://github.com/apache/arrow-datafusion/issues/707
-        let shuffle_output_partitioning = None;
+        let exec = if let Some(shuffle_writer) =
+            plan.as_any().downcast_ref::<ShuffleWriterExec>()
+        {
+            // recreate the shuffle writer with the correct working directory
+            ShuffleWriterExec::try_new(
+                job_id.clone(),
+                stage_id,
+                plan.children()[0].clone(),
+                self.work_dir.clone(),
+                shuffle_writer.shuffle_output_partitioning().cloned(),
+            )
+        } else {
+            Err(DataFusionError::Internal(
+                "Plan passed to execute_shuffle_write is not a ShuffleWriterExec"
+                    .to_string(),
+            ))
+        }?;
 
-        let exec = ShuffleWriterExec::try_new(
-            job_id,
-            stage_id,
-            plan,
-            self.work_dir.clone(),
-            shuffle_output_partitioning,
-        )?;
         let partitions = exec.execute_shuffle_write(part).await?;
 
         println!(
-            "=== Physical plan with metrics ===\n{}\n",
+            "=== [{}/{}/{}] Physical plan with metrics ===\n{}\n",
+            job_id,
+            stage_id,
+            part,
             DisplayableExecutionPlan::with_metrics(&exec)
                 .indent()
                 .to_string()
