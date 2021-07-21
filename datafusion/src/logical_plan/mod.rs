@@ -51,5 +51,5 @@ pub use operators::Operator;
 pub use plan::{
     JoinConstraint, JoinType, LogicalPlan, Partitioning, PlanType, PlanVisitor,
 };
-pub(crate) use plan::{StringifiedPlan, ToStringifiedPlan};
+pub use plan::{StringifiedPlan, ToStringifiedPlan};
 pub use registry::FunctionRegistry;
