@@ -31,9 +31,9 @@ jobs:
         id: buildx-cache
         with:
           path: "${{ runner.temp }}/buildx-cache"
-          key: ${{ runner.os }}-buildx-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-buildx-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
           restore-keys: |
-            ${{ runner.os }}-buildx-${{ hashFiles('**/Cargo.lock') }}
+            ${{ runner.os }}-buildx-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
             ${{ runner.os }}-buildx-
       - run: |
           ./dev/integration-tests.sh
