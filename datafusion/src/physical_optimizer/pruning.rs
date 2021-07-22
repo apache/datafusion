@@ -389,7 +389,7 @@ impl<'a> PruningExpressionBuilder<'a> {
             };
 
         let (column_expr, correct_operator, scalar_expr) =
-            match rewrite_expr_compatible(column_expr, correct_operator, scalar_expr) {
+            match rewrite_expr_to_prunable(column_expr, correct_operator, scalar_expr) {
                 Ok(ret) => ret,
                 Err(e) => return Err(e),
             };
@@ -432,15 +432,32 @@ impl<'a> PruningExpressionBuilder<'a> {
     }
 }
 
-fn rewrite_expr_compatible(
+/// This function is designed to rewrite the column_expr to
+/// ensure the column_expr is monotonically increasing.
+///
+/// For example,
+/// 1. `col > 10`
+/// 2. `-col > 10` should be rewritten to `col < -10`
+/// 3. `!col = true` would be rewritten to `col = !true`
+/// 4. `abs(a - 10) > 0` not supported
+///
+/// More rewrite rules are still in progress.
+fn rewrite_expr_to_prunable(
     column_expr: &Expr,
     op: Operator,
     scalar_expr: &Expr,
 ) -> Result<(Expr, Operator, Expr)> {
+    if !is_compare_op(op) {
+        return Err(DataFusionError::Plan(
+            "rewrite_expr_to_prunable only support compare expression".to_string(),
+        ));
+    }
+
     match column_expr {
+        // `col > lit()`
         Expr::Column(_) => Ok((column_expr.clone(), op, scalar_expr.clone())),
-        // Expr::BinaryExpr { .. } => todo!(),
-        // Expr::Not(_) => todo!(),
+
+        // `-col > lit()`  --> `col < -lit()`
         Expr::Negative(c) => match c.as_ref() {
             Expr::Column(_) => Ok((
                 c.as_ref().clone(),
@@ -448,17 +465,32 @@ fn rewrite_expr_compatible(
                 Expr::Negative(Box::new(scalar_expr.clone())),
             )),
             _ => Err(DataFusionError::Plan(format!(
-                "negative withm complex expression {:?} is not supported",
+                "negative with complex expression {:?} is not supported",
                 column_expr
             ))),
         },
-        // Expr::Between { expr, negated, low, high } => todo!(),
-        // Expr::Cast { expr, data_type } => todo!(),
-        // Expr::TryCast { expr, data_type } => todo!(),
-        // Expr::Sort { expr, asc, nulls_first } => todo!(),
-        // Expr::ScalarFunction { fun, args } => todo!(),
-        // Expr::InList { expr, list, negated } => todo!(),
-        // Expr::Wildcard => todo!(),
+
+        // `!col = true` --> `col = !true`
+        Expr::Not(c) => {
+            if op != Operator::Eq && op != Operator::NotEq {
+                return Err(DataFusionError::Plan(
+                    "Not with operator other than Eq / NotEq is not supported"
+                        .to_string(),
+                ));
+            }
+            return match c.as_ref() {
+                Expr::Column(_) => Ok((
+                    c.as_ref().clone(),
+                    reverse_operator(op),
+                    Expr::Not(Box::new(scalar_expr.clone())),
+                )),
+                _ => Err(DataFusionError::Plan(format!(
+                    "Not with complex expression {:?} is not supported",
+                    column_expr
+                ))),
+            };
+        }
+
         _ => {
             return Err(DataFusionError::Plan(format!(
                 "column expression {:?} is not supported",
@@ -467,6 +499,18 @@ fn rewrite_expr_compatible(
         }
     }
     // Ok((column_expr.clone(), op, scalar_expr.clone()))
+}
+
+fn is_compare_op(op: Operator) -> bool {
+    matches!(
+        op,
+        Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq
+    )
 }
 
 /// replaces a column with an old name with a new name in an expression
@@ -600,57 +644,57 @@ fn build_predicate_expression(
 }
 
 fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<Expr> {
-    let statistics_expr = match expr_builder.op() {
-        Operator::NotEq => {
-            // column != literal => (min, max) = literal =>
-            // !(min != literal && max != literal) ==>
-            // min != literal || literal != max
-            let min_column_expr = expr_builder.min_column_expr()?;
-            let max_column_expr = expr_builder.max_column_expr()?;
-            min_column_expr
-                .not_eq(expr_builder.scalar_expr().clone())
-                .or(expr_builder.scalar_expr().clone().not_eq(max_column_expr))
-        }
-        Operator::Eq => {
-            // column = literal => (min, max) = literal => min <= literal && literal <= max
-            // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
-            let min_column_expr = expr_builder.min_column_expr()?;
-            let max_column_expr = expr_builder.max_column_expr()?;
-            min_column_expr
-                .lt_eq(expr_builder.scalar_expr().clone())
-                .and(expr_builder.scalar_expr().clone().lt_eq(max_column_expr))
-        }
-        Operator::Gt => {
-            // column > literal => (min, max) > literal => max > literal
-            expr_builder
-                .max_column_expr()?
-                .gt(expr_builder.scalar_expr().clone())
-        }
-        Operator::GtEq => {
-            // column >= literal => (min, max) >= literal => max >= literal
-            expr_builder
-                .max_column_expr()?
-                .gt_eq(expr_builder.scalar_expr().clone())
-        }
-        Operator::Lt => {
-            // column < literal => (min, max) < literal => min < literal
-            expr_builder
-                .min_column_expr()?
-                .lt(expr_builder.scalar_expr().clone())
-        }
-        Operator::LtEq => {
-            // column <= literal => (min, max) <= literal => min <= literal
-            expr_builder
-                .min_column_expr()?
-                .lt_eq(expr_builder.scalar_expr().clone())
-        }
-        // other expressions are not supported
-        _ => {
-            return Err(DataFusionError::Plan(format!(
-                "other expressions than (neq, eq, gt, gteq, lt, lteq) are not superted"
-            )))
-        }
-    };
+    let statistics_expr =
+        match expr_builder.op() {
+            Operator::NotEq => {
+                // column != literal => (min, max) = literal =>
+                // !(min != literal && max != literal) ==>
+                // min != literal || literal != max
+                let min_column_expr = expr_builder.min_column_expr()?;
+                let max_column_expr = expr_builder.max_column_expr()?;
+                min_column_expr
+                    .not_eq(expr_builder.scalar_expr().clone())
+                    .or(expr_builder.scalar_expr().clone().not_eq(max_column_expr))
+            }
+            Operator::Eq => {
+                // column = literal => (min, max) = literal => min <= literal && literal <= max
+                // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
+                let min_column_expr = expr_builder.min_column_expr()?;
+                let max_column_expr = expr_builder.max_column_expr()?;
+                min_column_expr
+                    .lt_eq(expr_builder.scalar_expr().clone())
+                    .and(expr_builder.scalar_expr().clone().lt_eq(max_column_expr))
+            }
+            Operator::Gt => {
+                // column > literal => (min, max) > literal => max > literal
+                expr_builder
+                    .max_column_expr()?
+                    .gt(expr_builder.scalar_expr().clone())
+            }
+            Operator::GtEq => {
+                // column >= literal => (min, max) >= literal => max >= literal
+                expr_builder
+                    .max_column_expr()?
+                    .gt_eq(expr_builder.scalar_expr().clone())
+            }
+            Operator::Lt => {
+                // column < literal => (min, max) < literal => min < literal
+                expr_builder
+                    .min_column_expr()?
+                    .lt(expr_builder.scalar_expr().clone())
+            }
+            Operator::LtEq => {
+                // column <= literal => (min, max) <= literal => min <= literal
+                expr_builder
+                    .min_column_expr()?
+                    .lt_eq(expr_builder.scalar_expr().clone())
+            }
+            // other expressions are not supported
+            _ => return Err(DataFusionError::Plan(
+                "expressions other than (neq, eq, gt, gteq, lt, lteq) are not superted"
+                    .to_string(),
+            )),
+        };
     Ok(statistics_expr)
 }
 
@@ -1360,5 +1404,113 @@ mod tests {
             "{}",
             result
         )
+    }
+
+    /// Creates setup for int32 chunk pruning
+    fn int32_setup() -> (SchemaRef, TestStatistics) {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+
+        let statistics = TestStatistics::new().with(
+            "i",
+            ContainerStats::new_i32(
+                vec![Some(-5), Some(1), Some(-11), None, Some(1)], // min
+                vec![Some(5), Some(11), Some(-1), None, None],     // max
+            ),
+        );
+        (schema, statistics)
+    }
+
+    #[test]
+    fn prune_int32_col_gt_zero() {
+        let (schema, statistics) = int32_setup();
+
+        // Expression "i > 0" and "-i < 0"
+        // i [-5, 5] ==> some rows could pass (must keep)
+        // i [1, 11] ==> all rows must pass (must keep)
+        // i [-11, -1] ==>  no rows can pass (not keep)
+        // i [NULL, NULL]  ==> unknown (must keep)
+        // i [1, NULL]  ==> unknown (must keep)
+        let expected_ret = vec![true, true, false, true, true];
+
+        // i > 0
+        let expr = col("i").gt(lit(0));
+        let p = PruningPredicate::try_new(&expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // -i < 0
+        let expr = Expr::Negative(Box::new(col("i"))).lt(lit(0));
+        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+    }
+
+    #[test]
+    fn prune_int32_col_lte_zero() {
+        let (schema, statistics) = int32_setup();
+
+        // Expression "i <= 0" and "-i >= 0"
+        // i [-5, 5] ==> some rows could pass (must keep)
+        // i [1, 11] ==> no rows can pass (not keep)
+        // i [-11, -1] ==>  all rows must pass (must keep)
+        // i [NULL, NULL]  ==> unknown (must keep)
+        // i [1, NULL]  ==> no rows can pass (not keep)
+        let expected_ret = vec![true, false, true, true, false];
+
+        // i <= 0
+        let expr = col("i").lt_eq(lit(0));
+        let p = PruningPredicate::try_new(&expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // -i >= 0
+        let expr = Expr::Negative(Box::new(col("i"))).gt_eq(lit(0));
+        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+    }
+
+    #[test]
+    fn prune_int32_col_eq_zero() {
+        let (schema, statistics) = int32_setup();
+
+        // Expression "i = 0"
+        // i [-5, 5] ==> some rows could pass (must keep)
+        // i [1, 11] ==> no rows can pass (not keep)
+        // i [-11, -1] ==>  no rows can pass (not keep)
+        // i [NULL, NULL]  ==> unknown (must keep)
+        // i [1, NULL]  ==> no rows can pass (not keep)
+        let expected_ret = vec![true, false, false, true, false];
+
+        // i = 0
+        let expr = col("i").eq(lit(0));
+        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+    }
+
+    #[test]
+    fn prune_int32_col_lt_neg_one() {
+        let (schema, statistics) = int32_setup();
+
+        // Expression "i > -1" and "-i < 1"
+        // i [-5, 5] ==> some rows could pass (must keep)
+        // i [1, 11] ==> all rows must pass (must keep)
+        // i [-11, -1] ==>  no rows can pass (not keep)
+        // i [NULL, NULL]  ==> unknown (must keep)
+        // i [1, NULL]  ==> all rows must pass (must keep)
+        let expected_ret = vec![true, true, false, true, true];
+
+        // i > -1
+        let expr = col("i").gt(lit(-1));
+        let p = PruningPredicate::try_new(&expr, schema.clone()).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // -i < 1
+        let expr = Expr::Negative(Box::new(col("i"))).lt(lit(1));
+        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
     }
 }
