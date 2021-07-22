@@ -21,7 +21,4 @@ set -e
 
 . ./dev/build-set-env.sh
 
-docker ${BUILD_ARGS[@]} -t ballista-base:$BALLISTA_VERSION -f dev/docker/ballista-base.dockerfile .
-# couldn't use buildx for the ballista app image build due to restrictions of
-# the docker-container driver. see https://github.com/docker/buildx/issues/301
-docker build -t ballista:$BALLISTA_VERSION -f dev/docker/ballista.dockerfile .
+docker ${BUILD_ARGS[@]} -t ballista:$BALLISTA_VERSION -f dev/docker/ballista.dockerfile .
