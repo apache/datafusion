@@ -69,8 +69,8 @@ Run a SQL query against data stored in a CSV:
 
 ```rust
 use datafusion::prelude::*;
-use arrow::util::pretty::print_batches;
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::util::pretty::print_batches;
+use datafusion::arrow::record_batch::RecordBatch;
 
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
@@ -92,8 +92,8 @@ Use the DataFrame API to process data stored in a CSV:
 
 ```rust
 use datafusion::prelude::*;
-use arrow::util::pretty::print_batches;
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::util::pretty::print_batches;
+use datafusion::arrow::record_batch::RecordBatch;
 
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
