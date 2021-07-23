@@ -31,7 +31,7 @@ libc = "0.2"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 rand = "0.7"
 pyo3 = { version = "0.14.1", features = ["extension-module"] }
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "e4df37a4001423909964348289360da66acdd0a3" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "4d61196dee8526998aee7e7bb10ea88422e5f9e1" }
 
 [lib]
 name = "datafusion"
