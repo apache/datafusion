@@ -39,7 +39,7 @@
 //! ```rust
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use arrow::record_batch::RecordBatch;
+//! # use datafusion::arrow::record_batch::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -77,7 +77,7 @@
 //! ```
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use arrow::record_batch::RecordBatch;
+//! # use datafusion::arrow::record_batch::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
