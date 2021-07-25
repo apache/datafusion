@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
     let config = BallistaConfig::builder()
         .set("ballista.shuffle.partitions", "4")
         .build()?;
-    let ctx = BallistaContext::remote("localhost", 50051, &config);
+    let ctx = BallistaContext::remote("localhost", 50050, &config);
 
     let testdata = datafusion::arrow::util::test_util::arrow_test_data();
 
