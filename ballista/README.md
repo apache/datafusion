@@ -19,9 +19,9 @@
 
 # Ballista: Distributed Compute with Apache Arrow and DataFusion
 
-Ballista is a distributed compute platform primarily implemented in Rust, and powered by Apache Arrow and DataFusion. It is built
-on an architecture that allows other programming languages (such as Python, C++, and Java) to be supported as
-first-class citizens without paying a penalty for serialization costs.
+Ballista is a distributed compute platform primarily implemented in Rust, and powered by Apache Arrow and 
+DataFusion. It is built on an architecture that allows other programming languages (such as Python, C++, and 
+Java) to be supported as first-class citizens without paying a penalty for serialization costs.
 
 The foundational technologies in Ballista are:
 
@@ -37,52 +37,28 @@ redundancy in the case of a scheduler failing.
 
 # Getting Started
 
-## Start a standalone cluster
-
-```bash
-cargo build --release
-```
-
-```bash
-RUST_LOG=info ./target/release/ballista-scheduler
-```
-
-```bash
-RUST_LOG=info ./target/release/ballista-executor -c 4
-```
-
-## Run the examples
-
-Refer to the instructions in [DEVELOPERS.md](../DEVELOPERS.md) to define the `PARQUET_TEST_DATA` 
-environment variable so that the examples can find the test data files.
-
-```bash
-cargo run --example ballista-dataframe
-```
+Fully working examples are available. Refer to the [Ballista Examples README](../ballista-examples/README.md) for 
+more information.
 
 ## Distributed Scheduler Overview
 
-Ballista uses the DataFusion query execution framework to create a physical plan and then transforms it into a distributed physical plan by breaking the query down into stages whenever the partitioning scheme changes.
+Ballista uses the DataFusion query execution framework to create a physical plan and then transforms it into a 
+distributed physical plan by breaking the query down into stages whenever the partitioning scheme changes.
 
-Specifically, any `RepartitionExec` operators are replaced with an `UnresolvedShuffleExec` and the child operator of the repartition opertor is wrapped in a `ShuffleWriterExec` operator and scheduled for execution.
+Specifically, any `RepartitionExec` operatoris is replaced with an `UnresolvedShuffleExec` and the child operator 
+of the repartition operator is wrapped in a `ShuffleWriterExec` operator and scheduled for execution.
 
-Each executor polls the scheduler for the next task to run. Tasks are currently always ShuffleWriterExec operators and each task represents one *input* partition that will be executed. The resulting batches are repartitioned according to the shuffle partitioning scheme and each *output* partition is written to disk in IPC format.
+Each executor polls the scheduler for the next task to run. Tasks are currently always `ShuffleWriterExec` operators 
+and each task represents one *input* partition that will be executed. The resulting batches are repartitioned 
+according to the shuffle partitioning scheme and each *output* partition is streamed to disk in Arrow IPC format.
 
-The scheduler will replace `UnresolvedShuffleExec` operators with `ShuffleReaderExec` operators once all shuffle tasks have completed. The `ShuffleReaderExec` operator connects to other executors as required using the Flight interface, and streams the shuffle IPC files.
-
-## Performance and Scalability
-
-The following chart shows a performance comparison of DataFusion and Ballista executing queries from the TPC-H benchmark at scale factor 100. 
-
-TODO
-
-DataFusion: Concurrency=24. 
-
-Ballista: One scheduler and two executors, with each executor configured to run 12 concurrent tasks. 
+The scheduler will replace `UnresolvedShuffleExec` operators with `ShuffleReaderExec` operators once all shuffle 
+tasks have completed. The `ShuffleReaderExec` operator connects to other executors as required using the Flight 
+interface, and streams the shuffle IPC files.
 
 # How does this compare to Apache Spark?
 
-Although Ballista is largely inspired by Apache Spark, there are some key differences.
+Ballista implements a similar design to Apache Spark, but there are some key differences.
 
 - The choice of Rust as the main execution language means that memory usage is deterministic and avoids the overhead of
   GC pauses.
