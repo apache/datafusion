@@ -44,6 +44,7 @@ def test_math_functions(df):
         f.ln(col_v + f.lit(1)),
         f.log2(col_v + f.lit(1)),
         f.log10(col_v + f.lit(1)),
+        f.random(),
     )
     result = df.collect()
     assert len(result) == 1
@@ -58,3 +59,4 @@ def test_math_functions(df):
     np.testing.assert_array_almost_equal(result.column(7), np.log(values + 1.0))
     np.testing.assert_array_almost_equal(result.column(8), np.log2(values + 1.0))
     np.testing.assert_array_almost_equal(result.column(9), np.log10(values + 1.0))
+    np.testing.assert_array_less(result.column(10), np.ones_like(values))
