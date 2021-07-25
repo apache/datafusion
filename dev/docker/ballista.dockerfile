@@ -114,8 +114,13 @@ RUN --mount=type=cache,target=/root/.cache/sccache \
     rustup component add rustfmt
 
 WORKDIR /tmp/ballista
-RUN apt-get -y install cmake
-RUN cargo install cargo-chef
+RUN apt-get -y install cmake \
+  && apt-get clean \
+  && apt-get autoremove \
+  && rm -rf /var/cache/apt/archives/* \
+  && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/root/.cache/sccache \
+    cargo install cargo-chef
 
 
 ARG RELEASE_FLAG=--release
@@ -135,7 +140,8 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM base as cacher
 COPY --from=planner /tmp/ballista/recipe.json recipe.json
-RUN cargo chef cook $RELEASE_FLAG --recipe-path recipe.json
+RUN --mount=type=cache,target=/root/.cache/sccache \
+    cargo chef cook $RELEASE_FLAG --recipe-path recipe.json
 
 FROM base as builder
 RUN mkdir /tmp/ballista/ballista
@@ -154,7 +160,8 @@ ARG RELEASE_FLAG=--release
 
 # force build.rs to run to generate configure_me code.
 ENV FORCE_REBUILD='true'
-RUN cargo build $RELEASE_FLAG
+RUN --mount=type=cache,target=/root/.cache/sccache \
+    cargo build $RELEASE_FLAG
 
 # put the executor on /executor (need to be copied from different places depending on FLAG)
 ENV RELEASE_FLAG=${RELEASE_FLAG}
