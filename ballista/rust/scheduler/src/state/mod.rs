@@ -297,18 +297,22 @@ impl SchedulerState {
                 let mut partition_locations: HashMap<
                     usize, // stage id
                     HashMap<
-                        usize,                                                   // shuffle input partition id
-                        Vec<ballista_core::serde::scheduler::PartitionLocation>, // shuffle output partitions
+                        usize, // shuffle output partition id
+                        Vec<ballista_core::serde::scheduler::PartitionLocation>, // shuffle partitions
                     >,
                 > = HashMap::new();
                 for unresolved_shuffle in unresolved_shuffles {
-                    for partition_id in 0..unresolved_shuffle.partition_count {
+                    // we schedule one task per *input* partition and each input partition
+                    // can produce multiple output partitions
+                    for shuffle_input_partition_id in
+                        0..unresolved_shuffle.input_partition_count
+                    {
                         let referenced_task = tasks
                             .get(&get_task_status_key(
                                 &self.namespace,
                                 &partition.job_id,
                                 unresolved_shuffle.stage_id,
-                                partition_id,
+                                shuffle_input_partition_id,
                             ))
                             .unwrap();
                         let task_is_dead = self
@@ -323,7 +327,11 @@ impl SchedulerState {
                             },
                         )) = &referenced_task.status
                         {
-                            let locations = partition_locations
+                            debug!("Task for unresolved shuffle input partition {} completed and produced these shuffle partitions:\n\t{}",
+                                shuffle_input_partition_id,
+                                partitions.iter().map(|p| format!("{}={}", p.partition_id, &p.path)).collect::<Vec<_>>().join("\n\t")
+                            );
+                            let stage_shuffle_partition_locations = partition_locations
                                 .entry(unresolved_shuffle.stage_id)
                                 .or_insert_with(HashMap::new);
                             let executor_meta = executors
@@ -332,9 +340,10 @@ impl SchedulerState {
                                 .unwrap()
                                 .clone();
 
-                            let temp =
-                                locations.entry(partition_id).or_insert_with(Vec::new);
-                            for p in partitions {
+                            for shuffle_write_partition in partitions {
+                                let temp = stage_shuffle_partition_locations
+                                    .entry(shuffle_write_partition.partition_id as usize)
+                                    .or_insert_with(Vec::new);
                                 let executor_meta = executor_meta.clone();
                                 let partition_location =
                                     ballista_core::serde::scheduler::PartitionLocation {
@@ -342,29 +351,36 @@ impl SchedulerState {
                                             ballista_core::serde::scheduler::PartitionId {
                                                 job_id: partition.job_id.clone(),
                                                 stage_id: unresolved_shuffle.stage_id,
-                                                partition_id,
+                                                partition_id: shuffle_write_partition
+                                                    .partition_id
+                                                    as usize,
                                             },
                                         executor_meta,
                                         partition_stats: PartitionStats::new(
-                                            Some(p.num_rows),
-                                            Some(p.num_batches),
-                                            Some(p.num_bytes),
+                                            Some(shuffle_write_partition.num_rows),
+                                            Some(shuffle_write_partition.num_batches),
+                                            Some(shuffle_write_partition.num_bytes),
                                         ),
-                                        path: p.path.clone(),
+                                        path: shuffle_write_partition.path.clone(),
                                     };
-                                info!(
-                                    "Scheduler storing stage {} partition {} path: {}",
+                                debug!(
+                                    "Scheduler storing stage {} output partition {} path: {}",
                                     unresolved_shuffle.stage_id,
-                                    partition_id,
+                                    partition_location.partition_id.partition_id,
                                     partition_location.path
-                                );
+                                    );
                                 temp.push(partition_location);
                             }
                         } else {
+                            debug!(
+                                "Stage {} input partition {} has not completed yet",
+                                unresolved_shuffle.stage_id, shuffle_input_partition_id,
+                            );
                             continue 'tasks;
                         }
                     }
                 }
+
                 let plan =
                     remove_unresolved_shuffles(plan.as_ref(), &partition_locations)?;
 

@@ -28,8 +28,8 @@ use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_wildcard, col, lit, normalize_col, union_with_alias, Column,
-    DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType, StringifiedPlan,
-    ToDFSchema,
+    DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema,
+    ToStringifiedPlan,
 };
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
@@ -233,10 +233,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let plan = self.sql_statement_to_plan(statement)?;
 
-        let stringified_plans = vec![StringifiedPlan::new(
-            PlanType::InitialLogicalPlan,
-            plan.display_indent().to_string(),
-        )];
+        let stringified_plans = vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
 
         let schema = LogicalPlan::explain_schema();
         let plan = Arc::new(plan);

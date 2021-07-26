@@ -24,9 +24,10 @@ use super::{
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::{
     unnormalize_cols, DFSchema, Expr, LogicalPlan, Operator,
-    Partitioning as LogicalPartitioning, PlanType, StringifiedPlan,
+    Partitioning as LogicalPartitioning, PlanType, ToStringifiedPlan,
     UserDefinedLogicalNode,
 };
+use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions;
 use crate::physical_plan::expressions::{CaseExpr, Column, Literal, PhysicalSortExpr};
@@ -244,7 +245,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
             Some(plan) => Ok(plan),
             None => {
                 let plan = self.create_initial_plan(logical_plan, ctx_state)?;
-                self.optimize_plan(plan, ctx_state)
+                self.optimize_internal(plan, ctx_state, |_, _| {})
             }
         }
     }
@@ -283,23 +284,6 @@ impl DefaultPhysicalPlanner {
         extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
     ) -> Self {
         Self { extension_planners }
-    }
-
-    /// Optimize a physical plan by applying each physical optimizer
-    fn optimize_plan(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        ctx_state: &ExecutionContextState,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let optimizers = &ctx_state.config.physical_optimizers;
-        debug!("Physical plan:\n{:?}", plan);
-
-        let mut new_plan = plan;
-        for optimizer in optimizers {
-            new_plan = optimizer.optimize(new_plan, &ctx_state.config)?;
-        }
-        debug!("Optimized physical plan:\n{:?}", new_plan);
-        Ok(new_plan)
     }
 
     /// Create a physical plan from a logical plan
@@ -1315,32 +1299,24 @@ impl DefaultPhysicalPlanner {
             schema,
         } = logical_plan
         {
-            let final_logical_plan = StringifiedPlan::new(
-                PlanType::FinalLogicalPlan,
-                plan.display_indent().to_string(),
-            );
+            use PlanType::*;
+            let mut stringified_plans = stringified_plans.clone();
+
+            stringified_plans.push(plan.to_stringified(FinalLogicalPlan));
 
             let input = self.create_initial_plan(plan, ctx_state)?;
 
-            let initial_physical_plan = StringifiedPlan::new(
-                PlanType::InitialPhysicalPlan,
-                displayable(input.as_ref()).indent().to_string(),
-            );
+            stringified_plans
+                .push(displayable(input.as_ref()).to_stringified(InitialPhysicalPlan));
 
-            let input = self.optimize_plan(input, ctx_state)?;
+            let input = self.optimize_internal(input, ctx_state, |plan, optimizer| {
+                let optimizer_name = optimizer.name().to_string();
+                let plan_type = OptimizedPhysicalPlan { optimizer_name };
+                stringified_plans.push(displayable(plan).to_stringified(plan_type));
+            })?;
 
-            let final_physical_plan = StringifiedPlan::new(
-                PlanType::FinalPhysicalPlan,
-                displayable(input.as_ref()).indent().to_string(),
-            );
-
-            let stringified_plans = stringified_plans
-                .iter()
-                .cloned()
-                .chain(std::iter::once(final_logical_plan))
-                .chain(std::iter::once(initial_physical_plan))
-                .chain(std::iter::once(final_physical_plan))
-                .collect::<Vec<_>>();
+            stringified_plans
+                .push(displayable(input.as_ref()).to_stringified(FinalPhysicalPlan));
 
             Ok(Some(Arc::new(ExplainExec::new(
                 SchemaRef::new(schema.as_ref().to_owned().into()),
@@ -1350,6 +1326,29 @@ impl DefaultPhysicalPlanner {
         } else {
             Ok(None)
         }
+    }
+
+    /// Optimize a physical plan by applying each physical optimizer,
+    /// calling observer(plan, optimizer after each one)
+    fn optimize_internal<F>(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        ctx_state: &ExecutionContextState,
+        mut observer: F,
+    ) -> Result<Arc<dyn ExecutionPlan>>
+    where
+        F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
+    {
+        let optimizers = &ctx_state.config.physical_optimizers;
+        debug!("Physical plan:\n{:?}", plan);
+
+        let mut new_plan = plan;
+        for optimizer in optimizers {
+            new_plan = optimizer.optimize(new_plan, &ctx_state.config)?;
+            observer(new_plan.as_ref(), optimizer.as_ref())
+        }
+        debug!("Optimized physical plan:\n{:?}", new_plan);
+        Ok(new_plan)
     }
 }
 
@@ -1643,6 +1642,42 @@ mod tests {
         assert!(formatted.contains("FinalPartitioned"));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_explain() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan =
+            LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
+                .unwrap()
+                .explain(true)
+                .unwrap()
+                .build()
+                .unwrap();
+
+        let plan = plan(&logical_plan).unwrap();
+        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+            let stringified_plans = plan.stringified_plans();
+            assert!(stringified_plans.len() >= 4);
+            assert!(stringified_plans
+                .iter()
+                .any(|p| matches!(p.plan_type, PlanType::FinalLogicalPlan)));
+            assert!(stringified_plans
+                .iter()
+                .any(|p| matches!(p.plan_type, PlanType::InitialPhysicalPlan)));
+            assert!(stringified_plans
+                .iter()
+                .any(|p| matches!(p.plan_type, PlanType::OptimizedPhysicalPlan { .. })));
+            assert!(stringified_plans
+                .iter()
+                .any(|p| matches!(p.plan_type, PlanType::FinalPhysicalPlan)));
+        } else {
+            panic!(
+                "Plan was not an explain plan: {}",
+                displayable(plan.as_ref()).indent()
+            );
+        }
     }
 
     /// An example extension node that doesn't do anything

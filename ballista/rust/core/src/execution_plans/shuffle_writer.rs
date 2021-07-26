@@ -141,6 +141,7 @@ impl ShuffleWriterExec {
 
         match &self.shuffle_output_partitioning {
             None => {
+                let start = Instant::now();
                 path.push(&format!("{}", input_partition));
                 std::fs::create_dir_all(&path)?;
                 path.push("data.arrow");
@@ -155,6 +156,14 @@ impl ShuffleWriterExec {
                 )
                 .await
                 .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+
+                self.metrics
+                    .input_rows
+                    .add(stats.num_rows.unwrap_or(0) as usize);
+                self.metrics
+                    .output_rows
+                    .add(stats.num_rows.unwrap_or(0) as usize);
+                self.metrics.write_time.add_elapsed(start);
 
                 info!(
                     "Executed partition {} in {} seconds. Statistics: {}",
@@ -227,6 +236,8 @@ impl ShuffleWriterExec {
                             RecordBatch::try_new(input_batch.schema(), columns)?;
 
                         // write non-empty batch out
+
+                        //TODO optimize so we don't write or fetch empty partitions
                         //if output_batch.num_rows() > 0 {
                         let start = Instant::now();
                         match &mut writers[output_partition] {

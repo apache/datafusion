@@ -145,7 +145,7 @@ Whenever rust code changes (your changes or via `git pull`):
 ```bash
 # make sure you activate the venv using "source venv/bin/activate" first
 maturin develop
-python -m unittest discover tests
+python -m pytest
 ```
 
 ## How to update dependencies

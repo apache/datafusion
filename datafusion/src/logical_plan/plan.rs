@@ -820,6 +820,11 @@ pub enum PlanType {
     FinalLogicalPlan,
     /// The initial physical plan, prepared for execution
     InitialPhysicalPlan,
+    /// The ExecutionPlan which results from applying an optimizer pass
+    OptimizedPhysicalPlan {
+        /// The name of the optimizer which produced this plan
+        optimizer_name: String,
+    },
     /// The final, fully optimized physical which would be executed
     FinalPhysicalPlan,
 }
@@ -833,6 +838,9 @@ impl fmt::Display for PlanType {
             }
             PlanType::FinalLogicalPlan => write!(f, "logical_plan"),
             PlanType::InitialPhysicalPlan => write!(f, "initial_physical_plan"),
+            PlanType::OptimizedPhysicalPlan { optimizer_name } => {
+                write!(f, "physical_plan after {}", optimizer_name)
+            }
             PlanType::FinalPhysicalPlan => write!(f, "physical_plan"),
         }
     }
@@ -865,6 +873,18 @@ impl StringifiedPlan {
             PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan => true,
             _ => verbose_mode,
         }
+    }
+}
+
+/// Trait for something that can be formatted as a stringified plan
+pub trait ToStringifiedPlan {
+    /// Create a stringified plan with the specified type
+    fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
+}
+
+impl ToStringifiedPlan for LogicalPlan {
+    fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan {
+        StringifiedPlan::new(plan_type, self.display_indent().to_string())
     }
 }
 

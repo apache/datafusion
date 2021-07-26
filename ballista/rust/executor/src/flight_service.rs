@@ -18,7 +18,6 @@
 //! Implementation of the Apache Arrow Flight protocol that wraps an executor.
 
 use std::fs::File;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -82,24 +81,13 @@ impl FlightService for BallistaFlightService {
         request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
         let ticket = request.into_inner();
-        info!("Received do_get request");
 
         let action =
             decode_protobuf(&ticket.ticket).map_err(|e| from_ballista_err(&e))?;
 
         match &action {
-            BallistaAction::FetchPartition(partition_id) => {
-                // fetch a partition that was previously executed by this executor
-                info!("FetchPartition {:?}", partition_id);
-
-                let mut path = PathBuf::from(self.executor.work_dir());
-                path.push(&partition_id.job_id);
-                path.push(&format!("{}", partition_id.stage_id));
-                path.push(&format!("{}", partition_id.partition_id));
-                path.push("data.arrow");
-                let path = path.to_str().unwrap();
-
-                info!("FetchPartition {:?} reading {}", partition_id, path);
+            BallistaAction::FetchPartition { path, .. } => {
+                info!("FetchPartition reading {}", &path);
                 let file = File::open(&path)
                     .map_err(|e| {
                         BallistaError::General(format!(
@@ -222,7 +210,11 @@ where
     let schema_flight_data = SchemaAsIpc::new(reader.schema().as_ref(), &options).into();
     send_response(&tx, Ok(schema_flight_data)).await?;
 
+    let mut row_count = 0;
     for batch in reader {
+        if let Ok(x) = &batch {
+            row_count += x.num_rows();
+        }
         let batch_flight_data: Vec<_> = batch
             .map(|b| create_flight_iter(&b, &options).collect())
             .map_err(|e| from_arrow_err(&e))?;
@@ -230,6 +222,7 @@ where
             send_response(&tx, batch.clone()).await?;
         }
     }
+    info!("FetchPartition streamed {} rows", row_count);
     Ok(())
 }
 

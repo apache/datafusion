@@ -27,18 +27,15 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
+use crate::{datasource::TableProvider, logical_plan::plan::ToStringifiedPlan};
 use crate::{
     datasource::{empty::EmptyTable, parquet::ParquetTable, CsvFile, MemTable},
     prelude::CsvReadOptions,
 };
 
 use super::dfschema::ToDFSchema;
-use super::{
-    exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType,
-    StringifiedPlan,
-};
+use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
     DFSchemaRef, Partitioning,
@@ -398,10 +395,8 @@ impl LogicalPlanBuilder {
 
     /// Create an expression to represent the explanation of the plan
     pub fn explain(&self, verbose: bool) -> Result<Self> {
-        let stringified_plans = vec![StringifiedPlan::new(
-            PlanType::InitialLogicalPlan,
-            format!("{:#?}", self.plan.clone()),
-        )];
+        let stringified_plans =
+            vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
         let schema = LogicalPlan::explain_schema();
 
@@ -552,6 +547,8 @@ pub(crate) fn expand_wildcard(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
+
+    use crate::logical_plan::StringifiedPlan;
 
     use super::super::{col, lit, sum};
     use super::*;

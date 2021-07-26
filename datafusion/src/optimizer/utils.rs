@@ -17,15 +17,11 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
-use std::{collections::HashSet, sync::Arc};
-
-use arrow::datatypes::Schema;
-
 use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
     build_join_schema, Column, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder,
-    Operator, Partitioning, PlanType, Recursion, StringifiedPlan, ToDFSchema,
+    Operator, Partitioning, Recursion,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
@@ -33,6 +29,7 @@ use crate::{
     error::{DataFusionError, Result},
     logical_plan::ExpressionVisitor,
 };
+use std::{collections::HashSet, sync::Arc};
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
 const CASE_ELSE_MARKER: &str = "__DATAFUSION_CASE_ELSE__";
@@ -94,34 +91,6 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
     Ok(())
 }
 
-/// Create a `LogicalPlan::Explain` node by running `optimizer` on the
-/// input plan and capturing the resulting plan string
-pub fn optimize_explain(
-    optimizer: &impl OptimizerRule,
-    verbose: bool,
-    plan: &LogicalPlan,
-    stringified_plans: &[StringifiedPlan],
-    schema: &Schema,
-    execution_props: &ExecutionProps,
-) -> Result<LogicalPlan> {
-    // These are the fields of LogicalPlan::Explain It might be nice
-    // to transform that enum Variant into its own struct and avoid
-    // passing the fields individually
-    let plan = Arc::new(optimizer.optimize(plan, execution_props)?);
-    let mut stringified_plans = stringified_plans.to_vec();
-    let optimizer_name = optimizer.name().into();
-    stringified_plans.push(StringifiedPlan::new(
-        PlanType::OptimizedLogicalPlan { optimizer_name },
-        format!("{:#?}", plan),
-    ));
-    Ok(LogicalPlan::Explain {
-        verbose,
-        plan,
-        stringified_plans,
-        schema: schema.clone().to_dfschema_ref()?,
-    })
-}
-
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
 /// type. Useful for optimizer rules which want to leave the type
@@ -132,23 +101,6 @@ pub fn optimize_children(
     plan: &LogicalPlan,
     execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
-    if let LogicalPlan::Explain {
-        verbose,
-        plan,
-        stringified_plans,
-        schema,
-    } = plan
-    {
-        return optimize_explain(
-            optimizer,
-            *verbose,
-            &*plan,
-            stringified_plans,
-            &schema.as_ref().to_owned().into(),
-            execution_props,
-        );
-    }
-
     let new_exprs = plan.expressions();
     let new_inputs = plan
         .inputs()
@@ -489,7 +441,7 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::{col, LogicalPlanBuilder};
+    use crate::logical_plan::col;
     use arrow::datatypes::DataType;
     use std::collections::HashSet;
 
@@ -512,63 +464,6 @@ mod tests {
         )?;
         assert_eq!(1, accum.len());
         assert!(accum.contains(&Column::from_name("a")));
-        Ok(())
-    }
-
-    struct TestOptimizer {}
-
-    impl OptimizerRule for TestOptimizer {
-        fn optimize(
-            &self,
-            plan: &LogicalPlan,
-            _: &ExecutionProps,
-        ) -> Result<LogicalPlan> {
-            Ok(plan.clone())
-        }
-
-        fn name(&self) -> &str {
-            "test_optimizer"
-        }
-    }
-
-    #[test]
-    fn test_optimize_explain() -> Result<()> {
-        let optimizer = TestOptimizer {};
-
-        let empty_plan = LogicalPlanBuilder::empty(false).build()?;
-        let schema = LogicalPlan::explain_schema();
-
-        let optimized_explain = optimize_explain(
-            &optimizer,
-            true,
-            &empty_plan,
-            &[StringifiedPlan::new(PlanType::InitialLogicalPlan, "...")],
-            schema.as_ref(),
-            &ExecutionProps::new(),
-        )?;
-
-        match &optimized_explain {
-            LogicalPlan::Explain {
-                verbose,
-                stringified_plans,
-                ..
-            } => {
-                assert!(*verbose);
-
-                let expected_stringified_plans = vec![
-                    StringifiedPlan::new(PlanType::InitialLogicalPlan, "..."),
-                    StringifiedPlan::new(
-                        PlanType::OptimizedLogicalPlan {
-                            optimizer_name: "test_optimizer".into(),
-                        },
-                        "EmptyRelation",
-                    ),
-                ];
-                assert_eq!(*stringified_plans, expected_stringified_plans);
-            }
-            _ => panic!("Expected explain plan but got {:?}", optimized_explain),
-        }
-
         Ok(())
     }
 }
