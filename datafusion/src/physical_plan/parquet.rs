@@ -231,75 +231,131 @@ impl ParquetExec {
                             match stat {
                                 ParquetStatistics::Boolean(s) => {
                                     if let DataType::Boolean = fields[i].data_type() {
-                                        if let Some(max_value) = &mut max_values[i] {
-                                            let _ = max_value.update(&[
-                                                ScalarValue::Boolean(Some(*s.max())),
-                                            ]);
-                                        }
-                                        if let Some(min_value) = &mut min_values[i] {
-                                            let _ = min_value.update(&[
-                                                ScalarValue::Boolean(Some(*s.min())),
-                                            ]);
+                                        if s.has_min_max_set() {
+                                            if let Some(max_value) = &mut max_values[i] {
+                                                match max_value.update(&[
+                                                    ScalarValue::Boolean(Some(*s.max())),
+                                                ]) {
+                                                    Ok(_) => {}
+                                                    Err(_) => {
+                                                        max_values[i] = None;
+                                                    }
+                                                }
+                                            }
+                                            if let Some(min_value) = &mut min_values[i] {
+                                                match min_value.update(&[
+                                                    ScalarValue::Boolean(Some(*s.min())),
+                                                ]) {
+                                                    Ok(_) => {}
+                                                    Err(_) => {
+                                                        min_values[i] = None;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                                 ParquetStatistics::Int32(s) => {
                                     if let DataType::Int32 = fields[i].data_type() {
-                                        if let Some(max_value) = &mut max_values[i] {
-                                            let _ =
-                                                max_value.update(&[ScalarValue::Int32(
-                                                    Some(*s.max()),
-                                                )]);
-                                        }
-                                        if let Some(min_value) = &mut min_values[i] {
-                                            let _ =
-                                                min_value.update(&[ScalarValue::Int32(
-                                                    Some(*s.min()),
-                                                )]);
+                                        if s.has_min_max_set() {
+                                            if let Some(max_value) = &mut max_values[i] {
+                                                match max_value.update(&[
+                                                    ScalarValue::Int32(Some(*s.max())),
+                                                ]) {
+                                                    Ok(_) => {}
+                                                    Err(_) => {
+                                                        max_values[i] = None;
+                                                    }
+                                                }
+                                            }
+                                            if let Some(min_value) = &mut min_values[i] {
+                                                match min_value.update(&[
+                                                    ScalarValue::Int32(Some(*s.min())),
+                                                ]) {
+                                                    Ok(_) => {}
+                                                    Err(_) => {
+                                                        min_values[i] = None;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                                 ParquetStatistics::Int64(s) => {
                                     if let DataType::Int64 = fields[i].data_type() {
-                                        if let Some(max_value) = &mut max_values[i] {
-                                            let _ =
-                                                max_value.update(&[ScalarValue::Int64(
-                                                    Some(*s.max()),
-                                                )]);
-                                        }
-                                        if let Some(min_value) = &mut min_values[i] {
-                                            let _ =
-                                                min_value.update(&[ScalarValue::Int64(
-                                                    Some(*s.min()),
-                                                )]);
+                                        if s.has_min_max_set() {
+                                            if let Some(max_value) = &mut max_values[i] {
+                                                match max_value.update(&[
+                                                    ScalarValue::Int64(Some(*s.max())),
+                                                ]) {
+                                                    Ok(_) => {}
+                                                    Err(_) => {
+                                                        max_values[i] = None;
+                                                    }
+                                                }
+                                            }
+                                            if let Some(min_value) = &mut min_values[i] {
+                                                match min_value.update(&[
+                                                    ScalarValue::Int64(Some(*s.min())),
+                                                ]) {
+                                                    Ok(_) => {}
+                                                    Err(_) => {
+                                                        min_values[i] = None;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                                 ParquetStatistics::Float(s) => {
                                     if let DataType::Float32 = fields[i].data_type() {
-                                        if let Some(max_value) = &mut max_values[i] {
-                                            let _ = max_value.update(&[
-                                                ScalarValue::Float32(Some(*s.max())),
-                                            ]);
-                                        }
-                                        if let Some(min_value) = &mut min_values[i] {
-                                            let _ = min_value.update(&[
-                                                ScalarValue::Float32(Some(*s.min())),
-                                            ]);
+                                        if s.has_min_max_set() {
+                                            if let Some(max_value) = &mut max_values[i] {
+                                                match max_value.update(&[
+                                                    ScalarValue::Float32(Some(*s.max())),
+                                                ]) {
+                                                    Ok(_) => {}
+                                                    Err(_) => {
+                                                        max_values[i] = None;
+                                                    }
+                                                }
+                                            }
+                                            if let Some(min_value) = &mut min_values[i] {
+                                                match min_value.update(&[
+                                                    ScalarValue::Float32(Some(*s.min())),
+                                                ]) {
+                                                    Ok(_) => {}
+                                                    Err(_) => {
+                                                        min_values[i] = None;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                                 ParquetStatistics::Double(s) => {
                                     if let DataType::Float64 = fields[i].data_type() {
-                                        if let Some(max_value) = &mut max_values[i] {
-                                            let _ = max_value.update(&[
-                                                ScalarValue::Float64(Some(*s.max())),
-                                            ]);
-                                        }
-                                        if let Some(min_value) = &mut min_values[i] {
-                                            let _ = min_value.update(&[
-                                                ScalarValue::Float64(Some(*s.min())),
-                                            ]);
+                                        if s.has_min_max_set() {
+                                            if let Some(max_value) = &mut max_values[i] {
+                                                match max_value.update(&[
+                                                    ScalarValue::Float64(Some(*s.max())),
+                                                ]) {
+                                                    Ok(_) => {}
+                                                    Err(_) => {
+                                                        max_values[i] = None;
+                                                    }
+                                                }
+                                            }
+                                            if let Some(min_value) = &mut min_values[i] {
+                                                match min_value.update(&[
+                                                    ScalarValue::Float64(Some(*s.min())),
+                                                ]) {
+                                                    Ok(_) => {}
+                                                    Err(_) => {
+                                                        min_values[i] = None;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -442,12 +498,22 @@ impl ParquetExec {
                     null_counts[i] = part_nulls[i].unwrap_or(0);
                     if let Some(part_max_value) = part_max_values[i].clone() {
                         if let Some(max_value) = &mut max_values[i] {
-                            let _ = max_value.update(&[part_max_value]);
+                            match max_value.update(&[part_max_value]) {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    max_values[i] = None;
+                                }
+                            }
                         }
                     }
                     if let Some(part_min_value) = part_min_values[i].clone() {
                         if let Some(min_value) = &mut min_values[i] {
-                            let _ = min_value.update(&[part_min_value]);
+                            match min_value.update(&[part_min_value]) {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    min_values[i] = None;
+                                }
+                            }
                         }
                     }
                 }
