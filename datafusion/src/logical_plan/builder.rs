@@ -282,41 +282,27 @@ impl LogicalPlanBuilder {
             ));
         }
 
-        let left_keys = left_keys
-            .into_iter()
-            .map(|c| c.into())
-            .collect::<Vec<Column>>();
+        let (left_keys, right_keys): (Vec<Result<Column>>, Vec<Result<Column>>) =
+            left_keys
+                .into_iter()
+                .zip(right_keys.into_iter())
+                .map(|(l, r)| {
+                    let mut swap = false;
+                    let l = l.into();
+                    let left_key = l.clone().normalize(&self.plan).or_else(|_| {
+                        swap = true;
+                        l.normalize(right)
+                    });
+                    if swap {
+                        (r.into().normalize(&self.plan), left_key)
+                    } else {
+                        (left_key, r.into().normalize(right))
+                    }
+                })
+                .unzip();
 
-        let mut swap = false;
-        let left_keys: Vec<Column> = left_keys
-            .clone()
-            .into_iter()
-            .map(|c| c.normalize(&self.plan))
-            .collect::<Result<_>>()
-            .or_else(|_| {
-                swap = true;
-                left_keys
-                    .into_iter()
-                    .map(|c| c.normalize(right))
-                    .collect::<Result<_>>()
-            })?;
-
-        let right_keys: Vec<Column> = right_keys
-            .into_iter()
-            .map(|c| {
-                if swap {
-                    c.into().normalize(&self.plan)
-                } else {
-                    c.into().normalize(right)
-                }
-            })
-            .collect::<Result<_>>()?;
-
-        let (left_keys, right_keys) = if swap {
-            (right_keys, left_keys)
-        } else {
-            (left_keys, right_keys)
-        };
+        let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
+        let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
         let join_schema =

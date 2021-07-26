@@ -1717,7 +1717,7 @@ fn create_case_context() -> Result<ExecutionContext> {
 #[tokio::test]
 async fn equijoin() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
-    let sqls = &[
+    let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
@@ -1726,7 +1726,28 @@ async fn equijoin() -> Result<()> {
         vec!["22", "b", "y"],
         vec!["44", "d", "x"],
     ];
-    for sql in sqls {
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_multiple_condition_ordering() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t1_name <> t2_name ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name <> t1_name ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t1_name <> t2_name ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t2_name <> t1_name ORDER BY t1_id",
+    ];
+    let expected = vec![
+        vec!["11", "a", "z"],
+        vec!["22", "b", "y"],
+        vec!["44", "d", "x"],
+    ];
+    for sql in equivalent_sql.iter() {
         let actual = execute(&mut ctx, sql).await;
         assert_eq!(expected, actual);
     }
@@ -1758,7 +1779,7 @@ async fn equijoin_and_unsupported_condition() -> Result<()> {
 #[tokio::test]
 async fn left_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
-    let sqls = &[
+    let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
@@ -1768,7 +1789,7 @@ async fn left_join() -> Result<()> {
         vec!["33", "c", "NULL"],
         vec!["44", "d", "x"],
     ];
-    for sql in sqls {
+    for sql in equivalent_sql.iter() {
         let actual = execute(&mut ctx, sql).await;
         assert_eq!(expected, actual);
     }
@@ -1778,7 +1799,7 @@ async fn left_join() -> Result<()> {
 #[tokio::test]
 async fn right_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
-    let sqls = &[
+    let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t2_id = t1_id ORDER BY t1_id"
     ];
@@ -1788,7 +1809,7 @@ async fn right_join() -> Result<()> {
         vec!["22", "b", "y"],
         vec!["44", "d", "x"],
     ];
-    for sql in sqls {
+    for sql in equivalent_sql.iter() {
         let actual = execute(&mut ctx, sql).await;
         assert_eq!(expected, actual);
     }
@@ -1798,7 +1819,7 @@ async fn right_join() -> Result<()> {
 #[tokio::test]
 async fn full_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
-    let sqls = &[
+    let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
@@ -1809,16 +1830,16 @@ async fn full_join() -> Result<()> {
         vec!["33", "c", "NULL"],
         vec!["44", "d", "x"],
     ];
-    for sql in sqls {
+    for sql in equivalent_sql.iter() {
         let actual = execute(&mut ctx, sql).await;
         assert_eq!(expected, actual);
     }
 
-    let sqls = &[
+    let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
-    for sql in sqls {
+    for sql in equivalent_sql.iter() {
         let actual = execute(&mut ctx, sql).await;
         assert_eq!(expected, actual);
     }
@@ -1844,7 +1865,7 @@ async fn left_join_using() -> Result<()> {
 #[tokio::test]
 async fn equijoin_implicit_syntax() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
-    let sqls = &[
+    let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id",
     ];
@@ -1853,7 +1874,7 @@ async fn equijoin_implicit_syntax() -> Result<()> {
         vec!["22", "b", "y"],
         vec!["44", "d", "x"],
     ];
-    for sql in sqls {
+    for sql in equivalent_sql.iter() {
         let actual = execute(&mut ctx, sql).await;
         assert_eq!(expected, actual);
     }
@@ -1869,6 +1890,21 @@ async fn equijoin_implicit_syntax_with_filter() -> Result<()> {
         AND t1_id = t2_id \
         AND t2_id < 99 \
         ORDER BY t1_id";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["11", "a", "z"],
+        vec!["22", "b", "y"],
+        vec!["44", "d", "x"],
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_implicit_syntax_reversed() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![
         vec!["11", "a", "z"],
