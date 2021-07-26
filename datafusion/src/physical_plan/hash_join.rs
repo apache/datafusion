@@ -35,7 +35,6 @@ use std::{time::Instant, vec};
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
-use hashbrown::HashMap;
 use tokio::sync::Mutex;
 
 use arrow::array::Array;
@@ -51,11 +50,14 @@ use arrow::array::{
 
 use hashbrown::raw::RawTable;
 
-use super::expressions::Column;
 use super::hash_utils::create_hashes;
 use super::{
     coalesce_partitions::CoalescePartitionsExec,
     hash_utils::{build_join_schema, check_join_is_valid, JoinOn},
+};
+use super::{
+    expressions::Column,
+    metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::JoinType;
@@ -65,7 +67,7 @@ use super::{
     SendableRecordBatchStream,
 };
 use crate::physical_plan::coalesce_batches::concat_batches;
-use crate::physical_plan::{PhysicalExpr, SQLMetric};
+use crate::physical_plan::PhysicalExpr;
 use log::debug;
 use std::fmt;
 
@@ -111,33 +113,45 @@ pub struct HashJoinExec {
     random_state: RandomState,
     /// Partitioning mode to use
     mode: PartitionMode,
-    /// Metrics
-    metrics: Arc<HashJoinMetrics>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 /// Metrics for HashJoinExec
 #[derive(Debug)]
 struct HashJoinMetrics {
     /// Total time for joining probe-side batches to the build-side batches
-    join_time: Arc<SQLMetric>,
+    join_time: metrics::Time,
     /// Number of batches consumed by this operator
-    input_batches: Arc<SQLMetric>,
+    input_batches: metrics::Count,
     /// Number of rows consumed by this operator
-    input_rows: Arc<SQLMetric>,
+    input_rows: metrics::Count,
     /// Number of batches produced by this operator
-    output_batches: Arc<SQLMetric>,
+    output_batches: metrics::Count,
     /// Number of rows produced by this operator
-    output_rows: Arc<SQLMetric>,
+    output_rows: metrics::Count,
 }
 
 impl HashJoinMetrics {
-    fn new() -> Self {
+    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
+
+        let input_batches =
+            MetricBuilder::new(metrics).counter("input_batches", partition);
+
+        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+
+        let output_batches =
+            MetricBuilder::new(metrics).counter("output_rows", partition);
+
+        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
+
         Self {
-            join_time: SQLMetric::time_nanos(),
-            input_batches: SQLMetric::counter(),
-            input_rows: SQLMetric::counter(),
-            output_batches: SQLMetric::counter(),
-            output_rows: SQLMetric::counter(),
+            join_time,
+            input_batches,
+            input_rows,
+            output_batches,
+            output_rows,
         }
     }
 }
@@ -187,7 +201,7 @@ impl HashJoinExec {
             build_side: Arc::new(Mutex::new(None)),
             random_state,
             mode: partition_mode,
-            metrics: Arc::new(HashJoinMetrics::new()),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -425,7 +439,7 @@ impl ExecutionPlan for HashJoinExec {
             column_indices,
             self.random_state.clone(),
             visited_left_side,
-            self.metrics.clone(),
+            HashJoinMetrics::new(partition, &self.metrics),
         )))
     }
 
@@ -445,20 +459,8 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
-    fn metrics(&self) -> HashMap<String, SQLMetric> {
-        let mut metrics = HashMap::new();
-        metrics.insert("joinTime".to_owned(), (*self.metrics.join_time).clone());
-        metrics.insert(
-            "inputBatches".to_owned(),
-            (*self.metrics.input_batches).clone(),
-        );
-        metrics.insert("inputRows".to_owned(), (*self.metrics.input_rows).clone());
-        metrics.insert(
-            "outputBatches".to_owned(),
-            (*self.metrics.output_batches).clone(),
-        );
-        metrics.insert("outputRows".to_owned(), (*self.metrics.output_rows).clone());
-        metrics
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
 
@@ -522,7 +524,7 @@ struct HashJoinStream {
     /// There is nothing to process anymore and left side is processed in case of left join
     is_exhausted: bool,
     /// Metrics
-    metrics: Arc<HashJoinMetrics>,
+    join_metrics: HashJoinMetrics,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -537,7 +539,7 @@ impl HashJoinStream {
         column_indices: Vec<ColumnIndex>,
         random_state: RandomState,
         visited_left_side: Vec<bool>,
-        metrics: Arc<HashJoinMetrics>,
+        join_metrics: HashJoinMetrics,
     ) -> Self {
         HashJoinStream {
             schema,
@@ -550,7 +552,7 @@ impl HashJoinStream {
             random_state,
             visited_left_side,
             is_exhausted: false,
-            metrics,
+            join_metrics,
         }
     }
 }
@@ -876,7 +878,7 @@ impl Stream for HashJoinStream {
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(batch)) => {
-                    let start = Instant::now();
+                    let timer = self.join_metrics.join_time.timer();
                     let result = build_batch(
                         &batch,
                         &self.left_data,
@@ -887,14 +889,12 @@ impl Stream for HashJoinStream {
                         &self.column_indices,
                         &self.random_state,
                     );
-                    self.metrics.input_batches.add(1);
-                    self.metrics.input_rows.add(batch.num_rows());
+                    self.join_metrics.input_batches.add(1);
+                    self.join_metrics.input_rows.add(batch.num_rows());
                     if let Ok((ref batch, ref left_side)) = result {
-                        self.metrics
-                            .join_time
-                            .add(start.elapsed().as_millis() as usize);
-                        self.metrics.output_batches.add(1);
-                        self.metrics.output_rows.add(batch.num_rows());
+                        timer.done();
+                        self.join_metrics.output_batches.add(1);
+                        self.join_metrics.output_rows.add(batch.num_rows());
 
                         match self.join_type {
                             JoinType::Left
@@ -911,7 +911,7 @@ impl Stream for HashJoinStream {
                     Some(result.map(|x| x.0))
                 }
                 other => {
-                    let start = Instant::now();
+                    let timer = self.join_metrics.join_time.timer();
                     // For the left join, produce rows for unmatched rows
                     match self.join_type {
                         JoinType::Left
@@ -928,16 +928,14 @@ impl Stream for HashJoinStream {
                                 self.join_type != JoinType::Semi,
                             );
                             if let Ok(ref batch) = result {
-                                self.metrics.input_batches.add(1);
-                                self.metrics.input_rows.add(batch.num_rows());
+                                self.join_metrics.input_batches.add(1);
+                                self.join_metrics.input_rows.add(batch.num_rows());
                                 if let Ok(ref batch) = result {
-                                    self.metrics
-                                        .join_time
-                                        .add(start.elapsed().as_millis() as usize);
-                                    self.metrics.output_batches.add(1);
-                                    self.metrics.output_rows.add(batch.num_rows());
+                                    self.join_metrics.output_batches.add(1);
+                                    self.join_metrics.output_rows.add(batch.num_rows());
                                 }
                             }
+                            timer.done();
                             self.is_exhausted = true;
                             return Some(result);
                         }

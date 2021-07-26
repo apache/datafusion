@@ -164,6 +164,14 @@ impl ExecutionPlan for AnalyzeExec {
             // Verbose output
             // TODO make this more sophisticated
             if verbose {
+                type_builder.append_value("Plan with Full Metrics").unwrap();
+
+                let annotated_plan =
+                    DisplayableExecutionPlan::with_full_metrics(captured_input.as_ref())
+                        .indent()
+                        .to_string();
+                plan_builder.append_value(annotated_plan).unwrap();
+
                 type_builder.append_value("Output Rows").unwrap();
                 plan_builder.append_value(total_rows.to_string()).unwrap();
 
