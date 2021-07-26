@@ -282,14 +282,42 @@ impl LogicalPlanBuilder {
             ));
         }
 
-        let left_keys: Vec<Column> = left_keys
+        let left_keys = left_keys
             .into_iter()
-            .map(|c| c.into().normalize(&self.plan))
-            .collect::<Result<_>>()?;
+            .map(|c| c.into())
+            .collect::<Vec<Column>>();
+
+        let mut swap = false;
+        let left_keys: Vec<Column> = left_keys
+            .clone()
+            .into_iter()
+            .map(|c| c.normalize(&self.plan))
+            .collect::<Result<_>>()
+            .or_else(|_| {
+                swap = true;
+                left_keys
+                    .into_iter()
+                    .map(|c| c.normalize(right))
+                    .collect::<Result<_>>()
+            })?;
+
         let right_keys: Vec<Column> = right_keys
             .into_iter()
-            .map(|c| c.into().normalize(right))
+            .map(|c| {
+                if swap {
+                    c.into().normalize(&self.plan)
+                } else {
+                    c.into().normalize(right)
+                }
+            })
             .collect::<Result<_>>()?;
+
+        let (left_keys, right_keys) = if swap {
+            (right_keys, left_keys)
+        } else {
+            (left_keys, right_keys)
+        };
+
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
