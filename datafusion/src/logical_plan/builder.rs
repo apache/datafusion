@@ -273,19 +273,19 @@ impl LogicalPlanBuilder {
         &self,
         right: &LogicalPlan,
         join_type: JoinType,
-        left_keys: Vec<impl Into<Column>>,
-        right_keys: Vec<impl Into<Column>>,
+        join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
     ) -> Result<Self> {
-        if left_keys.len() != right_keys.len() {
+        if join_keys.0.len() != join_keys.1.len() {
             return Err(DataFusionError::Plan(
                 "left_keys and right_keys were not the same length".to_string(),
             ));
         }
 
         let (left_keys, right_keys): (Vec<Result<Column>>, Vec<Result<Column>>) =
-            left_keys
+            join_keys
+                .0
                 .into_iter()
-                .zip(right_keys.into_iter())
+                .zip(join_keys.1.into_iter())
                 .map(|(l, r)| {
                     let mut swap = false;
                     let l = l.into();
