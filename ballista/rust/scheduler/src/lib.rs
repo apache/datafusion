@@ -341,7 +341,7 @@ impl SchedulerGrpc for SchedulerServer {
                 Query::Sql(sql) => {
                     //TODO we can't just create a new context because we need a context that has
                     // tables registered from previous SQL statements that have been executed
-                    let mut ctx = create_datafusion_context2(&config);
+                    let mut ctx = create_datafusion_context(&config);
                     let df = ctx.sql(&sql).map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
@@ -377,7 +377,7 @@ impl SchedulerGrpc for SchedulerServer {
             let job_id_spawn = job_id.clone();
             tokio::spawn(async move {
                 // create physical plan using DataFusion
-                let datafusion_ctx = create_datafusion_context2(&config);
+                let datafusion_ctx = create_datafusion_context(&config);
                 macro_rules! fail_job {
                     ($code :expr) => {{
                         match $code {
@@ -512,7 +512,7 @@ impl SchedulerGrpc for SchedulerServer {
 }
 
 /// Create a DataFusion context that is compatible with Ballista
-pub fn create_datafusion_context2(config: &BallistaConfig) -> ExecutionContext {
+pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
     let config =
         ExecutionConfig::new().with_concurrency(config.default_shuffle_partitions());
     ExecutionContext::with_config(config)
