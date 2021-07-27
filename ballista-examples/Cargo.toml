@@ -27,8 +27,7 @@ keywords = [ "arrow", "distributed", "query", "sql" ]
 edition = "2018"
 publish = false
 
-
-[dev-dependencies]
+[dependencies]
 arrow-flight = { version = "5.0" }
 datafusion = { path = "../datafusion" }
 ballista = { path = "../ballista/rust/client" }

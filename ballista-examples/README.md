@@ -50,9 +50,9 @@ RUST_LOG=info ./target/release/ballista-executor -c 4
 Refer to the instructions in [DEVELOPERS.md](../DEVELOPERS.md) to define the `ARROW_TEST_DATA` and
 `PARQUET_TEST_DATA` environment variables so that the examples can find the test data files.
 
-The examples can be run using the `cargo run --example` syntax. 
+The examples can be run using the `cargo run --bin` syntax. 
 
 ```bash
-cargo run --release --example ballista-dataframe
+cargo run --release --bin ballista-dataframe
 ```
 
