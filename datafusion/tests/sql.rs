@@ -2967,6 +2967,45 @@ async fn query_count_distinct() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_group_on_null() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int32Array::from(vec![
+            Some(0),
+            Some(3),
+            None,
+            Some(1),
+            Some(3),
+        ]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT COUNT(*), c1 FROM test GROUP BY c1";
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    // this is incorrect: the results should also
+    // include a row for NULL (c1=NULL, count = 1)
+    // https://github.com/apache/arrow-datafusion/issues/782
+    let expected = vec![
+        "+-----------------+----+",
+        "| COUNT(UInt8(1)) | c1 |",
+        "+-----------------+----+",
+        "| 2               | 3  |",
+        "| 2               | 0  |",
+        "| 1               | 1  |",
+        "+-----------------+----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
@@ -3017,6 +3056,12 @@ async fn query_on_string_dictionary() -> Result<()> {
     let sql = "SELECT COUNT(d1) FROM test";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["2"]];
+    assert_eq!(expected, actual);
+
+    // grouping
+    let sql = "SELECT d1, COUNT(*) FROM test group by d1";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["one", "1"], vec!["three", "1"]];
     assert_eq!(expected, actual);
 
     Ok(())
