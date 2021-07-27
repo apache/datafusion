@@ -36,7 +36,7 @@ RUN curl -LsSf ${SCCACHE_TAR_URL} > /tmp/sccache.tar.gz && \
 
 ENV RUSTC_WRAPPER=/usr/local/bin/sccache
 ENV CARGO_INCREMENTAL=0
-ENV SCCACHE_CACHE_SIZE=1G
+ENV SCCACHE_CACHE_SIZE=2G
 
 #NOTE: the following was copied from https://github.com/emk/rust-musl-builder/blob/master/Dockerfile under Apache 2.0 license
 
@@ -106,10 +106,16 @@ ENV OPENSSL_DIR=/usr/local/musl/ \
 ## Download the target for static linking.
 RUN rustup target add x86_64-unknown-linux-musl
 RUN --mount=type=cache,target=/root/.cache/sccache \
+    --mount=type=cache,target=/usr/local/cargo/registry/index \
+    --mount=type=cache,target=/usr/local/cargo/registry/cache \
+    --mount=type=cache,target=/usr/local/cargo/git/db \
     cargo install cargo-build-deps
 
 # prepare toolchain
 RUN --mount=type=cache,target=/root/.cache/sccache \
+    --mount=type=cache,target=/usr/local/cargo/registry/index \
+    --mount=type=cache,target=/usr/local/cargo/registry/cache \
+    --mount=type=cache,target=/usr/local/cargo/git/db \
     rustup update && \
     rustup component add rustfmt
 
@@ -120,6 +126,9 @@ RUN apt-get -y install cmake \
   && rm -rf /var/cache/apt/archives/* \
   && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=cache,target=/root/.cache/sccache \
+    --mount=type=cache,target=/usr/local/cargo/registry/index \
+    --mount=type=cache,target=/usr/local/cargo/registry/cache \
+    --mount=type=cache,target=/usr/local/cargo/git/db \
     cargo install cargo-chef
 
 
@@ -141,6 +150,9 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM base as cacher
 COPY --from=planner /tmp/ballista/recipe.json recipe.json
 RUN --mount=type=cache,target=/root/.cache/sccache \
+    --mount=type=cache,target=/usr/local/cargo/registry/index \
+    --mount=type=cache,target=/usr/local/cargo/registry/cache \
+    --mount=type=cache,target=/usr/local/cargo/git/db \
     cargo chef cook $RELEASE_FLAG --recipe-path recipe.json
 
 FROM base as builder
@@ -161,6 +173,9 @@ ARG RELEASE_FLAG=--release
 # force build.rs to run to generate configure_me code.
 ENV FORCE_REBUILD='true'
 RUN --mount=type=cache,target=/root/.cache/sccache \
+    --mount=type=cache,target=/usr/local/cargo/registry/index \
+    --mount=type=cache,target=/usr/local/cargo/registry/cache \
+    --mount=type=cache,target=/usr/local/cargo/git/db \
     cargo build $RELEASE_FLAG
 
 # put the executor on /executor (need to be copied from different places depending on FLAG)
