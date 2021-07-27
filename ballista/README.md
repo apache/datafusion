@@ -45,7 +45,7 @@ more information.
 Ballista uses the DataFusion query execution framework to create a physical plan and then transforms it into a 
 distributed physical plan by breaking the query down into stages whenever the partitioning scheme changes.
 
-Specifically, any `RepartitionExec` operatoris is replaced with an `UnresolvedShuffleExec` and the child operator 
+Specifically, any `RepartitionExec` operator is replaced with an `UnresolvedShuffleExec` and the child operator 
 of the repartition operator is wrapped in a `ShuffleWriterExec` operator and scheduled for execution.
 
 Each executor polls the scheduler for the next task to run. Tasks are currently always `ShuffleWriterExec` operators 
