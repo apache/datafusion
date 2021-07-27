@@ -3001,7 +3001,7 @@ async fn query_group_on_null() -> Result<()> {
         "| 1               | 1  |",
         "+-----------------+----+",
     ];
-    assert_batches_eq!(expected, &actual);
+    assert_batches_sorted_eq!(expected, &actual);
     Ok(())
 }
 
