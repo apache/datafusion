@@ -42,10 +42,17 @@ use futures::future;
 use futures::StreamExt;
 use log::{error, info};
 
+/// This operator sends a logial plan to a Ballista scheduler for execution and
+/// polls the scheduler until the query is complete and then fetches the resulting
+/// batches directly from the executors that hold the results from the final
+/// query stage.
 #[derive(Debug, Clone)]
 pub struct DistributedQueryExec {
+    /// Ballista scheduler URL
     scheduler_url: String,
+    /// Ballista configuration
     config: BallistaConfig,
+    /// Logical plan to execute
     plan: LogicalPlan,
 }
 
