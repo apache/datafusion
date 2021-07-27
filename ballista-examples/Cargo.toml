@@ -15,17 +15,24 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-members = [
-    "datafusion",
-    "datafusion-cli",
-    "datafusion-examples",
-    "benchmarks",
-    "ballista/rust/client",
-    "ballista/rust/core",
-    "ballista/rust/executor",
-    "ballista/rust/scheduler",
-    "ballista-examples",
-]
+[package]
+name = "ballista-examples"
+description = "Ballista usage examples"
+version = "0.5.0-SNAPSHOT"
+homepage = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/arrow-datafusion"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+keywords = [ "arrow", "distributed", "query", "sql" ]
+edition = "2018"
+publish = false
 
-exclude = ["python"]
+[dependencies]
+arrow-flight = { version = "5.0" }
+datafusion = { path = "../datafusion" }
+ballista = { path = "../ballista/rust/client" }
+prost = "0.7"
+tonic = "0.4"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+futures = "0.3"
+num_cpus = "1.13.0"
