@@ -3058,12 +3058,6 @@ async fn query_on_string_dictionary() -> Result<()> {
     let expected = vec![vec!["2"]];
     assert_eq!(expected, actual);
 
-    // grouping
-    let sql = "SELECT d1, COUNT(*) FROM test group by d1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["one", "1"], vec!["three", "1"]];
-    assert_eq!(expected, actual);
-
     Ok(())
 }
 
