@@ -31,6 +31,9 @@ use crate::{
     physical_plan::{collect, collect_partitioned},
 };
 
+use crate::physical_plan::{
+    collect_stream, collect_stream_partitioned, SendableRecordBatchStream,
+};
 use async_trait::async_trait;
 
 /// Implementation of DataFrame API
@@ -139,8 +142,8 @@ impl DataFrame for DataFrameImpl {
         self.plan.clone()
     }
 
-    // Convert the logical plan represented by this DataFrame into a physical plan and
-    // execute it
+    /// Convert the logical plan represented by this DataFrame into a physical plan and
+    /// execute it, collecting all resulting batches into memory
     async fn collect(&self) -> Result<Vec<RecordBatch>> {
         let state = self.ctx_state.lock().unwrap().clone();
         let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
@@ -149,14 +152,35 @@ impl DataFrame for DataFrameImpl {
         Ok(collect(plan).await?)
     }
 
-    // Convert the logical plan represented by this DataFrame into a physical plan and
-    // execute it
+    /// Convert the logical plan represented by this DataFrame into a physical plan and
+    /// execute it, returning a stream over a single partition
+    async fn collect_stream(&self) -> Result<SendableRecordBatchStream> {
+        let state = self.ctx_state.lock().unwrap().clone();
+        let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
+        let plan = ctx.optimize(&self.plan)?;
+        let plan = ctx.create_physical_plan(&plan)?;
+        collect_stream(plan).await
+    }
+
+    /// Convert the logical plan represented by this DataFrame into a physical plan and
+    /// execute it, collecting all resulting batches into memory while maintaining
+    /// partitioning
     async fn collect_partitioned(&self) -> Result<Vec<Vec<RecordBatch>>> {
         let state = self.ctx_state.lock().unwrap().clone();
         let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
         let plan = ctx.optimize(&self.plan)?;
         let plan = ctx.create_physical_plan(&plan)?;
         Ok(collect_partitioned(plan).await?)
+    }
+
+    /// Convert the logical plan represented by this DataFrame into a physical plan and
+    /// execute it, returning a stream for each partition
+    async fn collect_stream_partitioned(&self) -> Result<Vec<SendableRecordBatchStream>> {
+        let state = self.ctx_state.lock().unwrap().clone();
+        let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
+        let plan = ctx.optimize(&self.plan)?;
+        let plan = ctx.create_physical_plan(&plan)?;
+        Ok(collect_stream_partitioned(plan).await?)
     }
 
     /// Returns the schema from the logical plan

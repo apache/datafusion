@@ -313,18 +313,25 @@ pub fn plan_metrics(plan: Arc<dyn ExecutionPlan>) -> HashMap<String, SQLMetric> 
 
 /// Execute the [ExecutionPlan] and collect the results in memory
 pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
+    let stream = collect_stream(plan).await?;
+    common::collect(stream).await
+}
+
+/// Execute the [ExecutionPlan] and collect the results in memory
+pub async fn collect_stream(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<SendableRecordBatchStream> {
     match plan.output_partitioning().partition_count() {
-        0 => Ok(vec![]),
-        1 => {
-            let it = plan.execute(0).await?;
-            common::collect(it).await
+        0 => {
+            todo!()
         }
+        1 => plan.execute(0).await,
         _ => {
             // merge into a single partition
             let plan = CoalescePartitionsExec::new(plan.clone());
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.output_partitioning().partition_count());
-            common::collect(plan.execute(0).await?).await
+            plan.execute(0).await
         }
     }
 }
@@ -333,16 +340,25 @@ pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
 pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
+    let streams = collect_stream_partitioned(plan).await?;
+    let mut result = vec![];
+    for stream in streams {
+        result.push(common::collect(stream).await?);
+    }
+    Ok(result)
+}
+
+/// Execute the [ExecutionPlan] and stream the results
+pub async fn collect_stream_partitioned(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Vec<SendableRecordBatchStream>> {
     match plan.output_partitioning().partition_count() {
         0 => Ok(vec![]),
-        1 => {
-            let it = plan.execute(0).await?;
-            Ok(vec![common::collect(it).await?])
-        }
+        1 => Ok(vec![plan.execute(0).await?]),
         _ => {
             let mut partitions = vec![];
             for i in 0..plan.output_partitioning().partition_count() {
-                partitions.push(common::collect(plan.execute(i).await?).await?)
+                partitions.push(plan.execute(i).await?)
             }
             Ok(partitions)
         }
