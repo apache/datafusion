@@ -132,7 +132,12 @@ impl BallistaContext {
         let path = fs::canonicalize(&path)?;
 
         // use local DataFusion context for now but later this might call the scheduler
-        let mut ctx = create_datafusion_context(&self.state.lock().unwrap().config());
+        let guard = self.state.lock().unwrap();
+        let mut ctx = create_datafusion_context(
+            &guard.scheduler_host,
+            guard.scheduler_port,
+            &guard.config(),
+        );
         let df = ctx.read_parquet(path.to_str().unwrap())?;
         Ok(df)
     }
@@ -149,7 +154,12 @@ impl BallistaContext {
         let path = fs::canonicalize(&path)?;
 
         // use local DataFusion context for now but later this might call the scheduler
-        let mut ctx = create_datafusion_context(&self.state.lock().unwrap().config());
+        let guard = self.state.lock().unwrap();
+        let mut ctx = create_datafusion_context(
+            &guard.scheduler_host,
+            guard.scheduler_port,
+            &guard.config(),
+        );
         let df = ctx.read_csv(path.to_str().unwrap(), options)?;
         Ok(df)
     }
@@ -183,7 +193,11 @@ impl BallistaContext {
         // use local DataFusion context for now but later this might call the scheduler
         // register tables
         let state = self.state.lock().unwrap();
-        let mut ctx = create_datafusion_context(&state.config());
+        let mut ctx = create_datafusion_context(
+            &state.scheduler_host,
+            state.scheduler_port,
+            state.config(),
+        );
         for (name, plan) in &state.tables {
             let plan = ctx.optimize(plan)?;
             let execution_plan = ctx.create_physical_plan(&plan)?;

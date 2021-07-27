@@ -341,7 +341,8 @@ impl SchedulerGrpc for SchedulerServer {
                 Query::Sql(sql) => {
                     //TODO we can't just create a new context because we need a context that has
                     // tables registered from previous SQL statements that have been executed
-                    let mut ctx = create_datafusion_context(&config);
+                    //TODO scheduler host and port
+                    let mut ctx = create_datafusion_context("", 50050, &config);
                     let df = ctx.sql(&sql).map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
@@ -377,7 +378,8 @@ impl SchedulerGrpc for SchedulerServer {
             let job_id_spawn = job_id.clone();
             tokio::spawn(async move {
                 // create physical plan using DataFusion
-                let datafusion_ctx = create_datafusion_context(&config);
+                //TODO scheduler url
+                let datafusion_ctx = create_datafusion_context("", 50050, &config);
                 macro_rules! fail_job {
                     ($code :expr) => {{
                         match $code {
