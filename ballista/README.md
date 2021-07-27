@@ -17,11 +17,11 @@
   under the License.
 -->
 
-# Ballista: Distributed Compute with Apache Arrow
+# Ballista: Distributed Compute with Apache Arrow and DataFusion
 
-Ballista is a distributed compute platform primarily implemented in Rust, and powered by Apache Arrow. It is built
-on an architecture that allows other programming languages (such as Python, C++, and Java) to be supported as
-first-class citizens without paying a penalty for serialization costs.
+Ballista is a distributed compute platform primarily implemented in Rust, and powered by Apache Arrow and 
+DataFusion. It is built on an architecture that allows other programming languages (such as Python, C++, and 
+Java) to be supported as first-class citizens without paying a penalty for serialization costs.
 
 The foundational technologies in Ballista are:
 
@@ -35,9 +35,30 @@ Ballista can be deployed as a standalone cluster and also supports [Kubernetes](
 case, the scheduler can be configured to use [etcd](https://etcd.io/) as a backing store to (eventually) provide
 redundancy in the case of a scheduler failing.
 
+# Getting Started
+
+Fully working examples are available. Refer to the [Ballista Examples README](../ballista-examples/README.md) for 
+more information.
+
+## Distributed Scheduler Overview
+
+Ballista uses the DataFusion query execution framework to create a physical plan and then transforms it into a 
+distributed physical plan by breaking the query down into stages whenever the partitioning scheme changes.
+
+Specifically, any `RepartitionExec` operator is replaced with an `UnresolvedShuffleExec` and the child operator 
+of the repartition operator is wrapped in a `ShuffleWriterExec` operator and scheduled for execution.
+
+Each executor polls the scheduler for the next task to run. Tasks are currently always `ShuffleWriterExec` operators 
+and each task represents one *input* partition that will be executed. The resulting batches are repartitioned 
+according to the shuffle partitioning scheme and each *output* partition is streamed to disk in Arrow IPC format.
+
+The scheduler will replace `UnresolvedShuffleExec` operators with `ShuffleReaderExec` operators once all shuffle 
+tasks have completed. The `ShuffleReaderExec` operator connects to other executors as required using the Flight 
+interface, and streams the shuffle IPC files.
+
 # How does this compare to Apache Spark?
 
-Although Ballista is largely inspired by Apache Spark, there are some key differences.
+Ballista implements a similar design to Apache Spark, but there are some key differences.
 
 - The choice of Rust as the main execution language means that memory usage is deterministic and avoids the overhead of
   GC pauses.
@@ -49,14 +70,3 @@ Although Ballista is largely inspired by Apache Spark, there are some key differ
   distributed compute.
 - The use of Apache Arrow as the memory model and network protocol means that data can be exchanged between executors
   in any programming language with minimal serialization overhead.
-
-## Status
-
-Ballista was [donated](https://arrow.apache.org/blog/2021/04/12/ballista-donation/) to the Apache Arrow project in
-April 2021 and should be considered experimental.
-
-## Getting Started
-
-The [Ballista Developer Documentation](docs/README.md) and the
-[DataFusion User Guide](https://github.com/apache/arrow-datafusion/tree/master/docs/user-guide) are currently the
-best sources of information for getting started with Ballista.
