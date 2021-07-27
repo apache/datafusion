@@ -17,32 +17,22 @@
 
 //! Distributed execution context.
 
+use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::{collections::HashMap, convert::TryInto};
-use std::{fs, time::Duration};
 
 use ballista_core::config::BallistaConfig;
-use ballista_core::serde::protobuf::{
-    execute_query_params::Query, job_status, scheduler_grpc_client::SchedulerGrpcClient,
-    ExecuteQueryParams, GetJobStatusParams, GetJobStatusResult, KeyValuePair,
-    PartitionLocation,
-};
-use ballista_core::{
-    client::BallistaClient, datasource::DfTableAdapter, utils::create_datafusion_context,
-    utils::WrappedStream,
-};
+use ballista_core::{datasource::DfTableAdapter, utils::create_datafusion_context};
 
-use datafusion::arrow::datatypes::Schema;
+use ballista_core::execution_plans::DistributedQueryExec;
 use datafusion::catalog::TableReference;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::csv::CsvReadOptions;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::{dataframe::DataFrame, physical_plan::RecordBatchStream};
-use futures::future;
-use futures::StreamExt;
-use log::{error, info};
 
 struct BallistaContextState {
     /// Ballista configuration
@@ -205,124 +195,18 @@ impl BallistaContext {
         ctx.sql(sql)
     }
 
-    async fn fetch_partition(
-        location: PartitionLocation,
-    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-        let metadata = location.executor_meta.ok_or_else(|| {
-            DataFusionError::Internal("Received empty executor metadata".to_owned())
-        })?;
-        let partition_id = location.partition_id.ok_or_else(|| {
-            DataFusionError::Internal("Received empty partition id".to_owned())
-        })?;
-        let mut ballista_client =
-            BallistaClient::try_new(metadata.host.as_str(), metadata.port as u16)
-                .await
-                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-        Ok(ballista_client
-            .fetch_partition(
-                &partition_id.job_id,
-                partition_id.stage_id as usize,
-                partition_id.partition_id as usize,
-                &location.path,
-            )
-            .await
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)
-    }
-
     pub async fn collect(
         &self,
         plan: &LogicalPlan,
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-        let (scheduler_url, config) = {
+        let distributed_query = {
             let state = self.state.lock().unwrap();
             let scheduler_url =
                 format!("http://{}:{}", state.scheduler_host, state.scheduler_port);
-            (scheduler_url, state.config.clone())
+            DistributedQueryExec::new(scheduler_url, state.config.clone(), plan.clone())
         };
 
-        info!("Connecting to Ballista scheduler at {}", scheduler_url);
-
-        let mut scheduler = SchedulerGrpcClient::connect(scheduler_url)
-            .await
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-
-        let schema: Schema = plan.schema().as_ref().clone().into();
-
-        let job_id = scheduler
-            .execute_query(ExecuteQueryParams {
-                query: Some(Query::LogicalPlan(
-                    (plan)
-                        .try_into()
-                        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?,
-                )),
-                settings: config
-                    .settings()
-                    .iter()
-                    .map(|(k, v)| KeyValuePair {
-                        key: k.to_owned(),
-                        value: v.to_owned(),
-                    })
-                    .collect::<Vec<_>>(),
-            })
-            .await
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?
-            .into_inner()
-            .job_id;
-
-        let mut prev_status: Option<job_status::Status> = None;
-
-        loop {
-            let GetJobStatusResult { status } = scheduler
-                .get_job_status(GetJobStatusParams {
-                    job_id: job_id.clone(),
-                })
-                .await
-                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?
-                .into_inner();
-            let status = status.and_then(|s| s.status).ok_or_else(|| {
-                DataFusionError::Internal("Received empty status message".to_owned())
-            })?;
-            let wait_future = tokio::time::sleep(Duration::from_millis(100));
-            let has_status_change = prev_status.map(|x| x != status).unwrap_or(true);
-            match status {
-                job_status::Status::Queued(_) => {
-                    if has_status_change {
-                        info!("Job {} still queued...", job_id);
-                    }
-                    wait_future.await;
-                    prev_status = Some(status);
-                }
-                job_status::Status::Running(_) => {
-                    if has_status_change {
-                        info!("Job {} is running...", job_id);
-                    }
-                    wait_future.await;
-                    prev_status = Some(status);
-                }
-                job_status::Status::Failed(err) => {
-                    let msg = format!("Job {} failed: {}", job_id, err.error);
-                    error!("{}", msg);
-                    break Err(DataFusionError::Execution(msg));
-                }
-                job_status::Status::Completed(completed) => {
-                    let result = future::join_all(
-                        completed
-                            .partition_location
-                            .into_iter()
-                            .map(BallistaContext::fetch_partition),
-                    )
-                    .await
-                    .into_iter()
-                    .collect::<Result<Vec<_>>>()?;
-
-                    let result = WrappedStream::new(
-                        Box::pin(futures::stream::iter(result).flatten()),
-                        Arc::new(schema),
-                    );
-                    break Ok(Box::pin(result));
-                }
-            };
-        }
+        distributed_query.execute(0).await
     }
 }
 
