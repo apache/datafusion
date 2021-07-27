@@ -65,8 +65,9 @@ pub enum ScalarValue {
     Binary(Option<Vec<u8>>),
     /// large binary
     LargeBinary(Option<Vec<u8>>),
-    /// list of nested ScalarValue
-    List(Option<Vec<ScalarValue>>, DataType),
+    /// list of nested ScalarValue (boxed to reduce size_of(ScalarValue))
+    #[allow(clippy::box_vec)]
+    List(Option<Box<Vec<ScalarValue>>>, Box<DataType>),
     /// Date stored as a signed 32bit int
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int
@@ -110,7 +111,7 @@ macro_rules! build_list {
                 )
             }
             Some(values) => {
-                build_values_list!($VALUE_BUILDER_TY, $SCALAR_TY, values, $SIZE)
+                build_values_list!($VALUE_BUILDER_TY, $SCALAR_TY, values.as_ref(), $SIZE)
             }
         }
     }};
@@ -130,32 +131,35 @@ macro_rules! build_timestamp_list {
                     $SIZE,
                 )
             }
-            Some(values) => match $TIME_UNIT {
-                TimeUnit::Second => build_values_list!(
-                    TimestampSecondBuilder,
-                    TimestampSecond,
-                    values,
-                    $SIZE
-                ),
-                TimeUnit::Microsecond => build_values_list!(
-                    TimestampMillisecondBuilder,
-                    TimestampMillisecond,
-                    values,
-                    $SIZE
-                ),
-                TimeUnit::Millisecond => build_values_list!(
-                    TimestampMicrosecondBuilder,
-                    TimestampMicrosecond,
-                    values,
-                    $SIZE
-                ),
-                TimeUnit::Nanosecond => build_values_list!(
-                    TimestampNanosecondBuilder,
-                    TimestampNanosecond,
-                    values,
-                    $SIZE
-                ),
-            },
+            Some(values) => {
+                let values = values.as_ref();
+                match $TIME_UNIT {
+                    TimeUnit::Second => build_values_list!(
+                        TimestampSecondBuilder,
+                        TimestampSecond,
+                        values,
+                        $SIZE
+                    ),
+                    TimeUnit::Microsecond => build_values_list!(
+                        TimestampMillisecondBuilder,
+                        TimestampMillisecond,
+                        values,
+                        $SIZE
+                    ),
+                    TimeUnit::Millisecond => build_values_list!(
+                        TimestampMicrosecondBuilder,
+                        TimestampMicrosecond,
+                        values,
+                        $SIZE
+                    ),
+                    TimeUnit::Nanosecond => build_values_list!(
+                        TimestampNanosecondBuilder,
+                        TimestampNanosecond,
+                        values,
+                        $SIZE
+                    ),
+                }
+            }
         }
     }};
 }
@@ -235,9 +239,11 @@ impl ScalarValue {
             ScalarValue::LargeUtf8(_) => DataType::LargeUtf8,
             ScalarValue::Binary(_) => DataType::Binary,
             ScalarValue::LargeBinary(_) => DataType::LargeBinary,
-            ScalarValue::List(_, data_type) => {
-                DataType::List(Box::new(Field::new("item", data_type.clone(), true)))
-            }
+            ScalarValue::List(_, data_type) => DataType::List(Box::new(Field::new(
+                "item",
+                data_type.as_ref().clone(),
+                true,
+            ))),
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
             ScalarValue::IntervalYearMonth(_) => {
@@ -415,6 +421,7 @@ impl ScalarValue {
                 for scalar in scalars.into_iter() {
                     match scalar {
                         ScalarValue::List(Some(xs), _) => {
+                            let xs = *xs;
                             for s in xs {
                                 match s {
                                     ScalarValue::$SCALAR_TY(Some(val)) => {
@@ -627,7 +634,7 @@ impl ScalarValue {
                         .collect::<LargeBinaryArray>(),
                 ),
             },
-            ScalarValue::List(values, data_type) => Arc::new(match data_type {
+            ScalarValue::List(values, data_type) => Arc::new(match data_type.as_ref() {
                 DataType::Boolean => build_list!(BooleanBuilder, Boolean, values, size),
                 DataType::Int8 => build_list!(Int8Builder, Int8, values, size),
                 DataType::Int16 => build_list!(Int16Builder, Int16, values, size),
@@ -643,7 +650,7 @@ impl ScalarValue {
                 DataType::Timestamp(unit, tz) => {
                     build_timestamp_list!(unit.clone(), tz.clone(), values, size)
                 }
-                DataType::LargeUtf8 => {
+                &DataType::LargeUtf8 => {
                     build_list!(LargeStringBuilder, LargeUtf8, values, size)
                 }
                 dt => panic!("Unexpected DataType for list {:?}", dt),
@@ -705,7 +712,9 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                ScalarValue::List(value, nested_type.data_type().clone())
+                let value = value.map(Box::new);
+                let data_type = Box::new(nested_type.data_type().clone());
+                ScalarValue::List(value, data_type)
             }
             DataType::Date32 => {
                 typed_cast!(array, index, Date32Array, Date32)
@@ -965,7 +974,7 @@ impl TryFrom<&DataType> for ScalarValue {
                 ScalarValue::TimestampNanosecond(None)
             }
             DataType::List(ref nested_type) => {
-                ScalarValue::List(None, nested_type.data_type().clone())
+                ScalarValue::List(None, Box::new(nested_type.data_type().clone()))
             }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -1167,7 +1176,8 @@ mod tests {
 
     #[test]
     fn scalar_list_null_to_array() {
-        let list_array_ref = ScalarValue::List(None, DataType::UInt64).to_array();
+        let list_array_ref =
+            ScalarValue::List(None, Box::new(DataType::UInt64)).to_array();
         let list_array = list_array_ref.as_any().downcast_ref::<ListArray>().unwrap();
 
         assert!(list_array.is_null(0));
@@ -1178,12 +1188,12 @@ mod tests {
     #[test]
     fn scalar_list_to_array() {
         let list_array_ref = ScalarValue::List(
-            Some(vec![
+            Some(Box::new(vec![
                 ScalarValue::UInt64(Some(100)),
                 ScalarValue::UInt64(None),
                 ScalarValue::UInt64(Some(101)),
-            ]),
-            DataType::UInt64,
+            ])),
+            Box::new(DataType::UInt64),
         )
         .to_array();
 
@@ -1335,5 +1345,13 @@ mod tests {
         let result = ScalarValue::iter_to_array(scalars.into_iter()).unwrap_err();
         assert!(result.to_string().contains("Inconsistent types in ScalarValue::iter_to_array. Expected Boolean, got Int32(5)"),
                 "{}", result);
+    }
+
+    #[test]
+    fn size_of_scalar() {
+        // Since ScalarValues are used in a non trivial number of places,
+        // making it larger means significant more memory consumption
+        // per distinct value.
+        assert_eq!(std::mem::size_of::<ScalarValue>(), 32);
     }
 }
