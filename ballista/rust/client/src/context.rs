@@ -20,19 +20,16 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use ballista_core::config::BallistaConfig;
 use ballista_core::{datasource::DfTableAdapter, utils::create_datafusion_context};
 
-use ballista_core::execution_plans::DistributedQueryExec;
 use datafusion::catalog::TableReference;
+use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::csv::CsvReadOptions;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::{dataframe::DataFrame, physical_plan::RecordBatchStream};
 
 struct BallistaContextState {
     /// Ballista configuration
@@ -207,20 +204,6 @@ impl BallistaContext {
             )?;
         }
         ctx.sql(sql)
-    }
-
-    pub async fn collect(
-        &self,
-        plan: &LogicalPlan,
-    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-        let distributed_query = {
-            let state = self.state.lock().unwrap();
-            let scheduler_url =
-                format!("http://{}:{}", state.scheduler_host, state.scheduler_port);
-            DistributedQueryExec::new(scheduler_url, state.config.clone(), plan.clone())
-        };
-
-        distributed_query.execute(0).await
     }
 }
 

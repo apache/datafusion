@@ -82,8 +82,8 @@ use self::state::{ConfigBackendClient, SchedulerState};
 use ballista_core::config::BallistaConfig;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use ballista_core::utils::create_datafusion_context;
 use datafusion::physical_plan::parquet::ParquetExec;
+use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
@@ -341,8 +341,7 @@ impl SchedulerGrpc for SchedulerServer {
                 Query::Sql(sql) => {
                     //TODO we can't just create a new context because we need a context that has
                     // tables registered from previous SQL statements that have been executed
-                    //TODO scheduler host and port
-                    let mut ctx = create_datafusion_context("", 50050, &config);
+                    let mut ctx = create_datafusion_context2(&config);
                     let df = ctx.sql(&sql).map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
@@ -378,8 +377,7 @@ impl SchedulerGrpc for SchedulerServer {
             let job_id_spawn = job_id.clone();
             tokio::spawn(async move {
                 // create physical plan using DataFusion
-                //TODO scheduler url
-                let datafusion_ctx = create_datafusion_context("", 50050, &config);
+                let datafusion_ctx = create_datafusion_context2(&config);
                 macro_rules! fail_job {
                     ($code :expr) => {{
                         match $code {
@@ -511,6 +509,13 @@ impl SchedulerGrpc for SchedulerServer {
             status: Some(job_meta),
         }))
     }
+}
+
+/// Create a DataFusion context that is compatible with Ballista
+pub fn create_datafusion_context2(config: &BallistaConfig) -> ExecutionContext {
+    let config =
+        ExecutionConfig::new().with_concurrency(config.default_shuffle_partitions());
+    ExecutionContext::with_config(config)
 }
 
 #[cfg(all(test, feature = "sled"))]
