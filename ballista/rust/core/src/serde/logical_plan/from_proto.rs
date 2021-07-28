@@ -536,7 +536,7 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::scalar_value::Value
             }
             protobuf::scalar_value::Value::ListValue(v) => v.try_into()?,
             protobuf::scalar_value::Value::NullListValue(v) => {
-                ScalarValue::List(None, v.try_into()?)
+                ScalarValue::List(None, Box::new(v.try_into()?))
             }
             protobuf::scalar_value::Value::NullValue(null_enum) => {
                 PrimitiveScalarType::from_i32(*null_enum)
@@ -580,8 +580,8 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarListValue {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 datafusion::scalar::ScalarValue::List(
-                    Some(typechecked_values),
-                    leaf_scalar_type.into(),
+                    Some(Box::new(typechecked_values)),
+                    Box::new(leaf_scalar_type.into()),
                 )
             }
             Datatype::List(list_type) => {
@@ -625,9 +625,9 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarListValue {
                 datafusion::scalar::ScalarValue::List(
                     match typechecked_values.len() {
                         0 => None,
-                        _ => Some(typechecked_values),
+                        _ => Some(Box::new(typechecked_values)),
                     },
-                    list_type.try_into()?,
+                    Box::new(list_type.try_into()?),
                 )
             }
         };
@@ -765,14 +765,16 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarValue {
                     .map(|val| val.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
                 let scalar_type: DataType = pb_scalar_type.try_into()?;
-                ScalarValue::List(Some(typechecked_values), scalar_type)
+                let scalar_type = Box::new(scalar_type);
+                ScalarValue::List(Some(Box::new(typechecked_values)), scalar_type)
             }
             protobuf::scalar_value::Value::NullListValue(v) => {
                 let pb_datatype = v
                     .datatype
                     .as_ref()
                     .ok_or_else(|| proto_error("Protobuf deserialization error: NullListValue message missing required field 'datatyp'"))?;
-                ScalarValue::List(None, pb_datatype.try_into()?)
+                let pb_datatype = Box::new(pb_datatype.try_into()?);
+                ScalarValue::List(None, pb_datatype)
             }
             protobuf::scalar_value::Value::NullValue(v) => {
                 let null_type_enum = protobuf::PrimitiveScalarType::from_i32(*v)
