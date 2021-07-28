@@ -158,7 +158,7 @@ impl DataFrame for DataFrameImpl {
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and
     /// execute it, returning a stream over a single partition
-    async fn collect_stream(&self) -> Result<SendableRecordBatchStream> {
+    async fn execute_stream(&self) -> Result<SendableRecordBatchStream> {
         let plan = self.create_physical_plan().await?;
         execute_stream(plan).await
     }
@@ -173,7 +173,7 @@ impl DataFrame for DataFrameImpl {
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and
     /// execute it, returning a stream for each partition
-    async fn collect_stream_partitioned(&self) -> Result<Vec<SendableRecordBatchStream>> {
+    async fn execute_stream_partitioned(&self) -> Result<Vec<SendableRecordBatchStream>> {
         let plan = self.create_physical_plan().await?;
         Ok(execute_stream_partitioned(plan).await?)
     }
