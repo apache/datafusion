@@ -23,7 +23,9 @@ use std::sync::Arc;
 use std::{fs::File, pin::Pin};
 
 use crate::error::{BallistaError, Result};
-use crate::execution_plans::{ShuffleWriterExec, UnresolvedShuffleExec};
+use crate::execution_plans::{
+    DistributedQueryExec, ShuffleWriterExec, UnresolvedShuffleExec,
+};
 use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
@@ -38,8 +40,11 @@ use datafusion::arrow::{
     ipc::writer::FileWriter,
     record_batch::RecordBatch,
 };
-use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
-use datafusion::logical_plan::Operator;
+use datafusion::error::DataFusionError;
+use datafusion::execution::context::{
+    ExecutionConfig, ExecutionContext, ExecutionContextState, QueryPlanner,
+};
+use datafusion::logical_plan::{LogicalPlan, Operator};
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
 use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
@@ -232,10 +237,47 @@ fn build_exec_plan_diagram(
 }
 
 /// Create a DataFusion context that is compatible with Ballista
-pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
-    let config =
-        ExecutionConfig::new().with_concurrency(config.default_shuffle_partitions());
+pub fn create_datafusion_context(
+    scheduler_host: &str,
+    scheduler_port: u16,
+    config: &BallistaConfig,
+) -> ExecutionContext {
+    let scheduler_url = format!("http://{}:{}", scheduler_host, scheduler_port);
+    let config = ExecutionConfig::new()
+        .with_query_planner(Arc::new(BallistaQueryPlanner::new(
+            scheduler_url,
+            config.clone(),
+        )))
+        .with_concurrency(config.default_shuffle_partitions());
     ExecutionContext::with_config(config)
+}
+
+pub struct BallistaQueryPlanner {
+    scheduler_url: String,
+    config: BallistaConfig,
+}
+
+impl BallistaQueryPlanner {
+    pub fn new(scheduler_url: String, config: BallistaConfig) -> Self {
+        Self {
+            scheduler_url,
+            config,
+        }
+    }
+}
+
+impl QueryPlanner for BallistaQueryPlanner {
+    fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        _ctx_state: &ExecutionContextState,
+    ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+        Ok(Arc::new(DistributedQueryExec::new(
+            self.scheduler_url.clone(),
+            self.config.clone(),
+            logical_plan.clone(),
+        )))
+    }
 }
 
 pub struct WrappedStream {
