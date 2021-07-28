@@ -380,10 +380,10 @@ pub async fn collect_partitioned(
 pub async fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<SendableRecordBatchStream>> {
-    let p = plan.output_partitioning().partition_count();
-    let mut streams = Vec::with_capacity(p);
-    for _ in 0..p {
-        streams.push(plan.execute(0).await?);
+    let num_partitions = plan.output_partitioning().partition_count();
+    let mut streams = Vec::with_capacity(num_partitions);
+    for i in 0..num_partitions {
+        streams.push(plan.execute(i).await?);
     }
     Ok(streams)
 }
