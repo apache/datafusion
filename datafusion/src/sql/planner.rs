@@ -375,8 +375,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
                 // return the logical plan representing the join
-                let join = LogicalPlanBuilder::from(left)
-                    .join(right, join_type, left_keys, right_keys)?;
+                let join = LogicalPlanBuilder::from(left).join(
+                    right,
+                    join_type,
+                    (left_keys, right_keys),
+                )?;
 
                 if filter.is_empty() {
                     join.build()
@@ -548,7 +551,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             join_keys.iter().map(|(_, r)| r.clone()).collect();
                         let builder = LogicalPlanBuilder::from(left);
                         left = builder
-                            .join(right, JoinType::Inner, left_keys, right_keys)?
+                            .join(right, JoinType::Inner, (left_keys, right_keys))?
                             .build()?;
                     }
 

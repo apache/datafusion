@@ -701,7 +701,7 @@ mod roundtrip_tests {
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![0, 3, 4]),
         )
-        .and_then(|plan| plan.join(&scan_plan, JoinType::Inner, vec!["id"], vec!["id"]))
+        .and_then(|plan| plan.join(&scan_plan, JoinType::Inner, (vec!["id"], vec!["id"])))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 

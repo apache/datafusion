@@ -117,8 +117,7 @@ impl DataFrame for DataFrameImpl {
             .join(
                 &right.to_logical_plan(),
                 join_type,
-                left_cols.to_vec(),
-                right_cols.to_vec(),
+                (left_cols.to_vec(), right_cols.to_vec()),
             )?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
