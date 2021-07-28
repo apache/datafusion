@@ -82,8 +82,8 @@ use self::state::{ConfigBackendClient, SchedulerState};
 use ballista_core::config::BallistaConfig;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use ballista_core::utils::create_datafusion_context;
 use datafusion::physical_plan::parquet::ParquetExec;
+use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
@@ -509,6 +509,13 @@ impl SchedulerGrpc for SchedulerServer {
             status: Some(job_meta),
         }))
     }
+}
+
+/// Create a DataFusion context that is compatible with Ballista
+pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
+    let config =
+        ExecutionConfig::new().with_concurrency(config.default_shuffle_partitions());
+    ExecutionContext::with_config(config)
 }
 
 #[cfg(all(test, feature = "sled"))]

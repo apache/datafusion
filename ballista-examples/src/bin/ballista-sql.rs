@@ -45,18 +45,7 @@ async fn main() -> Result<()> {
         GROUP BY c1",
     )?;
 
-    // execute the query - note that calling collect on the DataFrame
-    // trait will execute the query with DataFusion so we have to call
-    // collect on the BallistaContext instead and pass it the DataFusion
-    // logical plan
-    let mut stream = ctx.collect(&df.to_logical_plan()).await?;
-
-    // print the results
-    let mut results = vec![];
-    while let Some(batch) = stream.next().await {
-        let batch = batch?;
-        results.push(batch);
-    }
+    let results = df.collect().await?;
     pretty::print_batches(&results)?;
 
     Ok(())
