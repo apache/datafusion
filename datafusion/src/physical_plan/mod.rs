@@ -17,6 +17,14 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
+use std::fmt;
+use std::fmt::{Debug, Display};
+use std::ops::Range;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::{any::Any, pin::Pin};
+
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
@@ -35,12 +43,6 @@ use async_trait::async_trait;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
 use hashbrown::HashMap;
-use std::fmt;
-use std::fmt::{Debug, Display};
-use std::ops::Range;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::{any::Any, pin::Pin};
 
 /// Trait for types that stream [arrow::record_batch::RecordBatch]
 pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
@@ -53,6 +55,34 @@ pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
 
 /// Trait for a stream of record batches.
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send + Sync>>;
+
+/// EmptyRecordBatchStream can be used to create a RecordBatchStream
+/// that will produce no results
+pub struct EmptyRecordBatchStream {}
+
+impl EmptyRecordBatchStream {
+    /// Create an empty RecordBatchStream
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl RecordBatchStream for EmptyRecordBatchStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::new(Schema::empty())
+    }
+}
+
+impl Stream for EmptyRecordBatchStream {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        Poll::Ready(None)
+    }
+}
 
 /// SQL metric type
 #[derive(Debug, Clone)]
@@ -313,18 +343,16 @@ pub fn plan_metrics(plan: Arc<dyn ExecutionPlan>) -> HashMap<String, SQLMetric> 
 
 /// Execute the [ExecutionPlan] and collect the results in memory
 pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
-    let stream = collect_stream(plan).await?;
+    let stream = execute_stream(plan).await?;
     common::collect(stream).await
 }
 
-/// Execute the [ExecutionPlan] and collect the results in memory
-pub async fn collect_stream(
+/// Execute the [ExecutionPlan] and return a single stream of results
+pub async fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<SendableRecordBatchStream> {
     match plan.output_partitioning().partition_count() {
-        0 => {
-            todo!()
-        }
+        0 => Ok(Box::pin(EmptyRecordBatchStream::new())),
         1 => plan.execute(0).await,
         _ => {
             // merge into a single partition
@@ -340,29 +368,24 @@ pub async fn collect_stream(
 pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
-    let streams = collect_stream_partitioned(plan).await?;
-    let mut result = vec![];
+    let streams = execute_stream_partitioned(plan).await?;
+    let mut batches = Vec::with_capacity(streams.len());
     for stream in streams {
-        result.push(common::collect(stream).await?);
+        batches.push(common::collect(stream).await?);
     }
-    Ok(result)
+    Ok(batches)
 }
 
-/// Execute the [ExecutionPlan] and stream the results
-pub async fn collect_stream_partitioned(
+/// Execute the [ExecutionPlan] and return a vec with one stream per output partition
+pub async fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<SendableRecordBatchStream>> {
-    match plan.output_partitioning().partition_count() {
-        0 => Ok(vec![]),
-        1 => Ok(vec![plan.execute(0).await?]),
-        _ => {
-            let mut partitions = vec![];
-            for i in 0..plan.output_partitioning().partition_count() {
-                partitions.push(plan.execute(i).await?)
-            }
-            Ok(partitions)
-        }
+    let p = plan.output_partitioning().partition_count();
+    let mut streams = Vec::with_capacity(p);
+    for _ in 0..p {
+        streams.push(plan.execute(0).await?);
     }
+    Ok(streams)
 }
 
 /// Partitioning schemes supported by operators.
