@@ -58,18 +58,21 @@ pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send + Sync
 
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream
 /// that will produce no results
-pub struct EmptyRecordBatchStream {}
+pub struct EmptyRecordBatchStream {
+    /// Schema
+    schema: SchemaRef
+}
 
 impl EmptyRecordBatchStream {
     /// Create an empty RecordBatchStream
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(schema: SchemaRef) -> Self {
+        Self { schema }
     }
 }
 
 impl RecordBatchStream for EmptyRecordBatchStream {
     fn schema(&self) -> SchemaRef {
-        Arc::new(Schema::empty())
+        self.schema.clone()
     }
 }
 
@@ -352,7 +355,7 @@ pub async fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<SendableRecordBatchStream> {
     match plan.output_partitioning().partition_count() {
-        0 => Ok(Box::pin(EmptyRecordBatchStream::new())),
+        0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
         1 => plan.execute(0).await,
         _ => {
             // merge into a single partition
