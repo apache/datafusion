@@ -60,7 +60,7 @@ pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send + Sync
 /// that will produce no results
 pub struct EmptyRecordBatchStream {
     /// Schema
-    schema: SchemaRef
+    schema: SchemaRef,
 }
 
 impl EmptyRecordBatchStream {
