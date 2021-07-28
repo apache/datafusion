@@ -272,8 +272,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     JoinConstraint::On => builder.join(
                         &convert_box_required!(join.right)?,
                         join_type.into(),
-                        left_keys,
-                        right_keys,
+                        (left_keys, right_keys),
                     )?,
                     JoinConstraint::Using => builder.join_using(
                         &convert_box_required!(join.right)?,
