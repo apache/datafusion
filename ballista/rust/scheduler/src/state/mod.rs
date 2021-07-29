@@ -316,7 +316,7 @@ impl SchedulerState {
                             ))
                             .unwrap();
                         let task_is_dead = self
-                            .reschedule_dead_task(&referenced_task, &executors)
+                            .reschedule_dead_task(referenced_task, &executors)
                             .await?;
                         if task_is_dead {
                             continue 'tasks;

@@ -133,7 +133,7 @@ impl BallistaContext {
         let mut ctx = create_datafusion_context(
             &guard.scheduler_host,
             guard.scheduler_port,
-            &guard.config(),
+            guard.config(),
         );
         let df = ctx.read_parquet(path.to_str().unwrap())?;
         Ok(df)
@@ -155,7 +155,7 @@ impl BallistaContext {
         let mut ctx = create_datafusion_context(
             &guard.scheduler_host,
             guard.scheduler_port,
-            &guard.config(),
+            guard.config(),
         );
         let df = ctx.read_csv(path.to_str().unwrap(), options)?;
         Ok(df)
