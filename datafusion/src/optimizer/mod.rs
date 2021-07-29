@@ -19,6 +19,7 @@
 //! some simple rules to a logical plan, such as "Projection Push Down" and "Type Coercion".
 
 pub mod aggregate_statistics;
+pub mod common_subexpr_eliminate;
 pub mod constant_folding;
 pub mod eliminate_limit;
 pub mod filter_push_down;
