@@ -20,6 +20,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
+
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
@@ -59,16 +61,30 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         } => {
             let mut arrays = vec![];
             for e in expr {
+                let data_type = e.get_type(input.schema())?;
                 let mut id_array = vec![];
-                expr_to_identifier(e, &mut expr_set, &mut addr_map, &mut id_array)?;
+                expr_to_identifier(
+                    e,
+                    &mut expr_set,
+                    &mut addr_map,
+                    &mut id_array,
+                    data_type,
+                )?;
                 arrays.push(id_array);
             }
 
             return optimize(input, execution_props);
         }
         LogicalPlan::Filter { predicate, input } => {
+            let data_type = predicate.get_type(input.schema())?;
             let mut id_array = vec![];
-            expr_to_identifier(predicate, &mut expr_set, &mut addr_map, &mut id_array)?;
+            expr_to_identifier(
+                predicate,
+                &mut expr_set,
+                &mut addr_map,
+                &mut id_array,
+                data_type,
+            )?;
 
             return optimize(input, execution_props);
         }
@@ -79,8 +95,15 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         } => {
             let mut arrays = vec![];
             for e in window_expr {
+                let data_type = e.get_type(input.schema())?;
                 let mut id_array = vec![];
-                expr_to_identifier(e, &mut expr_set, &mut addr_map, &mut id_array)?;
+                expr_to_identifier(
+                    e,
+                    &mut expr_set,
+                    &mut addr_map,
+                    &mut id_array,
+                    data_type,
+                )?;
                 arrays.push(id_array);
             }
 
@@ -95,19 +118,30 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             // collect id
             let mut group_arrays = vec![];
             for e in group_expr {
+                let data_type = e.get_type(input.schema())?;
                 let mut id_array = vec![];
-                expr_to_identifier(e, &mut expr_set, &mut addr_map, &mut id_array)?;
+                expr_to_identifier(
+                    e,
+                    &mut expr_set,
+                    &mut addr_map,
+                    &mut id_array,
+                    data_type,
+                )?;
                 group_arrays.push(id_array);
             }
             let mut aggr_arrays = vec![];
             for e in aggr_expr {
+                let data_type = e.get_type(input.schema())?;
                 let mut id_array = vec![];
-                expr_to_identifier(e, &mut expr_set, &mut addr_map, &mut id_array)?;
+                expr_to_identifier(
+                    e,
+                    &mut expr_set,
+                    &mut addr_map,
+                    &mut id_array,
+                    data_type,
+                )?;
                 aggr_arrays.push(id_array);
             }
-
-            println!("expr set: {:#?}", expr_set);
-            println!("aggr arrays: {:#?}", aggr_arrays);
 
             // rewrite
             let new_group_expr = group_expr
@@ -161,16 +195,13 @@ fn build_project_plan(
     expr_set: &ExprSet,
     schema: &DFSchema,
 ) -> Result<LogicalPlan> {
-    println!("input schema: {:#?}", schema);
-
     let mut project_exprs = vec![];
     let mut fields = vec![];
 
     for id in affected_id {
-        let (expr, _, _, _) = expr_set.get(&id).unwrap();
-        let data_type = expr.get_type(schema)?;
+        let (expr, _, _, _, data_type) = expr_set.get(&id).unwrap();
         // todo: check `nullable`
-        fields.push(DFField::new(None, &id, data_type, true));
+        fields.push(DFField::new(None, &id, data_type.clone(), true));
         project_exprs.push(expr.clone());
     }
 
@@ -188,7 +219,8 @@ fn build_project_plan(
 /// - a hash set contains all addresses with the same identifier.
 /// - counter
 /// - A alternative plan.
-pub type ExprSet = HashMap<Identifier, (Expr, HashSet<*const Expr>, usize, Option<()>)>;
+pub type ExprSet =
+    HashMap<Identifier, (Expr, HashSet<*const Expr>, usize, Option<()>, DataType)>;
 
 pub type ExprAddrToId = HashMap<*const Expr, Identifier>;
 
@@ -211,6 +243,7 @@ struct ExprIdentifierVisitor<'a> {
     addr_map: &'a mut ExprAddrToId,
     /// series number (usize) and identifier.
     id_array: &'a mut Vec<(usize, Identifier)>,
+    data_type: DataType,
 
     // inner states
     visit_stack: Vec<Item>,
@@ -327,9 +360,10 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
 
         self.id_array[idx] = (self.post_visit_number, desc.clone());
         self.visit_stack.push(Item::ExprItem(desc.clone()));
+        let data_type = self.data_type.clone();
         self.expr_set
             .entry(desc.clone())
-            .or_insert_with(|| (expr.clone(), HashSet::new(), 0, None))
+            .or_insert_with(|| (expr.clone(), HashSet::new(), 0, None, data_type))
             .2 += 1;
         self.addr_map.insert(expr as *const Expr, desc);
         Ok(self)
@@ -342,11 +376,13 @@ fn expr_to_identifier(
     expr_set: &mut ExprSet,
     addr_map: &mut ExprAddrToId,
     id_array: &mut Vec<(usize, Identifier)>,
+    data_type: DataType,
 ) -> Result<()> {
     expr.accept(ExprIdentifierVisitor {
         expr_set,
         addr_map,
         id_array,
+        data_type,
         visit_stack: vec![],
         node_count: 0,
         post_visit_number: 0,
@@ -380,8 +416,7 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
             self.curr_index += 1;
             return Ok(RewriteRecursion::Continue);
         }
-        println!("current id: {:?}", curr_id);
-        let (stored_expr, somewhat_set, counter, another_thing) =
+        let (stored_expr, somewhat_set, counter, another_thing, _) =
             self.expr_set.get(curr_id).unwrap();
         if *counter > 1 {
             self.affected_id.insert(curr_id.clone());
@@ -402,7 +437,6 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
             return Ok(expr);
         }
         self.max_series_number = *series_number;
-        println!("mutating id: {:?}", id);
 
         // step index, skip all sub-node (which has smaller series number).
         self.curr_index += 1;
@@ -469,12 +503,9 @@ mod test {
                 ],
             )?
             .build()?;
-        println!("{:#?}", plan);
 
         let optimizer = CommonSubexprEliminate {};
         let new_plan = optimizer.optimize(&plan, &ExecutionProps::new()).unwrap();
-
-        println!("{:#?}", new_plan);
 
         Ok(())
     }
