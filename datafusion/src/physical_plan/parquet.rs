@@ -18,7 +18,6 @@
 //! Execution plan for reading Parquet files
 
 use std::fmt;
-use std::fs::File;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
@@ -27,14 +26,15 @@ use crate::{
     logical_plan::{Column, Expr},
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
-        common, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+        DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+        SendableRecordBatchStream,
     },
     scalar::ScalarValue,
 };
 
 use arrow::{
     array::ArrayRef,
-    datatypes::{DataType, Schema, SchemaRef},
+    datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
@@ -54,13 +54,14 @@ use tokio::{
     task,
 };
 
-use crate::datasource::datasource::{ColumnStatistics, Statistics};
+use crate::datasource::datasource::Statistics;
 use async_trait::async_trait;
 
 use super::stream::RecordBatchReceiverStream;
 use super::SQLMetric;
-use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::Accumulator;
+use crate::datasource::parquet::ParquetRootDesc;
+use crate::datasource::{get_statistics_with_limit, FilePartition, PartitionedFile};
+use std::fs::File;
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
@@ -95,9 +96,7 @@ pub struct ParquetExec {
 #[derive(Debug, Clone)]
 pub struct ParquetPartition {
     /// The Parquet filename for this partition
-    pub filenames: Vec<String>,
-    /// Statistics for this partition
-    pub statistics: Statistics,
+    pub file_partition: FilePartition,
     /// Execution metrics
     metrics: ParquetPartitionMetrics,
 }
@@ -131,285 +130,38 @@ impl ParquetExec {
     ) -> Result<Self> {
         // build a list of filenames from the specified path, which could be a single file or
         // a directory containing one or more parquet files
-        let filenames = common::build_file_list(path, ".parquet")?;
-        if filenames.is_empty() {
-            Err(DataFusionError::Plan(format!(
-                "No Parquet files (with .parquet extension) found at path {}",
-                path
-            )))
-        } else {
-            let filenames = filenames
-                .iter()
-                .map(|filename| filename.as_str())
-                .collect::<Vec<&str>>();
-            Self::try_from_files(
-                &filenames,
-                projection,
-                predicate,
-                batch_size,
-                max_concurrency,
-                limit,
-            )
-        }
+        let root_desc = ParquetRootDesc::new(path)?;
+        Self::try_new(
+            Arc::new(root_desc),
+            projection,
+            predicate,
+            batch_size,
+            max_concurrency,
+            limit,
+        )
     }
 
-    /// Create a new Parquet reader execution plan based on the specified list of Parquet
-    /// files
-    pub fn try_from_files(
-        filenames: &[&str],
+    /// Create a new Parquet reader execution plan with root descriptor, provided partitions and schema
+    pub fn try_new(
+        desc: Arc<ParquetRootDesc>,
         projection: Option<Vec<usize>>,
         predicate: Option<Expr>,
         batch_size: usize,
         max_concurrency: usize,
         limit: Option<usize>,
     ) -> Result<Self> {
-        debug!("Creating ParquetExec, filenames: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
-               filenames, projection, predicate, limit);
-        // build a list of Parquet partitions with statistics and gather all unique schemas
-        // used in this data set
-        let mut schemas: Vec<Schema> = vec![];
+        debug!("Creating ParquetExec, desc: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
+               desc, projection, predicate, limit);
+
+        let (all_files, statistics) = get_statistics_with_limit(&desc.descriptor, limit);
+        let schema = desc.schema();
+
         let mut partitions = Vec::with_capacity(max_concurrency);
-        let filenames: Vec<String> = filenames.iter().map(|s| s.to_string()).collect();
-        let chunks = split_files(&filenames, max_concurrency);
-        let mut num_rows = 0;
-        let mut num_fields = 0;
-        let mut fields = Vec::new();
-        let mut total_byte_size = 0;
-        let mut null_counts = Vec::new();
-        let mut max_values: Vec<Option<MaxAccumulator>> = Vec::new();
-        let mut min_values: Vec<Option<MinAccumulator>> = Vec::new();
-        let mut limit_exhausted = false;
-        for chunk in chunks {
-            let mut filenames: Vec<String> =
-                chunk.iter().map(|x| x.to_string()).collect();
-            let mut total_files = 0;
-            for filename in &filenames {
-                total_files += 1;
-                let file = File::open(filename)?;
-                let file_reader = Arc::new(SerializedFileReader::new(file)?);
-                let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
-                let meta_data = arrow_reader.get_metadata();
-                // collect all the unique schemas in this data set
-                let schema = arrow_reader.get_schema()?;
-                if schemas.is_empty() || schema != schemas[0] {
-                    fields = schema.fields().to_vec();
-                    num_fields = schema.fields().len();
-                    null_counts = vec![0; num_fields];
-                    max_values = schema
-                        .fields()
-                        .iter()
-                        .map(|field| MaxAccumulator::try_new(field.data_type()).ok())
-                        .collect::<Vec<_>>();
-                    min_values = schema
-                        .fields()
-                        .iter()
-                        .map(|field| MinAccumulator::try_new(field.data_type()).ok())
-                        .collect::<Vec<_>>();
-                    schemas.push(schema);
-                }
-
-                for row_group_meta in meta_data.row_groups() {
-                    num_rows += row_group_meta.num_rows();
-                    total_byte_size += row_group_meta.total_byte_size();
-
-                    // Currently assumes every Parquet file has same schema
-                    // https://issues.apache.org/jira/browse/ARROW-11017
-                    let columns_null_counts = row_group_meta
-                        .columns()
-                        .iter()
-                        .flat_map(|c| c.statistics().map(|stats| stats.null_count()));
-
-                    for (i, cnt) in columns_null_counts.enumerate() {
-                        null_counts[i] += cnt
-                    }
-
-                    for (i, column) in row_group_meta.columns().iter().enumerate() {
-                        if let Some(stat) = column.statistics() {
-                            match stat {
-                                ParquetStatistics::Boolean(s) => {
-                                    if let DataType::Boolean = fields[i].data_type() {
-                                        if s.has_min_max_set() {
-                                            if let Some(max_value) = &mut max_values[i] {
-                                                match max_value.update(&[
-                                                    ScalarValue::Boolean(Some(*s.max())),
-                                                ]) {
-                                                    Ok(_) => {}
-                                                    Err(_) => {
-                                                        max_values[i] = None;
-                                                    }
-                                                }
-                                            }
-                                            if let Some(min_value) = &mut min_values[i] {
-                                                match min_value.update(&[
-                                                    ScalarValue::Boolean(Some(*s.min())),
-                                                ]) {
-                                                    Ok(_) => {}
-                                                    Err(_) => {
-                                                        min_values[i] = None;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                ParquetStatistics::Int32(s) => {
-                                    if let DataType::Int32 = fields[i].data_type() {
-                                        if s.has_min_max_set() {
-                                            if let Some(max_value) = &mut max_values[i] {
-                                                match max_value.update(&[
-                                                    ScalarValue::Int32(Some(*s.max())),
-                                                ]) {
-                                                    Ok(_) => {}
-                                                    Err(_) => {
-                                                        max_values[i] = None;
-                                                    }
-                                                }
-                                            }
-                                            if let Some(min_value) = &mut min_values[i] {
-                                                match min_value.update(&[
-                                                    ScalarValue::Int32(Some(*s.min())),
-                                                ]) {
-                                                    Ok(_) => {}
-                                                    Err(_) => {
-                                                        min_values[i] = None;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                ParquetStatistics::Int64(s) => {
-                                    if let DataType::Int64 = fields[i].data_type() {
-                                        if s.has_min_max_set() {
-                                            if let Some(max_value) = &mut max_values[i] {
-                                                match max_value.update(&[
-                                                    ScalarValue::Int64(Some(*s.max())),
-                                                ]) {
-                                                    Ok(_) => {}
-                                                    Err(_) => {
-                                                        max_values[i] = None;
-                                                    }
-                                                }
-                                            }
-                                            if let Some(min_value) = &mut min_values[i] {
-                                                match min_value.update(&[
-                                                    ScalarValue::Int64(Some(*s.min())),
-                                                ]) {
-                                                    Ok(_) => {}
-                                                    Err(_) => {
-                                                        min_values[i] = None;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                ParquetStatistics::Float(s) => {
-                                    if let DataType::Float32 = fields[i].data_type() {
-                                        if s.has_min_max_set() {
-                                            if let Some(max_value) = &mut max_values[i] {
-                                                match max_value.update(&[
-                                                    ScalarValue::Float32(Some(*s.max())),
-                                                ]) {
-                                                    Ok(_) => {}
-                                                    Err(_) => {
-                                                        max_values[i] = None;
-                                                    }
-                                                }
-                                            }
-                                            if let Some(min_value) = &mut min_values[i] {
-                                                match min_value.update(&[
-                                                    ScalarValue::Float32(Some(*s.min())),
-                                                ]) {
-                                                    Ok(_) => {}
-                                                    Err(_) => {
-                                                        min_values[i] = None;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                ParquetStatistics::Double(s) => {
-                                    if let DataType::Float64 = fields[i].data_type() {
-                                        if s.has_min_max_set() {
-                                            if let Some(max_value) = &mut max_values[i] {
-                                                match max_value.update(&[
-                                                    ScalarValue::Float64(Some(*s.max())),
-                                                ]) {
-                                                    Ok(_) => {}
-                                                    Err(_) => {
-                                                        max_values[i] = None;
-                                                    }
-                                                }
-                                            }
-                                            if let Some(min_value) = &mut min_values[i] {
-                                                match min_value.update(&[
-                                                    ScalarValue::Float64(Some(*s.min())),
-                                                ]) {
-                                                    Ok(_) => {}
-                                                    Err(_) => {
-                                                        min_values[i] = None;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    if limit.map(|x| num_rows >= x as i64).unwrap_or(false) {
-                        limit_exhausted = true;
-                        break;
-                    }
-                }
-            }
-            let column_stats = (0..num_fields)
-                .map(|i| {
-                    let max_value = match &max_values[i] {
-                        Some(max_value) => max_value.evaluate().ok(),
-                        None => None,
-                    };
-                    let min_value = match &min_values[i] {
-                        Some(min_value) => min_value.evaluate().ok(),
-                        None => None,
-                    };
-                    ColumnStatistics {
-                        null_count: Some(null_counts[i] as usize),
-                        max_value,
-                        min_value,
-                        distinct_count: None,
-                    }
-                })
-                .collect();
-
-            let statistics = Statistics {
-                num_rows: Some(num_rows as usize),
-                total_byte_size: Some(total_byte_size as usize),
-                column_statistics: Some(column_stats),
-            };
-            // remove files that are not needed in case of limit
-            filenames.truncate(total_files);
-            partitions.push(ParquetPartition::new(filenames, statistics));
-            if limit_exhausted {
-                break;
-            }
+        let chunked_files = split_files(&all_files, max_concurrency);
+        for (index, group) in chunked_files.iter().enumerate() {
+            partitions.push(ParquetPartition::new(Vec::from(*group), index));
         }
 
-        // we currently get the schema information from the first file rather than do
-        // schema merging and this is a limitation.
-        // See https://issues.apache.org/jira/browse/ARROW-11017
-        if schemas.len() > 1 {
-            return Err(DataFusionError::Plan(format!(
-                "The Parquet files have {} different schemas and DataFusion does \
-                not yet support schema merging",
-                schemas.len()
-            )));
-        }
-        let schema = Arc::new(schemas.pop().unwrap());
         let metrics = ParquetExecMetrics::new();
 
         let predicate_builder = predicate.and_then(|predicate_expr| {
@@ -430,6 +182,7 @@ impl ParquetExec {
             partitions,
             schema,
             projection,
+            statistics,
             metrics,
             predicate_builder,
             batch_size,
@@ -438,10 +191,12 @@ impl ParquetExec {
     }
 
     /// Create a new Parquet reader execution plan with provided partitions and schema
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         partitions: Vec<ParquetPartition>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
+        statistics: Statistics,
         metrics: ParquetExecMetrics,
         predicate_builder: Option<PruningPredicate>,
         batch_size: usize,
@@ -459,94 +214,20 @@ impl ParquetExec {
                 .collect(),
         );
 
-        // sum the statistics
-        let mut num_rows: Option<usize> = None;
-        let mut total_byte_size: Option<usize> = None;
-        let mut null_counts: Vec<usize> = vec![0; schema.fields().len()];
-        let mut has_statistics = false;
-        let mut max_values = schema
-            .fields()
-            .iter()
-            .map(|field| MaxAccumulator::try_new(field.data_type()).ok())
-            .collect::<Vec<_>>();
-        let mut min_values = schema
-            .fields()
-            .iter()
-            .map(|field| MinAccumulator::try_new(field.data_type()).ok())
-            .collect::<Vec<_>>();
-        for part in &partitions {
-            if let Some(n) = part.statistics.num_rows {
-                num_rows = Some(num_rows.unwrap_or(0) + n)
+        let new_column_statistics = statistics.column_statistics.map(|stats| {
+            let mut projected_stats = Vec::with_capacity(projection.len());
+            for proj in &projection {
+                projected_stats.push(stats[*proj].clone());
             }
-            if let Some(n) = part.statistics.total_byte_size {
-                total_byte_size = Some(total_byte_size.unwrap_or(0) + n)
-            }
-            if let Some(x) = &part.statistics.column_statistics {
-                let part_nulls: Vec<Option<usize>> =
-                    x.iter().map(|c| c.null_count).collect();
-                has_statistics = true;
-
-                let part_max_values: Vec<Option<ScalarValue>> =
-                    x.iter().map(|c| c.max_value.clone()).collect();
-                let part_min_values: Vec<Option<ScalarValue>> =
-                    x.iter().map(|c| c.min_value.clone()).collect();
-
-                for &i in projection.iter() {
-                    null_counts[i] = part_nulls[i].unwrap_or(0);
-                    if let Some(part_max_value) = part_max_values[i].clone() {
-                        if let Some(max_value) = &mut max_values[i] {
-                            match max_value.update(&[part_max_value]) {
-                                Ok(_) => {}
-                                Err(_) => {
-                                    max_values[i] = None;
-                                }
-                            }
-                        }
-                    }
-                    if let Some(part_min_value) = part_min_values[i].clone() {
-                        if let Some(min_value) = &mut min_values[i] {
-                            match min_value.update(&[part_min_value]) {
-                                Ok(_) => {}
-                                Err(_) => {
-                                    min_values[i] = None;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let column_stats = if has_statistics {
-            Some(
-                (0..schema.fields().len())
-                    .map(|i| {
-                        let max_value = match &max_values[i] {
-                            Some(max_value) => max_value.evaluate().ok(),
-                            None => None,
-                        };
-                        let min_value = match &min_values[i] {
-                            Some(min_value) => min_value.evaluate().ok(),
-                            None => None,
-                        };
-                        ColumnStatistics {
-                            null_count: Some(null_counts[i] as usize),
-                            max_value,
-                            min_value,
-                            distinct_count: None,
-                        }
-                    })
-                    .collect(),
-            )
-        } else {
-            None
-        };
+            projected_stats
+        });
 
         let statistics = Statistics {
-            num_rows,
-            total_byte_size,
-            column_statistics: column_stats,
+            num_rows: statistics.num_rows,
+            total_byte_size: statistics.total_byte_size,
+            column_statistics: new_column_statistics,
         };
+
         Self {
             partitions,
             schema: Arc::new(projected_schema),
@@ -582,22 +263,20 @@ impl ParquetExec {
 
 impl ParquetPartition {
     /// Create a new parquet partition
-    pub fn new(filenames: Vec<String>, statistics: Statistics) -> Self {
+    pub fn new(files: Vec<PartitionedFile>, index: usize) -> Self {
         Self {
-            filenames,
-            statistics,
+            file_partition: FilePartition { index, files },
             metrics: ParquetPartitionMetrics::new(),
         }
     }
 
     /// The Parquet filename for this partition
-    pub fn filenames(&self) -> &[String] {
-        &self.filenames
-    }
-
-    /// Statistics for this partition
-    pub fn statistics(&self) -> &Statistics {
-        &self.statistics
+    pub fn filenames(&self) -> Vec<String> {
+        self.file_partition
+            .files
+            .iter()
+            .map(|f| f.file_path.clone())
+            .collect()
     }
 }
 
@@ -663,8 +342,7 @@ impl ExecutionPlan for ParquetExec {
             Receiver<ArrowResult<RecordBatch>>,
         ) = channel(2);
 
-        let partition = &self.partitions[partition];
-        let filenames = partition.filenames.clone();
+        let partition = self.partitions[partition].clone();
         let metrics = partition.metrics.clone();
         let projection = self.projection.clone();
         let predicate_builder = self.predicate_builder.clone();
@@ -672,8 +350,8 @@ impl ExecutionPlan for ParquetExec {
         let limit = self.limit;
 
         task::spawn_blocking(move || {
-            if let Err(e) = read_files(
-                &filenames,
+            if let Err(e) = read_partition(
+                partition,
                 metrics,
                 &projection,
                 &predicate_builder,
@@ -698,9 +376,7 @@ impl ExecutionPlan for ParquetExec {
                 let files: Vec<_> = self
                     .partitions
                     .iter()
-                    .map(|pp| pp.filenames.iter())
-                    .flatten()
-                    .map(|s| s.as_str())
+                    .map(|pp| format!("{}", pp.file_partition))
                     .collect();
 
                 write!(
@@ -720,14 +396,11 @@ impl ExecutionPlan for ParquetExec {
             .flat_map(|p| {
                 vec![
                     (
-                        format!(
-                            "numPredicateEvaluationErrors for {}",
-                            p.filenames.join(",")
-                        ),
+                        format!("numPredicateEvaluationErrors for {}", p.file_partition),
                         p.metrics.predicate_evaluation_errors.as_ref().clone(),
                     ),
                     (
-                        format!("numRowGroupsPruned for {}", p.filenames.join(",")),
+                        format!("numRowGroupsPruned for {}", p.file_partition),
                         p.metrics.row_groups_pruned.as_ref().clone(),
                     ),
                 ]
@@ -851,7 +524,7 @@ fn build_row_group_predicate(
     match predicate_values {
         Ok(values) => {
             // NB: false means don't scan row group
-            let num_pruned = values.iter().filter(|&v| !v).count();
+            let num_pruned = values.iter().filter(|&v| !*v).count();
             metrics.row_groups_pruned.add(num_pruned);
             Box::new(move |_, i| values[i])
         }
@@ -865,8 +538,9 @@ fn build_row_group_predicate(
     }
 }
 
-fn read_files(
-    filenames: &[String],
+#[allow(clippy::too_many_arguments)]
+fn read_partition(
+    partition: ParquetPartition,
     metrics: ParquetPartitionMetrics,
     projection: &[usize],
     predicate_builder: &Option<PruningPredicate>,
@@ -875,8 +549,9 @@ fn read_files(
     limit: Option<usize>,
 ) -> Result<()> {
     let mut total_rows = 0;
-    'outer: for filename in filenames {
-        let file = File::open(&filename)?;
+    let all_files = partition.file_partition.files;
+    'outer: for partitioned_file in all_files {
+        let file = File::open(partitioned_file.file_path.as_str())?;
         let mut file_reader = SerializedFileReader::new(file)?;
         if let Some(predicate_builder) = predicate_builder {
             let row_group_predicate = build_row_group_predicate(
@@ -904,7 +579,7 @@ fn read_files(
                 Some(Err(e)) => {
                     let err_msg = format!(
                         "Error reading batch from {}: {}",
-                        filename,
+                        partitioned_file,
                         e.to_string()
                     );
                     // send error to operator
@@ -924,12 +599,15 @@ fn read_files(
     Ok(())
 }
 
-fn split_files(filenames: &[String], n: usize) -> Vec<&[String]> {
-    let mut chunk_size = filenames.len() / n;
-    if filenames.len() % n > 0 {
+fn split_files(
+    partitioned_files: &[PartitionedFile],
+    n: usize,
+) -> Vec<&[PartitionedFile]> {
+    let mut chunk_size = partitioned_files.len() / n;
+    if partitioned_files.len() % n > 0 {
         chunk_size += 1;
     }
-    filenames.chunks(chunk_size).collect()
+    partitioned_files.chunks(chunk_size).collect()
 }
 
 #[cfg(test)]
@@ -945,24 +623,24 @@ mod tests {
 
     #[test]
     fn test_split_files() {
-        let filenames = vec![
-            "a".to_string(),
-            "b".to_string(),
-            "c".to_string(),
-            "d".to_string(),
-            "e".to_string(),
+        let files = vec![
+            PartitionedFile::from("a".to_string()),
+            PartitionedFile::from("b".to_string()),
+            PartitionedFile::from("c".to_string()),
+            PartitionedFile::from("d".to_string()),
+            PartitionedFile::from("e".to_string()),
         ];
 
-        let chunks = split_files(&filenames, 1);
+        let chunks = split_files(&files, 1);
         assert_eq!(1, chunks.len());
         assert_eq!(5, chunks[0].len());
 
-        let chunks = split_files(&filenames, 2);
+        let chunks = split_files(&files, 2);
         assert_eq!(2, chunks.len());
         assert_eq!(3, chunks[0].len());
         assert_eq!(2, chunks[1].len());
 
-        let chunks = split_files(&filenames, 5);
+        let chunks = split_files(&files, 5);
         assert_eq!(5, chunks.len());
         assert_eq!(1, chunks[0].len());
         assert_eq!(1, chunks[1].len());
@@ -970,7 +648,7 @@ mod tests {
         assert_eq!(1, chunks[3].len());
         assert_eq!(1, chunks[4].len());
 
-        let chunks = split_files(&filenames, 123);
+        let chunks = split_files(&files, 123);
         assert_eq!(5, chunks.len());
         assert_eq!(1, chunks[0].len());
         assert_eq!(1, chunks[1].len());

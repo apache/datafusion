@@ -130,10 +130,9 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
             }
             PhysicalPlanType::ParquetScan(scan) => {
                 let projection = scan.projection.iter().map(|i| *i as usize).collect();
-                let filenames: Vec<&str> =
-                    scan.filename.iter().map(|s| s.as_str()).collect();
-                Ok(Arc::new(ParquetExec::try_from_files(
-                    &filenames,
+                let path: &str = scan.filename[0].as_str();
+                Ok(Arc::new(ParquetExec::try_from_path(
+                    path,
                     Some(projection),
                     None,
                     scan.batch_size as usize,
@@ -621,6 +620,7 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
 
                 let catalog_list =
                     Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+
                 let ctx_state = ExecutionContextState {
                     catalog_list,
                     scalar_functions: Default::default(),

@@ -82,7 +82,7 @@ use self::state::{ConfigBackendClient, SchedulerState};
 use ballista_core::config::BallistaConfig;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use datafusion::physical_plan::parquet::ParquetExec;
+use datafusion::datasource::parquet::ParquetRootDesc;
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -282,24 +282,18 @@ impl SchedulerGrpc for SchedulerServer {
 
         match file_type {
             FileType::Parquet => {
-                let parquet_exec =
-                    ParquetExec::try_from_path(&path, None, None, 1024, 1, None)
-                        .map_err(|e| {
-                            let msg = format!("Error opening parquet files: {}", e);
-                            error!("{}", msg);
-                            tonic::Status::internal(msg)
-                        })?;
+                let parquet_desc = ParquetRootDesc::new(&path).map_err(|e| {
+                    let msg = format!("Error opening parquet files: {}", e);
+                    error!("{}", msg);
+                    tonic::Status::internal(msg)
+                })?;
 
                 //TODO include statistics and any other info needed to reconstruct ParquetExec
                 Ok(Response::new(GetFileMetadataResult {
-                    schema: Some(parquet_exec.schema().as_ref().into()),
-                    partitions: parquet_exec
-                        .partitions()
-                        .iter()
-                        .map(|part| FilePartitionMetadata {
-                            filename: part.filenames().to_vec(),
-                        })
-                        .collect(),
+                    schema: Some(parquet_desc.schema().as_ref().into()),
+                    partitions: vec![FilePartitionMetadata {
+                        filename: vec![path],
+                    }],
                 }))
             }
             //TODO implement for CSV
