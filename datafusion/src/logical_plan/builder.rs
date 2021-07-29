@@ -40,6 +40,7 @@ use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
     DFSchemaRef, Partitioning,
 };
+use crate::prelude::ExecutionContext;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -137,20 +138,20 @@ impl LogicalPlanBuilder {
     pub fn scan_parquet(
         path: impl Into<String>,
         projection: Option<Vec<usize>>,
-        max_concurrency: usize,
+        context: ExecutionContext,
     ) -> Result<Self> {
         let path = path.into();
-        Self::scan_parquet_with_name(path.clone(), projection, max_concurrency, path)
+        Self::scan_parquet_with_name(path.clone(), projection, context, path)
     }
 
     /// Scan a Parquet data source and register it with a given table name
     pub fn scan_parquet_with_name(
         path: impl Into<String>,
         projection: Option<Vec<usize>>,
-        max_concurrency: usize,
+        context: ExecutionContext,
         table_name: impl Into<String>,
     ) -> Result<Self> {
-        let provider = Arc::new(ParquetTable::try_new(path, max_concurrency)?);
+        let provider = Arc::new(ParquetTable::try_new(path, context)?);
         Self::scan(table_name, provider, projection)
     }
 

@@ -17,9 +17,11 @@
 
 //! Execution plan for reading CSV files
 
+use crate::datasource::local::LocalFileSystem;
+use crate::datasource::object_store::ObjectStore;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::{common, source::Source, Partitioning};
+use crate::physical_plan::{source::Source, Partitioning};
 use arrow::csv;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
@@ -141,7 +143,7 @@ impl CsvExec {
     ) -> Result<Self> {
         let file_extension = String::from(options.file_extension);
 
-        let filenames = common::build_file_list(path, file_extension.as_str())?;
+        let filenames = LocalFileSystem.list_all_files(path, options.file_extension)?;
         if filenames.is_empty() {
             return Err(DataFusionError::Execution(format!(
                 "No files found at {path} with file extension {file_extension}",

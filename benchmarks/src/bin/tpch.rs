@@ -475,7 +475,10 @@ fn get_table(
         }
         "parquet" => {
             let path = format!("{}/{}", path, table);
-            Ok(Arc::new(ParquetTable::try_new(&path, max_concurrency)?))
+            Ok(Arc::new(ParquetTable::try_new(
+                &path,
+                ExecutionContext::with_concurrency(max_concurrency),
+            )?))
         }
         other => {
             unimplemented!("Invalid file format '{}'", other);

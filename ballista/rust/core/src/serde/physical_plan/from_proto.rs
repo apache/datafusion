@@ -29,11 +29,13 @@ use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::protobuf::ShuffleReaderPartition;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{from_proto_binary_op, proto_error, protobuf};
+use crate::utils::create_datafusion_context_concurrency;
 use crate::{convert_box_required, convert_required, into_required};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
     CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
 };
+use datafusion::datasource::object_store::ObjectStoreRegistry;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
@@ -129,14 +131,13 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
             }
             PhysicalPlanType::ParquetScan(scan) => {
                 let projection = scan.projection.iter().map(|i| *i as usize).collect();
-                let filenames: Vec<&str> =
-                    scan.filename.iter().map(|s| s.as_str()).collect();
-                Ok(Arc::new(ParquetExec::try_from_files(
-                    &filenames,
+                let path: &str = scan.filename[0].as_str();
+                Ok(Arc::new(ParquetExec::try_from_path(
+                    path,
                     Some(projection),
                     None,
                     scan.batch_size as usize,
-                    scan.num_partitions as usize,
+                    create_datafusion_context_concurrency(scan.num_partitions as usize),
                     None,
                 )?))
             }
@@ -614,6 +615,9 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
 
                 let catalog_list =
                     Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+
+                let object_store_registry = Arc::new(ObjectStoreRegistry::new());
+
                 let ctx_state = ExecutionContextState {
                     catalog_list,
                     scalar_functions: Default::default(),
@@ -621,6 +625,7 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                     aggregate_functions: Default::default(),
                     config: ExecutionConfig::new(),
                     execution_props: ExecutionProps::new(),
+                    object_store_registry,
                 };
 
                 let fun_expr = functions::create_physical_fun(

@@ -49,6 +49,8 @@ use crate::catalog::{
     ResolvedTableReference, TableReference,
 };
 use crate::datasource::csv::CsvFile;
+use crate::datasource::object_store::ObjectStore;
+use crate::datasource::object_store::ObjectStoreRegistry;
 use crate::datasource::parquet::ParquetTable;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
@@ -164,8 +166,15 @@ impl ExecutionContext {
                 aggregate_functions: HashMap::new(),
                 config,
                 execution_props: ExecutionProps::new(),
+                object_store_registry: Arc::new(ObjectStoreRegistry::new()),
             })),
         }
+    }
+
+    /// Creates a new execution context using the provided concurrency.
+    pub fn with_concurrency(concurrency: usize) -> ExecutionContext {
+        let config = ExecutionConfig::new().with_concurrency(concurrency);
+        ExecutionContext::with_config(config)
     }
 
     /// Creates a dataframe that will execute a SQL query.
@@ -288,12 +297,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan_parquet(
-                filename,
-                None,
-                self.state.lock().unwrap().config.concurrency,
-            )?
-            .build()?,
+            &LogicalPlanBuilder::scan_parquet(filename, None, self.clone())?.build()?,
         )))
     }
 
@@ -325,7 +329,7 @@ impl ExecutionContext {
     pub fn register_parquet(&mut self, name: &str, filename: &str) -> Result<()> {
         let table = {
             let m = self.state.lock().unwrap();
-            ParquetTable::try_new(filename, m.config.concurrency)?
+            ParquetTable::try_new(filename, self.clone())?
                 .with_enable_pruning(m.config.parquet_pruning)
         };
         self.register_table(name, Arc::new(table))?;
@@ -356,6 +360,25 @@ impl ExecutionContext {
         };
 
         state.catalog_list.register_catalog(name, catalog)
+    }
+
+    /// Registers a object store with scheme using a custom `ObjectStore` so that
+    /// an external file system or object storage system could be used against this context.
+    ///
+    /// Returns the `ObjectStore` previously registered for this
+    /// scheme, if any
+    pub fn register_object_store(
+        &self,
+        scheme: impl Into<String>,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        let scheme = scheme.into();
+
+        self.state
+            .lock()
+            .unwrap()
+            .object_store_registry
+            .register_store(scheme, object_store)
     }
 
     /// Retrieves a `CatalogProvider` instance by name
@@ -840,6 +863,8 @@ pub struct ExecutionContextState {
     pub config: ExecutionConfig,
     /// Execution properties
     pub execution_props: ExecutionProps,
+    /// Object Store that are registered with the context
+    pub object_store_registry: Arc<ObjectStoreRegistry>,
 }
 
 impl ExecutionProps {
@@ -867,6 +892,7 @@ impl ExecutionContextState {
             aggregate_functions: HashMap::new(),
             config: ExecutionConfig::new(),
             execution_props: ExecutionProps::new(),
+            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
         }
     }
 

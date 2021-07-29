@@ -27,8 +27,6 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use futures::channel::mpsc;
 use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
-use std::fs;
-use std::fs::metadata;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::task::JoinHandle;
@@ -105,42 +103,6 @@ pub(crate) fn combine_batches(
             .collect::<ArrowResult<Vec<_>>>()?;
         Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
     }
-}
-
-/// Recursively builds a list of files in a directory with a given extension
-pub fn build_file_list(dir: &str, ext: &str) -> Result<Vec<String>> {
-    let mut filenames: Vec<String> = Vec::new();
-    build_file_list_recurse(dir, &mut filenames, ext)?;
-    Ok(filenames)
-}
-
-/// Recursively build a list of files in a directory with a given extension with an accumulator list
-fn build_file_list_recurse(
-    dir: &str,
-    filenames: &mut Vec<String>,
-    ext: &str,
-) -> Result<()> {
-    let metadata = metadata(dir)?;
-    if metadata.is_file() {
-        if dir.ends_with(ext) {
-            filenames.push(dir.to_string());
-        }
-    } else {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if let Some(path_name) = path.to_str() {
-                if path.is_dir() {
-                    build_file_list_recurse(path_name, filenames, ext)?;
-                } else if path_name.ends_with(ext) {
-                    filenames.push(path_name.to_string());
-                }
-            } else {
-                return Err(DataFusionError::Plan("Invalid path".to_string()));
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Spawns a task to the tokio threadpool and writes its outputs to the provided mpsc sender

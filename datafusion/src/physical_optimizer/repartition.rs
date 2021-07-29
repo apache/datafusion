@@ -110,6 +110,8 @@ mod tests {
 
     use super::*;
     use crate::datasource::datasource::Statistics;
+    use crate::datasource::local::LocalFileSystem;
+    use crate::datasource::PartitionedFile;
     use crate::physical_plan::parquet::{
         ParquetExec, ParquetExecMetrics, ParquetPartition,
     };
@@ -122,11 +124,13 @@ mod tests {
             vec![],
             Arc::new(ParquetExec::new(
                 vec![ParquetPartition::new(
-                    vec!["x".to_string()],
-                    Statistics::default(),
+                    vec![PartitionedFile::from("x".to_string())],
+                    0,
                 )],
+                Arc::new(LocalFileSystem),
                 schema,
                 None,
+                Statistics::default(),
                 ParquetExecMetrics::new(),
                 None,
                 2048,
@@ -160,11 +164,13 @@ mod tests {
                 vec![],
                 Arc::new(ParquetExec::new(
                     vec![ParquetPartition::new(
-                        vec!["x".to_string()],
-                        Statistics::default(),
+                        vec![PartitionedFile::from("x".to_string())],
+                        0,
                     )],
+                    Arc::new(LocalFileSystem),
                     schema,
                     None,
+                    Statistics::default(),
                     ParquetExecMetrics::new(),
                     None,
                     2048,

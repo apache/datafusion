@@ -30,7 +30,6 @@ use crate::{
     datasource::{Source, TableProvider},
     error::{DataFusionError, Result},
     physical_plan::{
-        common,
         json::{NdJsonExec, NdJsonReadOptions},
         ExecutionPlan,
     },
@@ -38,6 +37,8 @@ use crate::{
 use arrow::{datatypes::SchemaRef, json::reader::infer_json_schema_from_seekable};
 
 use super::datasource::Statistics;
+use crate::datasource::local::LocalFileSystem;
+use crate::datasource::object_store::ObjectStore;
 
 trait SeekRead: Read + Seek {}
 
@@ -57,7 +58,8 @@ impl NdJsonFile {
         let schema = if let Some(schema) = options.schema {
             schema
         } else {
-            let filenames = common::build_file_list(path, options.file_extension)?;
+            let filenames =
+                LocalFileSystem.list_all_files(path, options.file_extension)?;
             if filenames.is_empty() {
                 return Err(DataFusionError::Plan(format!(
                     "No files found at {path} with file extension {file_extension}",

@@ -19,7 +19,9 @@
 use async_trait::async_trait;
 use futures::Stream;
 
-use super::{common, source::Source, ExecutionPlan, Partitioning, RecordBatchStream};
+use super::{source::Source, ExecutionPlan, Partitioning, RecordBatchStream};
+use crate::datasource::local::LocalFileSystem;
+use crate::datasource::object_store::ObjectStore;
 use crate::error::{DataFusionError, Result};
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use arrow::{
@@ -87,7 +89,7 @@ impl NdJsonExec {
     ) -> Result<Self> {
         let file_extension = options.file_extension.to_string();
 
-        let filenames = common::build_file_list(path, &file_extension)?;
+        let filenames = LocalFileSystem.list_all_files(path, options.file_extension)?;
 
         if filenames.is_empty() {
             return Err(DataFusionError::Execution(format!(
