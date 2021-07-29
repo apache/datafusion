@@ -45,6 +45,7 @@ pub use expr::{
     sha224, sha256, sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos,
     substr, sum, tan, to_hex, translate, trim, trunc, unnormalize_col, unnormalize_cols,
     upper, when, Column, Expr, ExprRewriter, ExpressionVisitor, Literal, Recursion,
+    RewriteRecursion,
 };
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
