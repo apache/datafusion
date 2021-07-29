@@ -23,7 +23,9 @@ use crate::{
     },
     logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::{
-        aggregate_statistics::AggregateStatistics, eliminate_limit::EliminateLimit,
+        aggregate_statistics::AggregateStatistics,
+        // common_subexpr_eliminate::CommonSubexprEliminate,
+        eliminate_limit::EliminateLimit,
         hash_build_probe_order::HashBuildProbeOrder,
     },
     physical_optimizer::optimizer::PhysicalOptimizerRule,
@@ -691,6 +693,7 @@ impl Default for ExecutionConfig {
                 Arc::new(SimplifyExpressions::new()),
                 Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(LimitPushDown::new()),
+                // Arc::new(CommonSubexprEliminate::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(CoalesceBatches::new()),

@@ -985,9 +985,11 @@ pub trait ExpressionVisitor: Sized {
 
 /// Controls how the [ExprRewriter] recursion should proceed.
 pub enum RewriteRecursion {
+    /// Continue rewrite / visit this expression.
     Continue,
-    /// Call [mutate()] immediately and return.h
+    /// Call [mutate()] immediately and return.
     Mutate,
+    /// Do not rewrite / visit the children of this expression.
     Stop,
 }
 
@@ -997,7 +999,7 @@ pub enum RewriteRecursion {
 /// comments on `Expr::rewrite` for details on its use
 pub trait ExprRewriter: Sized {
     /// Invoked before any children of `expr` are rewritten /
-    /// visited. Default implementation returns `Ok(true)`
+    /// visited. Default implementation returns `Ok(RewriteRecursion::Continue)`
     fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
         Ok(RewriteRecursion::Continue)
     }
