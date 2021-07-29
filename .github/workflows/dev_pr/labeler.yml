@@ -17,6 +17,12 @@
 
 datafusion:
   - datafusion/**/*
+  - datafusion-cli/**/*
+  - datafusion-examples/**/*
 
 ballista:
   - ballista/**/*
+  - ballista-examples/**/*
+
+python:
+  - python/**/*
