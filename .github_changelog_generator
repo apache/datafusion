@@ -21,10 +21,10 @@
 # point to the old changelog in apache/arrow
 front-matter=For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)\n
 # some issues are just documentation
-add-sections={"documentation":{"prefix":"**Documentation updates:**","labels":["documentation"]}}
+add-sections={"documentation":{"prefix":"**Documentation updates:**","labels":["documentation"]},"performance":{"prefix":"**Performance improvements:**","labels":["performance"]}}
 # uncomment to not show PRs. TBD if we shown them or not.
 #pull-requests=false
 # so that the component is shown associated with the issue
-issue-line-labels=ballista,datafusion,python
+issue-line-labels=sql
 exclude-labels=development-process,invalid
-breaking_labels=api-change
+breaking-labels=api change
