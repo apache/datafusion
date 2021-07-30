@@ -513,7 +513,7 @@ fn dictionary_create_key_for_col<K: ArrowDictionaryKeyType>(
 /// Appends a sequence of [u8] bytes for the value in `col[row]` to
 /// `vec` to be used as a key into the hash map.
 ///
-/// NOTE: This functon does not check col.is_valid(). Caller must do so
+/// NOTE: This function does not check col.is_valid(). Caller must do so
 fn create_key_for_col(col: &ArrayRef, row: usize, vec: &mut Vec<u8>) -> Result<()> {
     match col.data_type() {
         DataType::Boolean => {
