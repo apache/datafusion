@@ -378,11 +378,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // return the logical plan representing the join
                 if filter.is_empty() {
                     let join = LogicalPlanBuilder::from(left)
-                        .join(&right, join_type, left_keys, right_keys)?;
+                        .join(&right, join_type, (left_keys, right_keys))?;
                     join.build()
                 } else if join_type == JoinType::Inner {
                     let join = LogicalPlanBuilder::from(left)
-                        .join(&right, join_type, left_keys, right_keys)?;
+                        .join(&right, join_type, (left_keys, right_keys))?;
                     join.filter(
                         filter
                             .iter()
@@ -436,8 +436,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 )?
                                 .build()?,
                             join_type,
-                            left_keys.clone(),
-                            right_keys.clone(),
+                            (left_keys.clone(), right_keys.clone()),
                         )?
                         .build()
                 } else {
@@ -600,7 +599,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             join_keys.iter().map(|(_, r)| r.clone()).collect();
                         let builder = LogicalPlanBuilder::from(left);
                         left = builder
-                            .join(right, JoinType::Inner, left_keys, right_keys)?
+                            .join(right, JoinType::Inner, (left_keys, right_keys))?
                             .build()?;
                     }
 

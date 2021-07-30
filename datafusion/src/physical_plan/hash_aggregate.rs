@@ -59,7 +59,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use hashbrown::HashMap;
-use ordered_float::OrderedFloat;
 use pin_project_lite::pin_project;
 
 use arrow::array::{
@@ -68,10 +67,7 @@ use arrow::array::{
 };
 use async_trait::async_trait;
 
-use super::{
-    expressions::Column, group_scalar::GroupByScalar, RecordBatchStream,
-    SendableRecordBatchStream,
-};
+use super::{expressions::Column, RecordBatchStream, SendableRecordBatchStream};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -362,7 +358,7 @@ fn group_aggregate_batch(
     // it will be overwritten on every iteration of the loop below
     let mut group_by_values = Vec::with_capacity(group_values.len());
     for _ in 0..group_values.len() {
-        group_by_values.push(GroupByScalar::UInt32(0));
+        group_by_values.push(ScalarValue::UInt32(Some(0)));
     }
 
     let mut group_by_values = group_by_values.into_boxed_slice();
@@ -730,7 +726,7 @@ impl GroupedHashAggregateStream {
 
 type AccumulatorItem = Box<dyn Accumulator>;
 type Accumulators =
-    HashMap<Vec<u8>, (Box<[GroupByScalar]>, Vec<AccumulatorItem>, Vec<u32>), RandomState>;
+    HashMap<Vec<u8>, (Box<[ScalarValue]>, Vec<AccumulatorItem>, Vec<u32>), RandomState>;
 
 impl Stream for GroupedHashAggregateStream {
     type Item = ArrowResult<RecordBatch>;
@@ -1004,9 +1000,11 @@ fn create_batch_from_map(
 
     let mut columns = (0..num_group_expr)
         .map(|i| {
-            ScalarValue::iter_to_array(accumulators.into_iter().map(
-                |(_, (group_by_values, _, _))| ScalarValue::from(&group_by_values[i]),
-            ))
+            ScalarValue::iter_to_array(
+                accumulators
+                    .into_iter()
+                    .map(|(_, (group_by_values, _, _))| group_by_values[i].clone()),
+            )
         })
         .collect::<Result<Vec<_>>>()
         .map_err(|x| x.into_arrow_external_error())?;
@@ -1088,124 +1086,9 @@ fn finalize_aggregation(
     }
 }
 
-/// Extract the value in `col[row]` from a dictionary a GroupByScalar
-fn dictionary_create_group_by_value<K: ArrowDictionaryKeyType>(
-    col: &ArrayRef,
-    row: usize,
-) -> Result<GroupByScalar> {
-    let dict_col = col.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
-
-    // look up the index in the values dictionary
-    let keys_col = dict_col.keys();
-    let values_index = keys_col.value(row).to_usize().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Can not convert index to usize in dictionary of type creating group by value {:?}",
-            keys_col.data_type()
-        ))
-    })?;
-
-    create_group_by_value(dict_col.values(), values_index)
-}
-
 /// Extract the value in `col[row]` as a GroupByScalar
-fn create_group_by_value(col: &ArrayRef, row: usize) -> Result<GroupByScalar> {
-    match col.data_type() {
-        DataType::Float32 => {
-            let array = col.as_any().downcast_ref::<Float32Array>().unwrap();
-            Ok(GroupByScalar::Float32(OrderedFloat::from(array.value(row))))
-        }
-        DataType::Float64 => {
-            let array = col.as_any().downcast_ref::<Float64Array>().unwrap();
-            Ok(GroupByScalar::Float64(OrderedFloat::from(array.value(row))))
-        }
-        DataType::UInt8 => {
-            let array = col.as_any().downcast_ref::<UInt8Array>().unwrap();
-            Ok(GroupByScalar::UInt8(array.value(row)))
-        }
-        DataType::UInt16 => {
-            let array = col.as_any().downcast_ref::<UInt16Array>().unwrap();
-            Ok(GroupByScalar::UInt16(array.value(row)))
-        }
-        DataType::UInt32 => {
-            let array = col.as_any().downcast_ref::<UInt32Array>().unwrap();
-            Ok(GroupByScalar::UInt32(array.value(row)))
-        }
-        DataType::UInt64 => {
-            let array = col.as_any().downcast_ref::<UInt64Array>().unwrap();
-            Ok(GroupByScalar::UInt64(array.value(row)))
-        }
-        DataType::Int8 => {
-            let array = col.as_any().downcast_ref::<Int8Array>().unwrap();
-            Ok(GroupByScalar::Int8(array.value(row)))
-        }
-        DataType::Int16 => {
-            let array = col.as_any().downcast_ref::<Int16Array>().unwrap();
-            Ok(GroupByScalar::Int16(array.value(row)))
-        }
-        DataType::Int32 => {
-            let array = col.as_any().downcast_ref::<Int32Array>().unwrap();
-            Ok(GroupByScalar::Int32(array.value(row)))
-        }
-        DataType::Int64 => {
-            let array = col.as_any().downcast_ref::<Int64Array>().unwrap();
-            Ok(GroupByScalar::Int64(array.value(row)))
-        }
-        DataType::Utf8 => {
-            let array = col.as_any().downcast_ref::<StringArray>().unwrap();
-            Ok(GroupByScalar::Utf8(Box::new(array.value(row).into())))
-        }
-        DataType::LargeUtf8 => {
-            let array = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
-            Ok(GroupByScalar::LargeUtf8(Box::new(array.value(row).into())))
-        }
-        DataType::Boolean => {
-            let array = col.as_any().downcast_ref::<BooleanArray>().unwrap();
-            Ok(GroupByScalar::Boolean(array.value(row)))
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, None) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap();
-            Ok(GroupByScalar::TimeMillisecond(array.value(row)))
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap();
-            Ok(GroupByScalar::TimeMicrosecond(array.value(row)))
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap();
-            Ok(GroupByScalar::TimeNanosecond(array.value(row)))
-        }
-        DataType::Date32 => {
-            let array = col.as_any().downcast_ref::<Date32Array>().unwrap();
-            Ok(GroupByScalar::Date32(array.value(row)))
-        }
-        DataType::Dictionary(index_type, _) => match **index_type {
-            DataType::Int8 => dictionary_create_group_by_value::<Int8Type>(col, row),
-            DataType::Int16 => dictionary_create_group_by_value::<Int16Type>(col, row),
-            DataType::Int32 => dictionary_create_group_by_value::<Int32Type>(col, row),
-            DataType::Int64 => dictionary_create_group_by_value::<Int64Type>(col, row),
-            DataType::UInt8 => dictionary_create_group_by_value::<UInt8Type>(col, row),
-            DataType::UInt16 => dictionary_create_group_by_value::<UInt16Type>(col, row),
-            DataType::UInt32 => dictionary_create_group_by_value::<UInt32Type>(col, row),
-            DataType::UInt64 => dictionary_create_group_by_value::<UInt64Type>(col, row),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported GROUP BY type (dictionary index type not supported) {}",
-                col.data_type(),
-            ))),
-        },
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported GROUP BY type {}",
-            col.data_type(),
-        ))),
-    }
+fn create_group_by_value(col: &ArrayRef, row: usize) -> Result<ScalarValue> {
+    ScalarValue::try_from_array(col, row)
 }
 
 /// Extract the values in `group_by_keys` arrow arrays into the target vector
@@ -1213,7 +1096,7 @@ fn create_group_by_value(col: &ArrayRef, row: usize) -> Result<GroupByScalar> {
 pub(crate) fn create_group_by_values(
     group_by_keys: &[ArrayRef],
     row: usize,
-    vec: &mut Box<[GroupByScalar]>,
+    vec: &mut Box<[ScalarValue]>,
 ) -> Result<()> {
     for (i, col) in group_by_keys.iter().enumerate() {
         vec[i] = create_group_by_value(col, row)?

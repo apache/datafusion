@@ -25,8 +25,6 @@ use std::{
     time::Instant,
 };
 
-use futures::StreamExt;
-
 use ballista::context::BallistaContext;
 use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
 
@@ -312,15 +310,10 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
         let df = ctx
             .sql(&sql)
             .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))?;
-        let mut batches = vec![];
-        let mut stream = ctx
-            .collect(&df.to_logical_plan())
+        let batches = df
+            .collect()
             .await
             .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))?;
-        while let Some(result) = stream.next().await {
-            let batch = result?;
-            batches.push(batch);
-        }
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         millis.push(elapsed as f64);
         println!("Query {} iteration {} took {:.1} ms", opt.query, i, elapsed);
