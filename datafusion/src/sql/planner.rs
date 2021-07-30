@@ -325,16 +325,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let right = self.create_relation(&join.relation, ctes)?;
         match &join.join_operator {
             JoinOperator::LeftOuter(constraint) => {
-                self.parse_join(left, &right, constraint, JoinType::Left)
+                self.parse_join(left, right, constraint, JoinType::Left)
             }
             JoinOperator::RightOuter(constraint) => {
-                self.parse_join(left, &right, constraint, JoinType::Right)
+                self.parse_join(left, right, constraint, JoinType::Right)
             }
             JoinOperator::Inner(constraint) => {
-                self.parse_join(left, &right, constraint, JoinType::Inner)
+                self.parse_join(left, right, constraint, JoinType::Inner)
             }
             JoinOperator::FullOuter(constraint) => {
-                self.parse_join(left, &right, constraint, JoinType::Full)
+                self.parse_join(left, right, constraint, JoinType::Full)
             }
             JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
             other => Err(DataFusionError::NotImplemented(format!(
@@ -354,7 +354,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn parse_join(
         &self,
         left: LogicalPlan,
-        right: &LogicalPlan,
+        right: LogicalPlan,
         constraint: &JoinConstraint,
         join_type: JoinType,
     ) -> Result<LogicalPlan> {
@@ -374,13 +374,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
-                // return the logical plan representing the join
-                let join = LogicalPlanBuilder::from(left)
-                    .join(right, join_type, left_keys, right_keys)?;
 
+                // return the logical plan representing the join
                 if filter.is_empty() {
+                    let join = LogicalPlanBuilder::from(left)
+                        .join(&right, join_type, left_keys, right_keys)?;
                     join.build()
                 } else if join_type == JoinType::Inner {
+                    let join = LogicalPlanBuilder::from(left)
+                        .join(&right, join_type, left_keys, right_keys)?;
                     join.filter(
                         filter
                             .iter()
@@ -388,6 +390,56 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
                     )?
                     .build()
+                }
+                // t left join u
+                // on u... like xx
+                else if join_type == JoinType::Left
+                    && filter.iter().all(|x| match x {
+                        Expr::BinaryExpr {
+                            left: l, right: r, ..
+                        } => match (l.as_ref(), r.as_ref()) {
+                            (
+                                Expr::Column(Column {
+                                    relation: qualifier,
+                                    name,
+                                }),
+                                _,
+                            ) => right
+                                .schema()
+                                .field_with_name(qualifier.as_deref(), &name)
+                                .is_ok(),
+                            (
+                                _,
+                                Expr::Column(Column {
+                                    relation: qualifier,
+                                    name,
+                                }),
+                            ) => right
+                                .schema()
+                                .field_with_name(qualifier.as_deref(), &name)
+                                .is_ok(),
+                            _ => false,
+                        },
+                        _ => false,
+                    })
+                {
+                    LogicalPlanBuilder::from(left)
+                        .join(
+                            &LogicalPlanBuilder::from(right)
+                                .filter(
+                                    filter
+                                        .iter()
+                                        .skip(1)
+                                        .fold(filter[0].clone(), |acc, e| {
+                                            acc.and(e.clone())
+                                        }),
+                                )?
+                                .build()?,
+                            join_type,
+                            left_keys.clone(),
+                            right_keys.clone(),
+                        )?
+                        .build()
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "Unsupported expressions in {:?} JOIN: {:?}",
@@ -401,7 +453,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|x| Column::from_name(x.value.clone()))
                     .collect();
                 LogicalPlanBuilder::from(left)
-                    .join_using(right, join_type, keys)?
+                    .join_using(&right, join_type, keys)?
                     .build()
             }
             JoinConstraint::Natural => {
@@ -1647,8 +1699,15 @@ fn extract_join_keys(
                 extract_join_keys(left, accum, accum_filter);
                 extract_join_keys(right, accum, accum_filter);
             }
-            _other => {
+            _other
+                if matches!(**left, Expr::Column(_))
+                    || matches!(**right, Expr::Column(_)) =>
+            {
                 accum_filter.push(expr.clone());
+            }
+            _other => {
+                extract_join_keys(left, accum, accum_filter);
+                extract_join_keys(right, accum, accum_filter);
             }
         },
         _other => {
