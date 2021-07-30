@@ -565,13 +565,13 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                             protobuf::ScalarValue {
                                 value: Some(protobuf::scalar_value::Value::ListValue(
                                     protobuf::ScalarListValue {
-                                        datatype: Some(datatype.try_into()?),
+                                        datatype: Some(datatype.as_ref().try_into()?),
                                         values: Vec::new(),
                                     },
                                 )),
                             }
                         } else {
-                            let scalar_type = match datatype {
+                            let scalar_type = match datatype.as_ref() {
                                 DataType::List(field) => field.as_ref().data_type(),
                                 _ => todo!("Proper error handling"),
                             };
@@ -579,16 +579,23 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                             let type_checked_values: Vec<protobuf::ScalarValue> = values
                                 .iter()
                                 .map(|scalar| match (scalar, scalar_type) {
-                                    (scalar::ScalarValue::List(_, DataType::List(list_field)), DataType::List(field)) => {
-                                        let scalar_datatype = field.data_type();
-                                        let list_datatype = list_field.data_type();
-                                        if std::mem::discriminant(list_datatype) != std::mem::discriminant(scalar_datatype) {
-                                            return Err(proto_error(format!(
-                                                "Protobuf serialization error: Lists with inconsistent typing {:?} and {:?} found within list",
-                                                list_datatype, scalar_datatype
-                                            )));
+                                    (scalar::ScalarValue::List(_, list_type), DataType::List(field)) => {
+                                        if let DataType::List(list_field) = list_type.as_ref() {
+                                            let scalar_datatype = field.data_type();
+                                            let list_datatype = list_field.data_type();
+                                            if std::mem::discriminant(list_datatype) != std::mem::discriminant(scalar_datatype) {
+                                                return Err(proto_error(format!(
+                                                    "Protobuf serialization error: Lists with inconsistent typing {:?} and {:?} found within list",
+                                                    list_datatype, scalar_datatype
+                                                )));
+                                            }
+                                            scalar.try_into()
+                                        } else {
+                                            Err(proto_error(format!(
+                                                "Protobuf serialization error, {:?} was inconsistent with designated type {:?}",
+                                                scalar, datatype
+                                            )))
                                         }
-                                        scalar.try_into()
                                     }
                                     (scalar::ScalarValue::Boolean(_), DataType::Boolean) => scalar.try_into(),
                                     (scalar::ScalarValue::Float32(_), DataType::Float32) => scalar.try_into(),
@@ -612,7 +619,7 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                             protobuf::ScalarValue {
                                 value: Some(protobuf::scalar_value::Value::ListValue(
                                     protobuf::ScalarListValue {
-                                        datatype: Some(datatype.try_into()?),
+                                        datatype: Some(datatype.as_ref().try_into()?),
                                         values: type_checked_values,
                                     },
                                 )),
@@ -621,7 +628,7 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                     }
                     None => protobuf::ScalarValue {
                         value: Some(protobuf::scalar_value::Value::NullListValue(
-                            datatype.try_into()?,
+                            datatype.as_ref().try_into()?,
                         )),
                     },
                 }
