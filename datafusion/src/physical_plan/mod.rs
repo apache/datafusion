@@ -655,7 +655,6 @@ pub mod explain;
 pub mod expressions;
 pub mod filter;
 pub mod functions;
-pub mod group_scalar;
 pub mod hash_aggregate;
 pub mod hash_join;
 pub mod hash_utils;
