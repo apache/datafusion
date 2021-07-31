@@ -1766,13 +1766,55 @@ async fn equijoin_and_other_condition() -> Result<()> {
 }
 
 #[tokio::test]
-async fn equijoin_and_unsupported_condition() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+async fn equijoin_left_and_condition_from_right() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
     let res = ctx.create_logical_plan(sql);
+    assert!(res.is_ok());
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![
+        vec!["11", "a", "z"],
+        vec!["22", "b", "y"],
+        vec!["33", "c", "NULL"],
+        vec!["44", "d", "NULL"],
+    ];
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_right_and_condition_from_left() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t1_id >= 22 ORDER BY t2_name";
+    let res = ctx.create_logical_plan(sql);
+    assert!(res.is_ok());
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![
+        vec!["NULL", "NULL", "w"],
+        vec!["44", "d", "x"],
+        vec!["22", "b", "y"],
+        vec!["NULL", "NULL", "z"],
+    ];
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_and_unsupported_condition() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_id >= '44' ORDER BY t1_id";
+    let res = ctx.create_logical_plan(sql);
+
     assert!(res.is_err());
-    assert_eq!(format!("{}", res.unwrap_err()), "This feature is not implemented: Unsupported expressions in Left JOIN: [#t2_name GtEq Utf8(\"y\")]");
+    assert_eq!(format!("{}", res.unwrap_err()), "This feature is not implemented: Unsupported expressions in Left JOIN: [#t1_id GtEq Utf8(\"44\")]");
+
     Ok(())
 }
 

@@ -31,6 +31,7 @@ use crate::logical_plan::{
     DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema,
     ToStringifiedPlan,
 };
+use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::{
@@ -372,17 +373,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // extract join keys
                 extract_join_keys(&expr, &mut keys, &mut filter);
 
+                let mut cols = HashSet::new();
+                exprlist_to_columns(&filter, &mut cols)?;
+
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
 
                 // return the logical plan representing the join
                 if filter.is_empty() {
-                    let join = LogicalPlanBuilder::from(left)
-                        .join(&right, join_type, (left_keys, right_keys))?;
+                    let join = LogicalPlanBuilder::from(left).join(
+                        &right,
+                        join_type,
+                        (left_keys, right_keys),
+                    )?;
                     join.build()
                 } else if join_type == JoinType::Inner {
-                    let join = LogicalPlanBuilder::from(left)
-                        .join(&right, join_type, (left_keys, right_keys))?;
+                    let join = LogicalPlanBuilder::from(left).join(
+                        &right,
+                        join_type,
+                        (left_keys, right_keys),
+                    )?;
                     join.filter(
                         filter
                             .iter()
@@ -391,37 +401,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     )?
                     .build()
                 }
-                // t left join u
-                // on u... like xx
+                // l left join r
+                // on l1=r1 and r2 like xx
                 else if join_type == JoinType::Left
-                    && filter.iter().all(|x| match x {
-                        Expr::BinaryExpr {
-                            left: l, right: r, ..
-                        } => match (l.as_ref(), r.as_ref()) {
-                            (
-                                Expr::Column(Column {
-                                    relation: qualifier,
-                                    name,
-                                }),
-                                _,
-                            ) => right
+                    && cols.iter().all(
+                        |Column {
+                             relation: qualifier,
+                             name,
+                         }| {
+                            right
                                 .schema()
                                 .field_with_name(qualifier.as_deref(), &name)
-                                .is_ok(),
-                            (
-                                _,
-                                Expr::Column(Column {
-                                    relation: qualifier,
-                                    name,
-                                }),
-                            ) => right
-                                .schema()
-                                .field_with_name(qualifier.as_deref(), &name)
-                                .is_ok(),
-                            _ => false,
+                                .is_ok()
                         },
-                        _ => false,
-                    })
+                    )
                 {
                     LogicalPlanBuilder::from(left)
                         .join(
@@ -438,6 +431,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             join_type,
                             (left_keys.clone(), right_keys.clone()),
                         )?
+                        .build()
+                } else if join_type == JoinType::Right
+                    && cols.iter().all(
+                        |Column {
+                             relation: qualifier,
+                             name,
+                         }| {
+                            left.schema()
+                                .field_with_name(qualifier.as_deref(), &name)
+                                .is_ok()
+                        },
+                    )
+                {
+                    LogicalPlanBuilder::from(left)
+                        .filter(
+                            filter
+                                .iter()
+                                .skip(1)
+                                .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
+                        )?
+                        .join(&right, join_type, (left_keys.clone(), right_keys.clone()))?
                         .build()
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
