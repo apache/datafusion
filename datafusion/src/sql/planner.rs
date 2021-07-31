@@ -412,7 +412,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                          }| {
                             right
                                 .schema()
-                                .field_with_name(qualifier.as_deref(), &name)
+                                .field_with_name(qualifier.as_deref(), name)
                                 .is_ok()
                         },
                     )
@@ -430,7 +430,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 )?
                                 .build()?,
                             join_type,
-                            (left_keys.clone(), right_keys.clone()),
+                            (left_keys, right_keys),
                         )?
                         .build()
                 }
@@ -444,7 +444,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                              name,
                          }| {
                             left.schema()
-                                .field_with_name(qualifier.as_deref(), &name)
+                                .field_with_name(qualifier.as_deref(), name)
                                 .is_ok()
                         },
                     )
@@ -456,7 +456,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 .skip(1)
                                 .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
                         )?
-                        .join(&right, join_type, (left_keys.clone(), right_keys.clone()))?
+                        .join(&right, join_type, (left_keys, right_keys))?
                         .build()
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
