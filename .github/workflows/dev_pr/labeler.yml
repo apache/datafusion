@@ -26,3 +26,6 @@ ballista:
 
 python:
   - python/**/*
+
+sql:
+  - datafusion/src/sql/**/*
