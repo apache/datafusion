@@ -287,16 +287,125 @@ impl LogicalPlanBuilder {
                 .into_iter()
                 .zip(join_keys.1.into_iter())
                 .map(|(l, r)| {
-                    let mut swap = false;
                     let l = l.into();
-                    let left_key = l.clone().normalize(&self.plan).or_else(|_| {
-                        swap = true;
-                        l.normalize(right)
-                    });
-                    if swap {
-                        (r.into().normalize(&self.plan), left_key)
-                    } else {
-                        (left_key, r.into().normalize(right))
+                    let r = r.into();
+                    let lr = l.relation.clone();
+                    let rr = r.relation.clone();
+
+                    match (lr, rr) {
+                        (Some(lr), Some(rr)) => {
+                            let l_is_left =
+                                self.plan.all_schemas().iter().any(|schema| {
+                                    schema.fields().iter().any(|field| {
+                                        field.qualifier().unwrap() == &lr
+                                            && field.name() == &l.name
+                                    })
+                                });
+                            let l_is_right = right.all_schemas().iter().any(|schema| {
+                                schema.fields().iter().any(|field| {
+                                    field.qualifier().unwrap() == &lr
+                                        && field.name() == &l.name
+                                })
+                            });
+                            let r_is_left =
+                                self.plan.all_schemas().iter().any(|schema| {
+                                    schema.fields().iter().any(|field| {
+                                        field.qualifier().unwrap() == &rr
+                                            && field.name() == &r.name
+                                    })
+                                });
+                            let r_is_right = right.all_schemas().iter().any(|schema| {
+                                schema.fields().iter().any(|field| {
+                                    field.qualifier().unwrap() == &rr
+                                        && field.name() == &r.name
+                                })
+                            });
+                            match (l_is_left, l_is_right, r_is_left, r_is_right) {
+                                (true, _, _, true) => (Ok(l), Ok(r)),
+                                (_, true, true, _) => (Ok(r), Ok(l)),
+                                (_, _, _, _) => (
+                                    Err(DataFusionError::Plan(format!(
+                                        "Column {} not found in provided schemas",
+                                        l
+                                    ))),
+                                    Err(DataFusionError::Plan(format!(
+                                        "Column {} not found in provided schemas",
+                                        r
+                                    ))),
+                                ),
+                            }
+                        }
+                        (Some(lr), None) => {
+                            let l_is_left =
+                                self.plan.all_schemas().iter().any(|schema| {
+                                    schema.fields().iter().any(|field| {
+                                        field.qualifier().unwrap() == &lr
+                                            && field.name() == &l.name
+                                    })
+                                });
+                            let l_is_right = right.all_schemas().iter().any(|schema| {
+                                schema.fields().iter().any(|field| {
+                                    field.qualifier().unwrap() == &lr
+                                        && field.name() == &l.name
+                                })
+                            });
+                            match (l_is_left, l_is_right) {
+                                (true, _) => (Ok(l), r.normalize(right)),
+                                (_, true) => (r.normalize(&self.plan), Ok(l)),
+                                (_, _) => (
+                                    Err(DataFusionError::Plan(format!(
+                                        "Column {} not found in provided schemas",
+                                        l
+                                    ))),
+                                    Err(DataFusionError::Plan(format!(
+                                        "Column {} not found in provided schemas",
+                                        r
+                                    ))),
+                                ),
+                            }
+                        }
+                        (None, Some(rr)) => {
+                            let r_is_left =
+                                self.plan.all_schemas().iter().any(|schema| {
+                                    schema.fields().iter().any(|field| {
+                                        field.qualifier().unwrap() == &rr
+                                            && field.name() == &r.name
+                                    })
+                                });
+                            let r_is_right = right.all_schemas().iter().any(|schema| {
+                                schema.fields().iter().any(|field| {
+                                    field.qualifier().unwrap() == &rr
+                                        && field.name() == &r.name
+                                })
+                            });
+                            match (r_is_left, r_is_right) {
+                                (true, _) => (Ok(r), l.normalize(right)),
+                                (_, true) => (l.normalize(&self.plan), Ok(r)),
+                                (_, _) => (
+                                    Err(DataFusionError::Plan(format!(
+                                        "Column {} not found in provided schemas",
+                                        l
+                                    ))),
+                                    Err(DataFusionError::Plan(format!(
+                                        "Column {} not found in provided schemas",
+                                        r
+                                    ))),
+                                ),
+                            }
+                        }
+                        (None, None) => {
+                            let mut swap = false;
+                            let left_key =
+                                l.clone().normalize(&self.plan).or_else(|_| {
+                                    swap = true;
+                                    l.normalize(right)
+                                });
+                            if swap {
+                                (r.normalize(&self.plan), left_key)
+                            } else {
+                                (left_key, r.normalize(right))
+                            }
+                        }
                     }
                 })
                 .unzip();
