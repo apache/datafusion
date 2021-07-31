@@ -2881,6 +2881,34 @@ mod tests {
     }
 
     #[test]
+    fn left_equijoin_unsupported_expression() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            LEFT JOIN orders \
+            ON id = customer_id AND order_id > 1 ";
+        let expected = "Projection: #person.id, #orders.order_id\
+        \n  Join: #person.id = #orders.customer_id\
+        \n    TableScan: person projection=None\
+        \n    Filter: #orders.order_id Gt Int64(1)\
+        \n      TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn right_equijoin_unsupported_expression() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            RIGHT JOIN orders \
+            ON id = customer_id AND id > 1";
+        let expected = "Projection: #person.id, #orders.order_id\
+        \n  Join: #person.id = #orders.customer_id\
+        \n    Filter: #person.id Gt Int64(1)\
+        \n      TableScan: person projection=None\
+        \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn join_with_table_name() {
         let sql = "SELECT id, order_id \
             FROM person \
