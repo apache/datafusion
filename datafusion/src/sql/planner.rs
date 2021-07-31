@@ -401,8 +401,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     )?
                     .build()
                 }
+                // Left join with all non-equijoin expressions from the right
                 // l left join r
-                // on l1=r1 and r2 like xx
+                // on l1=r1 and r2 > [..]
                 else if join_type == JoinType::Left
                     && cols.iter().all(
                         |Column {
@@ -432,7 +433,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             (left_keys.clone(), right_keys.clone()),
                         )?
                         .build()
-                } else if join_type == JoinType::Right
+                }
+                // Right join with all non-equijoin expressions from the left
+                // l right join r
+                // on l1=r1 and l2 > [..]
+                else if join_type == JoinType::Right
                     && cols.iter().all(
                         |Column {
                              relation: qualifier,
@@ -2885,7 +2890,7 @@ mod tests {
         let sql = "SELECT id, order_id \
             FROM person \
             LEFT JOIN orders \
-            ON id = customer_id AND order_id > 1 ";
+            ON id = customer_id AND order_id > 1";
         let expected = "Projection: #person.id, #orders.order_id\
         \n  Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
