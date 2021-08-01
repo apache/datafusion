@@ -39,4 +39,7 @@ development-process:
 documentation:
   - docs/**.*
   - README.md
+  - ./**/README.md
   - DEVELOPERS.md
+  - ballista/docs/**.*
+  - datafusion/docs/**.*
