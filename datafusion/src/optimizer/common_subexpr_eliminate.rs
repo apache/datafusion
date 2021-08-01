@@ -17,11 +17,6 @@
 
 //! Eliminate common sub-expression.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use arrow::datatypes::DataType;
-
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
@@ -29,6 +24,10 @@ use crate::logical_plan::{
     Recursion, RewriteRecursion,
 };
 use crate::optimizer::optimizer::OptimizerRule;
+use crate::optimizer::utils;
+use arrow::datatypes::DataType;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
@@ -75,7 +74,6 @@ impl CommonSubexprEliminate {
 
 fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<LogicalPlan> {
     let mut expr_set = ExprSet::new();
-    let mut affected_id = HashSet::new();
 
     match plan {
         LogicalPlan::Projection {
@@ -91,43 +89,44 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 arrays.push(id_array);
             }
 
-            let new_expr = expr
-                .iter()
-                .cloned()
-                .zip(arrays.into_iter())
-                .map(|(expr, id_array)| {
-                    replace_common_expr(
-                        expr,
-                        &id_array,
-                        &mut expr_set,
-                        &mut affected_id,
-                        schema,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let (mut new_expr, new_input) = rewrite_expr(
+                &[expr],
+                &[&arrays],
+                input,
+                &mut expr_set,
+                schema,
+                execution_props,
+            )?;
 
-            let mut new_input = optimize(input, execution_props)?;
-            if !affected_id.is_empty() {
-                new_input = build_project_plan(new_input, affected_id, &expr_set)?;
-            }
-
-            return Ok(LogicalPlan::Projection {
-                expr: new_expr,
+            Ok(LogicalPlan::Projection {
+                expr: new_expr.pop().unwrap(),
                 input: Arc::new(new_input),
                 schema: schema.clone(),
-            });
+            })
         }
         LogicalPlan::Filter { predicate, input } => {
             let data_type = predicate.get_type(input.schema())?;
             let mut id_array = vec![];
             expr_to_identifier(predicate, &mut expr_set, &mut id_array, data_type)?;
 
-            return optimize(input, execution_props);
+            let (mut new_expr, new_input) = rewrite_expr(
+                &[&[predicate.clone()]],
+                &[&[id_array]],
+                input,
+                &mut expr_set,
+                input.schema(),
+                execution_props,
+            )?;
+
+            Ok(LogicalPlan::Filter {
+                predicate: new_expr.pop().unwrap().pop().unwrap(),
+                input: Arc::new(new_input),
+            })
         }
         LogicalPlan::Window {
             input,
             window_expr,
-            schema: _,
+            schema,
         } => {
             let mut arrays = vec![];
             for e in window_expr {
@@ -137,7 +136,20 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 arrays.push(id_array);
             }
 
-            return optimize(input, execution_props);
+            let (mut new_expr, new_input) = rewrite_expr(
+                &[window_expr],
+                &[&arrays],
+                input,
+                &mut expr_set,
+                schema,
+                execution_props,
+            )?;
+
+            Ok(LogicalPlan::Window {
+                input: Arc::new(new_input),
+                window_expr: new_expr.pop().unwrap(),
+                schema: schema.clone(),
+            })
         }
         LogicalPlan::Aggregate {
             input,
@@ -145,7 +157,6 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             aggr_expr,
             schema,
         } => {
-            // collect id
             let mut group_arrays = vec![];
             for e in group_expr {
                 let data_type = e.get_type(input.schema())?;
@@ -161,49 +172,48 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 aggr_arrays.push(id_array);
             }
 
-            // rewrite
-            let new_group_expr = group_expr
-                .iter()
-                .cloned()
-                .zip(group_arrays.into_iter())
-                .map(|(expr, id_array)| {
-                    replace_common_expr(
-                        expr,
-                        &id_array,
-                        &mut expr_set,
-                        &mut affected_id,
-                        schema,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let new_aggr_expr = aggr_expr
-                .iter()
-                .cloned()
-                .zip(aggr_arrays.into_iter())
-                .map(|(expr, id_array)| {
-                    replace_common_expr(
-                        expr,
-                        &id_array,
-                        &mut expr_set,
-                        &mut affected_id,
-                        schema,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let (mut new_expr, new_input) = rewrite_expr(
+                &[group_expr, aggr_expr],
+                &[&group_arrays, &aggr_arrays],
+                input,
+                &mut expr_set,
+                schema,
+                execution_props,
+            )?;
+            // note the reversed pop order.
+            let new_aggr_expr = new_expr.pop().unwrap();
+            let new_group_expr = new_expr.pop().unwrap();
 
-            let mut new_input = optimize(input, execution_props)?;
-            if !affected_id.is_empty() {
-                new_input = build_project_plan(new_input, affected_id, &expr_set)?;
-            }
-
-            return Ok(LogicalPlan::Aggregate {
+            Ok(LogicalPlan::Aggregate {
                 input: Arc::new(new_input),
                 group_expr: new_group_expr,
                 aggr_expr: new_aggr_expr,
                 schema: schema.clone(),
-            });
+            })
         }
-        LogicalPlan::Sort { expr: _, input: _ } => {}
+        LogicalPlan::Sort { expr, input } => {
+            let mut arrays = vec![];
+            for e in expr {
+                let data_type = e.get_type(input.schema())?;
+                let mut id_array = vec![];
+                expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
+                arrays.push(id_array);
+            }
+
+            let (mut new_expr, new_input) = rewrite_expr(
+                &[expr],
+                &[&arrays],
+                input,
+                &mut expr_set,
+                input.schema(),
+                execution_props,
+            )?;
+
+            Ok(LogicalPlan::Sort {
+                expr: new_expr.pop().unwrap(),
+                input: Arc::new(new_input),
+            })
+        }
         LogicalPlan::Join { .. }
         | LogicalPlan::CrossJoin { .. }
         | LogicalPlan::Repartition { .. }
@@ -213,9 +223,18 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::Limit { .. }
         | LogicalPlan::CreateExternalTable { .. }
         | LogicalPlan::Explain { .. }
-        | LogicalPlan::Extension { .. } => {}
+        | LogicalPlan::Extension { .. } => {
+            // apply the optimization to all inputs of the plan
+            let expr = plan.expressions();
+            let inputs = plan.inputs();
+            let new_inputs = inputs
+                .iter()
+                .map(|input_plan| optimize(input_plan, execution_props))
+                .collect::<Result<Vec<_>>>()?;
+
+            utils::from_plan(plan, &expr, &new_inputs)
+        }
     }
-    Ok(plan.clone())
 }
 
 /// Build the "intermediate" projection plan that evaluates the extracted common expressions.
@@ -251,6 +270,46 @@ fn build_project_plan(
         input: Arc::new(input),
         schema: Arc::new(schema),
     })
+}
+
+#[inline]
+fn rewrite_expr(
+    exprs_list: &[&[Expr]],
+    arrays_list: &[&[Vec<(usize, String)>]],
+    input: &LogicalPlan,
+    expr_set: &mut ExprSet,
+    schema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
+    let mut affected_id = HashSet::<Identifier>::new();
+
+    let rewrote_exprs = exprs_list
+        .iter()
+        .zip(arrays_list.iter())
+        .map(|(exprs, arrays)| {
+            exprs
+                .iter()
+                .cloned()
+                .zip(arrays.iter())
+                .map(|(expr, id_array)| {
+                    replace_common_expr(
+                        expr,
+                        id_array,
+                        expr_set,
+                        &mut affected_id,
+                        schema,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut new_input = optimize(input, execution_props)?;
+    if !affected_id.is_empty() {
+        new_input = build_project_plan(new_input, affected_id, expr_set)?;
+    }
+
+    Ok((rewrote_exprs, new_input))
 }
 
 /// Go through an expression tree and generate identifier.
@@ -305,7 +364,6 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str(&column.flat_name());
             }
             Expr::ScalarVariable(var_names) => {
-                // accum.insert(Column::from_name(var_names.join(".")));
                 desc.push_str("ScalarVariable-");
                 desc.push_str(&var_names.join("."));
             }
@@ -321,26 +379,70 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("BinaryExpr-");
                 desc.push_str(&op.to_string());
             }
-            Expr::Not(_) => {}
-            Expr::IsNotNull(_) => {}
-            Expr::IsNull(_) => {}
-            Expr::Negative(_) => {}
-            Expr::Between { .. } => {}
-            Expr::Case { .. } => {}
-            Expr::Cast { .. } => {}
-            Expr::TryCast { .. } => {}
-            Expr::Sort { .. } => {}
-            Expr::ScalarFunction { .. } => {}
-            Expr::ScalarUDF { .. } => {}
-            Expr::WindowFunction { .. } => {}
+            Expr::Not(_) => {
+                desc.push_str("Not-");
+            }
+            Expr::IsNotNull(_) => {
+                desc.push_str("IsNotNull-");
+            }
+            Expr::IsNull(_) => {
+                desc.push_str("IsNull-");
+            }
+            Expr::Negative(_) => {
+                desc.push_str("Negative-");
+            }
+            Expr::Between { negated, .. } => {
+                desc.push_str("Between-");
+                desc.push_str(&negated.to_string());
+            }
+            Expr::Case { .. } => {
+                desc.push_str("Case-");
+            }
+            Expr::Cast { data_type, .. } => {
+                desc.push_str("Cast-");
+                desc.push_str(&format!("{:?}", data_type));
+            }
+            Expr::TryCast { data_type, .. } => {
+                desc.push_str("TryCast-");
+                desc.push_str(&format!("{:?}", data_type));
+            }
+            Expr::Sort {
+                asc, nulls_first, ..
+            } => {
+                desc.push_str("Sort-");
+                desc.push_str(&format!("{}{}", asc, nulls_first));
+            }
+            Expr::ScalarFunction { fun, .. } => {
+                desc.push_str("ScalarFunction-");
+                desc.push_str(&fun.to_string());
+            }
+            Expr::ScalarUDF { fun, .. } => {
+                desc.push_str("ScalarUDF-");
+                desc.push_str(&fun.name);
+            }
+            Expr::WindowFunction {
+                fun, window_frame, ..
+            } => {
+                desc.push_str("WindowFunction-");
+                desc.push_str(&fun.to_string());
+                desc.push_str(&format!("{:?}", window_frame));
+            }
             Expr::AggregateFunction { fun, distinct, .. } => {
                 desc.push_str("AggregateFunction-");
                 desc.push_str(&fun.to_string());
                 desc.push_str(&distinct.to_string());
             }
-            Expr::AggregateUDF { .. } => {}
-            Expr::InList { .. } => {}
-            Expr::Wildcard => {}
+            Expr::AggregateUDF { fun, .. } => {
+                desc.push_str("AggregateUDF-");
+                desc.push_str(&fun.name);
+            }
+            Expr::InList { negated, .. } => {
+                desc.push_str("InList-");
+                desc.push_str(&negated.to_string());
+            }
+            Expr::Wildcard => {
+                desc.push_str("Wildcard-");
+            }
         }
 
         desc
@@ -387,6 +489,7 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
                 | Expr::Column(..)
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
+                | Expr::Sort { .. }
                 | Expr::Wildcard
         ) {
             self.id_array[idx].0 = self.series_number;
@@ -483,8 +586,8 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
         {
             return Ok(expr);
         }
-        self.max_series_number = *series_number;
 
+        self.max_series_number = *series_number;
         // step index, skip all sub-node (which has smaller series number).
         self.curr_index += 1;
         while self.curr_index < self.id_array.len()
@@ -494,7 +597,6 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
         }
 
         let expr_name = expr.name(self.schema)?;
-
         // Alias this `Column` expr to it original "expr name",
         // `projection_push_down` optimizer use "expr name" to eliminate useless
         // projections.
