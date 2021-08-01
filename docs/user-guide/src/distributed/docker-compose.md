@@ -24,7 +24,7 @@ demonstrates how to start a cluster using a single process that acts as both a s
 volume mounted into the container so that Ballista can access the host file system.
 
 ```yaml
-version: '2.2'
+version: "2.2"
 services:
   etcd:
     image: quay.io/coreos/etcd:v3.4.9
