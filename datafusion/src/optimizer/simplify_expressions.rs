@@ -255,28 +255,19 @@ fn simplify(expr: &Expr) -> Expr {
             expr,
             list,
             negated,
-        } if list.len() == 1 => {
-            let exp = (**expr).clone().eq(list[0].clone());
+        } if list.len() >= 1 && list.len() <= 2 => {
             if *negated {
-                exp.not()
+                list.iter()
+                    .skip(1)
+                    .fold((**expr).clone().not_eq(list[0].clone()), |acc, e| {
+                        acc.and((**expr).clone().not_eq(e.clone()))
+                    })
             } else {
-                exp
-            }
-        }
-        Expr::InList {
-            expr,
-            list,
-            negated,
-        } if list.len() == 2 => {
-            let e1 = (**expr).clone().eq(list[0].clone());
-            let e2 = (**expr).clone().eq(list[1].clone());
-
-            let exp = e1.or(e2);
-
-            if *negated {
-                exp.not()
-            } else {
-                exp
+                list.iter()
+                    .skip(1)
+                    .fold((**expr).clone().eq(list[0].clone()), |acc, e| {
+                        acc.or((**expr).clone().eq(e.clone()))
+                    })
             }
         }
         _ => expr.clone(),
@@ -430,6 +421,24 @@ mod tests {
     fn simplify_inlist() -> Result<()> {
         let expr = in_list(col("c"), vec![lit(1), lit(2)], false);
         let expected = col("c").eq(lit(1)).or(col("c").eq(lit(2)));
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_inlist_negated() -> Result<()> {
+        let expr = in_list(col("c"), vec![lit(1), lit(2)], true);
+        let expected = col("c").not_eq(lit(1)).and(col("c").not_eq(lit(2)));
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_inlist_single() -> Result<()> {
+        let expr = in_list(col("c"), vec![lit(1)], false);
+        let expected = col("c").eq(lit(1));
 
         assert_eq!(simplify(&expr), expected);
         Ok(())
