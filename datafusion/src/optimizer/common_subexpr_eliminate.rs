@@ -81,7 +81,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         LogicalPlan::Projection {
             expr,
             input,
-            schema: _,
+            schema,
         } => {
             let mut arrays = vec![];
             for e in expr {
@@ -91,7 +91,31 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 arrays.push(id_array);
             }
 
-            return optimize(input, execution_props);
+            let new_expr = expr
+                .iter()
+                .cloned()
+                .zip(arrays.into_iter())
+                .map(|(expr, id_array)| {
+                    replace_common_expr(
+                        expr,
+                        &id_array,
+                        &mut expr_set,
+                        &mut affected_id,
+                        schema,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let mut new_input = optimize(input, execution_props)?;
+            if !affected_id.is_empty() {
+                new_input = build_project_plan(new_input, affected_id, &expr_set)?;
+            }
+
+            return Ok(LogicalPlan::Projection {
+                expr: new_expr,
+                input: Arc::new(new_input),
+                schema: schema.clone(),
+            });
         }
         LogicalPlan::Filter { predicate, input } => {
             let data_type = predicate.get_type(input.schema())?;
@@ -143,7 +167,13 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 .cloned()
                 .zip(group_arrays.into_iter())
                 .map(|(expr, id_array)| {
-                    replace_common_expr(expr, &id_array, &mut expr_set, &mut affected_id)
+                    replace_common_expr(
+                        expr,
+                        &id_array,
+                        &mut expr_set,
+                        &mut affected_id,
+                        schema,
+                    )
                 })
                 .collect::<Result<Vec<_>>>()?;
             let new_aggr_expr = aggr_expr
@@ -151,7 +181,13 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 .cloned()
                 .zip(aggr_arrays.into_iter())
                 .map(|(expr, id_array)| {
-                    replace_common_expr(expr, &id_array, &mut expr_set, &mut affected_id)
+                    replace_common_expr(
+                        expr,
+                        &id_array,
+                        &mut expr_set,
+                        &mut affected_id,
+                        schema,
+                    )
                 })
                 .collect::<Result<Vec<_>>>()?;
 
@@ -182,6 +218,11 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
     Ok(plan.clone())
 }
 
+/// Build the "intermediate" projection plan that evaluates the extracted common expressions.
+///
+/// This projection plan will merge all fields in the `input.schema()` into its own schema.
+/// Redundant project fields are expected to be removed in other optimize phase (like
+/// `projection_push_down`).
 fn build_project_plan(
     input: LogicalPlan,
     affected_id: HashSet<Identifier>,
@@ -196,6 +237,11 @@ fn build_project_plan(
         fields.push(DFField::new(None, &id, data_type.clone(), true));
         project_exprs.push(expr.clone());
     }
+
+    fields.extend_from_slice(input.schema().fields());
+    input.schema().fields().iter().for_each(|field| {
+        project_exprs.push(col(field.name()));
+    });
 
     let mut schema = DFSchema::new(fields)?;
     schema.merge(input.schema());
@@ -340,6 +386,7 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
             Expr::Literal(..)
                 | Expr::Column(..)
                 | Expr::ScalarVariable(..)
+                | Expr::Alias(..)
                 | Expr::Wildcard
         ) {
             self.id_array[idx].0 = self.series_number;
@@ -354,7 +401,7 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
         self.visit_stack.push(VisitRecord::ExprItem(desc.clone()));
         let data_type = self.data_type.clone();
         self.expr_set
-            .entry(desc.clone())
+            .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
             .1 += 1;
         Ok(self)
@@ -388,6 +435,7 @@ struct CommonSubexprRewriter<'a> {
     id_array: &'a [(usize, Identifier)],
     /// Which identifier is replaced.
     affected_id: &'a mut HashSet<Identifier>,
+    schema: &'a DFSchema,
 
     /// the max series number we have rewritten. Other expression nodes
     /// with smaller series number is already replaced and shouldn't
@@ -422,12 +470,17 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        // This expr tree is finished.
         if self.curr_index >= self.id_array.len() {
             return Ok(expr);
         }
 
         let (series_number, id) = &self.id_array[self.curr_index];
-        if *series_number < self.max_series_number || id.is_empty() {
+        // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
+        if *series_number < self.max_series_number
+            || id.is_empty()
+            || self.expr_set.get(id).unwrap().1 <= 1
+        {
             return Ok(expr);
         }
         self.max_series_number = *series_number;
@@ -440,7 +493,12 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
             self.curr_index += 1;
         }
 
-        Ok(col(id))
+        let expr_name = expr.name(self.schema)?;
+
+        // Alias this `Column` expr to it original "expr name",
+        // `projection_push_down` optimizer use "expr name" to eliminate useless
+        // projections.
+        Ok(col(id).alias(&expr_name))
     }
 }
 
@@ -449,11 +507,13 @@ fn replace_common_expr(
     id_array: &[(usize, Identifier)],
     expr_set: &mut ExprSet,
     affected_id: &mut HashSet<Identifier>,
+    schema: &DFSchema,
 ) -> Result<Expr> {
     expr.rewrite(&mut CommonSubexprRewriter {
         expr_set,
         id_array,
         affected_id,
+        schema,
         max_series_number: 0,
         curr_index: 0,
     })
@@ -480,7 +540,9 @@ mod test {
         //  select
         //      sum(a * (1 - b)),
         //      sum(a * (1 - b) * (1 + c))
-        //  from T
+        //  from T;
+        //
+        // The manual assembled logical plan don't contains the outermost `Projection`.
 
         let table_scan = test_table_scan()?;
 
@@ -506,8 +568,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a), SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a Multiply Int32(1) Plus #test.c)]]\
-        \n  Projection: #test.a Multiply Int32(1) Minus #test.b\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a Multiply Int32(1) Minus test.b), SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a Multiply Int32(1) Minus test.b Multiply Int32(1) Plus #test.c)]]\
+        \n  Projection: #test.a Multiply Int32(1) Minus #test.b, #a, #b, #c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
