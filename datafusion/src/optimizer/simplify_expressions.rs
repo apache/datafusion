@@ -251,6 +251,22 @@ fn simplify(expr: &Expr) -> Expr {
             op: *op,
             right: Box::new(simplify(right)),
         },
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } if list.len() == 2 => {
+            let e1 = (**expr).clone().eq(list[0].clone());
+            let e2 = (**expr).clone().eq(list[1].clone());
+
+            let exp = e1.or(e2);
+
+            if *negated {
+                exp.not()
+            } else {
+                exp
+            }
+        }
         _ => expr.clone(),
     }
 }
@@ -293,7 +309,9 @@ impl SimplifyExpressions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::{and, binary_expr, col, lit, Expr, LogicalPlanBuilder};
+    use crate::logical_plan::{
+        and, binary_expr, col, in_list, lit, Expr, LogicalPlanBuilder,
+    };
     use crate::test::*;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
@@ -391,6 +409,15 @@ mod tests {
     fn test_simplify_divide_by_same() -> Result<()> {
         let expr = binary_expr(col("c"), Operator::Divide, col("c"));
         let expected = lit(1);
+
+        assert_eq!(simplify(&expr), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_inlist() -> Result<()> {
+        let expr = in_list(col("c"), vec![lit(1), lit(2)], false);
+        let expected = col("c").eq(lit(1)).or(col("c").eq(lit(2)));
 
         assert_eq!(simplify(&expr), expected);
         Ok(())
