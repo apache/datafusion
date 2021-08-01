@@ -22,6 +22,7 @@ use std::{sync::Arc, time::Duration};
 
 use datafusion::physical_plan::ExecutionPlan;
 use log::{debug, error, info, warn};
+use tokio::time::Instant;
 use tonic::transport::Channel;
 
 use ballista_core::serde::protobuf::ExecutorRegistration;
@@ -56,13 +57,21 @@ pub async fn poll_loop(
         // to avoid going in sleep mode between polling
         let mut active_job = false;
 
+        // wait 30 seconds until we have available task slots
+        let begin = Instant::now();
+        let max_wait_time = 30;
+        while available_tasks_slots.load(Ordering::SeqCst) == 0
+            && begin.elapsed().as_secs() <= max_wait_time
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
         let poll_work_result: anyhow::Result<
             tonic::Response<PollWorkResult>,
             tonic::Status,
         > = scheduler
             .poll_work(PollWorkParams {
                 metadata: Some(executor_meta.clone()),
-                can_accept_task: available_tasks_slots.load(Ordering::SeqCst) > 0,
+                can_accept_task: true,
                 task_status,
             })
             .await;
