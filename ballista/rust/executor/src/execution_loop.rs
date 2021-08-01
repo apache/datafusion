@@ -71,7 +71,7 @@ pub async fn poll_loop(
         > = scheduler
             .poll_work(PollWorkParams {
                 metadata: Some(executor_meta.clone()),
-                can_accept_task: true,
+                can_accept_task: available_tasks_slots.load(Ordering::SeqCst) > 0,
                 task_status,
             })
             .await;
