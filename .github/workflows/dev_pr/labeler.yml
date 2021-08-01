@@ -29,3 +29,14 @@ python:
 
 sql:
   - datafusion/src/sql/**/*
+
+development-process:
+  - dev/**.*
+  - .github/**.*
+  - ci/**.*
+  - .asf.yaml
+
+documentation:
+  - docs/**.*
+  - README.md
+  - DEVELOPERS.md
