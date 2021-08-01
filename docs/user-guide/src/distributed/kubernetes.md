@@ -129,16 +129,16 @@ spec:
         ballista-cluster: ballista
     spec:
       containers:
-      - name: ballista-scheduler
-        image: <your-image>
-        command: ["/scheduler"]
-        args: ["--bind-port=50050"]
-        ports:
-          - containerPort: 50050
-            name: flight
-        volumeMounts:
-          - mountPath: /mnt
-            name: data
+        - name: ballista-scheduler
+          image: <your-image>
+          command: ["/scheduler"]
+          args: ["--bind-port=50050"]
+          ports:
+            - containerPort: 50050
+              name: flight
+          volumeMounts:
+            - mountPath: /mnt
+              name: data
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -245,10 +245,10 @@ spec:
   minReplicaCount: 0
   maxReplicaCount: 5
   triggers:
-  - type: external
-    metadata:
-      # Change this DNS if the scheduler isn't deployed in the "default" namespace
-      scalerAddress: ballista-scheduler.default.svc.cluster.local:50050
+    - type: external
+      metadata:
+        # Change this DNS if the scheduler isn't deployed in the "default" namespace
+        scalerAddress: ballista-scheduler.default.svc.cluster.local:50050
 ```
 
 And then deploy it into the cluster:
