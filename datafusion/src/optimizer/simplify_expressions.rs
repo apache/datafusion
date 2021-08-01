@@ -255,6 +255,18 @@ fn simplify(expr: &Expr) -> Expr {
             expr,
             list,
             negated,
+        } if list.len() == 1 => {
+            let exp = (**expr).clone().eq(list[0].clone());
+            if *negated {
+                exp.not()
+            } else {
+                exp
+            }
+        }
+        Expr::InList {
+            expr,
+            list,
+            negated,
         } if list.len() == 2 => {
             let e1 = (**expr).clone().eq(list[0].clone());
             let e2 = (**expr).clone().eq(list[1].clone());
