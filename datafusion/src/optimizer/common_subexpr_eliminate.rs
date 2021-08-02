@@ -254,12 +254,12 @@ fn build_project_plan(
         let (expr, _, data_type) = expr_set.get(&id).unwrap();
         // todo: check `nullable`
         fields.push(DFField::new(None, &id, data_type.clone(), true));
-        project_exprs.push(expr.clone());
+        project_exprs.push(expr.clone().alias(&id));
     }
 
     fields.extend_from_slice(input.schema().fields());
     input.schema().fields().iter().for_each(|field| {
-        project_exprs.push(col(field.name()));
+        project_exprs.push(col(&field.qualified_name()));
     });
 
     let mut schema = DFSchema::new(fields)?;
@@ -637,7 +637,7 @@ mod test {
     }
 
     #[test]
-    fn dev_driver_tpch_q1_simplified() -> Result<()> {
+    fn tpch_q1_simplified() -> Result<()> {
         // SQL:
         //  select
         //      sum(a * (1 - b)),
