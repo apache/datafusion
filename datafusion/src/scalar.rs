@@ -28,7 +28,7 @@ use arrow::{
     },
 };
 use ordered_float::OrderedFloat;
-use std::convert::Infallible;
+use std::convert::{Infallible, TryInto};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
@@ -796,6 +796,11 @@ impl ScalarValue {
 
     /// Converts a value in `array` at `index` into a ScalarValue
     pub fn try_from_array(array: &ArrayRef, index: usize) -> Result<Self> {
+        // handle NULL value
+        if !array.is_valid(index) {
+            return array.data_type().try_into();
+        }
+
         Ok(match array.data_type() {
             DataType::Boolean => typed_cast!(array, index, BooleanArray, Boolean),
             DataType::Float64 => typed_cast!(array, index, Float64Array, Float64),
@@ -897,6 +902,7 @@ impl ScalarValue {
         let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
 
         // look up the index in the values dictionary
+        // (note validity was previously checked in `try_from_array`)
         let keys_col = dict_array.keys();
         let values_index = keys_col.value(index).to_usize().ok_or_else(|| {
             DataFusionError::Internal(format!(
@@ -1132,6 +1138,7 @@ impl_try_from!(Boolean, bool);
 impl TryFrom<&DataType> for ScalarValue {
     type Error = DataFusionError;
 
+    /// Create a Null instance of ScalarValue for this datatype
     fn try_from(datatype: &DataType) -> Result<Self> {
         Ok(match datatype {
             DataType::Boolean => ScalarValue::Boolean(None),
@@ -1161,12 +1168,15 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 ScalarValue::TimestampNanosecond(None)
             }
+            DataType::Dictionary(_index_type, value_type) => {
+                value_type.as_ref().try_into()?
+            }
             DataType::List(ref nested_type) => {
                 ScalarValue::List(None, Box::new(nested_type.data_type().clone()))
             }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Can't create a scalar of type \"{:?}\"",
+                    "Can't create a scalar from data_type \"{:?}\"",
                     datatype
                 )))
             }
@@ -1533,6 +1543,29 @@ mod tests {
         let result = ScalarValue::iter_to_array(scalars.into_iter()).unwrap_err();
         assert!(result.to_string().contains("Inconsistent types in ScalarValue::iter_to_array. Expected Boolean, got Int32(5)"),
                 "{}", result);
+    }
+
+    #[test]
+    fn scalar_try_from_array_null() {
+        let array = vec![Some(33), None].into_iter().collect::<Int64Array>();
+        let array: ArrayRef = Arc::new(array);
+
+        assert_eq!(
+            ScalarValue::Int64(Some(33)),
+            ScalarValue::try_from_array(&array, 0).unwrap()
+        );
+        assert_eq!(
+            ScalarValue::Int64(None),
+            ScalarValue::try_from_array(&array, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn scalar_try_from_dict_datatype() {
+        let data_type =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+        let data_type = &data_type;
+        assert_eq!(ScalarValue::Utf8(None), data_type.try_into().unwrap())
     }
 
     #[test]
