@@ -395,7 +395,10 @@ fn group_aggregate_batch(
                 // We can safely unwrap here as we checked we can create an accumulator before
                 let accumulator_set = create_accumulators(aggr_expr).unwrap();
                 batch_keys.push(key.clone());
-                let _ = create_group_by_values(&group_values, row, &mut group_by_values);
+                // Note it would be nice to make this a real error (rather than panic)
+                // but it is better than silently ignoring the issue and getting wrong results
+                create_group_by_values(&group_values, row, &mut group_by_values)
+                    .expect("can not create group by value");
                 (
                     key.clone(),
                     (group_by_values.clone(), accumulator_set, vec![row as u32]),
@@ -508,7 +511,9 @@ fn dictionary_create_key_for_col<K: ArrowDictionaryKeyType>(
 }
 
 /// Appends a sequence of [u8] bytes for the value in `col[row]` to
-/// `vec` to be used as a key into the hash map
+/// `vec` to be used as a key into the hash map.
+///
+/// NOTE: This function does not check col.is_valid(). Caller must do so
 fn create_key_for_col(col: &ArrayRef, row: usize, vec: &mut Vec<u8>) -> Result<()> {
     match col.data_type() {
         DataType::Boolean => {
@@ -640,6 +645,50 @@ fn create_key_for_col(col: &ArrayRef, row: usize, vec: &mut Vec<u8>) -> Result<(
 }
 
 /// Create a key `Vec<u8>` that is used as key for the hashmap
+///
+/// This looks like
+/// [null_byte][col_value_bytes][null_byte][col_value_bytes]
+///
+/// Note that relatively uncommon patterns (e.g. not 0x00) are chosen
+/// for the null_byte to make debugging easier. The actual values are
+/// arbitrary.
+///
+/// For a NULL value in a column, the key looks like
+/// [0xFE]
+///
+/// For a Non-NULL value in a column, this looks like:
+/// [0xFF][byte representation of column value]
+///
+/// Example of a key with no NULL values:
+/// ```text
+///                        0xFF byte at the start of each column
+///                           signifies the value is non-null
+///                                          │
+///
+///                      ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┴ ─ ─ ─ ─ ─ ─ ─ ┐
+///
+///                      │        string len                 │  0x1234
+/// {                    ▼       (as usize le)      "foo"    ▼(as u16 le)
+///   k1: "foo"        ╔ ═┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──╦ ═┌──┬──┐
+///   k2: 0x1234u16     FF║03│00│00│00│00│00│00│00│"f│"o│"o│FF║34│12│
+/// }                  ╚ ═└──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──╩ ═└──┴──┘
+///                     0  1  2  3  4  5  6  7  8  9  10 11 12 13 14
+/// ```
+///
+///  Example of a key with NULL values:
+///
+///```text
+///                         0xFE byte at the start of k1 column
+///                     ┌ ─     signifies the value is NULL
+///
+///                     └ ┐
+///                              0x1234
+/// {                     ▼    (as u16 le)
+///   k1: NULL          ╔ ═╔ ═┌──┬──┐
+///   k2: 0x1234u16      FE║FF║12│34│
+/// }                   ╚ ═╚ ═└──┴──┘
+///                       0  1  2  3
+///```
 pub(crate) fn create_key(
     group_by_keys: &[ArrayRef],
     row: usize,
@@ -647,7 +696,12 @@ pub(crate) fn create_key(
 ) -> Result<()> {
     vec.clear();
     for col in group_by_keys {
-        create_key_for_col(col, row, vec)?
+        if !col.is_valid(row) {
+            vec.push(0xFE);
+        } else {
+            vec.push(0xFF);
+            create_key_for_col(col, row, vec)?
+        }
     }
     Ok(())
 }
