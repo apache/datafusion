@@ -292,9 +292,11 @@ fn create_hashes_dictionary<K: ArrowDictionaryKeyType>(
     Ok(())
 }
 
-/// Creates hash values for every row, based on the values in the columns
+/// Creates hash values for every row, based on the values in the
+/// columns.
 ///
-/// This implements so-called "vectorized hashing"
+/// The number of rows to hash is determined by `hashes_buffer.len()`.
+/// `hashes_buffer` should be pre-sized appropriately
 pub fn create_hashes<'a>(
     arrays: &[ArrayRef],
     random_state: &RandomState,
