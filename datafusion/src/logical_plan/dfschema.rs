@@ -161,11 +161,10 @@ impl DFSchema {
                 // current field is qualified and not shared between relations, compare both
                 // qualifer and name.
                 (Some(q), Some(field_q)) => {
-                    if field_q.contains('.') {
-                        field_q.ends_with(q) && field.name() == name
-                    } else {
-                        q == field_q && field.name() == name
-                    }
+                    field.name() == name
+                        && (q == field_q
+                            || (field_q.contains('.')
+                                && field_q.ends_with(&format!(".{}", q))))
                 }
                 // field to lookup is qualified but current field is unqualified.
                 (Some(_), None) => false,
