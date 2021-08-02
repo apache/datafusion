@@ -25,13 +25,14 @@ use std::time::Instant;
 use std::{any::Any, vec};
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, SQLMetric};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use super::{hash_join::create_hashes, RecordBatchStream, SendableRecordBatchStream};
+use super::{RecordBatchStream, SendableRecordBatchStream};
 use async_trait::async_trait;
 
 use futures::stream::Stream;

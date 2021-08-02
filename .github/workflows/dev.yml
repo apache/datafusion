@@ -64,8 +64,8 @@ jobs:
           # if you encounter error, try rerun the command below with --write instead of --check
           # and commit the changes
           npx prettier@2.3.2 --write \
-            {ballista,datafusion,datafusion-examples,docs,python}/**/*.md \
+            '{ballista,datafusion,datafusion-examples,docs,python}/**/*.md' \
             README.md \
             DEVELOPERS.md \
-            ballista/**/*.{ts,tsx}
+            'ballista/**/*.{ts,tsx}'
           git diff --exit-code
