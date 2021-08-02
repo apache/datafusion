@@ -101,7 +101,7 @@ impl ExecutionContext {
 
     #[args(
         has_header = "true",
-        delimiter = "b\",\"",
+        delimiter = "\",\"",
         schema_infer_max_records = "1000",
         file_extension = "\".csv\""
     )]
@@ -110,17 +110,17 @@ impl ExecutionContext {
         name: &str,
         path: &str,
         has_header: bool,
-        delimiter: &[u8],
+        delimiter: &str,
         schema_infer_max_records: usize,
         file_extension: &str,
     ) -> PyResult<()> {
-        let delimiter = match delimiter.split_first() {
-            Some((first, rest)) if rest.is_empty() => *first,
-            _ => return Err(PyValueError::new_err("Delimiter must be a single character")),
-        };
+        let delimiter = delimiter.as_bytes();
+        if delimiter.len() != 1 {
+            return Err(PyValueError::new_err("Delimiter must be a single character"))
+        }
         let options = CsvReadOptions::new()
             .has_header(has_header)
-            .delimiter(delimiter)
+            .delimiter(delimiter[0])
             .schema_infer_max_records(schema_infer_max_records)
             .file_extension(file_extension);
         errors::wrap(self.ctx.register_csv(name, path, options))?;

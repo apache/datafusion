@@ -40,7 +40,7 @@ def test_register_csv(ctx, tmp_path):
         "csv2",
         path,
         has_header=True,
-        delimiter=b",",
+        delimiter=",",
         schema_infer_max_records=10,
     )
     assert ctx.tables() == {"csv", "csv2"}
@@ -53,7 +53,7 @@ def test_register_csv(ctx, tmp_path):
     with pytest.raises(
         ValueError, match="Delimiter must be a single character"
     ):
-        ctx.register_csv("csv3", path, delimiter=b"wrong")
+        ctx.register_csv("csv3", path, delimiter="wrong")
 
 
 def test_register_parquet(ctx, tmp_path):
