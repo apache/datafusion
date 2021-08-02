@@ -35,11 +35,11 @@ async-trait = "0.1.36"
 futures = "0.3"
 hashbrown = "0.11"
 log = "0.4"
-prost = "0.7"
+prost = "0.8"
 serde = {version = "1", features = ["derive"]}
 sqlparser = "0.9.0"
 tokio = "1.0"
-tonic = "0.4"
+tonic = "0.5"
 uuid = { version = "0.8", features = ["v4"] }
 
 arrow-flight = { version = "5.0"  }
@@ -50,4 +50,4 @@ datafusion = { path = "../../../datafusion" }
 tempfile = "3"
 
 [build-dependencies]
-tonic-build = { version = "0.4" }
+tonic-build = { version = "0.5" }
