@@ -31,9 +31,33 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
+use arrow::array::*;
+use arrow::buffer::{Buffer, MutableBuffer};
+
+macro_rules! compare_op_scalar {
+    ($left: expr, $right:expr, $op:expr) => {{
+        let null_bit_buffer = $left.data().null_buffer().cloned();
+
+        let comparison =
+            (0..$left.len()).map(|i| unsafe { $op($left.value_unchecked(i), $right) });
+        // same as $left.len()
+        let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
+
+        let data = ArrayData::new(
+            DataType::Boolean,
+            $left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![Buffer::from(buffer)],
+            vec![],
+        );
+        Ok(BooleanArray::from(data))
+    }};
+}
 
 /// InList
 #[derive(Debug)]
@@ -97,6 +121,20 @@ macro_rules! make_contains {
                 .collect::<BooleanArray>(),
         )))
     }};
+}
+
+fn values_in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
+    array: &GenericStringArray<OffsetSize>,
+    values: &[&str],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(array, values, |x, v: &[&str]| v.contains(&x))
+}
+
+fn values_not_in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
+    array: &GenericStringArray<OffsetSize>,
+    values: &[&str],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(array, values, |x, v: &[&str]| !v.contains(&x))
 }
 
 impl InListExpr {
@@ -164,33 +202,39 @@ impl InListExpr {
             })
             .collect::<Vec<&str>>();
 
-        Ok(ColumnarValue::Array(Arc::new(
-            array
-                .iter()
-                .map(|x| {
-                    let contains = x.map(|x| values.contains(&x));
-                    match contains {
-                        Some(true) => {
-                            if negated {
-                                Some(false)
-                            } else {
-                                Some(true)
-                            }
-                        }
-                        Some(false) => {
-                            if contains_null {
-                                None
-                            } else if negated {
-                                Some(true)
-                            } else {
-                                Some(false)
-                            }
-                        }
-                        None => None,
-                    }
-                })
-                .collect::<BooleanArray>(),
-        )))
+        if negated {
+            if contains_null {
+                Ok(ColumnarValue::Array(Arc::new(
+                    array
+                        .iter()
+                        .map(|x| match x.map(|v| !values.contains(&v)) {
+                            Some(true) => None,
+                            x => x,
+                        })
+                        .collect::<BooleanArray>(),
+                )))
+            } else {
+                Ok(ColumnarValue::Array(Arc::new(values_not_in_list_utf8(
+                    array, &values,
+                )?)))
+            }
+        } else {
+            if contains_null {
+                Ok(ColumnarValue::Array(Arc::new(
+                    array
+                        .iter()
+                        .map(|x| match x.map(|v| values.contains(&v)) {
+                            Some(false) => None,
+                            x => x,
+                        })
+                        .collect::<BooleanArray>(),
+                )))
+            } else {
+                Ok(ColumnarValue::Array(Arc::new(values_in_list_utf8(
+                    array, &values,
+                )?)))
+            }
+        }
     }
 }
 
@@ -270,9 +314,10 @@ impl PhysicalExpr for InListExpr {
             DataType::LargeUtf8 => {
                 self.compare_utf8::<i64>(array, list_values, self.negated)
             }
-            datatype => {
-                unimplemented!("InList does not support datatype {:?}.", datatype)
-            }
+            datatype => Result::Err(DataFusionError::NotImplemented(format!(
+                "InList does not support datatype {:?}.",
+                datatype
+            ))),
         }
     }
 }
