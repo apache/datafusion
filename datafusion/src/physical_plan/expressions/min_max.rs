@@ -28,10 +28,10 @@ use arrow::compute;
 use arrow::datatypes::{DataType, TimeUnit};
 use arrow::{
     array::{
-        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Date32Array, Date64Array, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::Field,
 };
@@ -158,6 +158,8 @@ macro_rules! min_max_batch {
                 TimestampNanosecond,
                 $OP
             ),
+            DataType::Date32 => typed_min_max_batch!($VALUES, Date32Array, Date32, $OP),
+            DataType::Date64 => typed_min_max_batch!($VALUES, Date64Array, Date64, $OP),
             other => {
                 // This should have been handled before
                 return Err(DataFusionError::Internal(format!(
@@ -279,6 +281,18 @@ macro_rules! min_max {
                 ScalarValue::TimestampNanosecond(rhs),
             ) => {
                 typed_min_max!(lhs, rhs, TimestampNanosecond, $OP)
+            }
+            (
+                ScalarValue::Date32(lhs),
+                ScalarValue::Date32(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Date32, $OP)
+            }
+             (
+                ScalarValue::Date64(lhs),
+                ScalarValue::Date64(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Date64, $OP)
             }
             e => {
                 return Err(DataFusionError::Internal(format!(
@@ -666,6 +680,54 @@ mod tests {
             Min,
             ScalarValue::from(1_f64),
             DataType::Float64
+        )
+    }
+
+    #[test]
+    fn min_date32() -> Result<()> {
+        let a: ArrayRef = Arc::new(Date32Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Date32,
+            Min,
+            ScalarValue::Date32(Some(1)),
+            DataType::Date32
+        )
+    }
+
+    #[test]
+    fn min_date64() -> Result<()> {
+        let a: ArrayRef = Arc::new(Date64Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Date64,
+            Min,
+            ScalarValue::Date64(Some(1)),
+            DataType::Date64
+        )
+    }
+
+    #[test]
+    fn max_date32() -> Result<()> {
+        let a: ArrayRef = Arc::new(Date32Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Date32,
+            Max,
+            ScalarValue::Date32(Some(5)),
+            DataType::Date32
+        )
+    }
+
+    #[test]
+    fn max_date64() -> Result<()> {
+        let a: ArrayRef = Arc::new(Date64Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Date64,
+            Max,
+            ScalarValue::Date64(Some(5)),
+            DataType::Date64
         )
     }
 }
