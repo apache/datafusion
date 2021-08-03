@@ -289,108 +289,59 @@ impl LogicalPlanBuilder {
                 .map(|(l, r)| {
                     let l = l.into();
                     let r = r.into();
+
                     let lr = l.relation.clone();
                     let rr = r.relation.clone();
 
                     match (lr, rr) {
                         (Some(lr), Some(rr)) => {
-                            let l_is_left =
-                                self.plan.all_schemas().iter().any(|schema| {
-                                    schema.fields().iter().any(|field| {
-                                        field.qualifier().unwrap() == &lr
-                                            && field.name() == &l.name
-                                    })
-                                });
-                            let l_is_right = right.all_schemas().iter().any(|schema| {
-                                schema.fields().iter().any(|field| {
-                                    field.qualifier().unwrap() == &lr
-                                        && field.name() == &l.name
-                                })
-                            });
-                            let r_is_left =
-                                self.plan.all_schemas().iter().any(|schema| {
-                                    schema.fields().iter().any(|field| {
-                                        field.qualifier().unwrap() == &rr
-                                            && field.name() == &r.name
-                                    })
-                                });
-                            let r_is_right = right.all_schemas().iter().any(|schema| {
-                                schema.fields().iter().any(|field| {
-                                    field.qualifier().unwrap() == &rr
-                                        && field.name() == &r.name
-                                })
-                            });
+                            let l_is_left = self
+                                .plan
+                                .schema()
+                                .field_with_qualified_name(&lr, &l.name);
+                            let l_is_right =
+                                right.schema().field_with_qualified_name(&lr, &l.name);
+                            let r_is_left = self
+                                .plan
+                                .schema()
+                                .field_with_qualified_name(&rr, &r.name);
+                            let r_is_right =
+                                right.schema().field_with_qualified_name(&rr, &r.name);
+
                             match (l_is_left, l_is_right, r_is_left, r_is_right) {
-                                (true, _, _, true) => (Ok(l), Ok(r)),
-                                (_, true, true, _) => (Ok(r), Ok(l)),
-                                (_, _, _, _) => (
-                                    Err(DataFusionError::Plan(format!(
-                                        "Column {} not found in provided schemas",
-                                        l
-                                    ))),
-                                    Err(DataFusionError::Plan(format!(
-                                        "Column {} not found in provided schemas",
-                                        r
-                                    ))),
-                                ),
+                                (_, Ok(_), Ok(_), _) => (Ok(r), Ok(l)),
+                                (Ok(_), _, _, Ok(_)) => (Ok(l), Ok(r)),
+                                (_, _, _, _) => {
+                                    (l.normalize(&self.plan), r.normalize(right))
+                                }
                             }
                         }
                         (Some(lr), None) => {
-                            let l_is_left =
-                                self.plan.all_schemas().iter().any(|schema| {
-                                    schema.fields().iter().any(|field| {
-                                        field.qualifier().unwrap() == &lr
-                                            && field.name() == &l.name
-                                    })
-                                });
-                            let l_is_right = right.all_schemas().iter().any(|schema| {
-                                schema.fields().iter().any(|field| {
-                                    field.qualifier().unwrap() == &lr
-                                        && field.name() == &l.name
-                                })
-                            });
+                            let l_is_left = self
+                                .plan
+                                .schema()
+                                .field_with_qualified_name(&lr, &l.name);
+                            let l_is_right =
+                                right.schema().field_with_qualified_name(&lr, &l.name);
+
                             match (l_is_left, l_is_right) {
-                                (true, _) => (Ok(l), r.normalize(right)),
-                                (_, true) => (r.normalize(&self.plan), Ok(l)),
-                                (_, _) => (
-                                    Err(DataFusionError::Plan(format!(
-                                        "Column {} not found in provided schemas",
-                                        l
-                                    ))),
-                                    Err(DataFusionError::Plan(format!(
-                                        "Column {} not found in provided schemas",
-                                        r
-                                    ))),
-                                ),
+                                (Ok(_), _) => (Ok(l), r.normalize(right)),
+                                (_, Ok(_)) => (r.normalize(&self.plan), Ok(l)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
                             }
                         }
                         (None, Some(rr)) => {
-                            let r_is_left =
-                                self.plan.all_schemas().iter().any(|schema| {
-                                    schema.fields().iter().any(|field| {
-                                        field.qualifier().unwrap() == &rr
-                                            && field.name() == &r.name
-                                    })
-                                });
-                            let r_is_right = right.all_schemas().iter().any(|schema| {
-                                schema.fields().iter().any(|field| {
-                                    field.qualifier().unwrap() == &rr
-                                        && field.name() == &r.name
-                                })
-                            });
+                            let r_is_left = self
+                                .plan
+                                .schema()
+                                .field_with_qualified_name(&rr, &r.name);
+                            let r_is_right =
+                                right.schema().field_with_qualified_name(&rr, &r.name);
+
                             match (r_is_left, r_is_right) {
-                                (true, _) => (Ok(r), l.normalize(right)),
-                                (_, true) => (l.normalize(&self.plan), Ok(r)),
-                                (_, _) => (
-                                    Err(DataFusionError::Plan(format!(
-                                        "Column {} not found in provided schemas",
-                                        l
-                                    ))),
-                                    Err(DataFusionError::Plan(format!(
-                                        "Column {} not found in provided schemas",
-                                        r
-                                    ))),
-                                ),
+                                (Ok(_), _) => (Ok(r), l.normalize(right)),
+                                (_, Ok(_)) => (l.normalize(&self.plan), Ok(r)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
                             }
                         }
                         (None, None) => {
