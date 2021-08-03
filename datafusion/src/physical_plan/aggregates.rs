@@ -188,10 +188,7 @@ static TIMESTAMPS: &[DataType] = &[
     DataType::Timestamp(TimeUnit::Nanosecond, None),
 ];
 
-static DATES: &[DataType] = &[
-    DataType::Date32,
-    DataType::Date64,
-];
+static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 
 /// the signatures supported by the function `fun`.
 pub fn signature(fun: &AggregateFunction) -> Signature {
