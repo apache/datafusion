@@ -25,16 +25,14 @@ use datafusion::prelude::ExecutionContext;
 use datafusion::{datasource::MemTable, error::Result};
 use futures::executor::block_on;
 use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 async fn query(ctx: &mut ExecutionContext, sql: &str) {
+    let rt = Runtime::new().unwrap();
+
     // execute the query
     let df = ctx.sql(sql).unwrap();
-    let results = df.collect().await.unwrap();
-
-    // display the relation
-    for _batch in results {
-        // println!("num_rows: {}", _batch.num_rows());
-    }
+    criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
 
 fn create_context(array_len: usize, batch_size: usize) -> Result<ExecutionContext> {
@@ -82,6 +80,16 @@ fn criterion_benchmark(c: &mut Criterion) {
             block_on(query(
                 &mut ctx,
                 "select f32, f64 from t where f32 >= 250 and f64 > 250",
+            ))
+        })
+    });
+
+    c.bench_function("filter_scalar in list", |b| {
+        let mut ctx = create_context(array_len, batch_size).unwrap();
+        b.iter(|| {
+            block_on(query(
+                &mut ctx,
+                "select f32, f64 from t where f32 in (10, 20, 30, 40)",
             ))
         })
     });
