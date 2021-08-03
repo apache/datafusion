@@ -162,9 +162,7 @@ impl DFSchema {
                 // qualifer and name.
                 (Some(q), Some(field_q)) => {
                     field.name() == name
-                        && (q == field_q
-                            || (field_q.contains('.')
-                                && field_q.ends_with(&format!(".{}", q))))
+                        && (q == field_q || field_q.ends_with(&format!(".{}", q)))
                 }
                 // field to lookup is qualified but current field is unqualified.
                 (Some(_), None) => false,

@@ -942,9 +942,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .find(|field| match field.qualifier() {
                             Some(field_q) => {
                                 field.name() == &col.name
-                                    && q != field_q
-                                    && (field_q.contains('.')
-                                        && field_q.ends_with(&format!(".{}", q)))
+                                    && field_q.ends_with(&format!(".{}", q))
                             }
                             _ => false,
                         }) {
