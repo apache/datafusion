@@ -26,6 +26,7 @@ use arrow::array::{
     Int64Array, Int8Array, StringOffsetSizeTrait, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
 };
+use arrow::datatypes::ArrowPrimitiveType;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -121,6 +122,90 @@ macro_rules! make_contains {
                 .collect::<BooleanArray>(),
         )))
     }};
+}
+
+macro_rules! make_contains_primitive {
+    ($ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr, $SCALAR_VALUE:ident, $ARRAY_TYPE:ident) => {{
+        let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
+
+        let mut contains_null = false;
+        let values = $LIST_VALUES
+            .iter()
+            .flat_map(|expr| match expr {
+                ColumnarValue::Scalar(s) => match s {
+                    ScalarValue::$SCALAR_VALUE(Some(v)) => Some(*v),
+                    ScalarValue::$SCALAR_VALUE(None) => {
+                        contains_null = true;
+                        None
+                    }
+                    ScalarValue::Utf8(None) => {
+                        contains_null = true;
+                        None
+                    }
+                    datatype => unimplemented!("Unexpected type {} for InList", datatype),
+                },
+                ColumnarValue::Array(_) => {
+                    unimplemented!("InList does not yet support nested columns.")
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if $NEGATED {
+            if contains_null {
+                Ok(ColumnarValue::Array(Arc::new(
+                    array
+                        .iter()
+                        .map(|x| match x.map(|v| !values.contains(&v)) {
+                            Some(true) => None,
+                            x => x,
+                        })
+                        .collect::<BooleanArray>(),
+                )))
+            } else {
+                Ok(ColumnarValue::Array(Arc::new(
+                    values_not_in_list_primitive(array, &values)?,
+                )))
+            }
+        } else {
+            if contains_null {
+                Ok(ColumnarValue::Array(Arc::new(
+                    array
+                        .iter()
+                        .map(|x| match x.map(|v| values.contains(&v)) {
+                            Some(false) => None,
+                            x => x,
+                        })
+                        .collect::<BooleanArray>(),
+                )))
+            } else {
+                Ok(ColumnarValue::Array(Arc::new(values_in_list_primitive(
+                    array, &values,
+                )?)))
+            }
+        }
+    }};
+}
+
+fn values_in_list_primitive<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    values: &[<T as ArrowPrimitiveType>::Native],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(
+        array,
+        values,
+        |x, v: &[<T as ArrowPrimitiveType>::Native]| v.contains(&x)
+    )
+}
+
+fn values_not_in_list_primitive<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    values: &[<T as ArrowPrimitiveType>::Native],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(
+        array,
+        values,
+        |x, v: &[<T as ArrowPrimitiveType>::Native]| !v.contains(&x)
+    )
 }
 
 fn values_in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
@@ -278,16 +363,40 @@ impl PhysicalExpr for InListExpr {
 
         match value_data_type {
             DataType::Float32 => {
-                make_contains!(array, list_values, self.negated, Float32, Float32Array)
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Float32,
+                    Float32Array
+                )
             }
             DataType::Float64 => {
-                make_contains!(array, list_values, self.negated, Float64, Float64Array)
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Float64,
+                    Float64Array
+                )
             }
             DataType::Int16 => {
-                make_contains!(array, list_values, self.negated, Int16, Int16Array)
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Int16,
+                    Int16Array
+                )
             }
             DataType::Int32 => {
-                make_contains!(array, list_values, self.negated, Int32, Int32Array)
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Int32,
+                    Int32Array
+                )
             }
             DataType::Int64 => {
                 make_contains!(array, list_values, self.negated, Int64, Int64Array)
@@ -296,16 +405,40 @@ impl PhysicalExpr for InListExpr {
                 make_contains!(array, list_values, self.negated, Int8, Int8Array)
             }
             DataType::UInt16 => {
-                make_contains!(array, list_values, self.negated, UInt16, UInt16Array)
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt16,
+                    UInt16Array
+                )
             }
             DataType::UInt32 => {
-                make_contains!(array, list_values, self.negated, UInt32, UInt32Array)
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt32,
+                    UInt32Array
+                )
             }
             DataType::UInt64 => {
-                make_contains!(array, list_values, self.negated, UInt64, UInt64Array)
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt64,
+                    UInt64Array
+                )
             }
             DataType::UInt8 => {
-                make_contains!(array, list_values, self.negated, UInt8, UInt8Array)
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    UInt8,
+                    UInt8Array
+                )
             }
             DataType::Boolean => {
                 make_contains!(array, list_values, self.negated, Boolean, BooleanArray)
