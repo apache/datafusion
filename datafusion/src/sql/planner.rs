@@ -926,14 +926,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a relational expression from a SQL expression
     pub fn sql_to_rex(&self, sql: &SQLExpr, schema: &DFSchema) -> Result<Expr> {
         let mut expr = self.sql_expr_to_logical_expr(sql, schema)?;
-        self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
         expr = self.rewrite_partial_qualifier(expr, schema);
+        self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
         Ok(expr)
     }
 
     /// Rewrite aliases which are not-complete (e.g. ones that only include only table qualifier in a schema.table qualified relation)
     fn rewrite_partial_qualifier(&self, expr: Expr, schema: &DFSchema) -> Expr {
-        match expr.clone() {
+        match expr {
             Expr::Column(col) => match &col.relation {
                 Some(q) => {
                     match schema
@@ -950,10 +950,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             relation: df_field.qualifier().cloned(),
                             name: df_field.name().clone(),
                         }),
-                        None => expr,
+                        None => Expr::Column(col),
                     }
                 }
-                None => expr,
+                None => Expr::Column(col),
             },
             _ => expr,
         }
