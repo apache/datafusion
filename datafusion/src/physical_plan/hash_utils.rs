@@ -266,9 +266,9 @@ fn create_hashes_dictionary<K: ArrowDictionaryKeyType>(
     create_hashes(&[dict_values], random_state, &mut dict_hashes)?;
 
     // combine hash for each index in values
-    for (hash, key) in hashes_buffer.iter_mut().zip(dict_array.keys().iter()) {
-        match key {
-            Some(key) => {
+    if multi_col {
+        for (hash, key) in hashes_buffer.iter_mut().zip(dict_array.keys().iter()) {
+            if let Some(key) = key {
                 let idx = key
                     .to_usize()
                     .ok_or_else(|| {
@@ -277,16 +277,22 @@ fn create_hashes_dictionary<K: ArrowDictionaryKeyType>(
                             key, dict_array.data_type()
                         ))
                     })?;
-
-                *hash = if multi_col {
-                    combine_hashes(dict_hashes[idx], *hash)
-                } else {
-                    dict_hashes[idx]
-                };
-            }
-            None => {
-                // No update for Null, consistent with other hashes
-            }
+                *hash = combine_hashes(dict_hashes[idx], *hash)
+            } // no update for Null, consistent with other hashes
+        }
+    } else {
+        for (hash, key) in hashes_buffer.iter_mut().zip(dict_array.keys().iter()) {
+            if let Some(key) = key {
+                let idx = key
+                    .to_usize()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "Can not convert key value {:?} to usize in dictionary of type {:?}",
+                            key, dict_array.data_type()
+                        ))
+                    })?;
+                *hash = dict_hashes[idx]
+            } // no update for Null, consistent with other hashes
         }
     }
     Ok(())
