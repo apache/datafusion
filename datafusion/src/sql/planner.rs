@@ -992,9 +992,38 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Generate a relational expression from a SQL expression
     pub fn sql_to_rex(&self, sql: &SQLExpr, schema: &DFSchema) -> Result<Expr> {
-        let expr = self.sql_expr_to_logical_expr(sql, schema)?;
+        let mut expr = self.sql_expr_to_logical_expr(sql, schema)?;
+        expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
         Ok(expr)
+    }
+
+    /// Rewrite aliases which are not-complete (e.g. ones that only include only table qualifier in a schema.table qualified relation)
+    fn rewrite_partial_qualifier(&self, expr: Expr, schema: &DFSchema) -> Expr {
+        match expr {
+            Expr::Column(col) => match &col.relation {
+                Some(q) => {
+                    match schema
+                        .fields()
+                        .iter()
+                        .find(|field| match field.qualifier() {
+                            Some(field_q) => {
+                                field.name() == &col.name
+                                    && field_q.ends_with(&format!(".{}", q))
+                            }
+                            _ => false,
+                        }) {
+                        Some(df_field) => Expr::Column(Column {
+                            relation: df_field.qualifier().cloned(),
+                            name: df_field.name().clone(),
+                        }),
+                        None => Expr::Column(col),
+                    }
+                }
+                None => Expr::Column(col),
+            },
+            _ => expr,
+        }
     }
 
     fn sql_fn_arg_to_logical_expr(
@@ -3489,5 +3518,13 @@ mod tests {
         fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
             unimplemented!()
         }
+    }
+
+    #[test]
+    fn select_partially_qualified_column() {
+        let sql = r#"SELECT person.first_name FROM public.person"#;
+        let expected = "Projection: #public.person.first_name\
+            \n  TableScan: public.person projection=None";
+        quick_test(sql, expected);
     }
 }
