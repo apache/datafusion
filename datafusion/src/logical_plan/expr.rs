@@ -916,7 +916,7 @@ impl Expr {
                 negated,
             } => Expr::InList {
                 expr: rewrite_boxed(expr, rewriter)?,
-                list,
+                list: rewrite_vec(list, rewriter)?,
                 negated,
             },
             Expr::Wildcard => Expr::Wildcard,

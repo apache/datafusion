@@ -579,6 +579,7 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
         }
 
         let (series_number, id) = &self.id_array[self.curr_index];
+        self.curr_index += 1;
         // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
         if *series_number < self.max_series_number
             || id.is_empty()
@@ -588,8 +589,7 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
         }
 
         self.max_series_number = *series_number;
-        // step index, skip all sub-node (which has smaller series number).
-        self.curr_index += 1;
+        // step index to skip all sub-node (which has smaller series number).
         while self.curr_index < self.id_array.len()
             && *series_number > self.id_array[self.curr_index].0
         {
@@ -671,7 +671,7 @@ mod test {
             .build()?;
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a Multiply Int32(1) Minus test.b), SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a Multiply Int32(1) Minus test.b Multiply Int32(1) Plus #test.c)]]\
-        \n  Projection: #test.a Multiply Int32(1) Minus #test.b, #a, #b, #c\
+        \n  Projection: #test.a Multiply Int32(1) Minus #test.b AS BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a, #test.a, #test.b, #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
