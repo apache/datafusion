@@ -4210,3 +4210,18 @@ fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>> {
         })
         .collect::<Vec<_>>()
 }
+
+#[tokio::test]
+async fn test_partial_qualified_name() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let sql = "SELECT t1.t1_id, t1_name FROM public.t1";
+    let expected = vec![
+        vec!["11", "a"],
+        vec!["22", "b"],
+        vec!["33", "c"],
+        vec!["44", "d"],
+    ];
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
+    Ok(())
+}
