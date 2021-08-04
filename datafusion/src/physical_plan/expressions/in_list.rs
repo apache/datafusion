@@ -72,20 +72,16 @@ macro_rules! make_contains {
     ($ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr, $SCALAR_VALUE:ident, $ARRAY_TYPE:ident) => {{
         let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
 
-        let mut contains_null = false;
+        let contains_null = $LIST_VALUES
+            .iter()
+            .any(|v| matches!(v, ColumnarValue::Scalar(s) if s.is_null()));
         let values = $LIST_VALUES
             .iter()
             .flat_map(|expr| match expr {
                 ColumnarValue::Scalar(s) => match s {
                     ScalarValue::$SCALAR_VALUE(Some(v)) => Some(*v),
-                    ScalarValue::$SCALAR_VALUE(None) => {
-                        contains_null = true;
-                        None
-                    }
-                    ScalarValue::Utf8(None) => {
-                        contains_null = true;
-                        None
-                    }
+                    ScalarValue::$SCALAR_VALUE(None) => None,
+                    ScalarValue::Utf8(None) => None,
                     datatype => unimplemented!("Unexpected type {} for InList", datatype),
                 },
                 ColumnarValue::Array(_) => {
@@ -128,20 +124,16 @@ macro_rules! make_contains_primitive {
     ($ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr, $SCALAR_VALUE:ident, $ARRAY_TYPE:ident) => {{
         let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
 
-        let mut contains_null = false;
+        let contains_null = $LIST_VALUES
+            .iter()
+            .any(|v| matches!(v, ColumnarValue::Scalar(s) if s.is_null()));
         let values = $LIST_VALUES
             .iter()
             .flat_map(|expr| match expr {
                 ColumnarValue::Scalar(s) => match s {
                     ScalarValue::$SCALAR_VALUE(Some(v)) => Some(*v),
-                    ScalarValue::$SCALAR_VALUE(None) => {
-                        contains_null = true;
-                        None
-                    }
-                    ScalarValue::Utf8(None) => {
-                        contains_null = true;
-                        None
-                    }
+                    ScalarValue::$SCALAR_VALUE(None) => None,
+                    ScalarValue::Utf8(None) => None,
                     datatype => unimplemented!("Unexpected type {} for InList", datatype),
                 },
                 ColumnarValue::Array(_) => {
@@ -163,7 +155,7 @@ macro_rules! make_contains_primitive {
                 )))
             } else {
                 Ok(ColumnarValue::Array(Arc::new(
-                    values_not_in_list_primitive(array, &values)?,
+                    not_in_list_primitive(array, &values)?,
                 )))
             }
         } else {
@@ -178,7 +170,7 @@ macro_rules! make_contains_primitive {
                         .collect::<BooleanArray>(),
                 )))
             } else {
-                Ok(ColumnarValue::Array(Arc::new(values_in_list_primitive(
+                Ok(ColumnarValue::Array(Arc::new(in_list_primitive(
                     array, &values,
                 )?)))
             }
@@ -186,7 +178,8 @@ macro_rules! make_contains_primitive {
     }};
 }
 
-fn values_in_list_primitive<T: ArrowPrimitiveType>(
+// whether each value on the left (can be null) is contained in the non-null list
+fn in_list_primitive<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     values: &[<T as ArrowPrimitiveType>::Native],
 ) -> Result<BooleanArray> {
@@ -197,7 +190,8 @@ fn values_in_list_primitive<T: ArrowPrimitiveType>(
     )
 }
 
-fn values_not_in_list_primitive<T: ArrowPrimitiveType>(
+// whether each value on the left (can be null) is contained in the non-null list
+fn not_in_list_primitive<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     values: &[<T as ArrowPrimitiveType>::Native],
 ) -> Result<BooleanArray> {
@@ -208,14 +202,15 @@ fn values_not_in_list_primitive<T: ArrowPrimitiveType>(
     )
 }
 
-fn values_in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
+// whether each value on the left (can be null) is contained in the non-null list
+fn in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     values: &[&str],
 ) -> Result<BooleanArray> {
     compare_op_scalar!(array, values, |x, v: &[&str]| v.contains(&x))
 }
 
-fn values_not_in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
+fn not_in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     values: &[&str],
 ) -> Result<BooleanArray> {
@@ -264,21 +259,17 @@ impl InListExpr {
             .downcast_ref::<GenericStringArray<T>>()
             .unwrap();
 
-        let mut contains_null = false;
+        let contains_null = list_values
+            .iter()
+            .any(|v| matches!(v, ColumnarValue::Scalar(s) if s.is_null()));
         let values = list_values
             .iter()
             .flat_map(|expr| match expr {
                 ColumnarValue::Scalar(s) => match s {
                     ScalarValue::Utf8(Some(v)) => Some(v.as_str()),
-                    ScalarValue::Utf8(None) => {
-                        contains_null = true;
-                        None
-                    }
+                    ScalarValue::Utf8(None) => None,
                     ScalarValue::LargeUtf8(Some(v)) => Some(v.as_str()),
-                    ScalarValue::LargeUtf8(None) => {
-                        contains_null = true;
-                        None
-                    }
+                    ScalarValue::LargeUtf8(None) => None,
                     datatype => unimplemented!("Unexpected type {} for InList", datatype),
                 },
                 ColumnarValue::Array(_) => {
@@ -299,26 +290,24 @@ impl InListExpr {
                         .collect::<BooleanArray>(),
                 )))
             } else {
-                Ok(ColumnarValue::Array(Arc::new(values_not_in_list_utf8(
+                Ok(ColumnarValue::Array(Arc::new(not_in_list_utf8(
                     array, &values,
                 )?)))
             }
+        } else if contains_null {
+            Ok(ColumnarValue::Array(Arc::new(
+                array
+                    .iter()
+                    .map(|x| match x.map(|v| values.contains(&v)) {
+                        Some(false) => None,
+                        x => x,
+                    })
+                    .collect::<BooleanArray>(),
+            )))
         } else {
-            if contains_null {
-                Ok(ColumnarValue::Array(Arc::new(
-                    array
-                        .iter()
-                        .map(|x| match x.map(|v| values.contains(&v)) {
-                            Some(false) => None,
-                            x => x,
-                        })
-                        .collect::<BooleanArray>(),
-                )))
-            } else {
-                Ok(ColumnarValue::Array(Arc::new(values_in_list_utf8(
-                    array, &values,
-                )?)))
-            }
+            Ok(ColumnarValue::Array(Arc::new(in_list_utf8(
+                array, &values,
+            )?)))
         }
     }
 }
@@ -399,10 +388,22 @@ impl PhysicalExpr for InListExpr {
                 )
             }
             DataType::Int64 => {
-                make_contains!(array, list_values, self.negated, Int64, Int64Array)
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Int64,
+                    Int64Array
+                )
             }
             DataType::Int8 => {
-                make_contains!(array, list_values, self.negated, Int8, Int8Array)
+                make_contains_primitive!(
+                    array,
+                    list_values,
+                    self.negated,
+                    Int8,
+                    Int8Array
+                )
             }
             DataType::UInt16 => {
                 make_contains_primitive!(
