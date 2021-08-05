@@ -1120,6 +1120,15 @@ impl ScalarValue {
             None => self.is_null(),
         }
     }
+
+    /// Compares array @ row for equality with self.
+    ///
+    /// TODO: optimize: avoid constructing an intermediate ScalarValue
+    #[inline]
+    pub fn eq_array(&self, array: &ArrayRef, index: usize) -> bool {
+        let arr_scalar = Self::try_from_array(array, index).unwrap();
+        arr_scalar.eq(self)
+    }
 }
 
 impl From<f64> for ScalarValue {

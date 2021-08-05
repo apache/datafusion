@@ -27,6 +27,7 @@ use futures::{
     stream::{Stream, StreamExt},
     Future,
 };
+use hashbrown::HashMap;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
@@ -45,9 +46,8 @@ use arrow::{
     datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use hashbrown::HashMap;
+use hashbrown::raw::RawTable;
 use pin_project_lite::pin_project;
-use smallvec::{smallvec, SmallVec};
 
 use async_trait::async_trait;
 
@@ -365,44 +365,49 @@ fn group_aggregate_batch(
     for (row, hash) in batch_hashes.into_iter().enumerate() {
         let Accumulators { map, group_states } = &mut accumulators;
 
-        map
-            .raw_entry_mut()
-            .from_key(&hash)
-            // 1.3
-            .and_modify(|_, group_state_indexes| {
-                let mut iter = group_state_indexes.iter();
-                let group_idx = *(iter.next().unwrap()); // created with 1 element
-                /* ******* TODO THIS IS WHERE COLLISIONS NEED TO BE HANDLED ******** */
-                assert!(iter.next().is_none(), "TODO hash collisions");
+        let entry = map.get_mut(hash, |(_hash, group_idx)| {
+            // verify that a group that we are inserting with hash is
+            // actually the same key value as the group in
+            // existing_idx  (aka group_values @ row)
+            let group_state = &group_states[*group_idx];
+            group_values
+                .iter()
+                .zip(group_state.group_by_values.iter())
+                .all(|(array, scalar)| scalar.eq_array(array, row))
+        });
 
+        match entry {
+            // Existing entry for this group value
+            Some((_hash, group_idx)) => {
+                let group_state = &mut group_states[*group_idx];
                 // 1.3
-                let group_state = &mut group_states[group_idx];
                 if group_state.indices.is_empty() {
-                    groups_with_rows.push(group_idx);
+                    groups_with_rows.push(*group_idx);
                 };
                 group_state.indices.push(row as u32); // remember this row
-            })
-            // 1.2
-            .or_insert_with(|| {
+            }
+            //  1.2 Need to create new entry
+            None => {
                 // We can safely unwrap here as we checked we can create an accumulator before
                 let accumulator_set = create_accumulators(aggr_expr).unwrap();
 
-                // Note it would be nice to make this a real error (rather than panic)
-                // but it is better than silently ignoring the issue and getting wrong results
-                create_group_by_values(&group_values, row, &mut group_by_values)
-                    .expect("can not create group by value");
+                // Copy group values from arrays into ScalarValues
+                create_group_by_values(&group_values, row, &mut group_by_values)?;
 
+                // Add new entry to group_states and save newly created index
                 let group_state = GroupState {
                     group_by_values: group_by_values.clone(),
                     accumulator_set,
                     indices: vec![row as u32], // 1.3
                 };
-
                 let group_idx = group_states.len();
                 group_states.push(group_state);
                 groups_with_rows.push(group_idx);
-                (hash, smallvec![group_idx])
-            });
+
+                // for hasher function, use precomputed hash value
+                map.insert(hash, (hash, group_idx), |(hash, _group_idx)| *hash);
+            }
+        };
     }
 
     // Collect all indices + offsets based on keys in this vec
@@ -566,18 +571,30 @@ struct GroupState {
 }
 
 /// The state of all the groups
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Accumulators {
-    /// Maps hash values to one or more indices in `group_states`
+    /// Logically maps group values to an index in `group_states`
+    ///
+    /// Uses the raw API of hashbrown to avoid actually storing the
+    /// keys in the table
     ///
     /// keys: u64 hashes of the GroupValue
-    /// values: indices into `group_states`
-    ///
-    /// TODO: try and avoid double hashing
-    map: HashMap<u64, SmallVec<[usize; 1]>, RandomState>,
+    /// values: (hash, index into `group_states`)
+    map: RawTable<(u64, usize)>,
 
     /// State for each group
     group_states: Vec<GroupState>,
+}
+
+impl std::fmt::Debug for Accumulators {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // hashes are not store inline, so could only get values
+        let map_string = "RawTable";
+        f.debug_struct("Accumulators")
+            .field("map", &map_string)
+            .field("group_states", &self.group_states)
+            .finish()
+    }
 }
 
 impl Stream for GroupedHashAggregateStream {
