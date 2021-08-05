@@ -3163,22 +3163,14 @@ async fn query_group_on_null_multi_col() -> Result<()> {
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
-    let field_type =
-        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-    let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
+    let array = vec![Some("one"), None, Some("three")]
+        .into_iter()
+        .collect::<DictionaryArray<Int32Type>>();
 
-    let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
-    let values_builder = StringBuilder::new(10);
-    let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+    let batch =
+        RecordBatch::try_from_iter(vec![("d1", Arc::new(array) as ArrayRef)]).unwrap();
 
-    builder.append("one")?;
-    builder.append_null()?;
-    builder.append("three")?;
-    let array = Arc::new(builder.finish());
-
-    let data = RecordBatch::try_new(schema.clone(), vec![array])?;
-
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
@@ -3214,6 +3206,13 @@ async fn query_on_string_dictionary() -> Result<()> {
 
     // grouping
     let sql = "SELECT d1, COUNT(*) FROM test group by d1";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["NULL", "1"], vec!["one", "1"], vec!["three", "1"]];
+    assert_eq!(expected, actual);
+
+    // window functions
+    let sql = "SELECT d1, row_number() OVER (partition by d1) FROM test";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["NULL", "1"], vec!["one", "1"], vec!["three", "1"]];
