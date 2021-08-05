@@ -25,8 +25,6 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use datafusion::arrow::record_batch::RecordBatch;
-
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionContext as _ExecutionContext;
 use datafusion::prelude::CsvReadOptions;
