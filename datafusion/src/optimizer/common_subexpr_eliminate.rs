@@ -560,7 +560,7 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
         // skip `Expr`s without identifier (empty identifier).
         if curr_id.is_empty() {
             self.curr_index += 1;
-            return Ok(RewriteRecursion::Continue);
+            return Ok(RewriteRecursion::Skip);
         }
         let (_, counter, _) = self.expr_set.get(curr_id).unwrap();
         if *counter > 1 {
@@ -568,7 +568,7 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
             Ok(RewriteRecursion::Mutate)
         } else {
             self.curr_index += 1;
-            Ok(RewriteRecursion::Continue)
+            Ok(RewriteRecursion::Skip)
         }
     }
 
