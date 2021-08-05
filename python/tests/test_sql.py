@@ -15,11 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import datetime
+
 import numpy as np
 import pyarrow as pa
 import pytest
-from datafusion import ExecutionContext
 
+from datafusion import ExecutionContext
 from . import generic as helpers
 
 
@@ -34,8 +36,20 @@ def test_no_table(ctx):
 
 
 def test_register_csv(ctx, tmp_path):
-    path = helpers.write_csv(tmp_path / "a.csv", helpers.data())
+    path = tmp_path / "test.csv"
+
+    table = pa.Table.from_arrays(
+        [
+            [1, 2, 3, 4],
+            ["a", "b", "c", "d"],
+            [1.1, 2.2, 3.3, 4.4],
+        ],
+        names=["int", "str", "float"]
+    )
+    pa.csv.write_csv(table, path)
+
     ctx.register_csv("csv", path)
+    ctx.register_csv("csv1", str(path))
     ctx.register_csv(
         "csv2",
         path,
@@ -43,17 +57,28 @@ def test_register_csv(ctx, tmp_path):
         delimiter=",",
         schema_infer_max_records=10,
     )
-    assert ctx.tables() == {"csv", "csv2"}
+    alternative_schema = pa.schema([
+        ('some_int', pa.int16()),
+        ('some_bytes', pa.string()),
+        ('some_floats', pa.float32()),
+    ])
+    ctx.register_csv("csv3", path, schema=alternative_schema)
 
-    for table in ["csv", "csv2"]:
-        result = ctx.sql(f"SELECT COUNT(a) FROM {table}").collect()
+    assert ctx.tables() == {"csv", "csv1", "csv2", "csv3"}
+
+    for table in ["csv", "csv1", "csv2"]:
+        result = ctx.sql(f"SELECT COUNT(int) FROM {table}").collect()
         result = pa.Table.from_batches(result)
-        assert result.to_pydict() == {"COUNT(a)": [100]}
+        assert result.to_pydict() == {"COUNT(int)": [4]}
+
+    result = ctx.sql(f"SELECT * FROM csv3").collect()
+    result = pa.Table.from_batches(result)
+    assert result.schema == alternative_schema
 
     with pytest.raises(
         ValueError, match="Delimiter must be a single character"
     ):
-        ctx.register_csv("csv3", path, delimiter="wrong")
+        ctx.register_csv("csv4", path, delimiter="wrong")
 
 
 def test_register_parquet(ctx, tmp_path):

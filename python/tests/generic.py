@@ -79,9 +79,3 @@ def write_parquet(path, data):
     table = pa.Table.from_arrays([data], names=["a"])
     pq.write_table(table, path)
     return str(path)
-
-
-def write_csv(path, data, write_options=None):
-    table = pa.Table.from_arrays([data], names=["a"])
-    pyarrow.csv.write_csv(table, path, write_options=write_options)
-    return str(path)
