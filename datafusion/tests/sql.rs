@@ -1730,6 +1730,17 @@ async fn equijoin() -> Result<()> {
         let actual = execute(&mut ctx, sql).await;
         assert_eq!(expected, actual);
     }
+
+    let mut ctx = create_join_context_qualified()?;
+    let equivalent_sql = [
+        "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t1.a = t2.a ORDER BY t1.a",
+        "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t2.a = t1.a ORDER BY t1.a",
+    ];
+    let expected = vec![vec!["1", "100"], vec!["2", "200"], vec!["4", "400"]];
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
     Ok(())
 }
 
