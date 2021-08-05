@@ -429,14 +429,13 @@ mod tests {
             min_value: Some(ScalarValue::from(1_i64)),
             distinct_count: None,
         };
-        let mut column_statistics = Vec::new();
-        column_statistics.push(column_statistic);
+        let column_statistics = vec![column_statistic];
 
         ctx.register_table(
             "test",
             Arc::new(TestTableProvider {
                 num_rows: 100,
-                column_statistics: column_statistics,
+                column_statistics,
                 is_exact: true,
             }),
         )
