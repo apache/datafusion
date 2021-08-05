@@ -31,6 +31,7 @@ use crate::logical_plan::{
     DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema,
     ToStringifiedPlan,
 };
+use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
 use crate::{
@@ -325,16 +326,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let right = self.create_relation(&join.relation, ctes)?;
         match &join.join_operator {
             JoinOperator::LeftOuter(constraint) => {
-                self.parse_join(left, &right, constraint, JoinType::Left)
+                self.parse_join(left, right, constraint, JoinType::Left)
             }
             JoinOperator::RightOuter(constraint) => {
-                self.parse_join(left, &right, constraint, JoinType::Right)
+                self.parse_join(left, right, constraint, JoinType::Right)
             }
             JoinOperator::Inner(constraint) => {
-                self.parse_join(left, &right, constraint, JoinType::Inner)
+                self.parse_join(left, right, constraint, JoinType::Inner)
             }
             JoinOperator::FullOuter(constraint) => {
-                self.parse_join(left, &right, constraint, JoinType::Full)
+                self.parse_join(left, right, constraint, JoinType::Full)
             }
             JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
             other => Err(DataFusionError::NotImplemented(format!(
@@ -354,7 +355,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn parse_join(
         &self,
         left: LogicalPlan,
-        right: &LogicalPlan,
+        right: LogicalPlan,
         constraint: &JoinConstraint,
         join_type: JoinType,
     ) -> Result<LogicalPlan> {
@@ -372,15 +373,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // extract join keys
                 extract_join_keys(&expr, &mut keys, &mut filter);
 
+                let mut cols = HashSet::new();
+                exprlist_to_columns(&filter, &mut cols)?;
+
                 let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
                     keys.into_iter().unzip();
-                // return the logical plan representing the join
-                let join = LogicalPlanBuilder::from(left)
-                    .join(right, join_type, left_keys, right_keys)?;
 
+                // return the logical plan representing the join
                 if filter.is_empty() {
+                    let join = LogicalPlanBuilder::from(left).join(
+                        &right,
+                        join_type,
+                        (left_keys, right_keys),
+                    )?;
                     join.build()
                 } else if join_type == JoinType::Inner {
+                    let join = LogicalPlanBuilder::from(left).join(
+                        &right,
+                        join_type,
+                        (left_keys, right_keys),
+                    )?;
                     join.filter(
                         filter
                             .iter()
@@ -388,6 +400,64 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
                     )?
                     .build()
+                }
+                // Left join with all non-equijoin expressions from the right
+                // l left join r
+                // on l1=r1 and r2 > [..]
+                else if join_type == JoinType::Left
+                    && cols.iter().all(
+                        |Column {
+                             relation: qualifier,
+                             name,
+                         }| {
+                            right
+                                .schema()
+                                .field_with_name(qualifier.as_deref(), name)
+                                .is_ok()
+                        },
+                    )
+                {
+                    LogicalPlanBuilder::from(left)
+                        .join(
+                            &LogicalPlanBuilder::from(right)
+                                .filter(
+                                    filter
+                                        .iter()
+                                        .skip(1)
+                                        .fold(filter[0].clone(), |acc, e| {
+                                            acc.and(e.clone())
+                                        }),
+                                )?
+                                .build()?,
+                            join_type,
+                            (left_keys, right_keys),
+                        )?
+                        .build()
+                }
+                // Right join with all non-equijoin expressions from the left
+                // l right join r
+                // on l1=r1 and l2 > [..]
+                else if join_type == JoinType::Right
+                    && cols.iter().all(
+                        |Column {
+                             relation: qualifier,
+                             name,
+                         }| {
+                            left.schema()
+                                .field_with_name(qualifier.as_deref(), name)
+                                .is_ok()
+                        },
+                    )
+                {
+                    LogicalPlanBuilder::from(left)
+                        .filter(
+                            filter
+                                .iter()
+                                .skip(1)
+                                .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
+                        )?
+                        .join(&right, join_type, (left_keys, right_keys))?
+                        .build()
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "Unsupported expressions in {:?} JOIN: {:?}",
@@ -401,7 +471,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|x| Column::from_name(x.value.clone()))
                     .collect();
                 LogicalPlanBuilder::from(left)
-                    .join_using(right, join_type, keys)?
+                    .join_using(&right, join_type, keys)?
                     .build()
             }
             JoinConstraint::Natural => {
@@ -548,7 +618,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             join_keys.iter().map(|(_, r)| r.clone()).collect();
                         let builder = LogicalPlanBuilder::from(left);
                         left = builder
-                            .join(right, JoinType::Inner, left_keys, right_keys)?
+                            .join(right, JoinType::Inner, (left_keys, right_keys))?
                             .build()?;
                     }
 
@@ -922,9 +992,38 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Generate a relational expression from a SQL expression
     pub fn sql_to_rex(&self, sql: &SQLExpr, schema: &DFSchema) -> Result<Expr> {
-        let expr = self.sql_expr_to_logical_expr(sql, schema)?;
+        let mut expr = self.sql_expr_to_logical_expr(sql, schema)?;
+        expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
         Ok(expr)
+    }
+
+    /// Rewrite aliases which are not-complete (e.g. ones that only include only table qualifier in a schema.table qualified relation)
+    fn rewrite_partial_qualifier(&self, expr: Expr, schema: &DFSchema) -> Expr {
+        match expr {
+            Expr::Column(col) => match &col.relation {
+                Some(q) => {
+                    match schema
+                        .fields()
+                        .iter()
+                        .find(|field| match field.qualifier() {
+                            Some(field_q) => {
+                                field.name() == &col.name
+                                    && field_q.ends_with(&format!(".{}", q))
+                            }
+                            _ => false,
+                        }) {
+                        Some(df_field) => Expr::Column(Column {
+                            relation: df_field.qualifier().cloned(),
+                            name: df_field.name().clone(),
+                        }),
+                        None => Expr::Column(col),
+                    }
+                }
+                None => Expr::Column(col),
+            },
+            _ => expr,
+        }
     }
 
     fn sql_fn_arg_to_logical_expr(
@@ -1647,8 +1746,15 @@ fn extract_join_keys(
                 extract_join_keys(left, accum, accum_filter);
                 extract_join_keys(right, accum, accum_filter);
             }
-            _other => {
+            _other
+                if matches!(**left, Expr::Column(_))
+                    || matches!(**right, Expr::Column(_)) =>
+            {
                 accum_filter.push(expr.clone());
+            }
+            _other => {
+                extract_join_keys(left, accum, accum_filter);
+                extract_join_keys(right, accum, accum_filter);
             }
         },
         _other => {
@@ -2809,6 +2915,34 @@ mod tests {
     }
 
     #[test]
+    fn left_equijoin_unsupported_expression() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            LEFT JOIN orders \
+            ON id = customer_id AND order_id > 1";
+        let expected = "Projection: #person.id, #orders.order_id\
+        \n  Join: #person.id = #orders.customer_id\
+        \n    TableScan: person projection=None\
+        \n    Filter: #orders.order_id Gt Int64(1)\
+        \n      TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn right_equijoin_unsupported_expression() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            RIGHT JOIN orders \
+            ON id = customer_id AND id > 1";
+        let expected = "Projection: #person.id, #orders.order_id\
+        \n  Join: #person.id = #orders.customer_id\
+        \n    Filter: #person.id Gt Int64(1)\
+        \n      TableScan: person projection=None\
+        \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn join_with_table_name() {
         let sql = "SELECT id, order_id \
             FROM person \
@@ -3384,5 +3518,13 @@ mod tests {
         fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
             unimplemented!()
         }
+    }
+
+    #[test]
+    fn select_partially_qualified_column() {
+        let sql = r#"SELECT person.first_name FROM public.person"#;
+        let expected = "Projection: #public.person.first_name\
+            \n  TableScan: public.person projection=None";
+        quick_test(sql, expected);
     }
 }

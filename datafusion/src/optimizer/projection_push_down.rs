@@ -555,7 +555,7 @@ mod tests {
             LogicalPlanBuilder::scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(&table2_scan, JoinType::Left, vec!["a"], vec!["c1"])?
+            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]))?
             .project(vec![col("a"), col("b"), col("c1")])?
             .build()?;
 
@@ -594,7 +594,7 @@ mod tests {
             LogicalPlanBuilder::scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(&table2_scan, JoinType::Left, vec!["a"], vec!["c1"])?
+            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]))?
             // projecting joined column `a` should push the right side column `c1` projection as
             // well into test2 table even though `c1` is not referenced in projection.
             .project(vec![col("a"), col("b")])?

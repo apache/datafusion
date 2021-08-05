@@ -17,6 +17,29 @@
 
 datafusion:
   - datafusion/**/*
+  - datafusion-cli/**/*
+  - datafusion-examples/**/*
 
 ballista:
   - ballista/**/*
+  - ballista-examples/**/*
+
+python:
+  - python/**/*
+
+sql:
+  - datafusion/src/sql/**/*
+
+development-process:
+  - dev/**.*
+  - .github/**.*
+  - ci/**.*
+  - .asf.yaml
+
+documentation:
+  - docs/**.*
+  - README.md
+  - ./**/README.md
+  - DEVELOPERS.md
+  - ballista/docs/**.*
+  - datafusion/docs/**.*

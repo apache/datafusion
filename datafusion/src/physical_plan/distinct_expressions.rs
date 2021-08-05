@@ -18,7 +18,6 @@
 //! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
 
 use std::any::Any;
-use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -29,12 +28,11 @@ use ahash::RandomState;
 use std::collections::HashSet;
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::group_scalar::GroupByScalar;
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-struct DistinctScalarValues(Vec<GroupByScalar>);
+struct DistinctScalarValues(Vec<ScalarValue>);
 
 fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{}[{}]", name, state_name)
@@ -137,12 +135,7 @@ impl Accumulator for DistinctCountAccumulator {
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         // If a row has a NULL, it is not included in the final count.
         if !values.iter().any(|v| v.is_null()) {
-            self.values.insert(DistinctScalarValues(
-                values
-                    .iter()
-                    .map(GroupByScalar::try_from)
-                    .collect::<Result<Vec<_>>>()?,
-            ));
+            self.values.insert(DistinctScalarValues(values.to_vec()));
         }
 
         Ok(())
@@ -178,7 +171,9 @@ impl Accumulator for DistinctCountAccumulator {
             .state_data_types
             .iter()
             .map(|state_data_type| {
-                ScalarValue::List(Some(Vec::new()), state_data_type.clone())
+                let values = Box::new(Vec::new());
+                let data_type = Box::new(state_data_type.clone());
+                ScalarValue::List(Some(values), data_type)
             })
             .collect::<Vec<_>>();
 
@@ -193,7 +188,7 @@ impl Accumulator for DistinctCountAccumulator {
         self.values.iter().for_each(|distinct_values| {
             distinct_values.0.iter().enumerate().for_each(
                 |(col_index, distinct_value)| {
-                    cols_vec[col_index].push(ScalarValue::from(distinct_value));
+                    cols_vec[col_index].push(distinct_value.clone());
                 },
             )
         });
@@ -254,8 +249,8 @@ mod tests {
     macro_rules! state_to_vec {
         ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
             match $LIST {
-                ScalarValue::List(_, data_type) => match data_type {
-                    DataType::$DATA_TYPE => (),
+                ScalarValue::List(_, data_type) => match data_type.as_ref() {
+                    &DataType::$DATA_TYPE => (),
                     _ => panic!("Unexpected DataType for list"),
                 },
                 _ => panic!("Expected a ScalarValue::List"),

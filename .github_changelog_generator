@@ -1,3 +1,5 @@
+#!/bin/bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,25 +16,15 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-[package]
-name = "datafusion-examples"
-description = "DataFusion usage examples"
-version = "4.0.0-SNAPSHOT"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = [ "arrow", "query", "sql" ]
-edition = "2018"
-publish = false
-
-
-[dev-dependencies]
-arrow-flight = { version = "5.0" }
-datafusion = { path = "../datafusion" }
-prost = "0.8"
-tonic = "0.5"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
-futures = "0.3"
-num_cpus = "1.13.0"
+# point to the old changelog in apache/arrow
+front-matter=For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)\n
+# some issues are just documentation
+add-sections={"documentation":{"prefix":"**Documentation updates:**","labels":["documentation"]}}
+# uncomment to not show PRs. TBD if we shown them or not.
+#pull-requests=false
+# so that the component is shown associated with the issue
+issue-line-labels=ballista,datafusion,python
+exclude-labels=development-process,invalid
+breaking_labels=api-change
