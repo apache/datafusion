@@ -42,14 +42,7 @@ jobs:
         with:
           python-version: "3.9"
       - name: Install Python dependencies
-        run: |
-          pip install --upgrade \
-            -r python/requirements.txt \
-            pip \
-            setuptools \
-            wheel \
-            black \
-            flake8
+        run: pip install -r python/requirements.txt
       - name: Run Linters
         run: |
           flake8 python
