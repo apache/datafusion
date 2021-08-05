@@ -41,15 +41,20 @@ jobs:
       - uses: actions/setup-python@v2
         with:
           python-version: "3.9"
-      - name: Install Python dependencies
-        run: pip install -r python/requirements.txt
+      - name: Create Virtualenv
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r python/requirements.txt
       - name: Run Linters
         run: |
+          source venv/bin/activate
           flake8 python
           black --line-length 79 --check python
       - name: Run tests
-        working-directory: python
         run: |
+          source venv/bin/activate
+          cd python
           maturin develop
           pytest -v .
         env:
