@@ -287,16 +287,63 @@ impl LogicalPlanBuilder {
                 .into_iter()
                 .zip(join_keys.1.into_iter())
                 .map(|(l, r)| {
-                    let mut swap = false;
                     let l = l.into();
-                    let left_key = l.clone().normalize(&self.plan).or_else(|_| {
-                        swap = true;
-                        l.normalize(right)
-                    });
-                    if swap {
-                        (r.into().normalize(&self.plan), left_key)
-                    } else {
-                        (left_key, r.into().normalize(right))
+                    let r = r.into();
+
+                    match (&l.relation, &r.relation) {
+                        (Some(lr), Some(rr)) => {
+                            let l_is_left =
+                                self.plan.schema().field_with_qualified_name(lr, &l.name);
+                            let l_is_right =
+                                right.schema().field_with_qualified_name(lr, &l.name);
+                            let r_is_left =
+                                self.plan.schema().field_with_qualified_name(rr, &r.name);
+                            let r_is_right =
+                                right.schema().field_with_qualified_name(rr, &r.name);
+
+                            match (l_is_left, l_is_right, r_is_left, r_is_right) {
+                                (_, Ok(_), Ok(_), _) => (Ok(r), Ok(l)),
+                                (Ok(_), _, _, Ok(_)) => (Ok(l), Ok(r)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                            }
+                        }
+                        (Some(lr), None) => {
+                            let l_is_left =
+                                self.plan.schema().field_with_qualified_name(lr, &l.name);
+                            let l_is_right =
+                                right.schema().field_with_qualified_name(lr, &l.name);
+
+                            match (l_is_left, l_is_right) {
+                                (Ok(_), _) => (Ok(l), r.normalize(right)),
+                                (_, Ok(_)) => (r.normalize(&self.plan), Ok(l)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                            }
+                        }
+                        (None, Some(rr)) => {
+                            let r_is_left =
+                                self.plan.schema().field_with_qualified_name(rr, &r.name);
+                            let r_is_right =
+                                right.schema().field_with_qualified_name(rr, &r.name);
+
+                            match (r_is_left, r_is_right) {
+                                (Ok(_), _) => (Ok(r), l.normalize(right)),
+                                (_, Ok(_)) => (l.normalize(&self.plan), Ok(r)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                            }
+                        }
+                        (None, None) => {
+                            let mut swap = false;
+                            let left_key =
+                                l.clone().normalize(&self.plan).or_else(|_| {
+                                    swap = true;
+                                    l.normalize(right)
+                                });
+                            if swap {
+                                (r.normalize(&self.plan), left_key)
+                            } else {
+                                (left_key, r.normalize(right))
+                            }
+                        }
                     }
                 })
                 .unzip();
