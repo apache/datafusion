@@ -15,8 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import datetime
-
 import numpy as np
 import pyarrow as pa
 import pytest
@@ -44,7 +42,7 @@ def test_register_csv(ctx, tmp_path):
             ["a", "b", "c", "d"],
             [1.1, 2.2, 3.3, 4.4],
         ],
-        names=["int", "str", "float"]
+        names=["int", "str", "float"],
     )
     pa.csv.write_csv(table, path)
 
@@ -57,11 +55,13 @@ def test_register_csv(ctx, tmp_path):
         delimiter=",",
         schema_infer_max_records=10,
     )
-    alternative_schema = pa.schema([
-        ('some_int', pa.int16()),
-        ('some_bytes', pa.string()),
-        ('some_floats', pa.float32()),
-    ])
+    alternative_schema = pa.schema(
+        [
+            ("some_int", pa.int16()),
+            ("some_bytes", pa.string()),
+            ("some_floats", pa.float32()),
+        ]
+    )
     ctx.register_csv("csv3", path, schema=alternative_schema)
 
     assert ctx.tables() == {"csv", "csv1", "csv2", "csv3"}
@@ -71,7 +71,7 @@ def test_register_csv(ctx, tmp_path):
         result = pa.Table.from_batches(result)
         assert result.to_pydict() == {"COUNT(int)": [4]}
 
-    result = ctx.sql(f"SELECT * FROM csv3").collect()
+    result = ctx.sql("SELECT * FROM csv3").collect()
     result = pa.Table.from_batches(result)
     assert result.schema == alternative_schema
 
@@ -163,7 +163,9 @@ def test_cast(ctx, tmp_path):
         "float",
     ]
 
-    select = ", ".join([f"CAST(9 AS {t}) AS A{i}" for i, t in enumerate(valid_types)])
+    select = ", ".join(
+        [f"CAST(9 AS {t}) AS A{i}" for i, t in enumerate(valid_types)]
+    )
 
     # can execute, which implies that we can cast
     ctx.sql(f"SELECT {select} FROM t").collect()
@@ -192,7 +194,9 @@ def test_udf(
     ctx, tmp_path, fn, input_types, output_type, input_values, expected_values
 ):
     # write to disk
-    path = helpers.write_parquet(tmp_path / "a.parquet", pa.array(input_values))
+    path = helpers.write_parquet(
+        tmp_path / "a.parquet", pa.array(input_values)
+    )
     ctx.register_parquet("t", path)
     ctx.register_udf("udf", fn, input_types, output_type)
 
