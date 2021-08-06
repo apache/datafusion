@@ -62,6 +62,7 @@ pub use is_null::{is_null, IsNullExpr};
 pub use lead_lag::{lag, lead};
 pub use literal::{lit, Literal};
 pub use min_max::{Max, Min};
+pub(crate) use min_max::{MaxAccumulator, MinAccumulator};
 pub use negative::{negative, NegativeExpr};
 pub use not::{not, NotExpr};
 pub use nth_value::NthValue;
