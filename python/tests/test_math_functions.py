@@ -26,7 +26,9 @@ from datafusion import functions as f
 def df():
     ctx = ExecutionContext()
     # create a RecordBatch and a new DataFrame from it
-    batch = pa.RecordBatch.from_arrays([pa.array([0.1, -0.7, 0.55])], names=["value"])
+    batch = pa.RecordBatch.from_arrays(
+        [pa.array([0.1, -0.7, 0.55])], names=["value"]
+    )
     return ctx.create_dataframe([[batch]])
 
 
@@ -56,7 +58,13 @@ def test_math_functions(df):
     np.testing.assert_array_almost_equal(result.column(4), np.arcsin(values))
     np.testing.assert_array_almost_equal(result.column(5), np.arccos(values))
     np.testing.assert_array_almost_equal(result.column(6), np.exp(values))
-    np.testing.assert_array_almost_equal(result.column(7), np.log(values + 1.0))
-    np.testing.assert_array_almost_equal(result.column(8), np.log2(values + 1.0))
-    np.testing.assert_array_almost_equal(result.column(9), np.log10(values + 1.0))
+    np.testing.assert_array_almost_equal(
+        result.column(7), np.log(values + 1.0)
+    )
+    np.testing.assert_array_almost_equal(
+        result.column(8), np.log2(values + 1.0)
+    )
+    np.testing.assert_array_almost_equal(
+        result.column(9), np.log10(values + 1.0)
+    )
     np.testing.assert_array_less(result.column(10), np.ones_like(values))
