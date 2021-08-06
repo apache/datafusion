@@ -81,7 +81,7 @@ use std::fmt;
 // but the values don't match. Those are checked in the [equal_rows] macro
 // TODO: speed up collission check and move away from using a hashbrown HashMap
 // https://github.com/apache/arrow-datafusion/issues/50
-struct JoinHashMap(RawTable<SmallVec<[u64; 1]>>);
+struct JoinHashMap(RawTable<(u64, SmallVec<[u64; 1]>)>);
 
 impl fmt::Debug for JoinHashMap {
     fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -483,13 +483,17 @@ fn update_hash(
 
     // insert hashes to key of the hashmap
     for (row, hash_value) in hash_values.iter().enumerate() {
-        let item = hash_map.0.get_mut(*hash_value, |_| true);
-        if let Some(indices) = item {
+        let item = hash_map
+            .0
+            .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
+        if let Some((_, indices)) = item {
             indices.push((row + offset) as u64);
         } else {
-            hash_map
-                .0
-                .insert(*hash_value, smallvec![(row + offset) as u64], |_| 0);
+            hash_map.0.insert(
+                *hash_value,
+                (*hash_value, smallvec![(row + offset) as u64]),
+                |(hash, _)| *hash,
+            );
         }
     }
     Ok(())
@@ -680,7 +684,9 @@ fn build_join_indexes(
                 // For every item on the left and right we check if it matches
                 // This possibly contains rows with hash collisions,
                 // So we have to check here whether rows are equal or not
-                if let Some(indices) = left.0.get(*hash_value, |_| true) {
+                if let Some((_, indices)) =
+                    left.0.get(*hash_value, |(hash, _)| *hash_value == *hash)
+                {
                     for &i in indices {
                         // Check hash collisions
                         if equal_rows(i as usize, row, &left_join_values, &keys_values)? {
@@ -710,7 +716,9 @@ fn build_join_indexes(
 
             // First visit all of the rows
             for (row, hash_value) in hash_values.iter().enumerate() {
-                if let Some(indices) = left.0.get(*hash_value, |_| true) {
+                if let Some((_, indices)) =
+                    left.0.get(*hash_value, |(hash, _)| *hash_value == *hash)
+                {
                     for &i in indices {
                         // Collision check
                         if equal_rows(i as usize, row, &left_join_values, &keys_values)? {
@@ -727,8 +735,8 @@ fn build_join_indexes(
             let mut right_indices = UInt32Builder::new(0);
 
             for (row, hash_value) in hash_values.iter().enumerate() {
-                match left.0.get(*hash_value, |_| true) {
-                    Some(indices) => {
+                match left.0.get(*hash_value, |(hash, _)| *hash_value == *hash) {
+                    Some((_, indices)) => {
                         for &i in indices {
                             if equal_rows(
                                 i as usize,
@@ -1755,9 +1763,9 @@ mod tests {
         let hashes =
             create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
 
-        // Create hash collisions
-        hashmap_left.insert(hashes[0], smallvec![0, 1], |_| 0);
-        hashmap_left.insert(hashes[1], smallvec![0, 1], |_| 0);
+        // Create hash collisions (same hashes)
+        hashmap_left.insert(hashes[0], (hashes[0], smallvec![0, 1]), |(h, _)| *h);
+        hashmap_left.insert(hashes[1], (hashes[0], smallvec![0, 1]), |(h, _)| *h);
 
         let right = build_table_i32(
             ("a", &vec![10, 20]),
