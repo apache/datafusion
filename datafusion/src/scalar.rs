@@ -402,6 +402,8 @@ impl ScalarValue {
                 | ScalarValue::Int64(None)
                 | ScalarValue::Float32(None)
                 | ScalarValue::Float64(None)
+                | ScalarValue::Date32(None)
+                | ScalarValue::Date64(None)
                 | ScalarValue::Utf8(None)
                 | ScalarValue::LargeUtf8(None)
                 | ScalarValue::List(None, _)
