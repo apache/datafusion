@@ -1765,7 +1765,7 @@ mod tests {
 
         // Create hash collisions (same hashes)
         hashmap_left.insert(hashes[0], (hashes[0], smallvec![0, 1]), |(h, _)| *h);
-        hashmap_left.insert(hashes[1], (hashes[0], smallvec![0, 1]), |(h, _)| *h);
+        hashmap_left.insert(hashes[1], (hashes[1], smallvec![0, 1]), |(h, _)| *h);
 
         let right = build_table_i32(
             ("a", &vec![10, 20]),
