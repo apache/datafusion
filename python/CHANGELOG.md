@@ -28,6 +28,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 **Implemented enhancements:**
 
 - add more math functions and unit tests to `python` crate  [\#748](https://github.com/apache/arrow-datafusion/pull/748) ([Jimexist](https://github.com/Jimexist))
+- Expose ExecutionContext.register\_csv to the python bindings [\#524](https://github.com/apache/arrow-datafusion/pull/524) ([kszucs](https://github.com/kszucs))
 - Implement missing join types for Python dataframe [\#503](https://github.com/apache/arrow-datafusion/pull/503) ([Dandandan](https://github.com/Dandandan))
 - Add missing functions to python [\#388](https://github.com/apache/arrow-datafusion/pull/388) ([jgoday](https://github.com/jgoday))
 
@@ -56,7 +57,6 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 - fix 226, make `concat`, `concat_ws`, and `random` work with `Python` crate [\#761](https://github.com/apache/arrow-datafusion/pull/761) ([Jimexist](https://github.com/Jimexist))
 - fix python crate with the changes to logical plan builder [\#650](https://github.com/apache/arrow-datafusion/pull/650) ([Jimexist](https://github.com/Jimexist))
 - use nightly nightly-2021-05-10 [\#536](https://github.com/apache/arrow-datafusion/pull/536) ([Jimexist](https://github.com/Jimexist))
-- Expose ExecutionContext.register\_csv to the python bindings [\#524](https://github.com/apache/arrow-datafusion/pull/524) ([kszucs](https://github.com/kszucs))
 - Define the unittests using pytest [\#493](https://github.com/apache/arrow-datafusion/pull/493) ([kszucs](https://github.com/kszucs))
 - use requirements.txt to formalize python deps [\#484](https://github.com/apache/arrow-datafusion/pull/484) ([Jimexist](https://github.com/Jimexist))
 - update cargo.toml in python crate and fix unit test due to hash joins [\#483](https://github.com/apache/arrow-datafusion/pull/483) ([Jimexist](https://github.com/Jimexist))
