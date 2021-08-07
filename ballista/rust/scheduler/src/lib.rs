@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for distributed schedulers, such as Kubernetes
+//! Ballista Scheduler Process
+//!
+//! This crate contains the Ballista scheduler process. Refer to <https://crates.io/crates/ballista> for
+//! documentation.
 
 pub mod api;
 pub mod planner;
