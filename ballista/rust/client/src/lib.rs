@@ -69,43 +69,12 @@
 //!
 //! ## Executing a query
 //!
-//! Ballista provides a `BallistaContext` as a starting point for creating a DataFrame from a CSV
-//! or Parquet file and then performing transformations on the DataFrame. This usage is almost
-//! identical to DataFusion except that the starting point is a `BallistaContext` instead of a
-//! DataFusion `ExecutionContext`.
+//! Ballista provides a `BallistaContext` as a starting point for creating queries. DataFrames can be created
+//! by invoking the `read_csv`, `read_parquet`, and `sql` methods.
 //!
-//! ```no_run
-//! use ballista::prelude::*;
-//! use datafusion::arrow::util::pretty;
-//! use datafusion::prelude::{col, lit};
-//!
-//! #[tokio::main]
-//! async fn main() -> Result<()> {
-//!     let config = BallistaConfig::builder()
-//!         .set("ballista.shuffle.partitions", "4")
-//!         .build()?;
-//!
-//!     // connect to Ballista scheduler
-//!     let ctx = BallistaContext::remote("localhost", 50050, &config);
-//!
-//!     let testdata = datafusion::arrow::util::test_util::parquet_test_data();
-//!
-//!     let filename = &format!("{}/alltypes_plain.parquet", testdata);
-//!
-//!     // define the query using the DataFrame trait
-//!     let df = ctx
-//!         .read_parquet(filename)?
-//!         .select_columns(&["id", "bool_col", "timestamp_col"])?
-//!         .filter(col("id").gt(lit(1)))?;
-//!
-//!     let results = df.collect().await?;
-//!     pretty::print_batches(&results)?;
-//!
-//!     Ok(())
-//! }
-//! ```
-//!
-//! SQL is also supported as demonstrated in the following example:
+//! The following example runs a simple aggregate SQL query against a CSV file from the
+//! [New York Taxi and Limousine Commission](https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page)
+//! data set.
 //!
 //! ```no_run
 //! use ballista::prelude::*;
@@ -114,34 +83,33 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     let config = BallistaConfig::builder()
-//!         .set("ballista.shuffle.partitions", "4")
-//!         .build()?;
+//!    // create configuration
+//!    let config = BallistaConfig::builder()
+//!        .set("ballista.shuffle.partitions", "4")
+//!        .build()?;
 //!
-//!     // connect to Ballista scheduler
-//!     let ctx = BallistaContext::remote("localhost", 50050, &config);
+//!    // connect to Ballista scheduler
+//!    let ctx = BallistaContext::remote("localhost", 50050, &config);
 //!
-//!     let testdata = datafusion::arrow::util::test_util::arrow_test_data();
+//!    // register csv file with the execution context
+//!    ctx.register_csv(
+//!        "tripdata",
+//!        "/path/to/yellow_tripdata_2020-01.csv",
+//!        CsvReadOptions::new(),
+//!    )?;
 //!
-//!     // register csv file with the execution context
-//!     ctx.register_csv(
-//!         "aggregate_test_100",
-//!         &format!("{}/csv/aggregate_test_100.csv", testdata),
-//!         CsvReadOptions::new(),
-//!     )?;
+//!    // execute the query
+//!    let df = ctx.sql(
+//!        "SELECT passenger_count, MIN(fare_amount), MAX(fare_amount), AVG(fare_amount), SUM(fare_amount)
+//!        FROM tripdata
+//!        GROUP BY passenger_count
+//!        ORDER BY passenger_count",
+//!    )?;
 //!
-//!     // execute the query
-//!     let df = ctx.sql(
-//!         "SELECT c1, MIN(c12), MAX(c12) \
-//!         FROM aggregate_test_100 \
-//!         WHERE c11 > 0.1 AND c11 < 0.9 \
-//!         GROUP BY c1",
-//!     )?;
-//!
-//!     let results = df.collect().await?;
-//!     pretty::print_batches(&results)?;
-//!
-//!     Ok(())
+//!    // collect the results and print them to stdout
+//!    let results = df.collect().await?;
+//!    pretty::print_batches(&results)?;
+//!    Ok(())
 //! }
 //! ```
 
