@@ -65,9 +65,10 @@ jobs:
           # and commit the changes
           #
           # ignore subproject CHANGELOG.md because they are machine generated
-          npx prettier@2.3.2 --check \
+          npx prettier@2.3.2 --write \
             '{ballista,datafusion,datafusion-examples,docs,python}/**/*.md' \
             '!{ballista,datafusion,python}/CHANGELOG.md' \
             README.md \
             DEVELOPERS.md \
             'ballista/**/*.{ts,tsx}'
+          git diff --exit-code

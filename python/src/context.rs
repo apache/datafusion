@@ -15,16 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::path::PathBuf;
 use std::{collections::HashSet, sync::Arc};
 
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionContext as _ExecutionContext;
+use datafusion::prelude::CsvReadOptions;
 
 use crate::dataframe;
 use crate::errors;
@@ -94,6 +97,48 @@ impl ExecutionContext {
 
     fn register_parquet(&mut self, name: &str, path: &str) -> PyResult<()> {
         errors::wrap(self.ctx.register_parquet(name, path))?;
+        Ok(())
+    }
+
+    #[args(
+        schema = "None",
+        has_header = "true",
+        delimiter = "\",\"",
+        schema_infer_max_records = "1000",
+        file_extension = "\".csv\""
+    )]
+    fn register_csv(
+        &mut self,
+        name: &str,
+        path: PathBuf,
+        schema: Option<&PyAny>,
+        has_header: bool,
+        delimiter: &str,
+        schema_infer_max_records: usize,
+        file_extension: &str,
+    ) -> PyResult<()> {
+        let path = path
+            .to_str()
+            .ok_or(PyValueError::new_err("Unable to convert path to a string"))?;
+        let schema = match schema {
+            Some(s) => Some(to_rust::to_rust_schema(s)?),
+            None => None,
+        };
+        let delimiter = delimiter.as_bytes();
+        if delimiter.len() != 1 {
+            return Err(PyValueError::new_err(
+                "Delimiter must be a single character",
+            ));
+        }
+
+        let mut options = CsvReadOptions::new()
+            .has_header(has_header)
+            .delimiter(delimiter[0])
+            .schema_infer_max_records(schema_infer_max_records)
+            .file_extension(file_extension);
+        options.schema = schema.as_ref();
+
+        errors::wrap(self.ctx.register_csv(name, path, options))?;
         Ok(())
     }
 

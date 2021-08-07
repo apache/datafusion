@@ -47,7 +47,7 @@ use datafusion::{
 
 use datafusion::physical_plan::{
     empty::EmptyExec,
-    expressions::{Avg, BinaryExpr, Column, Sum},
+    expressions::{Avg, BinaryExpr, Column, Max, Min, Sum},
     Partitioning,
 };
 use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
@@ -421,6 +421,10 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
             Ok(protobuf::AggregateFunction::Sum.into())
         } else if self.as_any().downcast_ref::<Count>().is_some() {
             Ok(protobuf::AggregateFunction::Count.into())
+        } else if self.as_any().downcast_ref::<Min>().is_some() {
+            Ok(protobuf::AggregateFunction::Min.into())
+        } else if self.as_any().downcast_ref::<Max>().is_some() {
+            Ok(protobuf::AggregateFunction::Max.into())
         } else {
             Err(BallistaError::NotImplemented(format!(
                 "Aggregate function not supported: {:?}",

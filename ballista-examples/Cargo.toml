@@ -31,8 +31,8 @@ publish = false
 arrow-flight = { version = "5.0" }
 datafusion = { path = "../datafusion" }
 ballista = { path = "../ballista/rust/client" }
-prost = "0.7"
-tonic = "0.4"
+prost = "0.8"
+tonic = "0.5"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 futures = "0.3"
 num_cpus = "1.13.0"
