@@ -29,15 +29,17 @@ RUN cargo install cargo-chef
 
 FROM base as planner
 RUN mkdir /tmp/ballista/ballista
+RUN mkdir /tmp/ballista/ballista-examples
 RUN mkdir /tmp/ballista/benchmarks
 RUN mkdir /tmp/ballista/datafusion
 RUN mkdir /tmp/ballista/datafusion-examples
 ADD Cargo.toml .
+COPY ballista ./ballista/
+COPY ballista-examples ./ballista-examples/
 COPY benchmarks ./benchmarks/
 COPY datafusion ./datafusion/
 COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
-COPY ballista ./ballista/
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM base as cacher
@@ -46,14 +48,16 @@ RUN cargo chef cook $RELEASE_FLAG --recipe-path recipe.json
 
 FROM base as builder
 RUN mkdir /tmp/ballista/ballista
+RUN mkdir /tmp/ballista/ballista-examples
 RUN mkdir /tmp/ballista/benchmarks
 RUN mkdir /tmp/ballista/datafusion
 RUN mkdir /tmp/ballista/datafusion-cli
 RUN mkdir /tmp/ballista/datafusion-examples
 ADD Cargo.toml .
+COPY ballista ./ballista/
+COPY ballista-examples ./ballista-examples/
 COPY benchmarks ./benchmarks/
 COPY datafusion ./datafusion/
-COPY ballista ./ballista/
 COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
 COPY --from=cacher /tmp/ballista/target target
