@@ -15,12 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Ballista is a distributed compute platform based on Apache Arrow and DataFusion.
+//! Ballista is a distributed compute platform primarily implemented in Rust, and powered by Apache Arrow and
+//! DataFusion. It is built on an architecture that allows other programming languages (such as Python, C++, and
+//! Java) to be supported as first-class citizens without paying a penalty for serialization costs.
+//!
+//! The foundational technologies in Ballista are:
+//!
+//! - [Apache Arrow](https://arrow.apache.org/) memory model and compute kernels for efficient processing of data.
+//! - [Apache Arrow Flight Protocol](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for efficient
+//!   data transfer between processes.
+//! - [Google Protocol Buffers](https://developers.google.com/protocol-buffers) for serializing query plans.
+//! - [Docker](https://www.docker.com/) for packaging up executors along with user-defined code.
+//!
+//! Ballista can be deployed as a standalone cluster and also supports [Kubernetes](https://kubernetes.io/). In either
+//! case, the scheduler can be configured to use [etcd](https://etcd.io/) as a backing store to (eventually) provide
+//! redundancy in the case of a scheduler failing.
 //!
 //! ## Starting a cluster
 //!
 //! There are numerous ways to start a Ballista cluster, including support for Docker and
-//! Kubernetes.
+//! Kubernetes. For full documentation, refer to the
+//! [DataFusion User Guide](https://github.com/apache/arrow-datafusion/tree/master/docs/user-guide)
 //!
 //! A simple way to start a local cluster for testing purposes is to use cargo to install
 //! the scheduler and executor crates.
@@ -69,6 +84,8 @@
 //!     let config = BallistaConfig::builder()
 //!         .set("ballista.shuffle.partitions", "4")
 //!         .build()?;
+//!
+//!     // connect to Ballista scheduler
 //!     let ctx = BallistaContext::remote("localhost", 50050, &config);
 //!
 //!     let testdata = datafusion::arrow::util::test_util::parquet_test_data();
@@ -100,6 +117,8 @@
 //!     let config = BallistaConfig::builder()
 //!         .set("ballista.shuffle.partitions", "4")
 //!         .build()?;
+//!
+//!     // connect to Ballista scheduler
 //!     let ctx = BallistaContext::remote("localhost", 50050, &config);
 //!
 //!     let testdata = datafusion::arrow::util::test_util::arrow_test_data();

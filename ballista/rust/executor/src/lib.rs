@@ -17,7 +17,7 @@
 
 //! Ballista Executor Process
 //!
-//! This crate contains the Ballista executor process. Refer to https://crates.io/crates/ballista for
+//! This crate contains the Ballista executor process. Refer to <https://crates.io/crates/ballista> for
 //! documentation.
 
 pub mod collect;
