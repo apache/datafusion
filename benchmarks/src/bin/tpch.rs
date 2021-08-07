@@ -538,7 +538,7 @@ fn get_schema(table: &str) -> Schema {
             Field::new("o_orderdate", DataType::Date32, false),
             Field::new("o_orderpriority", DataType::Utf8, false),
             Field::new("o_clerk", DataType::Utf8, false),
-            Field::new("o_shippriority", DataType::UInt64, false),
+            Field::new("o_shippriority", DataType::Int32, false),
             Field::new("o_comment", DataType::Utf8, false),
         ]),
 
