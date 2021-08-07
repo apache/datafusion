@@ -21,7 +21,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
-## [5.0.0](https://github.com/apache/arrow-datafusion/tree/5.0.0) (2021-07-31)
+## [5.0.0](https://github.com/apache/arrow-datafusion/tree/5.0.0) (2021-08-07)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/4.0.0...5.0.0)
 
@@ -65,6 +65,8 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 -  Implement date\_trunc\(\) function [\#203](https://github.com/apache/arrow-datafusion/issues/203)
 -  COUNT DISTINCT does not support for `Float64` [\#199](https://github.com/apache/arrow-datafusion/issues/199)
 - Update SQLMetric to use atomics rather than a Mutex [\#30](https://github.com/apache/arrow-datafusion/issues/30)
+- Implement vectorized hashing for DictionaryArray types [\#812](https://github.com/apache/arrow-datafusion/pull/812) ([alamb](https://github.com/alamb))
+- Convert unsupported conditions in left right join to filters [\#796](https://github.com/apache/arrow-datafusion/pull/796) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Dandandan](https://github.com/Dandandan))
 - Implement streaming versions of Dataframe.collect methods [\#789](https://github.com/apache/arrow-datafusion/pull/789) ([andygrove](https://github.com/andygrove))
 - impl from str for column and scalar [\#762](https://github.com/apache/arrow-datafusion/pull/762) ([Jimexist](https://github.com/Jimexist))
 - impl fmt::Display for PlanType [\#752](https://github.com/apache/arrow-datafusion/pull/752) ([Jimexist](https://github.com/Jimexist))
@@ -146,6 +148,8 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 - Incorrect answers with SELECT DISTINCT queries [\#250](https://github.com/apache/arrow-datafusion/issues/250)
 - Intermitent failure in CI join\_with\_hash\_collision [\#227](https://github.com/apache/arrow-datafusion/issues/227)
 - `Concat` from Dataframe API no longer accepts multiple expressions [\#226](https://github.com/apache/arrow-datafusion/issues/226)
+- Qualified field resolution too strict [\#810](https://github.com/apache/arrow-datafusion/pull/810) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([seddonm1](https://github.com/seddonm1))
+- Produce correct answers for Group BY NULL \(Option 1\) [\#793](https://github.com/apache/arrow-datafusion/pull/793) ([alamb](https://github.com/alamb))
 - \#723 limit pruning rule to simple expression [\#764](https://github.com/apache/arrow-datafusion/pull/764) ([lvheyang](https://github.com/lvheyang))
 - \#699 fix return type conflict when calling builtin math fuctions [\#716](https://github.com/apache/arrow-datafusion/pull/716) ([lvheyang](https://github.com/lvheyang))
 - Fix Date32 and Date64 parquet row group pruning [\#690](https://github.com/apache/arrow-datafusion/pull/690) ([alamb](https://github.com/alamb))
@@ -177,6 +181,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 -  No way to get to the examples from docs.rs [\#186](https://github.com/apache/arrow-datafusion/issues/186)
 - Update docs to use vendored version of arrow [\#772](https://github.com/apache/arrow-datafusion/pull/772) ([alamb](https://github.com/alamb))
+- Fix typo in DEVELOPERS.md [\#692](https://github.com/apache/arrow-datafusion/pull/692) ([lvheyang](https://github.com/lvheyang))
 - update stale documentations related to window functions [\#598](https://github.com/apache/arrow-datafusion/pull/598) ([Jimexist](https://github.com/Jimexist))
 - update readme to reflect work on window functions [\#471](https://github.com/apache/arrow-datafusion/pull/471) ([Jimexist](https://github.com/Jimexist))
 - Add examples section to datafusion crate doc [\#457](https://github.com/apache/arrow-datafusion/pull/457) ([mluts](https://github.com/mluts))
@@ -193,7 +198,9 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 **Performance improvements:**
 
+- Speed up inlist for strings and primitives [\#813](https://github.com/apache/arrow-datafusion/pull/813) ([Dandandan](https://github.com/Dandandan))
 - perf: improve performance of `SortPreservingMergeExec` operator [\#722](https://github.com/apache/arrow-datafusion/pull/722) ([e-dard](https://github.com/e-dard))
+- Optimize min/max queries with table statistics [\#719](https://github.com/apache/arrow-datafusion/pull/719) ([b41sh](https://github.com/b41sh))
 - perf: Improve materialisation performance of SortPreservingMergeExec [\#691](https://github.com/apache/arrow-datafusion/pull/691) ([e-dard](https://github.com/e-dard))
 - Optimize count\(\*\) with table statistics [\#620](https://github.com/apache/arrow-datafusion/pull/620) ([Dandandan](https://github.com/Dandandan))
 - optimize window function's `find_ranges_in_range` [\#595](https://github.com/apache/arrow-datafusion/pull/595) ([Jimexist](https://github.com/Jimexist))
@@ -205,6 +212,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 **Closed issues:**
 
+- Confirm git tagging strategy for releases [\#770](https://github.com/apache/arrow-datafusion/issues/770)
 - arrow::util::pretty::pretty\_format\_batches missing [\#769](https://github.com/apache/arrow-datafusion/issues/769)
 - move the `assert_batches_eq!` macros to a non part of datafusion [\#745](https://github.com/apache/arrow-datafusion/issues/745)
 - fix an issue where aliases are not respected in generating downstream schemas in window expr [\#592](https://github.com/apache/arrow-datafusion/issues/592)
@@ -236,6 +244,12 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 **Merged pull requests:**
 
+- Use `RawTable`  API in hash join [\#827](https://github.com/apache/arrow-datafusion/pull/827) ([Dandandan](https://github.com/Dandandan))
+- Add test for window functions on dictionary [\#823](https://github.com/apache/arrow-datafusion/pull/823) ([alamb](https://github.com/alamb))
+- Support date datatypes in max/min [\#820](https://github.com/apache/arrow-datafusion/pull/820) ([viirya](https://github.com/viirya))
+- Update dependencies: prost to 0.8 and tonic to 0.5 [\#818](https://github.com/apache/arrow-datafusion/pull/818) ([alamb](https://github.com/alamb))
+- Move `hash_array` into hash\_utils.rs [\#807](https://github.com/apache/arrow-datafusion/pull/807) ([alamb](https://github.com/alamb))
+- Better join order resolution logic [\#797](https://github.com/apache/arrow-datafusion/pull/797) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([seddonm1](https://github.com/seddonm1))
 - Remove GroupByScalar and use ScalarValue in preparation for supporting null values in GroupBy [\#786](https://github.com/apache/arrow-datafusion/pull/786) ([alamb](https://github.com/alamb))
 -  Use consistent version of string\_to\_timestamp\_nanos in DataFusion [\#767](https://github.com/apache/arrow-datafusion/pull/767) ([alamb](https://github.com/alamb))
 - fix 226, make `concat`, `concat_ws`, and `random` work with `Python` crate [\#761](https://github.com/apache/arrow-datafusion/pull/761) ([Jimexist](https://github.com/Jimexist))
@@ -252,7 +266,6 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 - avoid iterator materialization in column index lookup [\#703](https://github.com/apache/arrow-datafusion/pull/703) ([houqp](https://github.com/houqp))
 - Fix build with 1.52.1 [\#696](https://github.com/apache/arrow-datafusion/pull/696) ([alamb](https://github.com/alamb))
 - Fix test output due to logical merge conflict [\#694](https://github.com/apache/arrow-datafusion/pull/694) ([alamb](https://github.com/alamb))
-- Fix typo in DEVELOPERS.md [\#692](https://github.com/apache/arrow-datafusion/pull/692) ([lvheyang](https://github.com/lvheyang))
 - add more integration tests [\#668](https://github.com/apache/arrow-datafusion/pull/668) ([Jimexist](https://github.com/Jimexist))
 - Bump arrow and parquet versions to 4.4 [\#654](https://github.com/apache/arrow-datafusion/pull/654) ([toddtreece](https://github.com/toddtreece))
 - Add query 15 to TPC-H queries [\#645](https://github.com/apache/arrow-datafusion/pull/645) ([Dandandan](https://github.com/Dandandan))

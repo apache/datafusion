@@ -21,7 +21,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
-## [python-0.3.0](https://github.com/apache/arrow-datafusion/tree/python-0.3.0) (2021-07-31)
+## [python-0.3.0](https://github.com/apache/arrow-datafusion/tree/python-0.3.0) (2021-08-07)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/4.0.0...python-0.3.0)
 
@@ -38,6 +38,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 **Closed issues:**
 
+- Confirm git tagging strategy for releases [\#770](https://github.com/apache/arrow-datafusion/issues/770)
 - arrow::util::pretty::pretty\_format\_batches missing [\#769](https://github.com/apache/arrow-datafusion/issues/769)
 - move the `assert_batches_eq!` macros to a non part of datafusion [\#745](https://github.com/apache/arrow-datafusion/issues/745)
 - fix an issue where aliases are not respected in generating downstream schemas in window expr [\#592](https://github.com/apache/arrow-datafusion/issues/592)
@@ -55,6 +56,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 - fix 226, make `concat`, `concat_ws`, and `random` work with `Python` crate [\#761](https://github.com/apache/arrow-datafusion/pull/761) ([Jimexist](https://github.com/Jimexist))
 - fix python crate with the changes to logical plan builder [\#650](https://github.com/apache/arrow-datafusion/pull/650) ([Jimexist](https://github.com/Jimexist))
 - use nightly nightly-2021-05-10 [\#536](https://github.com/apache/arrow-datafusion/pull/536) ([Jimexist](https://github.com/Jimexist))
+- Expose ExecutionContext.register\_csv to the python bindings [\#524](https://github.com/apache/arrow-datafusion/pull/524) ([kszucs](https://github.com/kszucs))
 - Define the unittests using pytest [\#493](https://github.com/apache/arrow-datafusion/pull/493) ([kszucs](https://github.com/kszucs))
 - use requirements.txt to formalize python deps [\#484](https://github.com/apache/arrow-datafusion/pull/484) ([Jimexist](https://github.com/Jimexist))
 - update cargo.toml in python crate and fix unit test due to hash joins [\#483](https://github.com/apache/arrow-datafusion/pull/483) ([Jimexist](https://github.com/Jimexist))
