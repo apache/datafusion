@@ -124,7 +124,7 @@ test_source_distribution() {
   export PARQUET_TEST_DATA=$PWD/parquet-testing-data/data
 
   cargo build
-  cargo test
+  cargo test --all
 }
 
 TEST_SUCCESS=no
