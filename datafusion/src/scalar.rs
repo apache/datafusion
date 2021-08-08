@@ -167,7 +167,7 @@ impl PartialOrd for ScalarValue {
         // or else face a compile error
         match (self, other) {
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
-            (Boolean(v1), _) => None,
+            (Boolean(_), _) => None,
             (Float32(v1), Float32(v2)) => {
                 let v1 = v1.map(OrderedFloat);
                 let v2 = v2.map(OrderedFloat);
