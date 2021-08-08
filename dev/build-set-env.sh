@@ -22,14 +22,14 @@ export BALLISTA_VERSION=$(awk -F'[ ="]+' '$1 == "version" { print $2 }' ballista
 # If running within CI, use docker-container driver to cache build cache into
 # local folders so we can share them between runs.
 if [[ "${CI}" = "true" ]] && docker buildx &>/dev/null; then
-    echo "building docker image in CI, saving build cache to local folder ${BUILDX_CACHE_DIR}."
+    echo "building docker image in CI, saving layer cache to local folder ${BUILDX_LAYER_CACHE_DIR}."
     BUILDX_BUILDER="${BUILDX_BUILDER:-ballista-docker-builder}"
     docker buildx inspect "${BUILDX_BUILDER}" &>/dev/null || \
         docker buildx create --driver docker-container --name "${BUILDX_BUILDER}" --use
     BUILD_ARGS=(buildx build \
         --builder ${BUILDX_BUILDER} \
-        --cache-from="type=local,src=${BUILDX_CACHE_DIR}" \
-        --cache-to="type=local,mode=max,dest=${BUILDX_CACHE_DIR}" \
+        --cache-from="type=local,src=${BUILDX_LAYER_CACHE_DIR}" \
+        --cache-to="type=local,mode=max,dest=${BUILDX_LAYER_CACHE_DIR}" \
         --load)
 else
     echo "No docker buildx plugin found, fallback to default docker build command with DOCKER_BUILDKIT=1"

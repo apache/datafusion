@@ -26,18 +26,62 @@ jobs:
       - name: Set up Docker Buildx
         id: docker-builder
         uses: docker/setup-buildx-action@v1
-      - name: Cache Buildx
+
+      - name: Cache docker layer cache
         uses: actions/cache@v2
-        id: buildx-cache
+        id: buildx-layer-cache
         with:
-          path: "${{ runner.temp }}/buildx-cache"
-          key: ${{ runner.os }}-buildx-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
+          path: "${{ runner.temp }}/buildx-cache/layer"
+          key: ${{ runner.os }}-buildx-layer-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
           restore-keys: |
-            ${{ runner.os }}-buildx-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
-            ${{ runner.os }}-buildx-
-      - run: |
-          ./dev/integration-tests.sh
-          docker buildx --builder "${BUILDX_BUILDER}" du
+            ${{ runner.os }}-buildx-layer-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
+            ${{ runner.os }}-buildx-layer-
+
+      - name: Cache docker buildkit cache
+        uses: actions/cache@v2
+        id: buildx-buildkit-cache
+        with:
+          path: "${{ runner.temp }}/buildx-cache/buildkit"
+          key: ${{ runner.os }}-buildx-buildkit-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-buildkit-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
+            ${{ runner.os }}-buildx-buildkit-
+
+      - name: Restore docker buildx cache
+        # Handle cache mount in buildx
+        # See https://github.com/docker/buildx/issues/156#issuecomment-537492942
+        if: steps.buildx-buildkit-cache.outputs.cache-hit == 'true'
         env:
-          BUILDX_BUILDER: ballista-docker-builder
-          BUILDX_CACHE_DIR: "${{ runner.temp }}/buildx-cache"
+          BUILDX_BUILDER: ${{ steps.docker-builder.outputs.name }}
+        run: |
+          export BUILDX_BUILDER_CONTAINER="buildx_buildkit_${BUILDX_BUILDER}0"
+          docker buildx stop --builder "${BUILDX_BUILDER}"
+          docker run --rm --volumes-from "${BUILDX_BUILDER_CONTAINER}" \
+            -v ${{ runner.temp }}/buildx-cache/buildkit:/backup \
+            alpine:3.10 /bin/sh -c "cd / && tar xf /backup/backup.tar.gz"
+          docker buildx inspect --builder "${BUILDX_BUILDER}" --bootstrap
+          docker buildx --builder "${BUILDX_BUILDER}" du --verbose
+
+      - name: Run integration test
+        env:
+          BUILDX_BUILDER: ${{ steps.docker-builder.outputs.name }}
+          BUILDX_LAYER_CACHE_DIR: "${{ runner.temp }}/buildx-cache/layer"
+        run: |
+          ./dev/integration-tests.sh
+
+      - name: Backup docker buildx cache
+        env:
+          KEEP_STORAGE: "3221225472.0" # 3GB
+          BUILDX_BUILDER: ${{ steps.docker-builder.outputs.name }}
+        run: |
+          export BUILDX_BUILDER_CONTAINER="buildx_buildkit_${BUILDX_BUILDER}0"
+          echo "Start pruning builder ${BUILDX_BUILDER_CONTAINER}"
+          docker buildx --builder "${BUILDX_BUILDER}" prune --force --filter type=frontend
+          docker buildx --builder "${BUILDX_BUILDER}" prune --force --filter type=regular
+          docker buildx --builder "${BUILDX_BUILDER}" prune --force --filter type=source.local
+          docker buildx --builder "${BUILDX_BUILDER}" prune --force --keep-storage ${KEEP_STORAGE}
+          docker buildx --builder "${BUILDX_BUILDER}" du --verbose
+
+          docker run --rm --volumes-from "${BUILDX_BUILDER_CONTAINER}" \
+            -v ${{ runner.temp }}/buildx-cache/buildkit:/backup \
+            alpine:3.10 /bin/sh -c "cd / && tar cf /backup/backup.tar.gz /var/lib/buildkit"
