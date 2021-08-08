@@ -37,5 +37,7 @@ jobs:
             ${{ runner.os }}-buildx-
       - run: |
           ./dev/integration-tests.sh
+          docker buildx --builder "${BUILDX_BUILDER}" du
         env:
+          BUILDX_BUILDER: ballista-docker-builder
           BUILDX_CACHE_DIR: "${{ runner.temp }}/buildx-cache"

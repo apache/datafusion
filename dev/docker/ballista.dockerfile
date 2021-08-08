@@ -169,7 +169,6 @@ COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
 COPY --from=cacher $CARGO_HOME $CARGO_HOME
 COPY --from=cacher /tmp/ballista/target target
-ARG RELEASE_FLAG=--release
 
 # force build.rs to run to generate configure_me code.
 ENV FORCE_REBUILD='true'
