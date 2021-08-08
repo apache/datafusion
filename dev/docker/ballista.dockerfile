@@ -167,6 +167,7 @@ COPY datafusion ./datafusion/
 COPY ballista ./ballista/
 COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
+COPY --from=cacher $CARGO_HOME $CARGO_HOME
 COPY --from=cacher /tmp/ballista/target target
 ARG RELEASE_FLAG=--release
 
@@ -178,17 +179,17 @@ RUN --mount=type=cache,target=/root/.cache/sccache \
     --mount=type=cache,target=/usr/local/cargo/git/db \
     cargo build $RELEASE_FLAG
 
-# put the executor on /executor (need to be copied from different places depending on FLAG)
+# copy the binaries into / (need to be copied from different places depending on RELEASE_FLAG)
 ENV RELEASE_FLAG=${RELEASE_FLAG}
-RUN if [ -z "$RELEASE_FLAG" ]; then mv /tmp/ballista/target/debug/ballista-executor /executor; else mv /tmp/ballista/target/release/ballista-executor /executor; fi
-
-# put the scheduler on /scheduler (need to be copied from different places depending on FLAG)
-ENV RELEASE_FLAG=${RELEASE_FLAG}
-RUN if [ -z "$RELEASE_FLAG" ]; then mv /tmp/ballista/target/debug/ballista-scheduler /scheduler; else mv /tmp/ballista/target/release/ballista-scheduler /scheduler; fi
-
-# put the tpch on /tpch (need to be copied from different places depending on FLAG)
-ENV RELEASE_FLAG=${RELEASE_FLAG}
-RUN if [ -z "$RELEASE_FLAG" ]; then mv /tmp/ballista/target/debug/tpch /tpch; else mv /tmp/ballista/target/release/tpch /tpch; fi
+RUN if [ -z "$RELEASE_FLAG" ]; then \
+        mv /tmp/ballista/target/debug/ballista-executor /executor; \
+        mv /tmp/ballista/target/debug/ballista-scheduler /scheduler; \
+        mv /tmp/ballista/target/debug/tpch /tpch; \
+    else \
+        mv /tmp/ballista/target/release/ballista-executor /executor; \
+        mv /tmp/ballista/target/release/ballista-scheduler /scheduler; \
+        mv /tmp/ballista/target/release/tpch /tpch; \
+    fi
 
 # Copy the binary into a new container for a smaller docker image
 FROM base
