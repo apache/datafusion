@@ -289,7 +289,10 @@ impl DFSchema {
     fn get_field_names(&self) -> String {
         self.fields
             .iter()
-            .map(|f| format!("'{}'", f.name()))
+            .map(|f| match f.qualifier() {
+                Some(qualifier) => format!("'{}.{}'", qualifier, f.name()),
+                None => format!("'{}'", f.name()),
+            })
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -619,7 +622,7 @@ mod tests {
     #[test]
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let expected_help = "Valid fields are \'c0\', \'c1\'.";
+        let expected_help = "Valid fields are \'t1.c0\', \'t1.c1\'.";
         assert!(schema
             .field_with_qualified_name("x", "y")
             .unwrap_err()

@@ -64,15 +64,6 @@ jobs:
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
-      # Ballista is currently not part of the main workspace so requires a separate build step
-      - name: Build Ballista
-        run: |
-          cd ballista/rust
-          # snmalloc requires cmake so build without default features
-          cargo build --no-default-features --features sled
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   # test the crate
   linux-test:

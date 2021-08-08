@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Core executor logic for executing queries and storing results in memory.
+//! Ballista Executor Process
+//!
+//! This crate contains the Ballista executor process. Refer to <https://crates.io/crates/ballista> for
+//! documentation.
 
 pub mod collect;
 pub mod execution_loop;

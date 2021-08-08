@@ -18,8 +18,8 @@
 import numpy as np
 import pyarrow as pa
 import pytest
-from datafusion import ExecutionContext
 
+from datafusion import ExecutionContext
 from . import generic as helpers
 
 
@@ -33,11 +33,62 @@ def test_no_table(ctx):
         ctx.sql("SELECT a FROM b").collect()
 
 
-def test_register(ctx, tmp_path):
+def test_register_csv(ctx, tmp_path):
+    path = tmp_path / "test.csv"
+
+    table = pa.Table.from_arrays(
+        [
+            [1, 2, 3, 4],
+            ["a", "b", "c", "d"],
+            [1.1, 2.2, 3.3, 4.4],
+        ],
+        names=["int", "str", "float"],
+    )
+    pa.csv.write_csv(table, path)
+
+    ctx.register_csv("csv", path)
+    ctx.register_csv("csv1", str(path))
+    ctx.register_csv(
+        "csv2",
+        path,
+        has_header=True,
+        delimiter=",",
+        schema_infer_max_records=10,
+    )
+    alternative_schema = pa.schema(
+        [
+            ("some_int", pa.int16()),
+            ("some_bytes", pa.string()),
+            ("some_floats", pa.float32()),
+        ]
+    )
+    ctx.register_csv("csv3", path, schema=alternative_schema)
+
+    assert ctx.tables() == {"csv", "csv1", "csv2", "csv3"}
+
+    for table in ["csv", "csv1", "csv2"]:
+        result = ctx.sql(f"SELECT COUNT(int) FROM {table}").collect()
+        result = pa.Table.from_batches(result)
+        assert result.to_pydict() == {"COUNT(int)": [4]}
+
+    result = ctx.sql("SELECT * FROM csv3").collect()
+    result = pa.Table.from_batches(result)
+    assert result.schema == alternative_schema
+
+    with pytest.raises(
+        ValueError, match="Delimiter must be a single character"
+    ):
+        ctx.register_csv("csv4", path, delimiter="wrong")
+
+
+def test_register_parquet(ctx, tmp_path):
     path = helpers.write_parquet(tmp_path / "a.parquet", helpers.data())
     ctx.register_parquet("t", path)
-
     assert ctx.tables() == {"t"}
+
+    result = ctx.sql("SELECT COUNT(a) FROM t").collect()
+    result = pa.Table.from_batches(result)
+    assert result.to_pydict() == {"COUNT(a)": [100]}
 
 
 def test_execute(ctx, tmp_path):
@@ -112,7 +163,9 @@ def test_cast(ctx, tmp_path):
         "float",
     ]
 
-    select = ", ".join([f"CAST(9 AS {t}) AS A{i}" for i, t in enumerate(valid_types)])
+    select = ", ".join(
+        [f"CAST(9 AS {t}) AS A{i}" for i, t in enumerate(valid_types)]
+    )
 
     # can execute, which implies that we can cast
     ctx.sql(f"SELECT {select} FROM t").collect()
@@ -141,7 +194,9 @@ def test_udf(
     ctx, tmp_path, fn, input_types, output_type, input_values, expected_values
 ):
     # write to disk
-    path = helpers.write_parquet(tmp_path / "a.parquet", pa.array(input_values))
+    path = helpers.write_parquet(
+        tmp_path / "a.parquet", pa.array(input_values)
+    )
     ctx.register_parquet("t", path)
     ctx.register_udf("udf", fn, input_types, output_type)
 

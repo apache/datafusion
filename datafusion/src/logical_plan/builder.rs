@@ -273,23 +273,84 @@ impl LogicalPlanBuilder {
         &self,
         right: &LogicalPlan,
         join_type: JoinType,
-        left_keys: Vec<impl Into<Column>>,
-        right_keys: Vec<impl Into<Column>>,
+        join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
     ) -> Result<Self> {
-        if left_keys.len() != right_keys.len() {
+        if join_keys.0.len() != join_keys.1.len() {
             return Err(DataFusionError::Plan(
                 "left_keys and right_keys were not the same length".to_string(),
             ));
         }
 
-        let left_keys: Vec<Column> = left_keys
-            .into_iter()
-            .map(|c| c.into().normalize(&self.plan))
-            .collect::<Result<_>>()?;
-        let right_keys: Vec<Column> = right_keys
-            .into_iter()
-            .map(|c| c.into().normalize(right))
-            .collect::<Result<_>>()?;
+        let (left_keys, right_keys): (Vec<Result<Column>>, Vec<Result<Column>>) =
+            join_keys
+                .0
+                .into_iter()
+                .zip(join_keys.1.into_iter())
+                .map(|(l, r)| {
+                    let l = l.into();
+                    let r = r.into();
+
+                    match (&l.relation, &r.relation) {
+                        (Some(lr), Some(rr)) => {
+                            let l_is_left =
+                                self.plan.schema().field_with_qualified_name(lr, &l.name);
+                            let l_is_right =
+                                right.schema().field_with_qualified_name(lr, &l.name);
+                            let r_is_left =
+                                self.plan.schema().field_with_qualified_name(rr, &r.name);
+                            let r_is_right =
+                                right.schema().field_with_qualified_name(rr, &r.name);
+
+                            match (l_is_left, l_is_right, r_is_left, r_is_right) {
+                                (_, Ok(_), Ok(_), _) => (Ok(r), Ok(l)),
+                                (Ok(_), _, _, Ok(_)) => (Ok(l), Ok(r)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                            }
+                        }
+                        (Some(lr), None) => {
+                            let l_is_left =
+                                self.plan.schema().field_with_qualified_name(lr, &l.name);
+                            let l_is_right =
+                                right.schema().field_with_qualified_name(lr, &l.name);
+
+                            match (l_is_left, l_is_right) {
+                                (Ok(_), _) => (Ok(l), r.normalize(right)),
+                                (_, Ok(_)) => (r.normalize(&self.plan), Ok(l)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                            }
+                        }
+                        (None, Some(rr)) => {
+                            let r_is_left =
+                                self.plan.schema().field_with_qualified_name(rr, &r.name);
+                            let r_is_right =
+                                right.schema().field_with_qualified_name(rr, &r.name);
+
+                            match (r_is_left, r_is_right) {
+                                (Ok(_), _) => (Ok(r), l.normalize(right)),
+                                (_, Ok(_)) => (l.normalize(&self.plan), Ok(r)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                            }
+                        }
+                        (None, None) => {
+                            let mut swap = false;
+                            let left_key =
+                                l.clone().normalize(&self.plan).or_else(|_| {
+                                    swap = true;
+                                    l.normalize(right)
+                                });
+                            if swap {
+                                (r.normalize(&self.plan), left_key)
+                            } else {
+                                (left_key, r.normalize(right))
+                            }
+                        }
+                    }
+                })
+                .unzip();
+
+        let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
+        let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
+
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;

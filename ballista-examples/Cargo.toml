@@ -16,38 +16,23 @@
 # under the License.
 
 [package]
-name = "ballista-core"
-description = "Ballista Distributed Compute"
-license = "Apache-2.0"
+name = "ballista-examples"
+description = "Ballista usage examples"
 version = "0.5.0-SNAPSHOT"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+keywords = [ "arrow", "distributed", "query", "sql" ]
 edition = "2018"
-build = "build.rs"
-
-[features]
-simd = ["datafusion/simd"]
+publish = false
 
 [dependencies]
-ahash = "0.7"
-async-trait = "0.1.36"
-futures = "0.3"
-hashbrown = "0.11"
-log = "0.4"
+arrow-flight = { version = "5.0" }
+datafusion = { path = "../datafusion" }
+ballista = { path = "../ballista/rust/client" }
 prost = "0.8"
-serde = {version = "1", features = ["derive"]}
-sqlparser = "0.9.0"
-tokio = "1.0"
 tonic = "0.5"
-uuid = { version = "0.8", features = ["v4"] }
-
-arrow-flight = { version = "5.0"  }
-
-datafusion = { path = "../../../datafusion" }
-
-[dev-dependencies]
-tempfile = "3"
-
-[build-dependencies]
-tonic-build = { version = "0.5" }
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+futures = "0.3"
+num_cpus = "1.13.0"

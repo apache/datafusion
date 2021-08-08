@@ -1717,15 +1717,51 @@ fn create_case_context() -> Result<ExecutionContext> {
 #[tokio::test]
 async fn equijoin() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+    ];
     let expected = vec![
         vec!["11", "a", "z"],
         vec!["22", "b", "y"],
         vec!["44", "d", "x"],
     ];
-    assert_eq!(expected, actual);
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
+
+    let mut ctx = create_join_context_qualified()?;
+    let equivalent_sql = [
+        "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t1.a = t2.a ORDER BY t1.a",
+        "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t2.a = t1.a ORDER BY t1.a",
+    ];
+    let expected = vec![vec!["1", "100"], vec!["2", "200"], vec!["4", "400"]];
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_multiple_condition_ordering() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t1_name <> t2_name ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name <> t1_name ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t1_name <> t2_name ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t2_name <> t1_name ORDER BY t1_id",
+    ];
+    let expected = vec![
+        vec!["11", "a", "z"],
+        vec!["22", "b", "y"],
+        vec!["44", "d", "x"],
+    ];
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
     Ok(())
 }
 
@@ -1741,52 +1777,105 @@ async fn equijoin_and_other_condition() -> Result<()> {
 }
 
 #[tokio::test]
-async fn equijoin_and_unsupported_condition() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+async fn equijoin_left_and_condition_from_right() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
     let res = ctx.create_logical_plan(sql);
+    assert!(res.is_ok());
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![
+        vec!["11", "a", "z"],
+        vec!["22", "b", "y"],
+        vec!["33", "c", "NULL"],
+        vec!["44", "d", "NULL"],
+    ];
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_right_and_condition_from_left() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t1_id >= 22 ORDER BY t2_name";
+    let res = ctx.create_logical_plan(sql);
+    assert!(res.is_ok());
+    let actual = execute(&mut ctx, sql).await;
+
+    let expected = vec![
+        vec!["NULL", "NULL", "w"],
+        vec!["44", "d", "x"],
+        vec!["22", "b", "y"],
+        vec!["NULL", "NULL", "z"],
+    ];
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_and_unsupported_condition() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_id >= '44' ORDER BY t1_id";
+    let res = ctx.create_logical_plan(sql);
+
     assert!(res.is_err());
-    assert_eq!(format!("{}", res.unwrap_err()), "This feature is not implemented: Unsupported expressions in Left JOIN: [#t2_name GtEq Utf8(\"y\")]");
+    assert_eq!(format!("{}", res.unwrap_err()), "This feature is not implemented: Unsupported expressions in Left JOIN: [#t1_id GtEq Utf8(\"44\")]");
+
     Ok(())
 }
 
 #[tokio::test]
 async fn left_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
-    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+    ];
     let expected = vec![
         vec!["11", "a", "z"],
         vec!["22", "b", "y"],
         vec!["33", "c", "NULL"],
         vec!["44", "d", "x"],
     ];
-    assert_eq!(expected, actual);
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
     Ok(())
 }
 
 #[tokio::test]
 async fn right_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t2_id = t1_id ORDER BY t1_id"
+    ];
     let expected = vec![
         vec!["NULL", "NULL", "w"],
         vec!["11", "a", "z"],
         vec!["22", "b", "y"],
         vec!["44", "d", "x"],
     ];
-    assert_eq!(expected, actual);
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
     Ok(())
 }
 
 #[tokio::test]
 async fn full_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
-    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t1_id = t2_id ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+    ];
     let expected = vec![
         vec!["NULL", "NULL", "w"],
         vec!["11", "a", "z"],
@@ -1794,11 +1883,19 @@ async fn full_join() -> Result<()> {
         vec!["33", "c", "NULL"],
         vec!["44", "d", "x"],
     ];
-    assert_eq!(expected, actual);
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
 
-    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
-    assert_eq!(expected, actual);
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+    ];
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
 
     Ok(())
 }
@@ -1821,15 +1918,19 @@ async fn left_join_using() -> Result<()> {
 #[tokio::test]
 async fn equijoin_implicit_syntax() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t1_id = t2_id ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t1_id = t2_id ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id",
+    ];
     let expected = vec![
         vec!["11", "a", "z"],
         vec!["22", "b", "y"],
         vec!["44", "d", "x"],
     ];
-    assert_eq!(expected, actual);
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
     Ok(())
 }
 
@@ -2967,25 +3068,120 @@ async fn query_count_distinct() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_group_on_null() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int32Array::from(vec![
+            Some(0),
+            Some(3),
+            None,
+            Some(1),
+            Some(3),
+        ]))],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT COUNT(*), c1 FROM test GROUP BY c1";
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    // Note that the results also
+    // include a row for NULL (c1=NULL, count = 1)
+    let expected = vec![
+        "+-----------------+----+",
+        "| COUNT(UInt8(1)) | c1 |",
+        "+-----------------+----+",
+        "| 1               |    |",
+        "| 1               | 0  |",
+        "| 1               | 1  |",
+        "| 2               | 3  |",
+        "+-----------------+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_group_on_null_multi_col() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Utf8, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(0),
+                Some(0),
+                Some(3),
+                None,
+                None,
+                Some(3),
+                Some(0),
+                None,
+                Some(3),
+            ])),
+            Arc::new(StringArray::from(vec![
+                None,
+                None,
+                Some("foo"),
+                None,
+                Some("bar"),
+                Some("foo"),
+                None,
+                Some("bar"),
+                Some("foo"),
+            ])),
+        ],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT COUNT(*), c1, c2 FROM test GROUP BY c1, c2";
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    // Note that the results also include values for null
+    // include a row for NULL (c1=NULL, count = 1)
+    let expected = vec![
+        "+-----------------+----+-----+",
+        "| COUNT(UInt8(1)) | c1 | c2  |",
+        "+-----------------+----+-----+",
+        "| 1               |    |     |",
+        "| 2               |    | bar |",
+        "| 3               | 0  |     |",
+        "| 3               | 3  | foo |",
+        "+-----------------+----+-----+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+
+    // Also run query with group columns reversed (results shoudl be the same)
+    let sql = "SELECT COUNT(*), c1, c2 FROM test GROUP BY c2, c1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
-    let field_type =
-        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-    let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
+    let array = vec![Some("one"), None, Some("three")]
+        .into_iter()
+        .collect::<DictionaryArray<Int32Type>>();
 
-    let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
-    let values_builder = StringBuilder::new(10);
-    let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+    let batch =
+        RecordBatch::try_from_iter(vec![("d1", Arc::new(array) as ArrayRef)]).unwrap();
 
-    builder.append("one")?;
-    builder.append_null()?;
-    builder.append("three")?;
-    let array = Arc::new(builder.finish());
-
-    let data = RecordBatch::try_new(schema.clone(), vec![array])?;
-
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
@@ -3017,6 +3213,20 @@ async fn query_on_string_dictionary() -> Result<()> {
     let sql = "SELECT COUNT(d1) FROM test";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["2"]];
+    assert_eq!(expected, actual);
+
+    // grouping
+    let sql = "SELECT d1, COUNT(*) FROM test group by d1";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["NULL", "1"], vec!["one", "1"], vec!["three", "1"]];
+    assert_eq!(expected, actual);
+
+    // window functions
+    let sql = "SELECT d1, row_number() OVER (partition by d1) FROM test";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["NULL", "1"], vec!["one", "1"], vec!["three", "1"]];
     assert_eq!(expected, actual);
 
     Ok(())
@@ -4009,4 +4219,19 @@ fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>> {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>()
+}
+
+#[tokio::test]
+async fn test_partial_qualified_name() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let sql = "SELECT t1.t1_id, t1_name FROM public.t1";
+    let expected = vec![
+        vec!["11", "a"],
+        vec!["22", "b"],
+        vec!["33", "c"],
+        vec!["44", "d"],
+    ];
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
+    Ok(())
 }

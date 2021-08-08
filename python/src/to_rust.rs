@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::convert::TryFrom;
 use std::sync::Arc;
 
 use datafusion::arrow::{
@@ -110,4 +111,12 @@ pub fn to_rust_scalar(ob: &PyAny) -> PyResult<ScalarValue> {
             .into())
         }
     })
+}
+
+pub fn to_rust_schema(ob: &PyAny) -> PyResult<Schema> {
+    let c_schema = ffi::FFI_ArrowSchema::empty();
+    let c_schema_ptr = &c_schema as *const ffi::FFI_ArrowSchema;
+    ob.call_method1("_export_to_c", (c_schema_ptr as uintptr_t,))?;
+    let schema = Schema::try_from(&c_schema).map_err(errors::DataFusionError::from)?;
+    Ok(schema)
 }
