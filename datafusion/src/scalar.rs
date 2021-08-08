@@ -167,28 +167,43 @@ impl PartialOrd for ScalarValue {
         // or else face a compile error
         match (self, other) {
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
+            (Boolean(v1), _) => None,
             (Float32(v1), Float32(v2)) => {
                 let v1 = v1.map(OrderedFloat);
                 let v2 = v2.map(OrderedFloat);
                 v1.partial_cmp(&v2)
             }
+            (Float32(_), _) => None,
             (Float64(v1), Float64(v2)) => {
                 let v1 = v1.map(OrderedFloat);
                 let v2 = v2.map(OrderedFloat);
                 v1.partial_cmp(&v2)
             }
+            (Float64(_), _) => None,
             (Int8(v1), Int8(v2)) => v1.partial_cmp(v2),
+            (Int8(_), _) => None,
             (Int16(v1), Int16(v2)) => v1.partial_cmp(v2),
+            (Int16(_), _) => None,
             (Int32(v1), Int32(v2)) => v1.partial_cmp(v2),
+            (Int32(_), _) => None,
             (Int64(v1), Int64(v2)) => v1.partial_cmp(v2),
+            (Int64(_), _) => None,
             (UInt8(v1), UInt8(v2)) => v1.partial_cmp(v2),
+            (UInt8(_), _) => None,
             (UInt16(v1), UInt16(v2)) => v1.partial_cmp(v2),
+            (UInt16(_), _) => None,
             (UInt32(v1), UInt32(v2)) => v1.partial_cmp(v2),
+            (UInt32(_), _) => None,
             (UInt64(v1), UInt64(v2)) => v1.partial_cmp(v2),
+            (UInt64(_), _) => None,
             (Utf8(v1), Utf8(v2)) => v1.partial_cmp(v2),
+            (Utf8(_), _) => None,
             (LargeUtf8(v1), LargeUtf8(v2)) => v1.partial_cmp(v2),
+            (LargeUtf8(_), _) => None,
             (Binary(v1), Binary(v2)) => v1.partial_cmp(v2),
+            (Binary(_), _) => None,
             (LargeBinary(v1), LargeBinary(v2)) => v1.partial_cmp(v2),
+            (LargeBinary(_), _) => None,
             (List(v1, t1), List(v2, t2)) => {
                 if t1.eq(t2) {
                     v1.partial_cmp(v2)
@@ -196,15 +211,23 @@ impl PartialOrd for ScalarValue {
                     None
                 }
             }
+            (List(_, _), _) => None,
             (Date32(v1), Date32(v2)) => v1.partial_cmp(v2),
+            (Date32(_), _) => None,
             (Date64(v1), Date64(v2)) => v1.partial_cmp(v2),
+            (Date64(_), _) => None,
             (TimestampSecond(v1), TimestampSecond(v2)) => v1.partial_cmp(v2),
+            (TimestampSecond(_), _) => None,
             (TimestampMillisecond(v1), TimestampMillisecond(v2)) => v1.partial_cmp(v2),
+            (TimestampMillisecond(_), _) => None,
             (TimestampMicrosecond(v1), TimestampMicrosecond(v2)) => v1.partial_cmp(v2),
+            (TimestampMicrosecond(_), _) => None,
             (TimestampNanosecond(v1), TimestampNanosecond(v2)) => v1.partial_cmp(v2),
+            (TimestampNanosecond(_), _) => None,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.partial_cmp(v2),
+            (IntervalYearMonth(_), _) => None,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.partial_cmp(v2),
-            (_, _) => None,
+            (IntervalDayTime(_), _) => None,
         }
     }
 }
