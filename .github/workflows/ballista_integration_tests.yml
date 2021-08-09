@@ -50,10 +50,14 @@ jobs:
       - name: Restore docker buildx cache
         # Handle cache mount in buildx
         # See https://github.com/docker/buildx/issues/156#issuecomment-537492942
-        if: steps.buildx-buildkit-cache.outputs.cache-hit == 'true'
         env:
           BUILDX_BUILDER: ${{ steps.docker-builder.outputs.name }}
         run: |
+          if [[ ! -d ${{ runner.temp }}/buildx-cache/buildkit ]]; then
+            # this happens on the first run
+            echo "buildkit cache dir not found, skipping cache restore"
+            exit 0
+          fi
           export BUILDX_BUILDER_CONTAINER="buildx_buildkit_${BUILDX_BUILDER}0"
           docker buildx stop --builder "${BUILDX_BUILDER}"
           docker run --rm --volumes-from "${BUILDX_BUILDER_CONTAINER}" \
