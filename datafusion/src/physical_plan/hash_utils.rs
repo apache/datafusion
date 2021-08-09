@@ -298,11 +298,28 @@ fn create_hashes_dictionary<K: ArrowDictionaryKeyType>(
     Ok(())
 }
 
+/// Test version of `create_hashes` that produces the same value for
+/// all hashes (to test collisions)
+///
+/// See comments on `hashes_buffer` for more details
+#[cfg(feature = "force_hash_collisions")]
+pub fn create_hashes<'a>(
+    _arrays: &[ArrayRef],
+    _random_state: &RandomState,
+    hashes_buffer: &'a mut Vec<u64>,
+) -> Result<&'a mut Vec<u64>> {
+    for hash in hashes_buffer.iter_mut() {
+        *hash = 0
+    }
+    return Ok(hashes_buffer);
+}
+
 /// Creates hash values for every row, based on the values in the
 /// columns.
 ///
 /// The number of rows to hash is determined by `hashes_buffer.len()`.
 /// `hashes_buffer` should be pre-sized appropriately
+#[cfg(not(feature = "force_hash_collisions"))]
 pub fn create_hashes<'a>(
     arrays: &[ArrayRef],
     random_state: &RandomState,
@@ -661,6 +678,8 @@ mod tests {
     }
 
     #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_dict_arrays() {
         let strings = vec![Some("foo"), None, Some("bar"), Some("foo"), None];
 
@@ -697,12 +716,14 @@ mod tests {
         assert_eq!(strings[0], strings[3]);
         assert_eq!(dict_hashes[0], dict_hashes[3]);
 
-        // different strings should matp to different hash values
+        // different strings should map to different hash values
         assert_ne!(strings[0], strings[2]);
         assert_ne!(dict_hashes[0], dict_hashes[2]);
     }
 
     #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn create_multi_column_hash_for_dict_arrays() {
         let strings1 = vec![Some("foo"), None, Some("bar")];
         let strings2 = vec![Some("blarg"), Some("blah"), None];
