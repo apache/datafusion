@@ -346,8 +346,6 @@ fn group_aggregate_batch(
         group_by_values.push(ScalarValue::UInt32(Some(0)));
     }
 
-    let mut group_by_values = group_by_values.into_boxed_slice();
-
     // 1.1 construct the key from the group values
     // 1.2 construct the mapping key if it does not exist
     // 1.3 add the row' index to `indices`
@@ -388,12 +386,15 @@ fn group_aggregate_batch(
                 let accumulator_set = create_accumulators(aggr_expr)
                     .map_err(DataFusionError::into_arrow_external_error)?;
 
-                // Copy group values from arrays into ScalarValues
-                create_group_by_values(&group_values, row, &mut group_by_values)?;
+                // Copy group values out of arrays into `ScalarValue`s
+                let group_by_values = group_values
+                    .iter()
+                    .map(|col| ScalarValue::try_from_array(col, row))
+                    .collect::<Result<Vec<_>>>()?;
 
                 // Add new entry to group_states and save newly created index
                 let group_state = GroupState {
-                    group_by_values: group_by_values.clone(),
+                    group_by_values: group_by_values.into_boxed_slice(),
                     accumulator_set,
                     indices: vec![row as u32], // 1.3
                 };
@@ -954,24 +955,6 @@ fn finalize_aggregation(
                 .collect::<Result<Vec<ArrayRef>>>()
         }
     }
-}
-
-/// Extract the value in `col[row]` as a GroupByScalar
-fn create_group_by_value(col: &ArrayRef, row: usize) -> Result<ScalarValue> {
-    ScalarValue::try_from_array(col, row)
-}
-
-/// Extract the values in `group_by_keys` arrow arrays into the target vector
-/// as GroupByScalar values
-pub(crate) fn create_group_by_values(
-    group_by_keys: &[ArrayRef],
-    row: usize,
-    vec: &mut Box<[ScalarValue]>,
-) -> Result<()> {
-    for (i, col) in group_by_keys.iter().enumerate() {
-        vec[i] = create_group_by_value(col, row)?
-    }
-    Ok(())
 }
 
 #[cfg(test)]
