@@ -1377,7 +1377,6 @@ mod tests {
     }
 
     #[tokio::test]
-    // Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
     async fn join_full_multi_batch() {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
