@@ -988,77 +988,58 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                             expr.fun
                         ))
                     })?;
+                let args = &expr.args;
+
                 match scalar_function {
-                    protobuf::ScalarFunction::Sqrt => {
-                        Ok(sqrt((&expr.expr[0]).try_into()?))
-                    }
-                    protobuf::ScalarFunction::Sin => Ok(sin((&expr.expr[0]).try_into()?)),
-                    protobuf::ScalarFunction::Cos => Ok(cos((&expr.expr[0]).try_into()?)),
-                    protobuf::ScalarFunction::Tan => Ok(tan((&expr.expr[0]).try_into()?)),
-                    // protobuf::ScalarFunction::Asin => Ok(asin(&expr.expr[0]).try_into()?)),
-                    // protobuf::ScalarFunction::Acos => Ok(acos(&expr.expr[0]).try_into()?)),
-                    protobuf::ScalarFunction::Atan => {
-                        Ok(atan((&expr.expr[0]).try_into()?))
-                    }
-                    protobuf::ScalarFunction::Exp => Ok(exp((&expr.expr[0]).try_into()?)),
-                    protobuf::ScalarFunction::Log2 => {
-                        Ok(log2((&expr.expr[0]).try_into()?))
-                    }
-                    protobuf::ScalarFunction::Ln => Ok(ln((&expr.expr[0]).try_into()?)),
-                    protobuf::ScalarFunction::Log10 => {
-                        Ok(log10((&expr.expr[0]).try_into()?))
-                    }
-                    protobuf::ScalarFunction::Floor => {
-                        Ok(floor((&expr.expr[0]).try_into()?))
-                    }
-                    protobuf::ScalarFunction::Ceil => {
-                        Ok(ceil((&expr.expr[0]).try_into()?))
-                    }
-                    protobuf::ScalarFunction::Round => {
-                        Ok(round((&expr.expr[0]).try_into()?))
-                    }
-                    protobuf::ScalarFunction::Trunc => {
-                        Ok(trunc((&expr.expr[0]).try_into()?))
-                    }
-                    protobuf::ScalarFunction::Abs => Ok(abs((&expr.expr[0]).try_into()?)),
+                    protobuf::ScalarFunction::Sqrt => Ok(sqrt((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Sin => Ok(sin((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Cos => Ok(cos((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Tan => Ok(tan((&args[0]).try_into()?)),
+                    // protobuf::ScalarFunction::Asin => Ok(asin(&args[0]).try_into()?)),
+                    // protobuf::ScalarFunction::Acos => Ok(acos(&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Atan => Ok(atan((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Exp => Ok(exp((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Log2 => Ok(log2((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Ln => Ok(ln((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Log10 => Ok(log10((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Floor => Ok(floor((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Ceil => Ok(ceil((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Round => Ok(round((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Trunc => Ok(trunc((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Abs => Ok(abs((&args[0]).try_into()?)),
                     protobuf::ScalarFunction::Signum => {
-                        Ok(signum((&expr.expr[0]).try_into()?))
+                        Ok(signum((&args[0]).try_into()?))
                     }
                     protobuf::ScalarFunction::Octetlength => {
-                        Ok(length((&expr.expr[0]).try_into()?))
+                        Ok(length((&args[0]).try_into()?))
                     }
-                    // // protobuf::ScalarFunction::Concat => Ok(concat((&expr.expr[0]).try_into()?)),
-                    protobuf::ScalarFunction::Lower => {
-                        Ok(lower((&expr.expr[0]).try_into()?))
+                    // // protobuf::ScalarFunction::Concat => Ok(concat((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Lower => Ok(lower((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Upper => Ok(upper((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Trim => Ok(trim((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Ltrim => Ok(ltrim((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Rtrim => Ok(rtrim((&args[0]).try_into()?)),
+                    // protobuf::ScalarFunction::Totimestamp => Ok(to_timestamp((&args[0]).try_into()?)),
+                    // protobuf::ScalarFunction::Array => Ok(array((&args[0]).try_into()?)),
+                    // // protobuf::ScalarFunction::Nullif => Ok(nulli((&args[0]).try_into()?)),
+                    protobuf::ScalarFunction::Datepart => {
+                        Ok(date_part((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }
-                    protobuf::ScalarFunction::Upper => {
-                        Ok(upper((&expr.expr[0]).try_into()?))
+                    protobuf::ScalarFunction::Datetrunc => {
+                        Ok(date_trunc((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }
-                    protobuf::ScalarFunction::Trim => {
-                        Ok(trim((&expr.expr[0]).try_into()?))
-                    }
-                    protobuf::ScalarFunction::Ltrim => {
-                        Ok(ltrim((&expr.expr[0]).try_into()?))
-                    }
-                    protobuf::ScalarFunction::Rtrim => {
-                        Ok(rtrim((&expr.expr[0]).try_into()?))
-                    }
-                    // protobuf::ScalarFunction::Totimestamp => Ok(to_timestamp((&expr.expr[0]).try_into()?)),
-                    // protobuf::ScalarFunction::Array => Ok(array((&expr.expr[0]).try_into()?)),
-                    // // protobuf::ScalarFunction::Nullif => Ok(nulli((&expr.expr[0]).try_into()?)),
-                    // protobuf::ScalarFunction::Datetrunc => Ok(date_trunc((&expr.expr[0]).try_into()?)),
-                    // protobuf::ScalarFunction::Md5 => Ok(md5((&expr.expr[0]).try_into()?)),
+                    // protobuf::ScalarFunction::Md5 => Ok(md5((&args[0]).try_into()?)),
                     protobuf::ScalarFunction::Sha224 => {
-                        Ok(sha224((&expr.expr[0]).try_into()?))
+                        Ok(sha224((&args[0]).try_into()?))
                     }
                     protobuf::ScalarFunction::Sha256 => {
-                        Ok(sha256((&expr.expr[0]).try_into()?))
+                        Ok(sha256((&args[0]).try_into()?))
                     }
                     protobuf::ScalarFunction::Sha384 => {
-                        Ok(sha384((&expr.expr[0]).try_into()?))
+                        Ok(sha384((&args[0]).try_into()?))
                     }
                     protobuf::ScalarFunction::Sha512 => {
-                        Ok(sha512((&expr.expr[0]).try_into()?))
+                        Ok(sha512((&args[0]).try_into()?))
                     }
                     _ => Err(proto_error(
                         "Protobuf deserialization error: Unsupported scalar function",
@@ -1119,10 +1100,10 @@ impl TryInto<Field> for &protobuf::Field {
     }
 }
 
-use datafusion::physical_plan::datetime_expressions::{date_trunc, to_timestamp};
 use datafusion::physical_plan::{aggregates, windows};
 use datafusion::prelude::{
-    array, length, lower, ltrim, md5, rtrim, sha224, sha256, sha384, sha512, trim, upper,
+    array, date_part, date_trunc, length, lower, ltrim, md5, rtrim, sha224, sha256,
+    sha384, sha512, trim, upper,
 };
 use std::convert::TryFrom;
 
