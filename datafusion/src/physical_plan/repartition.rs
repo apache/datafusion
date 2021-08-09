@@ -732,6 +732,9 @@ mod tests {
     }
 
     #[tokio::test]
+    // skip this test when hash function is different because the hard
+    // coded expected output is a function of the hash values
+    #[cfg(not(feature = "force_hash_collisions"))]
     async fn repartition_with_dropping_output_stream() {
         #[derive(Debug)]
         struct Case<'a> {

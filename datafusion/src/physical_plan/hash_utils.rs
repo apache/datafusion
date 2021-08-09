@@ -298,11 +298,28 @@ fn create_hashes_dictionary<K: ArrowDictionaryKeyType>(
     Ok(())
 }
 
+/// Test version of `create_hashes` that produces the same value for
+/// all hashes (to test collisions)
+///
+/// See comments on `hashes_buffer` for more details
+#[cfg(feature = "force_hash_collisions")]
+pub fn create_hashes<'a>(
+    _arrays: &[ArrayRef],
+    _random_state: &RandomState,
+    hashes_buffer: &'a mut Vec<u64>,
+) -> Result<&'a mut Vec<u64>> {
+    for hash in hashes_buffer.iter_mut() {
+        *hash = 0
+    }
+    return Ok(hashes_buffer);
+}
+
 /// Creates hash values for every row, based on the values in the
 /// columns.
 ///
 /// The number of rows to hash is determined by `hashes_buffer.len()`.
 /// `hashes_buffer` should be pre-sized appropriately
+#[cfg(not(feature = "force_hash_collisions"))]
 pub fn create_hashes<'a>(
     arrays: &[ArrayRef],
     random_state: &RandomState,
