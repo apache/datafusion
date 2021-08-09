@@ -22,9 +22,8 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        ArrayBuilder, ArrayData, ArrayRef, BooleanArray, LargeStringArray,
-        PrimitiveArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
-        UInt64Builder,
+        ArrayData, ArrayRef, BooleanArray, LargeStringArray, PrimitiveArray,
+        UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder,
     },
     compute,
     datatypes::{UInt32Type, UInt64Type},
