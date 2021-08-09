@@ -352,9 +352,6 @@ fn group_aggregate_batch(
     // 1.2 construct the mapping key if it does not exist
     // 1.3 add the row' index to `indices`
 
-    // Make sure we can create the accumulators or otherwise return an error
-    create_accumulators(aggr_expr).map_err(DataFusionError::into_arrow_external_error)?;
-
     // track which entries in `accumulators` have rows in this batch to aggregate
     let mut groups_with_rows = vec![];
 
@@ -388,8 +385,8 @@ fn group_aggregate_batch(
             }
             //  1.2 Need to create new entry
             None => {
-                // We can safely unwrap here as we checked we can create an accumulator before
-                let accumulator_set = create_accumulators(aggr_expr).unwrap();
+                let accumulator_set = create_accumulators(aggr_expr)
+                    .map_err(DataFusionError::into_arrow_external_error)?;
 
                 // Copy group values from arrays into ScalarValues
                 create_group_by_values(&group_values, row, &mut group_by_values)?;
