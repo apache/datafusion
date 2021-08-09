@@ -678,6 +678,8 @@ mod tests {
     }
 
     #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_dict_arrays() {
         let strings = vec![Some("foo"), None, Some("bar"), Some("foo"), None];
 
@@ -714,12 +716,14 @@ mod tests {
         assert_eq!(strings[0], strings[3]);
         assert_eq!(dict_hashes[0], dict_hashes[3]);
 
-        // different strings should matp to different hash values
+        // different strings should map to different hash values
         assert_ne!(strings[0], strings[2]);
         assert_ne!(dict_hashes[0], dict_hashes[2]);
     }
 
     #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn create_multi_column_hash_for_dict_arrays() {
         let strings1 = vec![Some("foo"), None, Some("bar")];
         let strings2 = vec![Some("blarg"), Some("blah"), None];
