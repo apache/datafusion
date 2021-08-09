@@ -1372,6 +1372,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
+    #[cfg(not(feature = "force_hash_collisions"))]
     async fn join_full_multi_batch() {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -1637,6 +1639,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
+    #[cfg(not(feature = "force_hash_collisions"))]
     async fn join_right_one() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -1673,6 +1677,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
+    #[cfg(not(feature = "force_hash_collisions"))]
     async fn partitioned_join_right_one() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -1710,6 +1716,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
+    #[cfg(not(feature = "force_hash_collisions"))]
     async fn join_full_one() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
