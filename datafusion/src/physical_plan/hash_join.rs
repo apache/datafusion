@@ -750,8 +750,8 @@ fn build_join_indexes(
                                 no_match = false;
                             }
                         }
-                       // If no rows matched left, still must keep the right
-                       // with all nulls for left
+                        // If no rows matched left, still must keep the right
+                        // with all nulls for left
                         if no_match {
                             left_indices.append_null()?;
                             right_indices.append_value(row as u32)?;
