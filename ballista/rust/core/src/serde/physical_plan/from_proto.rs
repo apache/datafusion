@@ -501,6 +501,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Totimestamp => BuiltinScalarFunction::ToTimestamp,
             ScalarFunction::Array => BuiltinScalarFunction::Array,
             ScalarFunction::Nullif => BuiltinScalarFunction::NullIf,
+            ScalarFunction::Datepart => BuiltinScalarFunction::DatePart,
             ScalarFunction::Datetrunc => BuiltinScalarFunction::DateTrunc,
             ScalarFunction::Md5 => BuiltinScalarFunction::MD5,
             ScalarFunction::Sha224 => BuiltinScalarFunction::SHA224,
