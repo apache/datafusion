@@ -21,7 +21,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
-## [ballista-0.5.0](https://github.com/apache/arrow-datafusion/tree/ballista-0.5.0) (2021-08-07)
+## [ballista-0.5.0](https://github.com/apache/arrow-datafusion/tree/ballista-0.5.0) (2021-08-08)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/4.0.0...ballista-0.5.0)
 
@@ -93,6 +93,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 **Fixed bugs:**
 
+- Ballista: TPC-H q3 @ SF=1000 never completes [\#835](https://github.com/apache/arrow-datafusion/issues/835)
 - Ballista does not support MIN/MAX aggregate functions [\#832](https://github.com/apache/arrow-datafusion/issues/832)
 - Ballista docker images fail to build [\#828](https://github.com/apache/arrow-datafusion/issues/828)
 - Ballista: UnresolvedShuffleExec should only have a single stage\_id [\#726](https://github.com/apache/arrow-datafusion/issues/726)

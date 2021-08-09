@@ -21,7 +21,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
-## [python-0.3.0](https://github.com/apache/arrow-datafusion/tree/python-0.3.0) (2021-08-07)
+## [python-0.3.0](https://github.com/apache/arrow-datafusion/tree/python-0.3.0) (2021-08-08)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/4.0.0...python-0.3.0)
 

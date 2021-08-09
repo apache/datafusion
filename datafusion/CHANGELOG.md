@@ -21,7 +21,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
-## [5.0.0](https://github.com/apache/arrow-datafusion/tree/5.0.0) (2021-08-07)
+## [5.0.0](https://github.com/apache/arrow-datafusion/tree/5.0.0) (2021-08-08)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/4.0.0...5.0.0)
 
@@ -65,6 +65,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 -  Implement date\_trunc\(\) function [\#203](https://github.com/apache/arrow-datafusion/issues/203)
 -  COUNT DISTINCT does not support for `Float64` [\#199](https://github.com/apache/arrow-datafusion/issues/199)
 - Update SQLMetric to use atomics rather than a Mutex [\#30](https://github.com/apache/arrow-datafusion/issues/30)
+- Implement PartialOrd for ScalarValue [\#838](https://github.com/apache/arrow-datafusion/pull/838) ([viirya](https://github.com/viirya))
 - Support date datatypes in max/min [\#820](https://github.com/apache/arrow-datafusion/pull/820) ([viirya](https://github.com/viirya))
 - Implement vectorized hashing for DictionaryArray types [\#812](https://github.com/apache/arrow-datafusion/pull/812) ([alamb](https://github.com/alamb))
 - Convert unsupported conditions in left right join to filters [\#796](https://github.com/apache/arrow-datafusion/pull/796) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Dandandan](https://github.com/Dandandan))
