@@ -32,8 +32,8 @@ if [[ "${CI}" = "true" ]] && docker buildx &>/dev/null; then
         --cache-to="type=local,mode=max,dest=${BUILDX_LAYER_CACHE_DIR}" \
         --load)
 else
-    echo "No docker buildx plugin found, fallback to default docker build command with DOCKER_BUILDKIT=1"
-    echo "To install docker buildx, follow https://github.com/docker/buildx#installing"
     export DOCKER_BUILDKIT=1
+    echo "No docker buildx plugin found, fallback to default docker build command with DOCKER_BUILDKIT=${DOCKER_BUILDKIT}"
+    echo "To install docker buildx, follow https://github.com/docker/buildx#installing"
     BUILD_ARGS=(build)
 fi
