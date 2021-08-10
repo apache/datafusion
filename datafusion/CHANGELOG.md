@@ -21,7 +21,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
-## [5.0.0](https://github.com/apache/arrow-datafusion/tree/5.0.0) (2021-08-08)
+## [5.0.0](https://github.com/apache/arrow-datafusion/tree/5.0.0) (2021-08-10)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/4.0.0...5.0.0)
 
