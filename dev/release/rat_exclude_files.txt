@@ -14,6 +14,9 @@ ci/etc/rprofile
 ci/etc/*.patch
 ci/vcpkg/*.patch
 CHANGELOG.md
+datafusion/CHANGELOG.md
+ballista/CHANGELOG.md
+python/CHANGELOG.md
 dev/requirements*.txt
 dev/archery/MANIFEST.in
 dev/archery/requirements*.txt
