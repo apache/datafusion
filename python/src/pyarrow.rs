@@ -17,11 +17,15 @@
 
 use std::convert::TryFrom;
 use std::error;
+use std::sync::Arc;
 
 use libc::uintptr_t;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
+use pyo3::types::PyList;
+use pyo3::exceptions::PyValueError;
 
+use datafusion::scalar::ScalarValue;
 use datafusion::arrow::array::{make_array_from_raw, ArrayRef};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::ffi;
@@ -124,8 +128,6 @@ impl PyArrowConvert for ArrayRef {
 impl PyArrowConvert for RecordBatch {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // TODO(kszucs): implement the FFI conversions in arrow-rs for RecordBatches
-        let schema = value.getattr("schema")?;
-        let arrays = value.getattr("columns")?;
 
         // let names = schema.getattr("names")?.extract::<Vec<String>>()?;
 
@@ -141,13 +143,12 @@ impl PyArrowConvert for RecordBatch {
         //     })
         //     .collect::<PyResult<_>>()?;
 
-        let schema = Schema::from_pyarrow(schema)?;
+        let schema = value.getattr("schema")?;
+        let schema = Arc::new(Schema::from_pyarrow(schema)?);
 
-        let arrays = (0..names.len())
-            .map(|i| {
-                let array = batch.call_method1("column", (i,))?;
-                to_rust(array)
-            })
+        let arrays = value.getattr("columns")?.downcast::<PyList>()?;
+        let arrays = arrays.iter()
+            .map(ArrayRef::from_pyarrow)
             .collect::<PyResult<_>>()?;
 
         let batch =
@@ -184,4 +185,42 @@ impl PyArrowConvert for RecordBatch {
     //         Ok(PyObject::from(list))
     //     })
     // }
+}
+
+impl PyArrowConvert for ScalarValue {
+    fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        let t = ob
+            .getattr("__class__")?
+            .getattr("__name__")?
+            .extract::<&str>()?;
+
+        let p = ob.call_method0("as_py")?;
+
+        Ok(match t {
+            "Int8Scalar" => ScalarValue::Int8(Some(p.extract::<i8>()?)),
+            "Int16Scalar" => ScalarValue::Int16(Some(p.extract::<i16>()?)),
+            "Int32Scalar" => ScalarValue::Int32(Some(p.extract::<i32>()?)),
+            "Int64Scalar" => ScalarValue::Int64(Some(p.extract::<i64>()?)),
+            "UInt8Scalar" => ScalarValue::UInt8(Some(p.extract::<u8>()?)),
+            "UInt16Scalar" => ScalarValue::UInt16(Some(p.extract::<u16>()?)),
+            "UInt32Scalar" => ScalarValue::UInt32(Some(p.extract::<u32>()?)),
+            "UInt64Scalar" => ScalarValue::UInt64(Some(p.extract::<u64>()?)),
+            "FloatScalar" => ScalarValue::Float32(Some(p.extract::<f32>()?)),
+            "DoubleScalar" => ScalarValue::Float64(Some(p.extract::<f64>()?)),
+            "BooleanScalar" => ScalarValue::Boolean(Some(p.extract::<bool>()?)),
+            "StringScalar" => ScalarValue::Utf8(Some(p.extract::<String>()?)),
+            "LargeStringScalar" => ScalarValue::LargeUtf8(Some(p.extract::<String>()?)),
+            other => {
+                return Err(DataFusionError::Common(format!(
+                    "Type \"{}\"not yet implemented",
+                    other
+                ))
+                .into())
+            }
+        })
+    }
+
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+        Err(PyValueError::new_err("argument is wrong"))
+    }
 }

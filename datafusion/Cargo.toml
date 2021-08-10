@@ -45,7 +45,7 @@ unicode_expressions = ["unicode-segmentation"]
 
 [dependencies]
 ahash = "0.7"
-hashbrown = "0.11"
+hashbrown = { version = "0.11", features = ["raw"] }
 arrow = { version = "5.1", features = ["prettyprint"] }
 parquet = { version = "5.1", features = ["arrow"] }
 sqlparser = "0.9.0"

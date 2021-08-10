@@ -17,10 +17,9 @@
 
 use datafusion::arrow::array::ArrayRef;
 use datafusion::{arrow::array, physical_plan::functions::make_scalar_function};
-use pyo3::{prelude::*, types::PyTuple};
-
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::functions::ScalarFunctionImplementation;
+use pyo3::{prelude::*, types::PyTuple};
 
 use crate::pyarrow::PyArrowConvert;
 
@@ -51,7 +50,7 @@ pub fn array_udf(func: PyObject) -> ScalarFunctionImplementation {
                     Err(error) => Err(DataFusionError::Execution(format!("{:?}", error))),
                 }?;
 
-                let array = ArrayRef::from(value).unwrap();
+                let array = ArrayRef::from_pyarrow(value).unwrap();
                 Ok(array)
             })
         },
