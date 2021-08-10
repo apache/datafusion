@@ -1016,7 +1016,7 @@ impl ScalarValue {
     ///
     /// This method implements an optimized version of:
     ///
-    /// ``text
+    /// ```text
     ///     let arr_scalar = Self::try_from_array(array, index).unwrap();
     ///     arr_scalar.eq(self)
     /// ```
