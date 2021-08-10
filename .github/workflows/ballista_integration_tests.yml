@@ -34,7 +34,6 @@ jobs:
           path: "${{ runner.temp }}/buildx-cache/layer"
           key: ${{ runner.os }}-buildx-layer-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
           restore-keys: |
-            ${{ runner.os }}-buildx-layer-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
             ${{ runner.os }}-buildx-layer-
 
       - name: Cache docker buildkit cache
@@ -44,7 +43,6 @@ jobs:
           path: "${{ runner.temp }}/buildx-cache/buildkit"
           key: ${{ runner.os }}-buildx-buildkit-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
           restore-keys: |
-            ${{ runner.os }}-buildx-buildkit-${{ hashFiles('**/Cargo.toml', '**/*.dockerfile') }}
             ${{ runner.os }}-buildx-buildkit-
 
       - name: Restore docker buildx cache
