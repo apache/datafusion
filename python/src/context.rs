@@ -65,36 +65,35 @@ impl ExecutionContext {
         ))
     }
 
-    fn create_dataframe(
-        &mut self,
-        partitions: Vec<Vec<PyObject>>,
-        py: Python,
-    ) -> PyResult<dataframe::DataFrame> {
-        let partitions: Vec<Vec<RecordBatch>> = partitions
-            .iter()
-            .map(|batches| {
-                batches
-                    .iter()
-                    .map(|batch| to_rust::to_rust_batch(batch.as_ref(py)))
-                    .collect()
-            })
-            .collect::<PyResult<_>>()?;
+    // fn create_dataframe(
+    //     &mut self,
+    //     partitions: Vec<Vec<&PyAny>>,
+    // ) -> PyResult<dataframe::DataFrame> {
+    //     let partitions: Vec<Vec<RecordBatch>> = partitions
+    //         .iter()
+    //         .map(|batches| {
+    //             batches
+    //                 .iter()
+    //                 .map(RecordBatch::from_pyarrow)
+    //                 .collect::<PyResult<_>>()
+    //         })
+    //         .collect::<PyResult<_>>()?;
 
-        let table =
-            errors::wrap(MemTable::try_new(partitions[0][0].schema(), partitions))?;
+    //     let table =
+    //         errors::wrap(MemTable::try_new(partitions[0][0].schema(), partitions))?;
 
-        // generate a random (unique) name for this table
-        let name = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .collect::<String>();
+    //     // generate a random (unique) name for this table
+    //     let name = rand::thread_rng()
+    //         .sample_iter(&Alphanumeric)
+    //         .take(10)
+    //         .collect::<String>();
 
-        errors::wrap(self.ctx.register_table(&*name, Arc::new(table)))?;
-        Ok(dataframe::DataFrame::new(
-            self.ctx.state.clone(),
-            errors::wrap(self.ctx.table(&*name))?.to_logical_plan(),
-        ))
-    }
+    //     errors::wrap(self.ctx.register_table(&*name, Arc::new(table)))?;
+    //     Ok(dataframe::DataFrame::new(
+    //         self.ctx.state.clone(),
+    //         errors::wrap(self.ctx.table(&*name))?.to_logical_plan(),
+    //     ))
+    // }
 
     fn register_parquet(&mut self, name: &str, path: &str) -> PyResult<()> {
         errors::wrap(self.ctx.register_parquet(name, path))?;

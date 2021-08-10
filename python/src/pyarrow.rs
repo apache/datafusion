@@ -144,8 +144,9 @@ impl PyArrowConvert for RecordBatch {
         let mut py_arrays = vec![];
         let mut py_names = vec![];
 
+        let schema = self.schema();
+        let fields = schema.fields().iter();
         let columns = self.columns().iter();
-        let fields = self.schema().fields().iter();
 
         for (array, field) in columns.zip(fields) {
             py_arrays.push(array.to_pyarrow(py)?);
@@ -192,7 +193,7 @@ impl PyArrowConvert for ScalarValue {
         })
     }
 
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+    fn to_pyarrow(&self, _py: Python) -> PyResult<PyObject> {
         Err(PyValueError::new_err("argument is wrong"))
     }
 }

@@ -30,6 +30,7 @@ use datafusion::physical_plan::collect;
 use datafusion::{execution::context::ExecutionContextState, logical_plan};
 
 use crate::errors;
+use crate::pyarrow::PyArrowConvert;
 use crate::{errors::DataFusionError, expression};
 
 /// A DataFrame is a representation of a logical plan and an API to compose statements.
@@ -136,7 +137,7 @@ impl DataFrame {
 
         let mut py_batches = vec![];
         for batch in batches {
-            py_batches.push(to_py_batch(batch, py, pyarrow)?);
+            py_batches.push(batch.to_pyarrow(py)?);
         }
         let py_list = PyList::new(py, py_batches);
         Ok(PyObject::from(py_list))
