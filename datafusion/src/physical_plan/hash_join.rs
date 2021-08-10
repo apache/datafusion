@@ -737,6 +737,7 @@ fn build_join_indexes(
             for (row, hash_value) in hash_values.iter().enumerate() {
                 match left.0.get(*hash_value, |(hash, _)| *hash_value == *hash) {
                     Some((_, indices)) => {
+                        let mut no_match = true;
                         for &i in indices {
                             if equal_rows(
                                 i as usize,
@@ -745,9 +746,14 @@ fn build_join_indexes(
                                 &keys_values,
                             )? {
                                 left_indices.append_value(i)?;
-                            } else {
-                                left_indices.append_null()?;
+                                right_indices.append_value(row as u32)?;
+                                no_match = false;
                             }
+                        }
+                        // If no rows matched left, still must keep the right
+                        // with all nulls for left
+                        if no_match {
+                            left_indices.append_null()?;
                             right_indices.append_value(row as u32)?;
                         }
                     }
@@ -768,7 +774,7 @@ macro_rules! equal_rows_elem {
         let left_array = $l.as_any().downcast_ref::<$array_type>().unwrap();
         let right_array = $r.as_any().downcast_ref::<$array_type>().unwrap();
 
-        match (left_array.is_null($left), left_array.is_null($right)) {
+        match (left_array.is_null($left), right_array.is_null($right)) {
             (false, false) => left_array.value($left) == right_array.value($right),
             _ => false,
         }
@@ -1372,8 +1378,6 @@ mod tests {
     }
 
     #[tokio::test]
-    // Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
-    #[cfg(not(feature = "force_hash_collisions"))]
     async fn join_full_multi_batch() {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -1639,8 +1643,6 @@ mod tests {
     }
 
     #[tokio::test]
-    // Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
-    #[cfg(not(feature = "force_hash_collisions"))]
     async fn join_right_one() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -1677,8 +1679,6 @@ mod tests {
     }
 
     #[tokio::test]
-    // Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
-    #[cfg(not(feature = "force_hash_collisions"))]
     async fn partitioned_join_right_one() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -1716,8 +1716,6 @@ mod tests {
     }
 
     #[tokio::test]
-    // Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
-    #[cfg(not(feature = "force_hash_collisions"))]
     async fn join_full_one() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
