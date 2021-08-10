@@ -150,6 +150,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 - Incorrect answers with SELECT DISTINCT queries [\#250](https://github.com/apache/arrow-datafusion/issues/250)
 - Intermitent failure in CI join\_with\_hash\_collision [\#227](https://github.com/apache/arrow-datafusion/issues/227)
 - `Concat` from Dataframe API no longer accepts multiple expressions [\#226](https://github.com/apache/arrow-datafusion/issues/226)
+- Fix right, full join handling when having multiple non-matching rows at the left side [\#845](https://github.com/apache/arrow-datafusion/pull/845) ([Dandandan](https://github.com/Dandandan))
 - Qualified field resolution too strict [\#810](https://github.com/apache/arrow-datafusion/pull/810) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([seddonm1](https://github.com/seddonm1))
 - Better join order resolution logic [\#797](https://github.com/apache/arrow-datafusion/pull/797) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([seddonm1](https://github.com/seddonm1))
 - Produce correct answers for Group BY NULL \(Option 1\) [\#793](https://github.com/apache/arrow-datafusion/pull/793) ([alamb](https://github.com/alamb))
