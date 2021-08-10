@@ -27,76 +27,77 @@ use pyo3::prelude::*;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
-use datafusion::execution::context::ExecutionContext as _ExecutionContext;
+use datafusion::execution::context::ExecutionContext;
 use datafusion::prelude::CsvReadOptions;
 
-use crate::dataframe;
-use crate::errors;
+use crate::dataframe::PyDataFrame;
+use crate::errors::DataFusionError;
 use crate::functions;
 use crate::pyarrow::PyArrowConvert;
 use crate::types::PyDataType;
 
-/// `ExecutionContext` is able to plan and execute DataFusion plans.
+/// `PyExecutionContext` is able to plan and execute DataFusion plans.
 /// It has a powerful optimizer, a physical planner for local execution, and a
 /// multi-threaded execution engine to perform the execution.
 #[pyclass(unsendable)]
-pub(crate) struct ExecutionContext {
-    ctx: _ExecutionContext,
+pub(crate) struct PyExecutionContext {
+    ctx: ExecutionContext,
 }
 
 #[pymethods]
-impl ExecutionContext {
+impl PyExecutionContext {
     #[new]
     fn new() -> Self {
-        ExecutionContext {
-            ctx: _ExecutionContext::new(),
+        PyExecutionContext {
+            ctx: ExecutionContext::new(),
         }
     }
 
-    /// Returns a DataFrame whose plan corresponds to the SQL statement.
-    fn sql(&mut self, query: &str) -> PyResult<dataframe::DataFrame> {
-        let df = self
-            .ctx
-            .sql(query)
-            .map_err(|e| -> errors::DataFusionError { e.into() })?;
-        Ok(dataframe::DataFrame::new(
+    /// Returns a PyDataFrame whose plan corresponds to the SQL statement.
+    fn sql(&mut self, query: &str) -> PyResult<PyDataFrame> {
+        let df = self.ctx.sql(query).map_err(DataFusionError::from)?;
+        Ok(PyDataFrame::new(
             self.ctx.state.clone(),
             df.to_logical_plan(),
         ))
     }
 
-    // fn create_dataframe(
-    //     &mut self,
-    //     partitions: Vec<Vec<&PyAny>>,
-    // ) -> PyResult<dataframe::DataFrame> {
-    //     let partitions: Vec<Vec<RecordBatch>> = partitions
-    //         .iter()
-    //         .map(|batches| {
-    //             batches
-    //                 .iter()
-    //                 .map(RecordBatch::from_pyarrow)
-    //                 .collect::<PyResult<_>>()
-    //         })
-    //         .collect::<PyResult<_>>()?;
+    fn create_dataframe(
+        &mut self,
+        partitions: Vec<Vec<&PyAny>>,
+    ) -> PyResult<PyDataFrame> {
+        let partitions: Vec<Vec<RecordBatch>> = partitions
+            .into_iter()
+            .map(|batches| {
+                batches
+                    .into_iter()
+                    .map(RecordBatch::from_pyarrow)
+                    .collect::<PyResult<_>>()
+            })
+            .collect::<PyResult<_>>()?;
 
-    //     let table =
-    //         errors::wrap(MemTable::try_new(partitions[0][0].schema(), partitions))?;
+        let table = MemTable::try_new(partitions[0][0].schema(), partitions)
+            .map_err(DataFusionError::from)?;
 
-    //     // generate a random (unique) name for this table
-    //     let name = rand::thread_rng()
-    //         .sample_iter(&Alphanumeric)
-    //         .take(10)
-    //         .collect::<String>();
+        // generate a random (unique) name for this table
+        let name = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(10)
+            .collect::<String>();
 
-    //     errors::wrap(self.ctx.register_table(&*name, Arc::new(table)))?;
-    //     Ok(dataframe::DataFrame::new(
-    //         self.ctx.state.clone(),
-    //         errors::wrap(self.ctx.table(&*name))?.to_logical_plan(),
-    //     ))
-    // }
+        self.ctx
+            .register_table(&*name, Arc::new(table))
+            .map_err(DataFusionError::from)?;
+        let table = self.ctx.table(&*name).map_err(DataFusionError::from)?;
+
+        let df = PyDataFrame::new(self.ctx.state.clone(), table.to_logical_plan());
+        Ok(df)
+    }
 
     fn register_parquet(&mut self, name: &str, path: &str) -> PyResult<()> {
-        errors::wrap(self.ctx.register_parquet(name, path))?;
+        self.ctx
+            .register_parquet(name, path)
+            .map_err(DataFusionError::from)?;
         Ok(())
     }
 
@@ -138,7 +139,9 @@ impl ExecutionContext {
             .file_extension(file_extension);
         options.schema = schema.as_ref();
 
-        errors::wrap(self.ctx.register_csv(name, path, options))?;
+        self.ctx
+            .register_csv(name, path, options)
+            .map_err(DataFusionError::from)?;
         Ok(())
     }
 

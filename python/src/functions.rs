@@ -15,46 +15,47 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::udaf;
-use crate::udf;
-use crate::{expression, types::PyDataType};
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_plan;
 use pyo3::{prelude::*, types::PyTuple, wrap_pyfunction};
-use std::sync::Arc;
 
-/// Expression representing a column on the existing plan.
+use crate::{
+    expression,
+    expression::{PyAggregateUDF, PyExpr, PyScalarUDF},
+    types::PyDataType,
+    udaf, udf,
+};
+
+/// PyExpr representing a column on the existing plan.
 #[pyfunction]
 #[pyo3(text_signature = "(name)")]
-fn col(name: &str) -> expression::Expression {
-    expression::Expression {
+fn col(name: &str) -> PyExpr {
+    PyExpr {
         expr: logical_plan::col(name),
     }
 }
 
-/// Expression representing a constant value
+/// PyExpr representing a constant value
 #[pyfunction]
 #[pyo3(text_signature = "(value)")]
-fn lit(value: i32) -> expression::Expression {
-    expression::Expression {
+fn lit(value: i32) -> PyExpr {
+    PyExpr {
         expr: logical_plan::lit(value),
     }
 }
 
 #[pyfunction]
-fn array(value: Vec<expression::Expression>) -> expression::Expression {
-    expression::Expression {
+fn array(value: Vec<PyExpr>) -> PyExpr {
+    PyExpr {
         expr: logical_plan::array(value.into_iter().map(|x| x.expr).collect::<Vec<_>>()),
     }
 }
 
 #[pyfunction]
-fn in_list(
-    expr: expression::Expression,
-    value: Vec<expression::Expression>,
-    negated: bool,
-) -> expression::Expression {
-    expression::Expression {
+fn in_list(expr: PyExpr, value: Vec<PyExpr>, negated: bool) -> PyExpr {
+    PyExpr {
         expr: logical_plan::in_list(
             expr.expr,
             value.into_iter().map(|x| x.expr).collect::<Vec<_>>(),
@@ -65,8 +66,8 @@ fn in_list(
 
 /// Current date and time
 #[pyfunction]
-fn now() -> expression::Expression {
-    expression::Expression {
+fn now() -> PyExpr {
+    PyExpr {
         // here lit(0) is a stub for conform to arity
         expr: logical_plan::now(logical_plan::lit(0)),
     }
@@ -74,8 +75,8 @@ fn now() -> expression::Expression {
 
 /// Returns a random value in the range 0.0 <= x < 1.0
 #[pyfunction]
-fn random() -> expression::Expression {
-    expression::Expression {
+fn random() -> PyExpr {
+    PyExpr {
         expr: logical_plan::random(),
     }
 }
@@ -83,10 +84,10 @@ fn random() -> expression::Expression {
 /// Concatenates the text representations of all the arguments.
 /// NULL arguments are ignored.
 #[pyfunction(args = "*")]
-fn concat(args: &PyTuple) -> PyResult<expression::Expression> {
+fn concat(args: &PyTuple) -> PyResult<PyExpr> {
     let expressions = expression::from_tuple(args)?;
     let args = expressions.into_iter().map(|e| e.expr).collect::<Vec<_>>();
-    Ok(expression::Expression {
+    Ok(PyExpr {
         expr: logical_plan::concat(&args),
     })
 }
@@ -95,10 +96,10 @@ fn concat(args: &PyTuple) -> PyResult<expression::Expression> {
 /// The first argument is used as the separator string, and should not be NULL.
 /// Other NULL arguments are ignored.
 #[pyfunction(sep, args = "*")]
-fn concat_ws(sep: String, args: &PyTuple) -> PyResult<expression::Expression> {
+fn concat_ws(sep: String, args: &PyTuple) -> PyResult<PyExpr> {
     let expressions = expression::from_tuple(args)?;
     let args = expressions.into_iter().map(|e| e.expr).collect::<Vec<_>>();
-    Ok(expression::Expression {
+    Ok(PyExpr {
         expr: logical_plan::concat_ws(sep, &args),
     })
 }
@@ -107,8 +108,8 @@ macro_rules! define_unary_function {
     ($NAME: ident) => {
         #[doc = "This function is not documented yet"]
         #[pyfunction]
-        fn $NAME(value: expression::Expression) -> expression::Expression {
-            expression::Expression {
+        fn $NAME(value: PyExpr) -> PyExpr {
+            PyExpr {
                 expr: logical_plan::$NAME(value.expr),
             }
         }
@@ -116,8 +117,8 @@ macro_rules! define_unary_function {
     ($NAME: ident, $DOC: expr) => {
         #[doc = $DOC]
         #[pyfunction]
-        fn $NAME(value: expression::Expression) -> expression::Expression {
-            expression::Expression {
+        fn $NAME(value: PyExpr) -> PyExpr {
+            PyExpr {
                 expr: logical_plan::$NAME(value.expr),
             }
         }
@@ -205,12 +206,12 @@ pub(crate) fn create_udf(
     input_types: Vec<PyDataType>,
     return_type: PyDataType,
     name: &str,
-) -> expression::ScalarUDF {
+) -> PyScalarUDF {
     let input_types: Vec<DataType> =
         input_types.iter().map(|d| d.data_type.clone()).collect();
     let return_type = Arc::new(return_type.data_type);
 
-    expression::ScalarUDF {
+    PyScalarUDF {
         function: logical_plan::create_udf(
             name,
             input_types,
@@ -227,7 +228,7 @@ fn udf(
     input_types: Vec<PyDataType>,
     return_type: PyDataType,
     py: Python,
-) -> PyResult<expression::ScalarUDF> {
+) -> PyResult<PyScalarUDF> {
     let name = fun.getattr(py, "__qualname__")?.extract::<String>(py)?;
 
     Ok(create_udf(fun, input_types, return_type, &name))
@@ -241,7 +242,7 @@ fn udaf(
     return_type: PyDataType,
     state_type: Vec<PyDataType>,
     py: Python,
-) -> PyResult<expression::AggregateUDF> {
+) -> PyResult<PyAggregateUDF> {
     let name = accumulator
         .getattr(py, "__qualname__")?
         .extract::<String>(py)?;
@@ -250,7 +251,7 @@ fn udaf(
     let return_type = Arc::new(return_type.data_type);
     let state_type = Arc::new(state_type.into_iter().map(|t| t.data_type).collect());
 
-    Ok(expression::AggregateUDF {
+    Ok(PyAggregateUDF {
         function: logical_plan::create_udaf(
             &name,
             input_type,

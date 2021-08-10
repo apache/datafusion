@@ -32,9 +32,9 @@ mod udf;
 /// DataFusion.
 #[pymodule]
 fn internals(py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<context::ExecutionContext>()?;
-    m.add_class::<dataframe::DataFrame>()?;
-    m.add_class::<expression::Expression>()?;
+    m.add_class::<context::PyExecutionContext>()?;
+    m.add_class::<dataframe::PyDataFrame>()?;
+    m.add_class::<expression::PyExpr>()?;
 
     let functions = PyModule::new(py, "functions")?;
     functions::init(functions)?;

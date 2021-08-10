@@ -29,29 +29,30 @@ use datafusion::logical_plan::{JoinType, LogicalPlanBuilder};
 use datafusion::physical_plan::collect;
 use datafusion::{execution::context::ExecutionContextState, logical_plan};
 
-use crate::errors;
-use crate::pyarrow::PyArrowConvert;
-use crate::{errors::DataFusionError, expression};
+use crate::{
+    errors, errors::DataFusionError, expression, expression::PyExpr,
+    pyarrow::PyArrowConvert,
+};
 
-/// A DataFrame is a representation of a logical plan and an API to compose statements.
+/// A PyDataFrame is a representation of a logical plan and an API to compose statements.
 /// Use it to build a plan and `.collect()` to execute the plan and collect the result.
 /// The actual execution of a plan runs natively on Rust and Arrow on a multi-threaded environment.
 #[pyclass]
-pub(crate) struct DataFrame {
+pub(crate) struct PyDataFrame {
     ctx_state: Arc<Mutex<ExecutionContextState>>,
     plan: LogicalPlan,
 }
 
-impl DataFrame {
-    /// creates a new DataFrame
+impl PyDataFrame {
+    /// creates a new PyDataFrame
     pub fn new(ctx_state: Arc<Mutex<ExecutionContextState>>, plan: LogicalPlan) -> Self {
         Self { ctx_state, plan }
     }
 }
 
 #[pymethods]
-impl DataFrame {
-    /// Select `expressions` from the existing DataFrame.
+impl PyDataFrame {
+    /// Select `expressions` from the existing PyDataFrame.
     #[args(args = "*")]
     fn select(&self, args: &PyTuple) -> PyResult<Self> {
         let expressions = expression::from_tuple(args)?;
@@ -60,30 +61,26 @@ impl DataFrame {
             errors::wrap(builder.project(expressions.into_iter().map(|e| e.expr)))?;
         let plan = errors::wrap(builder.build())?;
 
-        Ok(DataFrame {
+        Ok(PyDataFrame {
             ctx_state: self.ctx_state.clone(),
             plan,
         })
     }
 
     /// Filter according to the `predicate` expression
-    fn filter(&self, predicate: expression::Expression) -> PyResult<Self> {
+    fn filter(&self, predicate: PyExpr) -> PyResult<Self> {
         let builder = LogicalPlanBuilder::from(self.plan.clone());
         let builder = errors::wrap(builder.filter(predicate.expr))?;
         let plan = errors::wrap(builder.build())?;
 
-        Ok(DataFrame {
+        Ok(PyDataFrame {
             ctx_state: self.ctx_state.clone(),
             plan,
         })
     }
 
     /// Aggregates using expressions
-    fn aggregate(
-        &self,
-        group_by: Vec<expression::Expression>,
-        aggs: Vec<expression::Expression>,
-    ) -> PyResult<Self> {
+    fn aggregate(&self, group_by: Vec<PyExpr>, aggs: Vec<PyExpr>) -> PyResult<Self> {
         let builder = LogicalPlanBuilder::from(self.plan.clone());
         let builder = errors::wrap(builder.aggregate(
             group_by.into_iter().map(|e| e.expr),
@@ -91,19 +88,19 @@ impl DataFrame {
         ))?;
         let plan = errors::wrap(builder.build())?;
 
-        Ok(DataFrame {
+        Ok(PyDataFrame {
             ctx_state: self.ctx_state.clone(),
             plan,
         })
     }
 
     /// Sort by specified sorting expressions
-    fn sort(&self, exprs: Vec<expression::Expression>) -> PyResult<Self> {
+    fn sort(&self, exprs: Vec<PyExpr>) -> PyResult<Self> {
         let exprs = exprs.into_iter().map(|e| e.expr);
         let builder = LogicalPlanBuilder::from(self.plan.clone());
         let builder = errors::wrap(builder.sort(exprs))?;
         let plan = errors::wrap(builder.build())?;
-        Ok(DataFrame {
+        Ok(PyDataFrame {
             ctx_state: self.ctx_state.clone(),
             plan,
         })
@@ -115,7 +112,7 @@ impl DataFrame {
         let builder = errors::wrap(builder.limit(count))?;
         let plan = errors::wrap(builder.build())?;
 
-        Ok(DataFrame {
+        Ok(PyDataFrame {
             ctx_state: self.ctx_state.clone(),
             plan,
         })
@@ -143,8 +140,8 @@ impl DataFrame {
         Ok(PyObject::from(py_list))
     }
 
-    /// Returns the join of two DataFrames `on`.
-    fn join(&self, right: &DataFrame, on: Vec<&str>, how: &str) -> PyResult<Self> {
+    /// Returns the join of two PyDataFrames `on`.
+    fn join(&self, right: &PyDataFrame, on: Vec<&str>, how: &str) -> PyResult<Self> {
         let builder = LogicalPlanBuilder::from(self.plan.clone());
 
         let join_type = match how {
@@ -167,7 +164,7 @@ impl DataFrame {
 
         let plan = errors::wrap(builder.build())?;
 
-        Ok(DataFrame {
+        Ok(PyDataFrame {
             ctx_state: self.ctx_state.clone(),
             plan,
         })

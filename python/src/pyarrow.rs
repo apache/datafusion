@@ -49,8 +49,9 @@ impl PyArrowConvert for DataType {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(DataFusionError::from)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        let cls = py.import("pyarrow.DataType")?;
-        let dtype = cls.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
+        let module = py.import("pyarrow")?;
+        let class = module.getattr("DataType")?;
+        let dtype = class.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
         Ok(dtype.into())
     }
 }
@@ -67,8 +68,9 @@ impl PyArrowConvert for Field {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(DataFusionError::from)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        let cls = py.import("pyarrow.Field")?;
-        let dtype = cls.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
+        let module = py.import("pyarrow")?;
+        let class = module.getattr("Field")?;
+        let dtype = class.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
         Ok(dtype.into())
     }
 }
@@ -85,8 +87,10 @@ impl PyArrowConvert for Schema {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(DataFusionError::from)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        let cls = py.import("pyarrow.Schema")?;
-        let schema = cls.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
+        let module = py.import("pyarrow")?;
+        let class = module.getattr("Schema")?;
+        let schema =
+            class.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
         Ok(schema.into())
     }
 }
@@ -114,8 +118,9 @@ impl PyArrowConvert for ArrayRef {
         let (array_pointer, schema_pointer) =
             self.to_raw().map_err(DataFusionError::from)?;
 
-        let cls = py.import("pyarrow.Array")?;
-        let array = cls.call_method1(
+        let module = py.import("pyarrow")?;
+        let class = module.getattr("Array")?;
+        let array = class.call_method1(
             "_import_from_c",
             (array_pointer as uintptr_t, schema_pointer as uintptr_t),
         )?;
@@ -153,8 +158,9 @@ impl PyArrowConvert for RecordBatch {
             py_names.push(field.name());
         }
 
-        let cls = py.import("pyarrow.RecordBatch")?;
-        let record = cls.call_method1("from_arrays", (py_arrays, py_names))?;
+        let module = py.import("pyarrow")?;
+        let class = module.getattr("RecordBatch")?;
+        let record = class.call_method1("from_arrays", (py_arrays, py_names))?;
 
         Ok(PyObject::from(record))
     }

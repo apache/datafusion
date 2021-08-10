@@ -19,90 +19,89 @@ use pyo3::{
     basic::CompareOp, prelude::*, types::PyTuple, PyNumberProtocol, PyObjectProtocol,
 };
 
-use datafusion::logical_plan::Expr as _Expr;
-use datafusion::physical_plan::udaf::AggregateUDF as _AggregateUDF;
-use datafusion::physical_plan::udf::ScalarUDF as _ScalarUDF;
+use datafusion::logical_plan::Expr;
+use datafusion::physical_plan::{udaf::AggregateUDF, udf::ScalarUDF};
 
-/// An expression that can be used on a DataFrame
+/// An PyExpr that can be used on a DataFrame
 #[pyclass]
 #[derive(Debug, Clone)]
-pub(crate) struct Expression {
-    pub(crate) expr: _Expr,
+pub(crate) struct PyExpr {
+    pub(crate) expr: Expr,
 }
 
 /// converts a tuple of expressions into a vector of Expressions
-pub(crate) fn from_tuple(value: &PyTuple) -> PyResult<Vec<Expression>> {
+pub(crate) fn from_tuple(value: &PyTuple) -> PyResult<Vec<PyExpr>> {
     value
         .iter()
-        .map(|e| e.extract::<Expression>())
+        .map(|e| e.extract::<PyExpr>())
         .collect::<PyResult<_>>()
 }
 
 #[pyproto]
-impl PyNumberProtocol for Expression {
-    fn __add__(lhs: Expression, rhs: Expression) -> PyResult<Expression> {
-        Ok(Expression {
+impl PyNumberProtocol for PyExpr {
+    fn __add__(lhs: PyExpr, rhs: PyExpr) -> PyResult<PyExpr> {
+        Ok(PyExpr {
             expr: lhs.expr + rhs.expr,
         })
     }
 
-    fn __sub__(lhs: Expression, rhs: Expression) -> PyResult<Expression> {
-        Ok(Expression {
+    fn __sub__(lhs: PyExpr, rhs: PyExpr) -> PyResult<PyExpr> {
+        Ok(PyExpr {
             expr: lhs.expr - rhs.expr,
         })
     }
 
-    fn __truediv__(lhs: Expression, rhs: Expression) -> PyResult<Expression> {
-        Ok(Expression {
+    fn __truediv__(lhs: PyExpr, rhs: PyExpr) -> PyResult<PyExpr> {
+        Ok(PyExpr {
             expr: lhs.expr / rhs.expr,
         })
     }
 
-    fn __mul__(lhs: Expression, rhs: Expression) -> PyResult<Expression> {
-        Ok(Expression {
+    fn __mul__(lhs: PyExpr, rhs: PyExpr) -> PyResult<PyExpr> {
+        Ok(PyExpr {
             expr: lhs.expr * rhs.expr,
         })
     }
 
-    fn __and__(lhs: Expression, rhs: Expression) -> PyResult<Expression> {
-        Ok(Expression {
+    fn __and__(lhs: PyExpr, rhs: PyExpr) -> PyResult<PyExpr> {
+        Ok(PyExpr {
             expr: lhs.expr.and(rhs.expr),
         })
     }
 
-    fn __or__(lhs: Expression, rhs: Expression) -> PyResult<Expression> {
-        Ok(Expression {
+    fn __or__(lhs: PyExpr, rhs: PyExpr) -> PyResult<PyExpr> {
+        Ok(PyExpr {
             expr: lhs.expr.or(rhs.expr),
         })
     }
 
-    fn __invert__(&self) -> PyResult<Expression> {
-        Ok(Expression {
+    fn __invert__(&self) -> PyResult<PyExpr> {
+        Ok(PyExpr {
             expr: self.expr.clone().not(),
         })
     }
 }
 
 #[pyproto]
-impl PyObjectProtocol for Expression {
-    fn __richcmp__(&self, other: Expression, op: CompareOp) -> Expression {
+impl PyObjectProtocol for PyExpr {
+    fn __richcmp__(&self, other: PyExpr, op: CompareOp) -> PyExpr {
         match op {
-            CompareOp::Lt => Expression {
+            CompareOp::Lt => PyExpr {
                 expr: self.expr.clone().lt(other.expr),
             },
-            CompareOp::Le => Expression {
+            CompareOp::Le => PyExpr {
                 expr: self.expr.clone().lt_eq(other.expr),
             },
-            CompareOp::Eq => Expression {
+            CompareOp::Eq => PyExpr {
                 expr: self.expr.clone().eq(other.expr),
             },
-            CompareOp::Ne => Expression {
+            CompareOp::Ne => PyExpr {
                 expr: self.expr.clone().not_eq(other.expr),
             },
-            CompareOp::Gt => Expression {
+            CompareOp::Gt => PyExpr {
                 expr: self.expr.clone().gt(other.expr),
             },
-            CompareOp::Ge => Expression {
+            CompareOp::Ge => PyExpr {
                 expr: self.expr.clone().gt_eq(other.expr),
             },
         }
@@ -110,39 +109,39 @@ impl PyObjectProtocol for Expression {
 }
 
 #[pymethods]
-impl Expression {
-    /// assign a name to the expression
-    pub fn alias(&self, name: &str) -> PyResult<Expression> {
-        Ok(Expression {
+impl PyExpr {
+    /// assign a name to the PyExpr
+    pub fn alias(&self, name: &str) -> PyResult<PyExpr> {
+        Ok(PyExpr {
             expr: self.expr.clone().alias(name),
         })
     }
 
-    /// Create a sort expression from an existing expression.
+    /// Create a sort PyExpr from an existing PyExpr.
     #[args(ascending = true, nulls_first = true)]
-    pub fn sort(&self, ascending: bool, nulls_first: bool) -> PyResult<Expression> {
-        Ok(Expression {
+    pub fn sort(&self, ascending: bool, nulls_first: bool) -> PyResult<PyExpr> {
+        Ok(PyExpr {
             expr: self.expr.clone().sort(ascending, nulls_first),
         })
     }
 }
 
-/// Represents a ScalarUDF
+/// Represents a PyScalarUDF
 #[pyclass]
 #[derive(Debug, Clone)]
-pub struct ScalarUDF {
-    pub(crate) function: _ScalarUDF,
+pub struct PyScalarUDF {
+    pub(crate) function: ScalarUDF,
 }
 
 #[pymethods]
-impl ScalarUDF {
-    /// creates a new expression with the call of the udf
+impl PyScalarUDF {
+    /// creates a new PyExpr with the call of the udf
     #[call]
     #[args(args = "*")]
-    fn __call__(&self, args: &PyTuple) -> PyResult<Expression> {
+    fn __call__(&self, args: &PyTuple) -> PyResult<PyExpr> {
         let args = from_tuple(args)?.iter().map(|e| e.expr.clone()).collect();
 
-        Ok(Expression {
+        Ok(PyExpr {
             expr: self.function.call(args),
         })
     }
@@ -151,19 +150,19 @@ impl ScalarUDF {
 /// Represents a AggregateUDF
 #[pyclass]
 #[derive(Debug, Clone)]
-pub struct AggregateUDF {
-    pub(crate) function: _AggregateUDF,
+pub struct PyAggregateUDF {
+    pub(crate) function: AggregateUDF,
 }
 
 #[pymethods]
-impl AggregateUDF {
-    /// creates a new expression with the call of the udf
+impl PyAggregateUDF {
+    /// creates a new PyExpr with the call of the udf
     #[call]
     #[args(args = "*")]
-    fn __call__(&self, args: &PyTuple) -> PyResult<Expression> {
+    fn __call__(&self, args: &PyTuple) -> PyResult<PyExpr> {
         let args = from_tuple(args)?.iter().map(|e| e.expr.clone()).collect();
 
-        Ok(Expression {
+        Ok(PyExpr {
             expr: self.function.call(args),
         })
     }
