@@ -41,7 +41,7 @@ pub trait ObjectStore: Sync + Send + Debug {
     /// so that it can be downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
-    /// Returns all the files with `ext` in path `prefix`
+    /// Returns all the files with filename extension `ext` in path `prefix`
     fn list_all_files(&self, prefix: &str, ext: &str) -> Result<Vec<String>>;
 
     /// Get object reader for one file

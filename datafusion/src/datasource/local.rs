@@ -20,7 +20,8 @@
 use crate::datasource::object_store::{ObjectReader, ObjectStore};
 use crate::error::DataFusionError;
 use crate::error::Result;
-use crate::parquet::file::reader::{ChunkReader, Length};
+use crate::parquet::file::reader::Length;
+use crate::parquet::file::serialized_reader::FileSource;
 use std::any::Any;
 use std::fs;
 use std::fs::{metadata, File};
@@ -59,38 +60,11 @@ impl LocalFSObjectReader {
 
 impl ObjectReader for LocalFSObjectReader {
     fn get_reader(&self, start: u64, length: usize) -> Box<dyn Read> {
-        Box::new(FileSegmentReader::new(
-            self.file.try_clone().unwrap(),
-            start,
-            length,
-        ))
+        Box::new(FileSource::<File>::new(&self.file, start, length))
     }
 
     fn length(&self) -> u64 {
         self.file.len()
-    }
-}
-
-struct FileSegmentReader {
-    file: File,
-    start: u64,
-    length: usize,
-}
-
-impl FileSegmentReader {
-    fn new(file: File, start: u64, length: usize) -> Self {
-        Self {
-            file,
-            start,
-            length,
-        }
-    }
-}
-
-impl Read for FileSegmentReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::result::Result<usize, std::io::Error> {
-        let mut file_source = self.file.get_read(self.start, self.length)?;
-        file_source.read(buf)
     }
 }
 

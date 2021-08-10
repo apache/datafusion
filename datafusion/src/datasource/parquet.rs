@@ -178,7 +178,7 @@ impl ParquetRootDesc {
     fn summarize_min_max(
         max_values: &mut Vec<Option<MaxAccumulator>>,
         min_values: &mut Vec<Option<MinAccumulator>>,
-        fields: &Vec<Field>,
+        fields: &[Field],
         i: usize,
         stat: &ParquetStatistics,
     ) {
