@@ -19,7 +19,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use libc::uintptr_t;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::PyNotImplementedError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
@@ -200,6 +200,6 @@ impl PyArrowConvert for ScalarValue {
     }
 
     fn to_pyarrow(&self, _py: Python) -> PyResult<PyObject> {
-        Err(PyValueError::new_err("argument is wrong"))
+        Err(PyNotImplementedError::new_err("Not implemented"))
     }
 }

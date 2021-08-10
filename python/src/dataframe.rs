@@ -17,17 +17,15 @@
 
 use std::sync::{Arc, Mutex};
 
-use logical_plan::LogicalPlan;
 use pyo3::{
     prelude::*,
     types::{PyList, PyTuple},
 };
 use tokio::runtime::Runtime;
 
-use datafusion::execution::context::ExecutionContext as _ExecutionContext;
-use datafusion::logical_plan::{JoinType, LogicalPlanBuilder};
+use datafusion::execution::context::{ExecutionContext, ExecutionContextState};
+use datafusion::logical_plan::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use datafusion::physical_plan::collect;
-use datafusion::{execution::context::ExecutionContextState, logical_plan};
 
 use crate::{
     errors, errors::DataFusionError, expression, expression::PyExpr,
@@ -121,7 +119,7 @@ impl PyDataFrame {
     /// Executes the plan, returning a list of `RecordBatch`es.
     /// Unless some order is specified in the plan, there is no guarantee of the order of the result
     fn collect(&self, py: Python) -> PyResult<PyObject> {
-        let ctx = _ExecutionContext::from(self.ctx_state.clone());
+        let ctx = ExecutionContext::from(self.ctx_state.clone());
         let plan = ctx.optimize(&self.plan).map_err(DataFusionError::from)?;
         let plan = ctx
             .create_physical_plan(&plan)
