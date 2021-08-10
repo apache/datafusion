@@ -1011,7 +1011,8 @@ impl ScalarValue {
         })
     }
 
-    /// Compares array @ index for equality with self, in an optimized fashion
+    /// Compares a single row of array @ index for equality with self,
+    /// in an optimized fashion.
     ///
     /// This method implements an optimized version of:
     ///
@@ -1019,6 +1020,13 @@ impl ScalarValue {
     ///     let arr_scalar = Self::try_from_array(array, index).unwrap();
     ///     arr_scalar.eq(self)
     /// ```
+    ///
+    /// *Performance note*: the arrow compute kernels should be
+    /// preferred over this function if at all possible as they can be
+    /// vectorized and are generally much faster.
+    ///
+    /// This function has some narrow usescases such as hash table key
+    /// comparisons where comparing a single row at a time is necessary.
     #[inline]
     pub fn eq_array(&self, array: &ArrayRef, index: usize) -> bool {
         if let DataType::Dictionary(key_type, _) = array.data_type() {
