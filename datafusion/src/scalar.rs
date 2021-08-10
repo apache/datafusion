@@ -1025,7 +1025,7 @@ impl ScalarValue {
     /// preferred over this function if at all possible as they can be
     /// vectorized and are generally much faster.
     ///
-    /// This function has some narrow usescases such as hash table key
+    /// This function has a few narrow usescases such as hash table key
     /// comparisons where comparing a single row at a time is necessary.
     #[inline]
     pub fn eq_array(&self, array: &ArrayRef, index: usize) -> bool {
