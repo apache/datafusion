@@ -44,7 +44,7 @@ uuid = { version = "0.8", features = ["v4"] }
 
 arrow-flight = { version = "5.0"  }
 
-datafusion = { path = "../../../datafusion" }
+datafusion = { path = "../../../datafusion", version = "5.0.0" }
 
 [dev-dependencies]
 tempfile = "3"
