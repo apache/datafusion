@@ -328,9 +328,9 @@ impl ExecutionContext {
     /// executed against this context.
     pub fn register_parquet(&mut self, name: &str, filename: &str) -> Result<()> {
         let table = {
-            let m = self.state.lock().unwrap();
+            let enable_pruning = self.state.lock().unwrap().config.parquet_pruning;
             ParquetTable::try_new(filename, self.clone())?
-                .with_enable_pruning(m.config.parquet_pruning)
+                .with_enable_pruning(enable_pruning)
         };
         self.register_table(name, Arc::new(table))?;
         Ok(())
