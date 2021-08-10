@@ -19,6 +19,7 @@ use datafusion::arrow::datatypes::DataType;
 use pyo3::{FromPyObject, PyAny, PyResult};
 
 use crate::errors;
+use crate::pyarrow::PyArrowConvert;
 
 /// utility struct to convert PyObj to native DataType
 #[derive(Debug, Clone)]

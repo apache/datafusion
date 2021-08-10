@@ -28,7 +28,6 @@ use datafusion::{
 };
 
 use crate::scalar::Scalar;
-use crate::to_py::to_py_array;
 use crate::to_rust::to_rust_scalar;
 
 #[derive(Debug)]

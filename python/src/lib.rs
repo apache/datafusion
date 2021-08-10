@@ -17,13 +17,14 @@
 
 use pyo3::prelude::*;
 
+mod catalog;
 mod context;
 mod dataframe;
 mod errors;
 mod expression;
 mod functions;
+mod pyarrow;
 mod scalar;
-mod to_py;
 mod to_rust;
 mod types;
 mod udaf;
@@ -31,7 +32,7 @@ mod udf;
 
 /// DataFusion.
 #[pymodule]
-fn datafusion(py: Python, m: &PyModule) -> PyResult<()> {
+fn internals(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<context::ExecutionContext>()?;
     m.add_class::<dataframe::DataFrame>()?;
     m.add_class::<expression::Expression>()?;

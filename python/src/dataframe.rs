@@ -18,7 +18,10 @@
 use std::sync::{Arc, Mutex};
 
 use logical_plan::LogicalPlan;
-use pyo3::{prelude::*, types::PyTuple};
+use pyo3::{
+    prelude::*,
+    types::{PyList, PyTuple},
+};
 use tokio::runtime::Runtime;
 
 use datafusion::execution::context::ExecutionContext as _ExecutionContext;
@@ -26,7 +29,7 @@ use datafusion::logical_plan::{JoinType, LogicalPlanBuilder};
 use datafusion::physical_plan::collect;
 use datafusion::{execution::context::ExecutionContextState, logical_plan};
 
-use crate::{errors, to_py};
+use crate::errors;
 use crate::{errors::DataFusionError, expression};
 
 /// A DataFrame is a representation of a logical plan and an API to compose statements.
@@ -121,22 +124,22 @@ impl DataFrame {
     /// Unless some order is specified in the plan, there is no guarantee of the order of the result
     fn collect(&self, py: Python) -> PyResult<PyObject> {
         let ctx = _ExecutionContext::from(self.ctx_state.clone());
-        let plan = ctx
-            .optimize(&self.plan)
-            .map_err(|e| -> errors::DataFusionError { e.into() })?;
+        let plan = ctx.optimize(&self.plan).map_err(DataFusionError::from)?;
         let plan = ctx
             .create_physical_plan(&plan)
-            .map_err(|e| -> errors::DataFusionError { e.into() })?;
+            .map_err(DataFusionError::from)?;
 
         let rt = Runtime::new().unwrap();
         let batches = py.allow_threads(|| {
-            rt.block_on(async {
-                collect(plan)
-                    .await
-                    .map_err(|e| -> errors::DataFusionError { e.into() })
-            })
+            rt.block_on(async { collect(plan).await.map_err(DataFusionError::from) })
         })?;
-        to_py::to_py(&batches)
+
+        let mut py_batches = vec![];
+        for batch in batches {
+            py_batches.push(to_py_batch(batch, py, pyarrow)?);
+        }
+        let py_list = PyList::new(py, py_batches);
+        Ok(PyObject::from(py_list))
     }
 
     /// Returns the join of two DataFrames `on`.

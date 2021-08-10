@@ -24,6 +24,7 @@ use rand::Rng;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionContext as _ExecutionContext;
@@ -32,6 +33,7 @@ use datafusion::prelude::CsvReadOptions;
 use crate::dataframe;
 use crate::errors;
 use crate::functions;
+use crate::pyarrow::PyArrowConvert;
 use crate::to_rust;
 use crate::types::PyDataType;
 
@@ -121,7 +123,7 @@ impl ExecutionContext {
             .to_str()
             .ok_or(PyValueError::new_err("Unable to convert path to a string"))?;
         let schema = match schema {
-            Some(s) => Some(to_rust::to_rust_schema(s)?),
+            Some(s) => Some(Schema::from_pyarrow(s)?),
             None => None,
         };
         let delimiter = delimiter.as_bytes();
