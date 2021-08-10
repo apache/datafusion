@@ -1421,7 +1421,20 @@ macro_rules! unary_scalar_expr {
     };
 }
 
-// generate methods for creating the supported unary expressions
+/// Create an convenience function representing a /binaryunary scalar function
+macro_rules! binary_scalar_expr {
+    ($ENUM:ident, $FUNC:ident) => {
+        #[doc = "this scalar function is not documented yet"]
+        pub fn $FUNC(arg1: Expr, arg2: Expr) -> Expr {
+            Expr::ScalarFunction {
+                fun: functions::BuiltinScalarFunction::$ENUM,
+                args: vec![arg1, arg2],
+            }
+        }
+    };
+}
+
+// generate methods for creating the supported unary/binary expressions
 
 // math functions
 unary_scalar_expr!(Sqrt, sqrt);
@@ -1477,6 +1490,10 @@ unary_scalar_expr!(ToHex, to_hex);
 unary_scalar_expr!(Translate, translate);
 unary_scalar_expr!(Trim, trim);
 unary_scalar_expr!(Upper, upper);
+
+// date functions
+binary_scalar_expr!(DatePart, date_part);
+binary_scalar_expr!(DateTrunc, date_trunc);
 
 /// returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {

@@ -1797,6 +1797,8 @@ async fn equijoin_left_and_condition_from_right() -> Result<()> {
 }
 
 #[tokio::test]
+// Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
+#[cfg(not(feature = "force_hash_collisions"))]
 async fn equijoin_right_and_condition_from_left() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
@@ -1850,6 +1852,8 @@ async fn left_join() -> Result<()> {
 }
 
 #[tokio::test]
+// Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
+#[cfg(not(feature = "force_hash_collisions"))]
 async fn right_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
@@ -1870,6 +1874,8 @@ async fn right_join() -> Result<()> {
 }
 
 #[tokio::test]
+// Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
+#[cfg(not(feature = "force_hash_collisions"))]
 async fn full_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
