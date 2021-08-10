@@ -25,7 +25,6 @@ mod expression;
 mod functions;
 mod pyarrow;
 mod scalar;
-mod to_rust;
 mod types;
 mod udaf;
 mod udf;

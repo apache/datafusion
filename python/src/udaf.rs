@@ -27,8 +27,8 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
+use crate::pyarrow::PyArrowConvert;
 use crate::scalar::Scalar;
-use crate::to_rust::to_rust_scalar;
 
 #[derive(Debug)]
 struct PyAccumulator {
@@ -42,7 +42,7 @@ impl PyAccumulator {
 }
 
 impl Accumulator for PyAccumulator {
-    fn state(&self) -> Result<Vec<datafusion::scalar::ScalarValue>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         Python::with_gil(|py| {
             let state = self
                 .accum
@@ -66,7 +66,7 @@ impl Accumulator for PyAccumulator {
         todo!()
     }
 
-    fn evaluate(&self) -> Result<datafusion::scalar::ScalarValue> {
+    fn evaluate(&self) -> Result<ScalarValue> {
         Python::with_gil(|py| {
             let value = self
                 .accum
@@ -74,7 +74,7 @@ impl Accumulator for PyAccumulator {
                 .call_method0("evaluate")
                 .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
 
-            to_rust_scalar(value)
+            ScalarValue::from_pyarrow(value)
                 .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
         })
     }
@@ -89,7 +89,7 @@ impl Accumulator for PyAccumulator {
                 .iter()
                 .map(|arg| {
                     // remove unwrap
-                    to_py_array(arg, py).unwrap()
+                    arg.to_pyarrow(py).unwrap()
                 })
                 .collect::<Vec<_>>();
             let py_args = PyTuple::new(py, py_args);
@@ -110,7 +110,8 @@ impl Accumulator for PyAccumulator {
             // 2. merge
             let state = &states[0];
 
-            let state = to_py_array(state, py)
+            let state = state
+                .to_pyarrow(py)
                 .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
 
             // 2.

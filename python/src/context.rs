@@ -34,7 +34,6 @@ use crate::dataframe;
 use crate::errors;
 use crate::functions;
 use crate::pyarrow::PyArrowConvert;
-use crate::to_rust;
 use crate::types::PyDataType;
 
 /// `ExecutionContext` is able to plan and execute DataFusion plans.

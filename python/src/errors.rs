@@ -20,11 +20,7 @@ use core::fmt;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion::error::DataFusionError as InnerDataFusionError;
-use pyo3::{
-    exceptions::{PyException, PyRuntimeError},
-    prelude::*,
-    PyErr,
-};
+use pyo3::{exceptions::PyException, PyErr};
 
 #[derive(Debug)]
 pub enum DataFusionError {

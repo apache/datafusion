@@ -16,21 +16,19 @@
 // under the License.
 
 use std::convert::TryFrom;
-use std::error;
 use std::sync::Arc;
 
 use libc::uintptr_t;
-use pyo3::prelude::*;
-use pyo3::wrap_pyfunction;
-use pyo3::types::PyList;
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::PyList;
 
-use datafusion::scalar::ScalarValue;
 use datafusion::arrow::array::{make_array_from_raw, ArrayRef};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::ffi;
 use datafusion::arrow::ffi::FFI_ArrowSchema;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::scalar::ScalarValue;
 
 use crate::errors::DataFusionError;
 
@@ -128,26 +126,12 @@ impl PyArrowConvert for ArrayRef {
 impl PyArrowConvert for RecordBatch {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         // TODO(kszucs): implement the FFI conversions in arrow-rs for RecordBatches
-
-        // let names = schema.getattr("names")?.extract::<Vec<String>>()?;
-
-        // let fields = names
-        //     .iter()
-        //     .enumerate()
-        //     .map(|(i, name)| {
-        //         let field = schema.call_method1("field", (i,))?;
-        //         let nullable = field.getattr("nullable")?.extract::<bool>()?;
-        //         let py_data_type = field.getattr("type")?;
-        //         let data_type = py_data_type.extract::<PyDataType>()?.data_type;
-        //         Ok(Field::new(name, data_type, nullable))
-        //     })
-        //     .collect::<PyResult<_>>()?;
-
         let schema = value.getattr("schema")?;
         let schema = Arc::new(Schema::from_pyarrow(schema)?);
 
         let arrays = value.getattr("columns")?.downcast::<PyList>()?;
-        let arrays = arrays.iter()
+        let arrays = arrays
+            .iter()
             .map(ArrayRef::from_pyarrow)
             .collect::<PyResult<_>>()?;
 
@@ -173,28 +157,16 @@ impl PyArrowConvert for RecordBatch {
 
         Ok(PyObject::from(record))
     }
-
-    // fn to_pyarrow(batches: &[RecordBatch]) -> PyResult<PyObject> {
-    //     Python::with_gil(|py| {
-    //         let pyarrow = PyModule::import(py, "pyarrow")?;
-    //         let mut py_batches = vec![];
-    //         for batch in batches {
-    //             py_batches.push(to_py_batch(batch, py, pyarrow)?);
-    //         }
-    //         let list = PyList::new(py, py_batches);
-    //         Ok(PyObject::from(list))
-    //     })
-    // }
 }
 
 impl PyArrowConvert for ScalarValue {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
-        let t = ob
+        let t = value
             .getattr("__class__")?
             .getattr("__name__")?
             .extract::<&str>()?;
 
-        let p = ob.call_method0("as_py")?;
+        let p = value.call_method0("as_py")?;
 
         Ok(match t {
             "Int8Scalar" => ScalarValue::Int8(Some(p.extract::<i8>()?)),

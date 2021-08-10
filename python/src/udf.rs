@@ -16,9 +16,9 @@
 // under the License.
 
 use datafusion::arrow::array::ArrayRef;
-use datafusion::{arrow::array, physical_plan::functions::make_scalar_function};
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::functions::ScalarFunctionImplementation;
+use datafusion::{arrow::array, physical_plan::functions::make_scalar_function};
 use pyo3::{prelude::*, types::PyTuple};
 
 use crate::pyarrow::PyArrowConvert;
