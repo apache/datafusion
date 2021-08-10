@@ -63,8 +63,11 @@ jobs:
         run: |
           # if you encounter error, try rerun the command below with --write instead of --check
           # and commit the changes
+          #
+          # ignore subproject CHANGELOG.md because they are machine generated
           npx prettier@2.3.2 --write \
             '{ballista,datafusion,datafusion-examples,docs,python}/**/*.md' \
+            '!{ballista,datafusion,python}/CHANGELOG.md' \
             README.md \
             DEVELOPERS.md \
             'ballista/**/*.{ts,tsx}'

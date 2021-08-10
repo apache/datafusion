@@ -1,3 +1,5 @@
+#!/bin/bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,27 +16,13 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-[package]
-name = "ballista"
-description = "Ballista Distributed Compute"
-license = "Apache-2.0"
-version = "0.5.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-edition = "2018"
+# Usage:
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-python.sh
 
-[dependencies]
-ballista-core = { path = "../core" }
-ballista-executor = { path = "../executor", optional = true }
-ballista-scheduler = { path = "../scheduler", optional = true }
-futures = "0.3"
-log = "0.4"
-tokio = "1.0"
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 
-datafusion = { path = "../../../datafusion" }
-
-[features]
-default = []
-standalone = ["ballista-executor", "ballista-scheduler"]
+CURRENT_VER=$(grep version "${SOURCE_TOP_DIR}/python/Cargo.toml" | head -n 1 | awk '{print $3}' | tr -d '"')
+${SOURCE_DIR}/update_change_log.sh python 4.0.0 "python-${CURRENT_VER}"
