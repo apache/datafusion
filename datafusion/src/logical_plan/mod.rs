@@ -38,13 +38,14 @@ pub use display::display_schema;
 pub use expr::{
     abs, acos, and, array, ascii, asin, atan, avg, binary_expr, bit_length, btrim, case,
     ceil, character_length, chr, col, columnize_expr, combine_filters, concat, concat_ws,
-    cos, count, count_distinct, create_udaf, create_udf, exp, exprlist_to_fields, floor,
-    in_list, initcap, left, length, lit, ln, log10, log2, lower, lpad, ltrim, max, md5,
-    min, normalize_col, normalize_cols, now, octet_length, or, random, regexp_match,
-    regexp_replace, repeat, replace, replace_col, reverse, right, round, rpad, rtrim,
-    sha224, sha256, sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos,
-    substr, sum, tan, to_hex, translate, trim, trunc, unnormalize_col, unnormalize_cols,
-    upper, when, Column, Expr, ExprRewriter, ExpressionVisitor, Literal, Recursion,
+    cos, count, count_distinct, create_udaf, create_udf, date_part, date_trunc, exp,
+    exprlist_to_fields, floor, in_list, initcap, left, length, lit, ln, log10, log2,
+    lower, lpad, ltrim, max, md5, min, normalize_col, normalize_cols, now, octet_length,
+    or, random, regexp_match, regexp_replace, repeat, replace, replace_col, reverse,
+    right, round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, split_part,
+    sqrt, starts_with, strpos, substr, sum, tan, to_hex, translate, trim, trunc,
+    unnormalize_col, unnormalize_cols, upper, when, Column, Expr, ExprRewriter,
+    ExpressionVisitor, Literal, Recursion,
 };
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;

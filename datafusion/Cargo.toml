@@ -42,6 +42,9 @@ simd = ["arrow/simd"]
 crypto_expressions = ["md-5", "sha2"]
 regex_expressions = ["regex", "lazy_static"]
 unicode_expressions = ["unicode-segmentation"]
+# Used for testing ONLY: causes all values to hash to the same value (test for collisions)
+force_hash_collisions = []
+
 
 [dependencies]
 ahash = "0.7"

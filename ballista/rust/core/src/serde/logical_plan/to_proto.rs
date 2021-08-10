@@ -1065,7 +1065,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
             Expr::ScalarVariable(_) => unimplemented!(),
             Expr::ScalarFunction { ref fun, ref args } => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
-                let expr: Vec<protobuf::LogicalExprNode> = args
+                let args: Vec<protobuf::LogicalExprNode> = args
                     .iter()
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<protobuf::LogicalExprNode>, BallistaError>>()?;
@@ -1074,7 +1074,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                         protobuf::logical_expr_node::ExprType::ScalarFunction(
                             protobuf::ScalarFunctionNode {
                                 fun: fun.into(),
-                                expr,
+                                args,
                             },
                         ),
                     ),
@@ -1374,6 +1374,7 @@ impl TryInto<protobuf::ScalarFunction> for &BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Array => Ok(protobuf::ScalarFunction::Array),
             BuiltinScalarFunction::NullIf => Ok(protobuf::ScalarFunction::Nullif),
+            BuiltinScalarFunction::DatePart => Ok(protobuf::ScalarFunction::Datepart),
             BuiltinScalarFunction::DateTrunc => Ok(protobuf::ScalarFunction::Datetrunc),
             BuiltinScalarFunction::MD5 => Ok(protobuf::ScalarFunction::Md5),
             BuiltinScalarFunction::SHA224 => Ok(protobuf::ScalarFunction::Sha224),

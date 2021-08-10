@@ -144,18 +144,19 @@ enum ScalarFunction {
   TOTIMESTAMP = 24;
   ARRAY = 25;
   NULLIF = 26;
-  DATETRUNC = 27;
-  MD5 = 28;
-  SHA224 = 29;
-  SHA256 = 30;
-  SHA384 = 31;
-  SHA512 = 32;
-  LN = 33;
+  DATEPART = 27;
+  DATETRUNC = 28;
+  MD5 = 29;
+  SHA224 = 30;
+  SHA256 = 31;
+  SHA384 = 32;
+  SHA512 = 33;
+  LN = 34;
 }
 
 message ScalarFunctionNode {
   ScalarFunction fun = 1;
-  repeated LogicalExprNode expr = 2;
+  repeated LogicalExprNode args = 2;
 }
 
 enum AggregateFunction {
