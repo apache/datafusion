@@ -482,7 +482,6 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    #[ignore]
     async fn test() -> Result<()> {
         let input_plan = Arc::new(CoalescePartitionsExec::new(create_input_plan()?));
         let work_dir = TempDir::new()?;
@@ -535,7 +534,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_partitioned() -> Result<()> {
         let input_plan = create_input_plan()?;
         let work_dir = TempDir::new()?;
