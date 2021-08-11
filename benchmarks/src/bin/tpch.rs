@@ -152,7 +152,7 @@ struct ConvertOpt {
     file_format: String,
 
     /// Compression to use when writing Parquet files
-    #[structopt(short = "c", long = "compression", default_value = "snappy")]
+    #[structopt(short = "c", long = "compression", default_value = "zstd")]
     compression: String,
 
     /// Number of partitions to produce
