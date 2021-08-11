@@ -24,7 +24,6 @@ mod errors;
 mod expression;
 mod functions;
 mod pyarrow;
-mod types;
 mod udaf;
 mod udf;
 

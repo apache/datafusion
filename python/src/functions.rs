@@ -24,7 +24,7 @@ use pyo3::{prelude::*, types::PyTuple, wrap_pyfunction};
 use crate::{
     expression,
     expression::{PyAggregateUDF, PyExpr, PyScalarUDF},
-    types::PyDataType,
+    pyarrow::PyArrowConvert,
     udaf, udf,
 };
 
@@ -203,53 +203,60 @@ define_unary_function!(count);
 
 pub(crate) fn create_udf(
     fun: PyObject,
-    input_types: Vec<PyDataType>,
-    return_type: PyDataType,
+    input_types: Vec<&PyAny>,
+    return_type: &PyAny,
     name: &str,
-) -> PyScalarUDF {
-    let input_types: Vec<DataType> =
-        input_types.iter().map(|d| d.data_type.clone()).collect();
-    let return_type = Arc::new(return_type.data_type);
+) -> PyResult<PyScalarUDF> {
+    let input_types: Vec<DataType> = input_types
+        .into_iter()
+        .map(DataType::from_pyarrow)
+        .collect::<PyResult<_>>()?;
+    let return_type = Arc::new(DataType::from_pyarrow(return_type)?);
 
-    PyScalarUDF {
+    Ok(PyScalarUDF {
         function: logical_plan::create_udf(
             name,
             input_types,
             return_type,
             udf::array_udf(fun),
         ),
-    }
+    })
 }
 
 /// Creates a new udf.
 #[pyfunction]
 fn udf(
     fun: PyObject,
-    input_types: Vec<PyDataType>,
-    return_type: PyDataType,
+    input_types: Vec<&PyAny>,
+    return_type: &PyAny,
     py: Python,
 ) -> PyResult<PyScalarUDF> {
     let name = fun.getattr(py, "__qualname__")?.extract::<String>(py)?;
 
-    Ok(create_udf(fun, input_types, return_type, &name))
+    create_udf(fun, input_types, return_type, &name)
 }
 
 /// Creates a new udf.
 #[pyfunction]
 fn udaf(
     accumulator: PyObject,
-    input_type: PyDataType,
-    return_type: PyDataType,
-    state_type: Vec<PyDataType>,
+    input_type: &PyAny,
+    return_type: &PyAny,
+    state_type: Vec<&PyAny>,
     py: Python,
 ) -> PyResult<PyAggregateUDF> {
     let name = accumulator
         .getattr(py, "__qualname__")?
         .extract::<String>(py)?;
 
-    let input_type = input_type.data_type;
-    let return_type = Arc::new(return_type.data_type);
-    let state_type = Arc::new(state_type.into_iter().map(|t| t.data_type).collect());
+    let input_type = DataType::from_pyarrow(input_type)?;
+    let return_type = Arc::new(DataType::from_pyarrow(return_type)?);
+    let state_type = Arc::new(
+        state_type
+            .into_iter()
+            .map(DataType::from_pyarrow)
+            .collect::<PyResult<_>>()?,
+    );
 
     Ok(PyAggregateUDF {
         function: logical_plan::create_udaf(

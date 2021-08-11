@@ -34,7 +34,6 @@ use crate::dataframe::PyDataFrame;
 use crate::errors::DataFusionError;
 use crate::functions;
 use crate::pyarrow::PyArrowConvert;
-use crate::types::PyDataType;
 
 /// `PyExecutionContext` is able to plan and execute DataFusion plans.
 /// It has a powerful optimizer, a physical planner for local execution, and a
@@ -149,12 +148,12 @@ impl PyExecutionContext {
         &mut self,
         name: &str,
         func: PyObject,
-        args_types: Vec<PyDataType>,
-        return_type: PyDataType,
-    ) {
-        let function = functions::create_udf(func, args_types, return_type, name);
-
+        args_types: Vec<&PyAny>,
+        return_type: &PyAny,
+    ) -> PyResult<()> {
+        let function = functions::create_udf(func, args_types, return_type, name)?;
         self.ctx.register_udf(function.function);
+        Ok(())
     }
 
     fn tables(&self) -> HashSet<String> {
