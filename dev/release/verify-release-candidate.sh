@@ -125,6 +125,10 @@ test_source_distribution() {
 
   cargo build
   cargo test --all
+
+  pushd datafusion
+    cargo publish --dry-run
+  popd
 }
 
 TEST_SUCCESS=no
