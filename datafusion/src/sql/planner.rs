@@ -101,8 +101,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::Explain {
                 verbose,
                 statement,
-                analyze: _,
-            } => self.explain_statement_to_plan(*verbose, statement),
+                analyze,
+            } => self.explain_statement_to_plan(*verbose, *analyze, statement),
             Statement::Query(query) => self.query_to_plan(query),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(variable),
             Statement::ShowColumns {
@@ -230,21 +230,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub fn explain_statement_to_plan(
         &self,
         verbose: bool,
+        analyze: bool,
         statement: &Statement,
     ) -> Result<LogicalPlan> {
         let plan = self.sql_statement_to_plan(statement)?;
-
-        let stringified_plans = vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
-
-        let schema = LogicalPlan::explain_schema();
         let plan = Arc::new(plan);
+        let schema = LogicalPlan::explain_schema();
+        let schema = schema.to_dfschema_ref()?;
 
-        Ok(LogicalPlan::Explain {
-            verbose,
-            plan,
-            stringified_plans,
-            schema: schema.to_dfschema_ref()?,
-        })
+        if analyze {
+            Ok(LogicalPlan::Analyze {
+                verbose,
+                input: plan,
+                schema,
+            })
+        } else {
+            let stringified_plans =
+                vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
+            Ok(LogicalPlan::Explain {
+                verbose,
+                plan,
+                stringified_plans,
+                schema,
+            })
+        }
     }
 
     fn build_schema(&self, columns: &[SQLColumnDef]) -> Result<Schema> {

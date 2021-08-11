@@ -455,18 +455,32 @@ impl LogicalPlanBuilder {
     }
 
     /// Create an expression to represent the explanation of the plan
-    pub fn explain(&self, verbose: bool) -> Result<Self> {
-        let stringified_plans =
-            vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
-
+    ///
+    /// if `analyze` is true, runs the actual plan and produces
+    /// information about metrics during run.
+    ///
+    /// if `verbose` is true, prints out additional details.
+    pub fn explain(&self, verbose: bool, analyze: bool) -> Result<Self> {
         let schema = LogicalPlan::explain_schema();
+        let schema = schema.to_dfschema_ref()?;
 
-        Ok(Self::from(LogicalPlan::Explain {
-            verbose,
-            plan: Arc::new(self.plan.clone()),
-            stringified_plans,
-            schema: schema.to_dfschema_ref()?,
-        }))
+        if analyze {
+            Ok(Self::from(LogicalPlan::Analyze {
+                verbose,
+                input: Arc::new(self.plan.clone()),
+                schema,
+            }))
+        } else {
+            let stringified_plans =
+                vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
+
+            Ok(Self::from(LogicalPlan::Explain {
+                verbose,
+                plan: Arc::new(self.plan.clone()),
+                stringified_plans,
+                schema,
+            }))
+        }
     }
 
     /// Build the plan

@@ -289,6 +289,8 @@ pub trait DataFrame: Send + Sync {
 
     /// Return a DataFrame with the explanation of its plan so far.
     ///
+    /// if `analyze` is specified, runs the plan and reports metrics
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -296,11 +298,11 @@ pub trait DataFrame: Send + Sync {
     /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
-    /// let batches = df.limit(100)?.explain(false)?.collect().await?;
+    /// let batches = df.limit(100)?.explain(false, false)?.collect().await?;
     /// # Ok(())
     /// # }
     /// ```
-    fn explain(&self, verbose: bool) -> Result<Arc<dyn DataFrame>>;
+    fn explain(&self, verbose: bool, analyze: bool) -> Result<Arc<dyn DataFrame>>;
 
     /// Return a `FunctionRegistry` used to plan udf's calls
     ///

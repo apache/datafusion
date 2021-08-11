@@ -284,6 +284,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // push the optimization to the plan of this explain
             push_down(&state, plan)
         }
+        LogicalPlan::Analyze { .. } => push_down(&state, plan),
         LogicalPlan::Filter { input, predicate } => {
             let mut predicates = vec![];
             split_members(predicate, &mut predicates);

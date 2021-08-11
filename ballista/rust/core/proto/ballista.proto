@@ -249,6 +249,7 @@ message LogicalPlanNode {
     RepartitionNode repartition = 9;
     EmptyRelationNode empty_relation = 10;
     CreateExternalTableNode create_external_table = 11;
+    AnalyzeNode analyze = 14;
     ExplainNode explain = 12;
     WindowNode window = 13;
   }
@@ -321,6 +322,11 @@ enum FileType{
   NdJson = 0;
   Parquet = 1;
   CSV = 2;
+}
+
+message AnalyzeNode {
+  LogicalPlanNode input = 1;
+  bool verbose = 2;
 }
 
 message ExplainNode{

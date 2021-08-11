@@ -20,7 +20,6 @@
 use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::{any::Any, convert::TryInto};
 
 use crate::{
@@ -28,8 +27,7 @@ use crate::{
     logical_plan::{Column, Expr},
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
-        common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-        SendableRecordBatchStream,
+        common, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
     },
     scalar::ScalarValue,
 };
@@ -55,12 +53,11 @@ use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
     task,
 };
-use tokio_stream::wrappers::ReceiverStream;
 
 use crate::datasource::datasource::{ColumnStatistics, Statistics};
 use async_trait::async_trait;
-use futures::stream::{Stream, StreamExt};
 
+use super::stream::RecordBatchReceiverStream;
 use super::SQLMetric;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::Accumulator;
@@ -688,10 +685,7 @@ impl ExecutionPlan for ParquetExec {
             }
         });
 
-        Ok(Box::pin(ParquetStream {
-            schema: self.schema.clone(),
-            inner: ReceiverStream::new(response_rx),
-        }))
+        Ok(RecordBatchReceiverStream::create(&self.schema, response_rx))
     }
 
     fn fmt_as(
@@ -936,28 +930,6 @@ fn split_files(filenames: &[String], n: usize) -> Vec<&[String]> {
         chunk_size += 1;
     }
     filenames.chunks(chunk_size).collect()
-}
-
-struct ParquetStream {
-    schema: SchemaRef,
-    inner: ReceiverStream<ArrowResult<RecordBatch>>,
-}
-
-impl Stream for ParquetStream {
-    type Item = ArrowResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx)
-    }
-}
-
-impl RecordBatchStream for ParquetStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@
 
 //! Physical query planner
 
+use super::analyze::AnalyzeExec;
 use super::{
     aggregates, cross_join::CrossJoinExec, empty::EmptyExec, expressions::binary,
     functions, hash_join::PartitionMode, udaf, union::UnionExec, windows,
@@ -741,6 +742,15 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
                 "Unsupported logical plan: Explain must be root of the plan".to_string(),
             )),
+            LogicalPlan::Analyze {
+                verbose,
+                input,
+                schema,
+            } => {
+                let input = self.create_initial_plan(input, ctx_state)?;
+                let schema = SchemaRef::new(schema.as_ref().to_owned().into());
+                Ok(Arc::new(AnalyzeExec::new(*verbose, input, schema)))
+            }
             LogicalPlan::Extension { node } => {
                 let physical_inputs = node
                     .inputs()
@@ -1651,7 +1661,7 @@ mod tests {
         let logical_plan =
             LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
                 .unwrap()
-                .explain(true)
+                .explain(true, false)
                 .unwrap()
                 .build()
                 .unwrap();

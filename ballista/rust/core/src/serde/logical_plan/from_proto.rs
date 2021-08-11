@@ -231,10 +231,17 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     has_header: create_extern_table.has_header,
                 })
             }
+            LogicalPlanType::Analyze(analyze) => {
+                let input: LogicalPlan = convert_box_required!(analyze.input)?;
+                LogicalPlanBuilder::from(input)
+                    .explain(analyze.verbose, true)?
+                    .build()
+                    .map_err(|e| e.into())
+            }
             LogicalPlanType::Explain(explain) => {
                 let input: LogicalPlan = convert_box_required!(explain.input)?;
                 LogicalPlanBuilder::from(input)
-                    .explain(explain.verbose)?
+                    .explain(explain.verbose, false)?
                     .build()
                     .map_err(|e| e.into())
             }
