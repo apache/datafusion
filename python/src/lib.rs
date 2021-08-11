@@ -17,7 +17,6 @@
 
 use pyo3::prelude::*;
 
-mod catalog;
 mod context;
 mod dataframe;
 mod errors;
