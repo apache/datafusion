@@ -262,6 +262,7 @@ impl RepartitionExec {
             // fetch the next batch
             let now = Instant::now();
             let result = stream.next().await;
+            println!("input {:?}", result);
             metrics.fetch_nanos.add_elapsed(now);
 
             // Input is done
@@ -298,11 +299,13 @@ impl RepartitionExec {
                     hashes_buf.resize(arrays[0].len(), 0);
                     // Hash arrays and compute buckets based on number of partitions
                     let hashes = create_hashes(&arrays, &random_state, hashes_buf)?;
+                    println!("hashes: {:?}", &hashes);
                     let mut indices = vec![vec![]; num_output_partitions];
                     for (index, hash) in hashes.iter().enumerate() {
                         indices[(*hash % num_output_partitions as u64) as usize]
                             .push(index as u64)
                     }
+                    println!("indices: {:?}", &indices);
                     metrics.repart_nanos.add_elapsed(now);
                     for (num_output_partition, partition_indices) in
                         indices.into_iter().enumerate()
@@ -732,7 +735,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     // skip this test when hash function is different because the hard
     // coded expected output is a function of the hash values
     //#[cfg(not(feature = "force_hash_collisions"))]

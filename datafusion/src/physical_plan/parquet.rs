@@ -198,6 +198,7 @@ impl ParquetExec {
     }
 
     /// Create a new Parquet reader execution plan with provided partitions and schema
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         partitions: Vec<ParquetPartition>,
         object_store: Arc<dyn ObjectStore>,
@@ -551,6 +552,7 @@ fn build_row_group_predicate(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn read_files(
     object_store: Arc<dyn ObjectStore>,
     partition: ParquetPartition,
