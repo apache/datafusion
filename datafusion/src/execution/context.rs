@@ -2709,7 +2709,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn write_parquet_results() -> Result<()> {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;

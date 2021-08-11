@@ -732,6 +732,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     // skip this test when hash function is different because the hard
     // coded expected output is a function of the hash values
     //#[cfg(not(feature = "force_hash_collisions"))]

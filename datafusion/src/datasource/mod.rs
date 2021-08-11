@@ -79,16 +79,7 @@ impl From<String> for PartitionedFile {
 
 impl std::fmt::Display for PartitionedFile {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "PartitionedFile(file_path: {}, schema: {}, statistics: {:?},\
-         partition_value: {:?}, partition_schema: {:?})",
-            self.file_path,
-            self.schema,
-            self.statistics,
-            self.partition_value,
-            self.partition_schema
-        )
+        write!(f, "{}", self.file_path)
     }
 }
 
@@ -103,13 +94,8 @@ pub struct FilePartition {
 
 impl std::fmt::Display for FilePartition {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let files: Vec<String> = self.files.iter().map(|f| format!("{}", f)).collect();
-        write!(
-            f,
-            "FilePartition[{}], files: {}",
-            self.index,
-            files.join(", ")
-        )
+        let files: Vec<String> = self.files.iter().map(|f| f.to_string()).collect();
+        write!(f, "{}", files.join(", "))
     }
 }
 
