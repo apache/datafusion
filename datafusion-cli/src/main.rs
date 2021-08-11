@@ -238,8 +238,9 @@ async fn exec_and_print(
     print_options: PrintOptions,
     sql: String,
 ) -> Result<()> {
-    let df = ctx.sql(&sql)?;
     let now = Instant::now();
+
+    let df = ctx.sql(&sql)?;
     let results = df.collect().await?;
 
     print_options.print_batches(&results, now)?;
