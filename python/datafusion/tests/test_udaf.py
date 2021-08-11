@@ -20,6 +20,7 @@ from typing import List
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
+
 from datafusion import ExecutionContext
 from datafusion import functions as f
 

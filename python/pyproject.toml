@@ -27,8 +27,3 @@ dependencies = [
 
 [tool.isort]
 profile = "black"
-
-# [tool.mypy]
-# ignore_missing_imports = true
-# disallow_untyped_defs = true
-# files = "datafusion"
