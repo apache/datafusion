@@ -17,7 +17,10 @@
 
 use std::sync::Arc;
 
-use pyo3::{prelude::*, types::PyTuple};
+use pyo3::{
+    prelude::*,
+    types::{PyList, PyTuple},
+};
 
 use datafusion::arrow::array::ArrayRef;
 
@@ -28,7 +31,6 @@ use datafusion::{
 };
 
 use crate::pyarrow::PyArrowConvert;
-use crate::scalar::Scalar;
 
 #[derive(Debug)]
 struct PyAccumulator {
@@ -44,16 +46,15 @@ impl PyAccumulator {
 impl Accumulator for PyAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Python::with_gil(|py| {
-            let state = self
-                .accum
+            self.accum
                 .as_ref(py)
-                .call_method0("to_scalars")
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?
-                .extract::<Vec<Scalar>>()
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
-
-            Ok(state.into_iter().map(|v| v.scalar).collect::<Vec<_>>())
+                .call_method0("to_scalars")?
+                .downcast::<PyList>()?
+                .iter()
+                .map(ScalarValue::from_pyarrow)
+                .collect::<PyResult<Vec<ScalarValue>>>()
         })
+        .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
     }
 
     fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
