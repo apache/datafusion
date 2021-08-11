@@ -69,15 +69,10 @@ impl Accumulator for PyAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Python::with_gil(|py| {
-            let value = self
-                .accum
-                .as_ref(py)
-                .call_method0("evaluate")
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
-
+            let value = self.accum.as_ref(py).call_method0("evaluate")?;
             ScalarValue::from_pyarrow(value)
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
         })
+        .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
