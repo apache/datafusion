@@ -683,37 +683,31 @@ fn build_join_indexes(
                 if let Some((_, indices)) =
                     left.0.get(*hash_value, |(hash, _)| *hash_value == *hash)
                 {
-                    for &i in indices {
-                        // Check hash collisions
-                        //if equal_rows(i as usize, row, &left_join_values, &keys_values)? {
-                        left_indices.push(i);
-                        right_indices.push(row as u32);
-                        //}
-                    }
+                    left_indices.extend(indices);
+
+                    right_indices
+                        .extend(std::iter::repeat(row as u32).take(indices.len()));
                 }
             }
 
             equal_array_rows(left_indices, right_indices, &left_join_values, &keys_values)
         }
         JoinType::Left => {
-            let mut left_indices = UInt64Builder::new(0);
-            let mut right_indices = UInt32Builder::new(0);
+            let mut left_indices = vec![];
+            let mut right_indices = vec![];
 
             // First visit all of the rows
             for (row, hash_value) in hash_values.iter().enumerate() {
                 if let Some((_, indices)) =
                     left.0.get(*hash_value, |(hash, _)| *hash_value == *hash)
                 {
-                    for &i in indices {
-                        // Collision check
-                        if equal_rows(i as usize, row, &left_join_values, &keys_values)? {
-                            left_indices.append_value(i)?;
-                            right_indices.append_value(row as u32)?;
-                        }
-                    }
+                    left_indices.extend(indices);
+
+                    right_indices
+                        .extend(std::iter::repeat(row as u32).take(indices.len()));
                 };
             }
-            Ok((left_indices.finish(), right_indices.finish()))
+            equal_array_rows(left_indices, right_indices, &left_join_values, &keys_values)
         }
         JoinType::Right | JoinType::Full => {
             let mut left_indices = UInt64Builder::new(0);
