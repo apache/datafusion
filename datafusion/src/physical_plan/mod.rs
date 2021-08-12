@@ -639,6 +639,7 @@ pub trait Accumulator: Send + Sync + Debug {
 }
 
 pub mod aggregates;
+pub mod analyze;
 pub mod array_expressions;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
@@ -671,6 +672,7 @@ pub mod repartition;
 pub mod sort;
 pub mod sort_preserving_merge;
 pub mod source;
+pub mod stream;
 pub mod string_expressions;
 pub mod type_coercion;
 pub mod udaf;

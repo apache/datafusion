@@ -2141,6 +2141,54 @@ async fn csv_explain() {
 }
 
 #[tokio::test]
+async fn csv_explain_analyze() {
+    // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = normalize_for_explain(&formatted);
+
+    // Only test basic plumbing and try to avoid having to change too
+    // many things
+    let needle = "RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), metrics=[";
+    assert!(
+        formatted.contains(needle),
+        "did not find '{}' in\n{}",
+        needle,
+        formatted
+    );
+    let verbose_needle = "Output Rows       | 5";
+    assert!(
+        !formatted.contains(verbose_needle),
+        "found unexpected '{}' in\n{}",
+        verbose_needle,
+        formatted
+    );
+}
+
+#[tokio::test]
+async fn csv_explain_analyze_verbose() {
+    // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql =
+        "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = normalize_for_explain(&formatted);
+
+    let verbose_needle = "Output Rows       | 5";
+    assert!(
+        formatted.contains(verbose_needle),
+        "did not find '{}' in\n{}",
+        verbose_needle,
+        formatted
+    );
+}
+
+#[tokio::test]
 async fn csv_explain_plans() {
     // This test verify the look of each plan in its full cycle plan creation
 

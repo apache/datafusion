@@ -80,6 +80,7 @@ impl OptimizerRule for ConstantFolding {
             | LogicalPlan::Extension { .. }
             | LogicalPlan::Sort { .. }
             | LogicalPlan::Explain { .. }
+            | LogicalPlan::Analyze { .. }
             | LogicalPlan::Limit { .. }
             | LogicalPlan::Union { .. }
             | LogicalPlan::Join { .. }
