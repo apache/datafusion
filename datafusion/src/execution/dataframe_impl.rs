@@ -183,9 +183,9 @@ impl DataFrame for DataFrameImpl {
         self.plan.schema()
     }
 
-    fn explain(&self, verbose: bool) -> Result<Arc<dyn DataFrame>> {
+    fn explain(&self, verbose: bool, analyze: bool) -> Result<Arc<dyn DataFrame>> {
         let plan = LogicalPlanBuilder::from(self.to_logical_plan())
-            .explain(verbose)?
+            .explain(verbose, analyze)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
     }
@@ -318,7 +318,7 @@ mod tests {
         let df = df
             .select_columns(&["c1", "c2", "c11"])?
             .limit(10)?
-            .explain(false)?;
+            .explain(false, false)?;
         let plan = df.to_logical_plan();
 
         // build query using SQL

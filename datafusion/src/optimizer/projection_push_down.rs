@@ -356,6 +356,31 @@ fn optimize_plan(
         LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
             "Unsupported logical plan: Explain must be root of the plan".to_string(),
         )),
+        LogicalPlan::Analyze {
+            input,
+            verbose,
+            schema,
+        } => {
+            // make sure we keep all the columns from the input plan
+            let required_columns = input
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.qualified_column())
+                .collect::<HashSet<Column>>();
+
+            Ok(LogicalPlan::Analyze {
+                input: Arc::new(optimize_plan(
+                    optimizer,
+                    input,
+                    &required_columns,
+                    false,
+                    execution_props,
+                )?),
+                verbose: *verbose,
+                schema: schema.clone(),
+            })
+        }
         LogicalPlan::Union {
             inputs,
             schema,

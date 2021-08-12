@@ -198,7 +198,8 @@ pub fn from_plan(
         LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable { .. }
-        | LogicalPlan::Explain { .. } => Ok(plan.clone()),
+        | LogicalPlan::Explain { .. }
+        | LogicalPlan::Analyze { .. } => Ok(plan.clone()),
     }
 }
 

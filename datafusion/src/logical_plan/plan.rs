@@ -213,6 +213,16 @@ pub enum LogicalPlan {
         /// The output schema of the explain (2 columns of text)
         schema: DFSchemaRef,
     },
+    /// Runs the actual plan, and then prints the physical plan with
+    /// with execution metrics.
+    Analyze {
+        /// Should extra detail be included?
+        verbose: bool,
+        /// The logical plan that is being EXPLAIN ANALYZE'd
+        input: Arc<LogicalPlan>,
+        /// The output schema of the explain (2 columns of text)
+        schema: DFSchemaRef,
+    },
     /// Extension operator defined outside of DataFusion
     Extension {
         /// The runtime extension operator
@@ -239,6 +249,7 @@ impl LogicalPlan {
             LogicalPlan::Limit { input, .. } => input.schema(),
             LogicalPlan::CreateExternalTable { schema, .. } => schema,
             LogicalPlan::Explain { schema, .. } => schema,
+            LogicalPlan::Analyze { schema, .. } => schema,
             LogicalPlan::Extension { node } => node.schema(),
             LogicalPlan::Union { schema, .. } => schema,
         }
@@ -278,6 +289,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Extension { node } => vec![node.schema()],
             LogicalPlan::Explain { schema, .. }
+            | LogicalPlan::Analyze { schema, .. }
             | LogicalPlan::EmptyRelation { schema, .. }
             | LogicalPlan::CreateExternalTable { schema, .. } => vec![schema],
             LogicalPlan::Limit { input, .. }
@@ -327,6 +339,7 @@ impl LogicalPlan {
             | LogicalPlan::Limit { .. }
             | LogicalPlan::CreateExternalTable { .. }
             | LogicalPlan::CrossJoin { .. }
+            | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
             | LogicalPlan::Union { .. } => {
                 vec![]
@@ -350,6 +363,7 @@ impl LogicalPlan {
             LogicalPlan::Extension { node } => node.inputs(),
             LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
             LogicalPlan::Explain { plan, .. } => vec![plan],
+            LogicalPlan::Analyze { input: plan, .. } => vec![plan],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -495,6 +509,7 @@ impl LogicalPlan {
                 true
             }
             LogicalPlan::Explain { plan, .. } => plan.accept(visitor)?,
+            LogicalPlan::Analyze { input: plan, .. } => plan.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -790,6 +805,7 @@ impl LogicalPlan {
                         write!(f, "CreateExternalTable: {:?}", name)
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
+                    LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union { .. } => write!(f, "Union"),
                     LogicalPlan::Extension { ref node } => node.fmt_for_explain(f),
                 }

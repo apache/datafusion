@@ -931,6 +931,17 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )),
                 })
             }
+            LogicalPlan::Analyze { verbose, input, .. } => {
+                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Analyze(Box::new(
+                        protobuf::AnalyzeNode {
+                            input: Some(Box::new(input)),
+                            verbose: *verbose,
+                        },
+                    ))),
+                })
+            }
             LogicalPlan::Explain { verbose, plan, .. } => {
                 let input: protobuf::LogicalPlanNode = plan.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {

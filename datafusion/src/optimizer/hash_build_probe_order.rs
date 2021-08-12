@@ -80,6 +80,11 @@ fn get_num_rows(logical_plan: &LogicalPlan) -> Option<usize> {
             // we cannot predict how rows will be repartitioned
             None
         }
+        LogicalPlan::Analyze { .. } => {
+            // Analyze  produces one row, verbose produces more
+            // but it should never be used as an input to a Join anyways
+            None
+        }
         // the following operators are special cases and not querying data
         LogicalPlan::CreateExternalTable { .. } => None,
         LogicalPlan::Explain { .. } => None,
@@ -201,6 +206,7 @@ impl OptimizerRule for HashBuildProbeOrder {
             | LogicalPlan::Sort { .. }
             | LogicalPlan::CreateExternalTable { .. }
             | LogicalPlan::Explain { .. }
+            | LogicalPlan::Analyze { .. }
             | LogicalPlan::Union { .. }
             | LogicalPlan::Extension { .. } => {
                 let expr = plan.expressions();
