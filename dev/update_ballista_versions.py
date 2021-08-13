@@ -28,13 +28,17 @@ from pathlib import Path
 import tomlkit
 
 
-def update_cargo_toml(cargo_toml: str, new_version: str):
+def update_cargo_toml(cargo_toml: str, new_version: str, datafusion_version: str):
     print(f'updating {cargo_toml}')
     with open(cargo_toml) as f:
         data = f.read()
 
     doc = tomlkit.parse(data)
     doc.get('package')['version'] = new_version
+
+    df_dep = doc.get('dependencies').get('datafusion')
+    if df_dep is not None:
+        df_dep['version'] = datafusion_version
 
     with open(cargo_toml, 'w') as f:
         f.write(tomlkit.dumps(doc))
@@ -43,6 +47,7 @@ def update_cargo_toml(cargo_toml: str, new_version: str):
 def main():
     parser = argparse.ArgumentParser(description='Update ballista crate versions.')
     parser.add_argument('new_version', type=str, help='new ballista version')
+    parser.add_argument('datafusion_version', type=str, help='new datafusion version')
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent.parent.absolute()
@@ -57,11 +62,13 @@ def main():
         ]
     ])
     new_version = args.new_version
+    datafusion_version = args.datafusion_version
 
-    print(f'Updating ballista versions in {repo_root} to {new_version}')
+    print(f'Updating ballista versions in {repo_root} to {new_version} '
+          f'and datafusion dep version to {datafusion_version}')
 
     for cargo_toml in ballista_crates:
-        update_cargo_toml(cargo_toml, new_version)
+        update_cargo_toml(cargo_toml, new_version, datafusion_version)
 
 
 if __name__ == "__main__":
