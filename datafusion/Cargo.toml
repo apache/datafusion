@@ -49,8 +49,8 @@ force_hash_collisions = []
 [dependencies]
 ahash = "0.7"
 hashbrown = { version = "0.11", features = ["raw"] }
-arrow = { version = "5.1", features = ["prettyprint"] }
-parquet = { version = "5.1", features = ["arrow"] }
+arrow = { version = "^5.2", features = ["prettyprint"] }
+parquet = { version = "^5.2", features = ["arrow"] }
 sqlparser = "0.9.0"
 paste = "^1.0"
 num_cpus = "1.13.0"
