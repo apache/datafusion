@@ -89,7 +89,7 @@ impl NdJsonExec {
     ) -> Result<Self> {
         let file_extension = options.file_extension.to_string();
 
-        let filenames = LocalFileSystem.list_all_files(path, options.file_extension)?;
+        let filenames = LocalFileSystem.list_all_files(path, options.file_extension).await?;
 
         if filenames.is_empty() {
             return Err(DataFusionError::Execution(format!(

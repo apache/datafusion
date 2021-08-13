@@ -19,13 +19,17 @@
 
 use crate::datasource::local::LocalFileSystem;
 use crate::error::Result;
+use async_trait::async_trait;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Read;
 use std::sync::{Arc, RwLock};
+use futures::{Stream, StreamExt};
+use std::pin::Pin;
 
-/// Objct Reader for one file in a object store
+/// Object Reader for one file in a object store
+#[async_trait]
 pub trait ObjectReader {
     /// Get reader for a part [start, start + length] in the file
     fn get_reader(&self, start: u64, length: usize) -> Box<dyn Read>;
@@ -34,15 +38,18 @@ pub trait ObjectReader {
     fn length(&self) -> u64;
 }
 
+pub type FileNameStream = Pin<Box<dyn Stream<Item = Result<String>> + Send + Sync + 'static>>;
+
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
+#[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
     /// Returns the object store as [`Any`](std::any::Any)
     /// so that it can be downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
     /// Returns all the files with filename extension `ext` in path `prefix`
-    fn list_all_files(&self, prefix: &str, ext: &str) -> Result<Vec<String>>;
+    async fn list_all_files(&self, prefix: &str, ext: &str) -> Result<FileNameStream>;
 
     /// Get object reader for one file
     fn get_reader(&self, file_path: &str) -> Result<Arc<dyn ObjectReader>>;

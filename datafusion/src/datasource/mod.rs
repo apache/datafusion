@@ -116,7 +116,7 @@ pub trait SourceRootDescBuilder {
         object_store: Arc<dyn ObjectStore>,
         ext: &str,
     ) -> Result<SourceRootDescriptor> {
-        let filenames = object_store.list_all_files(path, ext)?;
+        let filenames = object_store.list_all_files(path, ext).await?;
         if filenames.is_empty() {
             return Err(DataFusionError::Plan(format!(
                 "No file (with .{} extension) found at path {}",

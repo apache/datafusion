@@ -143,7 +143,7 @@ impl CsvExec {
     ) -> Result<Self> {
         let file_extension = String::from(options.file_extension);
 
-        let filenames = LocalFileSystem.list_all_files(path, options.file_extension)?;
+        let filenames = LocalFileSystem.list_all_files(path, options.file_extension).await?;
         if filenames.is_empty() {
             return Err(DataFusionError::Execution(format!(
                 "No files found at {path} with file extension {file_extension}",
