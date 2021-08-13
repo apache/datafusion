@@ -56,6 +56,35 @@ impl ParquetTable {
         })
     }
 
+    /// Attempt to initialize a new `ParquetTable` from a file path and known schema.
+    /// If collect_statistics is `false`, doesn't read files until necessary by scan
+    pub fn try_new_with_schema(
+        path: impl Into<String>,
+        schema: Schema,
+        max_concurrency: usize,
+        collect_statistics: bool,
+    ) -> Result<Self> {
+        let path = path.into();
+        if collect_statistics {
+            let parquet_exec = ParquetExec::try_from_path(&path, None, None, 0, 1, None)?;
+            Ok(Self {
+                path,
+                schema: Arc::new(schema),
+                statistics: parquet_exec.statistics().to_owned(),
+                max_concurrency,
+                enable_pruning: true,
+            })
+        } else {
+            Ok(Self {
+                path,
+                schema: Arc::new(schema),
+                statistics: Statistics::default(),
+                max_concurrency,
+                enable_pruning: true,
+            })
+        }
+    }
+
     /// Get the path for the Parquet file(s) represented by this ParquetTable instance
     pub fn path(&self) -> &str {
         &self.path
