@@ -221,10 +221,12 @@ The `dev/release/verify-release-candidate.sh` is a script in this repository tha
 
 If the release is not approved, fix whatever the problem is and try again with the next RC number
 
-### If the release is approved,
+## Finalize the release
+
+### After the release is approved
 
 Move tarball to the release location in SVN, e.g.
-https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-4.1.0/, using
+https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-5.1.0/, using
 the `release-tarball.sh` script:
 
 ```shell
@@ -232,8 +234,6 @@ the `release-tarball.sh` script:
 ```
 
 Congratulations! The release is now offical!
-
-## Finalize the release
 
 ### Create release git tags
 
