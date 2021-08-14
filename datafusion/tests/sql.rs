@@ -4283,3 +4283,57 @@ async fn test_partial_qualified_name() -> Result<()> {
     assert_eq!(expected, actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn like_on_strings() -> Result<()> {
+    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
+        .into_iter()
+        .collect::<StringArray>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| bar   |",
+        "| fazzz |",
+        "+-------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn like_on_string_dictionaries() -> Result<()> {
+    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
+        .into_iter()
+        .collect::<DictionaryArray<Int32Type>>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| bar   |",
+        "| fazzz |",
+        "+-------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
