@@ -301,3 +301,11 @@ If there is ballista release, run
 ### Publish on PyPI
 
 TODO
+
+### Call the vote
+
+Call the vote on the Arrow dev list by replying to the RC voting thread. The
+reply should have a new subject constructed by adding `RESULT ` prefix to the
+old subject line.
+
+TODO: add example mail
