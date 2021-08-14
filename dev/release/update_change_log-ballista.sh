@@ -25,4 +25,4 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 
 CURRENT_VER=$(grep version "${SOURCE_TOP_DIR}/ballista/rust/client/Cargo.toml" | head -n 1 | awk '{print $3}' | tr -d '"')
-${SOURCE_DIR}/update_change_log.sh ballista 4.0.0 "ballista-${CURRENT_VER}"
+${SOURCE_DIR}/update_change_log.sh ballista 4.0.0 "ballista-${CURRENT_VER}-rc-local"
