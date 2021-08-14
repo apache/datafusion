@@ -274,6 +274,7 @@ create an account and login to crates.io before asking to be added as an owner
 of the following crates:
 
 - [datafusion](https://crates.io/crates/datafusion)
+- [ballista](https://crates.io/crates/ballista)
 - [ballista-core](https://crates.io/crates/ballista-core)
 - [ballista-executor](https://crates.io/crates/ballista-executor)
 - [ballista-scheduler](https://crates.io/crates/ballista-scheduler)
@@ -291,6 +292,7 @@ following commands
 If there is ballista release, run
 
 ```shell
+(cd ballista/rust/client && cargo publish)
 (cd ballista/rust/core && cargo publish)
 (cd ballista/rust/executor && cargo publish)
 (cd ballista/rust/scheduler && cargo publish)
