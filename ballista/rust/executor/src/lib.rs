@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Ballista Executor Process
-//!
-//! This crate contains the Ballista executor process. Refer to <https://crates.io/crates/ballista> for
-//! documentation.
+#![doc = include_str!("../README.md")]
 
 pub mod collect;
 pub mod execution_loop;

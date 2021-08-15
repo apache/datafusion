@@ -80,7 +80,7 @@ The following example runs a simple aggregate SQL query against a CSV file from 
 [New York Taxi and Limousine Commission](https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page)
 data set.
 
-```rust
+```rust,no_run
 use ballista::prelude::*;
 use datafusion::arrow::util::pretty;
 use datafusion::prelude::CsvReadOptions;
