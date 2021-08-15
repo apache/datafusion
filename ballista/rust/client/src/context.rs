@@ -204,25 +204,20 @@ impl BallistaContext {
             )
         };
 
-        // nested block because of locking state
-        // TODO refactor this
+        // register tables with DataFusion context
         {
-            println!("registering ballista tables with df context");
             let state = self.state.lock().unwrap();
             for (name, plan) in &state.tables {
                 let plan = ctx.optimize(plan)?;
                 let execution_plan = ctx.create_physical_plan(&plan)?;
-                println!("register= table {} with df context", name);
                 ctx.register_table(
                     TableReference::Bare { table: name },
                     Arc::new(DfTableAdapter::new(plan, execution_plan)),
                 )?;
             }
-            println!("done registering tables");
         }
 
         let plan = ctx.create_logical_plan(sql)?;
-
         match plan {
             LogicalPlan::CreateExternalTable {
                 ref schema,
