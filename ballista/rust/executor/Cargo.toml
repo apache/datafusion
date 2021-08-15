@@ -19,7 +19,7 @@
 name = "ballista-executor"
 description = "Ballista Distributed Compute - Executor"
 license = "Apache-2.0"
-version = "0.5.0"
+version = "0.6.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -33,9 +33,9 @@ arrow = { version = "5.0"  }
 arrow-flight = { version = "5.0"  }
 anyhow = "1"
 async-trait = "0.1.36"
-ballista-core = { path = "../core", version = "0.5.0" }
+ballista-core = { path = "../core", version = "0.6.0" }
 configure_me = "0.4.0"
-datafusion = { path = "../../../datafusion", version = "5.0.0" }
+datafusion = { path = "../../../datafusion", version = "5.1.0" }
 env_logger = "0.8"
 futures = "0.3"
 log = "0.4"
