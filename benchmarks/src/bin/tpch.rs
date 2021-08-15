@@ -262,7 +262,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
         .build()
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
 
-    let mut ctx =
+    let ctx =
         BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), &config);
 
     // register tables with Ballista context
