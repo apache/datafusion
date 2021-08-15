@@ -114,7 +114,11 @@ pub async fn main() -> Result<()> {
         )
         .get_matches();
 
-    println!("DataFusion CLI v{}\n", DATAFUSION_CLI_VERSION);
+    let quiet = matches.is_present("quiet");
+
+    if !quiet {
+        println!("DataFusion CLI v{}\n", DATAFUSION_CLI_VERSION);
+    }
 
     let host = matches.value_of("host");
     let port = matches
@@ -153,7 +157,6 @@ pub async fn main() -> Result<()> {
         .parse::<PrintFormat>()
         .expect("Invalid format");
 
-    let quiet = matches.is_present("quiet");
     let print_options = PrintOptions { format, quiet };
 
     if let Some(file_paths) = matches.values_of("file") {
