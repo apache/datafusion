@@ -23,6 +23,7 @@
 # pip install tomlkit
 
 import os
+import re
 import argparse
 from pathlib import Path
 import tomlkit
@@ -76,6 +77,16 @@ def main():
 
     for cargo_toml in ballista_crates:
         update_cargo_toml(cargo_toml, new_version)
+
+    docker_compose_path = os.path.join(repo_root, "benchmarks/docker-compose.yaml")
+    print(f'Updating ballista versions in {docker_compose_path}')
+    with open(docker_compose_path, "r+") as fd:
+        data = fd.read()
+        pattern = re.compile(r'(^\s+image:\sballista:)\d+\.\d+\.\d+(-SNAPSHOT)?', re.MULTILINE)
+        data = pattern.sub(r"\g<1>"+new_version, data)
+        fd.truncate(0)
+        fd.seek(0)
+        fd.write(data)
 
 
 if __name__ == "__main__":
