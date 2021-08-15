@@ -234,11 +234,11 @@ impl BallistaContext {
                             .schema(&schema.as_ref().to_owned().into())
                             .has_header(*has_header),
                     )?;
-                    Ok(Arc::new(DataFrameImpl::new(ctx.state.clone(), &plan)))
+                    Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
                 }
                 FileType::Parquet => {
                     self.register_parquet(name, location)?;
-                    Ok(Arc::new(DataFrameImpl::new(ctx.state.clone(), &plan)))
+                    Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
                 }
                 _ => Err(DataFusionError::NotImplemented(format!(
                     "Unsupported file type {:?}.",
