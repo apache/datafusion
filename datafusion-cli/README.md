@@ -48,8 +48,7 @@ DataFusion CLI v4.0.0-SNAPSHOT
 
 ## Ballista
 
-The DataFusion CLI can connect to a Ballista scheduler for query execution. Note that Ballista does not currently
-support the `CREATE EXTERNAL TABLE` SQL command, so this is of limited use. 
+The DataFusion CLI can connect to a Ballista scheduler for query execution.
 
 ```bash
 datafusion-cli --host localhost --port 50050
