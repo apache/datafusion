@@ -182,7 +182,7 @@ Send the email output from the script to dev@arrow.apache.org. The email should 
 
 ```
 To: dev@arrow.apache.org
-Subject: [VOTE][RUST][Datafusion] Release Apache Arrow Datafusion 5.1.0 RC0
+Subject: [VOTE][Datafusion] Release Apache Arrow Datafusion 5.1.0 RC0
 
 Hi,
 
@@ -305,7 +305,7 @@ TODO
 ### Call the vote
 
 Call the vote on the Arrow dev list by replying to the RC voting thread. The
-reply should have a new subject constructed by adding `RESULT ` prefix to the
+reply should have a new subject constructed by adding `[RESULT]` prefix to the
 old subject line.
 
 TODO: add example mail
