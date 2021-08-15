@@ -133,12 +133,14 @@ impl BallistaContext {
         let path = fs::canonicalize(&path)?;
 
         // use local DataFusion context for now but later this might call the scheduler
-        let guard = self.state.lock().unwrap();
-        let mut ctx = create_df_ctx_with_ballista_query_planner(
-            &guard.scheduler_host,
-            guard.scheduler_port,
-            guard.config(),
-        );
+        let mut ctx = {
+            let guard = self.state.lock().unwrap();
+            create_df_ctx_with_ballista_query_planner(
+                &guard.scheduler_host,
+                guard.scheduler_port,
+                guard.config(),
+            )
+        };
         let df = ctx.read_parquet(path.to_str().unwrap())?;
         Ok(df)
     }
@@ -155,12 +157,14 @@ impl BallistaContext {
         let path = fs::canonicalize(&path)?;
 
         // use local DataFusion context for now but later this might call the scheduler
-        let guard = self.state.lock().unwrap();
-        let mut ctx = create_df_ctx_with_ballista_query_planner(
-            &guard.scheduler_host,
-            guard.scheduler_port,
-            guard.config(),
-        );
+        let mut ctx = {
+            let guard = self.state.lock().unwrap();
+            create_df_ctx_with_ballista_query_planner(
+                &guard.scheduler_host,
+                guard.scheduler_port,
+                guard.config(),
+            )
+        };
         let df = ctx.read_csv(path.to_str().unwrap(), options)?;
         Ok(df)
     }
@@ -168,7 +172,6 @@ impl BallistaContext {
     /// Register a DataFrame as a table that can be referenced from a SQL query
     pub fn register_table(&self, name: &str, table: &dyn DataFrame) -> Result<()> {
         let mut state = self.state.lock().unwrap();
-        println!("inserting ballista ctx state - {}", name);
         state
             .tables
             .insert(name.to_owned(), table.to_logical_plan());
@@ -229,7 +232,6 @@ impl BallistaContext {
                 ref has_header,
             } => match file_type {
                 FileType::CSV => {
-                    println!("registering csv {} on ballista context", name);
                     self.register_csv(
                         name,
                         location,
