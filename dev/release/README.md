@@ -84,13 +84,13 @@ git checkout apache/master
 
 Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`.
 
-If there is new ballista release, update versions in ballista Cargo.tomls, run
+If there is a ballista release, update versions in ballista Cargo.tomls, run
 
 ```
 ./dev/update_ballista_versions.py 0.5.0
 ```
 
-If there is new datafusion python binding release, update versions in
+If there is a datafusion python binding release, update versions in
 `./python/Cargo.toml`.
 
 Lastly commit the version change:
@@ -219,7 +219,8 @@ The `dev/release/verify-release-candidate.sh` is a script in this repository tha
 
 #### If the release is not approved
 
-If the release is not approved, fix whatever the problem is and try again with the next RC number
+If the release is not approved, fix whatever the problem is, merge changelog
+changes into master if there is any and try again with the next RC number.
 
 ## Finalize the release
 
@@ -245,14 +246,14 @@ git tag 5.1.0
 git push 5.1.0
 ```
 
-If there is ballista release, also push the ballista tag
+If there is a ballista release, also push the ballista tag
 
 ```
 git tag ballista-0.5.0
 git push ballista-0.5.0
 ```
 
-If there is datafusion python binding release, also push the python tag
+If there is a datafusion python binding release, also push the python tag
 
 ```
 git tag python-0.3.0
@@ -289,7 +290,7 @@ following commands
 (cd datafusion && cargo publish)
 ```
 
-If there is ballista release, run
+If there is a ballista release, run
 
 ```shell
 (cd ballista/rust/client && cargo publish)
