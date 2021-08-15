@@ -19,7 +19,7 @@
 name = "ballista-scheduler"
 description = "Ballista Distributed Compute - Scheduler"
 license = "Apache-2.0"
-version = "0.5.0"
+version = "0.6.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -32,10 +32,10 @@ sled = ["sled_package", "tokio-stream"]
 
 [dependencies]
 anyhow = "1"
-ballista-core = { path = "../core", version = "0.5.0" }
+ballista-core = { path = "../core", version = "0.6.0" }
 clap = "2"
 configure_me = "0.4.0"
-datafusion = { path = "../../../datafusion", version = "5.0.0" }
+datafusion = { path = "../../../datafusion", version = "5.1.0" }
 env_logger = "0.8"
 etcd-client = { version = "0.6", optional = true }
 futures = "0.3"
@@ -55,7 +55,7 @@ tower = { version = "0.4" }
 warp = "0.3"
 
 [dev-dependencies]
-ballista-core = { path = "../core", version = "0.5.0" }
+ballista-core = { path = "../core", version = "0.6.0" }
 uuid = { version = "0.8", features = ["v4"] }
 
 [build-dependencies]
