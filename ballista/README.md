@@ -37,8 +37,7 @@ redundancy in the case of a scheduler failing.
 
 # Getting Started
 
-Fully working examples are available. Refer to the [Ballista Examples README](../ballista-examples/README.md) for
-more information.
+Refer to the core [Ballista crate README](rust/client/README.md) for the Getting Started guide.
 
 ## Distributed Scheduler Overview
 
