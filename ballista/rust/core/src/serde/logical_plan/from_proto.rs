@@ -41,8 +41,6 @@ use std::{
     unimplemented,
 };
 
-// use uuid::Uuid;
-
 impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
     type Error = BallistaError;
 
@@ -289,6 +287,15 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                 };
 
                 builder.build().map_err(|e| e.into())
+            }
+            LogicalPlanType::CrossJoin(crossjoin) => {
+                let left = convert_box_required!(crossjoin.left)?;
+                let right = convert_box_required!(crossjoin.right)?;
+
+                LogicalPlanBuilder::from(left)
+                    .cross_join(&right)?
+                    .build()
+                    .map_err(|e| e.into())
             }
         }
     }
