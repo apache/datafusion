@@ -2148,8 +2148,6 @@ async fn csv_explain_analyze() {
     let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
-    println!("Analyze output is {}", formatted);
-
     let formatted = normalize_for_explain(&formatted);
 
     // Only test basic plumbing and try to avoid having to change too

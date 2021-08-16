@@ -135,7 +135,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// should be complete. If this function is called prior to
     /// `execute()` new metrics may appear in subsequent calls.
     fn metrics(&self) -> Option<MetricsSet> {
-        return None;
+        None
     }
 
     /// Format this `ExecutionPlan` to `f` in the specified type.

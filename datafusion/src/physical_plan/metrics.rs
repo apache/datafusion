@@ -279,7 +279,7 @@ impl MetricKind {
     pub fn name(&self) -> &str {
         match self {
             MetricKind::OutputRows => "outputRows",
-            MetricKind::Custom(name) => &name,
+            MetricKind::Custom(name) => name,
             MetricKind::CPUTime => "cpuTime",
         }
     }

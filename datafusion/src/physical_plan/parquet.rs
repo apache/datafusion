@@ -848,6 +848,7 @@ fn build_row_group_predicate(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn read_files(
     partition: usize,
     filenames: &[String],

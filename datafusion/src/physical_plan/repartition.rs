@@ -96,7 +96,7 @@ impl RepartitionMetrics {
 
         // Time in nanos for sending resulting batches to channels
         let send_time = MetricBuilder::new(metrics)
-            .with_label(label.clone())
+            .with_label(label)
             .subset_time("sendTime", output_partition);
 
         Self {
