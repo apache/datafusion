@@ -17,14 +17,6 @@
 
 #![allow(bare_trait_objects)]
 
-use clap::{crate_version, App, Arg};
-use datafusion::error::Result;
-use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
-use datafusion_cli::{
-    print_format::{all_print_formats, PrintFormat},
-    PrintOptions,
-};
-use rustyline::Editor;
 use std::env;
 use std::fs::File;
 use std::io::prelude::*;
@@ -32,8 +24,27 @@ use std::io::BufReader;
 use std::path::Path;
 use std::time::Instant;
 
+use ballista::context::BallistaContext;
+use ballista::prelude::BallistaConfig;
+use clap::{crate_version, App, Arg};
+use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
+use datafusion_cli::{
+    print_format::{all_print_formats, PrintFormat},
+    PrintOptions, DATAFUSION_CLI_VERSION,
+};
+use rustyline::Editor;
+
+/// The CLI supports using a local DataFusion context or a distributed BallistaContext
+enum Context {
+    /// In-process execution with DataFusion
+    Local(ExecutionContext),
+    /// Distributed execution with Ballista
+    Remote(BallistaContext),
+}
+
 #[tokio::main]
-pub async fn main() {
+pub async fn main() -> Result<()> {
     let matches = App::new("DataFusion")
         .version(crate_version!())
         .about(
@@ -83,6 +94,18 @@ pub async fn main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("host")
+                .help("Ballista scheduler host")
+                .long("host")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("port")
+                .help("Ballista scheduler port")
+                .long("port")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("quiet")
                 .help("Reduce printing other than the results and work quietly")
                 .short("q")
@@ -90,6 +113,17 @@ pub async fn main() {
                 .takes_value(false),
         )
         .get_matches();
+
+    let quiet = matches.is_present("quiet");
+
+    if !quiet {
+        println!("DataFusion CLI v{}\n", DATAFUSION_CLI_VERSION);
+    }
+
+    let host = matches.value_of("host");
+    let port = matches
+        .value_of("port")
+        .and_then(|port| port.parse::<u16>().ok());
 
     if let Some(path) = matches.value_of("data-path") {
         let p = Path::new(path);
@@ -105,31 +139,43 @@ pub async fn main() {
         execution_config = execution_config.with_batch_size(batch_size);
     };
 
+    let ctx: Result<Context> = match (host, port) {
+        (Some(h), Some(p)) => {
+            let config: BallistaConfig = BallistaConfig::new()
+                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+            Ok(Context::Remote(BallistaContext::remote(h, p, &config)))
+        }
+        _ => Ok(Context::Local(ExecutionContext::with_config(
+            execution_config.clone(),
+        ))),
+    };
+    let mut ctx = ctx?;
+
     let format = matches
         .value_of("format")
         .expect("No format is specified")
         .parse::<PrintFormat>()
         .expect("Invalid format");
 
-    let quiet = matches.is_present("quiet");
     let print_options = PrintOptions { format, quiet };
 
     if let Some(file_paths) = matches.values_of("file") {
         let files = file_paths
             .map(|file_path| File::open(file_path).unwrap())
             .collect::<Vec<_>>();
-        let mut ctx = ExecutionContext::with_config(execution_config);
         for file in files {
             let mut reader = BufReader::new(file);
             exec_from_lines(&mut ctx, &mut reader, print_options.clone()).await;
         }
     } else {
-        exec_from_repl(execution_config, print_options).await;
+        exec_from_repl(&mut ctx, print_options).await;
     }
+
+    Ok(())
 }
 
 async fn exec_from_lines(
-    ctx: &mut ExecutionContext,
+    ctx: &mut Context,
     reader: &mut BufReader<File>,
     print_options: PrintOptions,
 ) {
@@ -168,9 +214,7 @@ async fn exec_from_lines(
     }
 }
 
-async fn exec_from_repl(execution_config: ExecutionConfig, print_options: PrintOptions) {
-    let mut ctx = ExecutionContext::with_config(execution_config);
-
+async fn exec_from_repl(ctx: &mut Context, print_options: PrintOptions) {
     let mut rl = Editor::<()>::new();
     rl.load_history(".history").ok();
 
@@ -186,7 +230,7 @@ async fn exec_from_repl(execution_config: ExecutionConfig, print_options: PrintO
             Ok(ref line) if line.trim_end().ends_with(';') => {
                 query.push_str(line.trim_end());
                 rl.add_history_entry(query.clone());
-                match exec_and_print(&mut ctx, print_options.clone(), query).await {
+                match exec_and_print(ctx, print_options.clone(), query).await {
                     Ok(_) => {}
                     Err(err) => println!("{:?}", err),
                 }
@@ -234,15 +278,19 @@ fn is_exit_command(line: &str) -> bool {
 }
 
 async fn exec_and_print(
-    ctx: &mut ExecutionContext,
+    ctx: &mut Context,
     print_options: PrintOptions,
     sql: String,
 ) -> Result<()> {
     let now = Instant::now();
 
-    let df = ctx.sql(&sql)?;
-    let results = df.collect().await?;
+    let df = match ctx {
+        Context::Local(datafusion) => datafusion.sql(&sql)?,
+        Context::Remote(ballista) => ballista.sql(&sql)?,
+    };
 
+    let results = df.collect().await?;
     print_options.print_batches(&results, now)?;
+
     Ok(())
 }

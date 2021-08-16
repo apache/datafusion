@@ -30,6 +30,7 @@ use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
+use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
     array::{
@@ -51,6 +52,7 @@ use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::csv::CsvExec;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{BinaryExpr, Column, Literal};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
@@ -236,8 +238,9 @@ fn build_exec_plan_diagram(
     Ok(node_id)
 }
 
-/// Create a DataFusion context that is compatible with Ballista
-pub fn create_datafusion_context(
+/// Create a DataFusion context that uses the BallistaQueryPlanner to send logical plans
+/// to a Ballista scheduler
+pub fn create_df_ctx_with_ballista_query_planner(
     scheduler_host: &str,
     scheduler_port: u16,
     config: &BallistaConfig,
@@ -272,11 +275,17 @@ impl QueryPlanner for BallistaQueryPlanner {
         logical_plan: &LogicalPlan,
         _ctx_state: &ExecutionContextState,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        Ok(Arc::new(DistributedQueryExec::new(
-            self.scheduler_url.clone(),
-            self.config.clone(),
-            logical_plan.clone(),
-        )))
+        match logical_plan {
+            LogicalPlan::CreateExternalTable { .. } => {
+                // table state is managed locally in the BallistaContext, not in the scheduler
+                Ok(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))))
+            }
+            _ => Ok(Arc::new(DistributedQueryExec::new(
+                self.scheduler_url.clone(),
+                self.config.clone(),
+                logical_plan.clone(),
+            ))),
+        }
     }
 }
 
