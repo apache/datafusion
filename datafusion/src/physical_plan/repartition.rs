@@ -87,17 +87,17 @@ impl RepartitionMetrics {
         // Time in nanos to execute child operator and fetch batches
         let fetch_time = MetricBuilder::new(metrics)
             .with_label(label.clone())
-            .subset_time("fetch_time", output_partition);
+            .subset_time("fetchTime", output_partition);
 
         // Time in nanos to perform repartitioning
         let repart_time = MetricBuilder::new(metrics)
             .with_label(label.clone())
-            .subset_time("repart_time", output_partition);
+            .subset_time("repartTime", output_partition);
 
         // Time in nanos for sending resulting batches to channels
         let send_time = MetricBuilder::new(metrics)
             .with_label(label.clone())
-            .subset_time("send_time", output_partition);
+            .subset_time("sendTime", output_partition);
 
         Self {
             fetch_time,
