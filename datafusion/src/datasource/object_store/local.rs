@@ -40,7 +40,7 @@ impl ObjectStore for LocalFileSystem {
         self
     }
 
-    async fn list_all_files(&self, path: &str, ext: &str) -> Result<FileNameStream> {
+    async fn list(&self, path: &str, ext: &str) -> Result<FileNameStream> {
         list_all(path.to_string(), ext.to_string()).await
     }
 

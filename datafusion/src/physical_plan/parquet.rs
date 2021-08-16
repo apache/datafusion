@@ -360,7 +360,7 @@ impl ExecutionPlan for ParquetExec {
         let limit = self.limit;
 
         task::spawn_blocking(move || {
-            if let Err(e) = read_files(
+            if let Err(e) = read_partition(
                 object_store,
                 partition,
                 metrics,
@@ -553,7 +553,7 @@ fn build_row_group_predicate(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn read_files(
+fn read_partition(
     object_store: Arc<dyn ObjectStore>,
     partition: ParquetPartition,
     metrics: ParquetPartitionMetrics,

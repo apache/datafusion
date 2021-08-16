@@ -159,7 +159,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                 LogicalPlanBuilder::scan_parquet_with_name(
                     &scan.path,
                     projection,
-                    create_datafusion_context_concurrency(24),
+                    ExecutionContext::with_concurrency(24),
                     &scan.table_name,
                 )? //TODO concurrency
                 .build()
@@ -1100,13 +1100,9 @@ impl TryInto<Field> for &protobuf::Field {
     }
 }
 
-use crate::utils::create_datafusion_context_concurrency;
 use datafusion::physical_plan::datetime_expressions::to_timestamp;
 use datafusion::physical_plan::{aggregates, windows};
-use datafusion::prelude::{
-    array, date_part, date_trunc, length, lower, ltrim, md5, rtrim, sha224, sha256,
-    sha384, sha512, trim, upper,
-};
+use datafusion::prelude::{array, date_part, date_trunc, length, lower, ltrim, md5, rtrim, sha224, sha256, sha384, sha512, trim, upper, ExecutionContext};
 use std::convert::TryFrom;
 
 impl TryFrom<i32> for protobuf::FileType {

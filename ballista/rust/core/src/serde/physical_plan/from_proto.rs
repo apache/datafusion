@@ -29,7 +29,6 @@ use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::protobuf::ShuffleReaderPartition;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{from_proto_binary_op, proto_error, protobuf};
-use crate::utils::create_datafusion_context_concurrency;
 use crate::{convert_box_required, convert_required, into_required};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
@@ -71,7 +70,7 @@ use datafusion::physical_plan::{
     Partitioning,
 };
 use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
-use datafusion::prelude::CsvReadOptions;
+use datafusion::prelude::{CsvReadOptions, ExecutionContext};
 use log::debug;
 use protobuf::physical_expr_node::ExprType;
 use protobuf::physical_plan_node::PhysicalPlanType;
@@ -137,7 +136,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     Some(projection),
                     None,
                     scan.batch_size as usize,
-                    create_datafusion_context_concurrency(scan.num_partitions as usize),
+                    ExecutionContext::with_concurrency(scan.num_partitions as usize),
                     None,
                 )?))
             }

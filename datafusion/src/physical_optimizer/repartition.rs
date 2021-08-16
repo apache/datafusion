@@ -110,7 +110,7 @@ mod tests {
 
     use super::*;
     use crate::datasource::datasource::Statistics;
-    use crate::datasource::local::LocalFileSystem;
+    use crate::datasource::object_store::local::LocalFileSystem;
     use crate::datasource::PartitionedFile;
     use crate::physical_plan::parquet::{
         ParquetExec, ParquetExecMetrics, ParquetPartition,

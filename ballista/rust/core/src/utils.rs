@@ -252,11 +252,6 @@ pub fn create_datafusion_context(
     ExecutionContext::with_config(config)
 }
 
-/// Create a DataFusion context that is compatible with Ballista in concurrency
-pub fn create_datafusion_context_concurrency(concurrency: usize) -> ExecutionContext {
-    ExecutionContext::with_concurrency(concurrency)
-}
-
 pub struct BallistaQueryPlanner {
     scheduler_url: String,
     config: BallistaConfig,

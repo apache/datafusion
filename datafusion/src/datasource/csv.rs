@@ -40,7 +40,7 @@ use std::string::String;
 use std::sync::{Arc, Mutex};
 
 use crate::datasource::datasource::Statistics;
-use crate::datasource::local::LocalFileSystem;
+use crate::datasource::object_store::local::LocalFileSystem;
 use crate::datasource::object_store::ObjectStore;
 use crate::datasource::{Source, TableProvider};
 use crate::error::{DataFusionError, Result};
@@ -67,7 +67,7 @@ impl CsvFile {
             Some(s) => s.clone(),
             None => {
                 let filenames = LocalFileSystem
-                    .list_all_files(path.as_str(), options.file_extension).await?;
+                    .list(path.as_str(), options.file_extension).await?;
                 if filenames.is_empty() {
                     return Err(DataFusionError::Plan(format!(
                         "No files found at {path} with file extension {file_extension}",

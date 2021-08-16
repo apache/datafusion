@@ -85,7 +85,6 @@ use self::state::{ConfigBackendClient, SchedulerState};
 use ballista_core::config::BallistaConfig;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use ballista_core::utils::create_datafusion_context_concurrency;
 use datafusion::datasource::parquet::ParquetRootDesc;
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -286,7 +285,7 @@ impl SchedulerGrpc for SchedulerServer {
 
         match file_type {
             FileType::Parquet => {
-                let ctx = create_datafusion_context_concurrency(1);
+                let ctx = ExecutionContext::with_concurrency(1);
                 let parquet_desc = ParquetRootDesc::new(&path, ctx).map_err(|e| {
                     let msg = format!("Error opening parquet files: {}", e);
                     error!("{}", msg);

@@ -157,7 +157,7 @@ impl ParquetRootDesc {
             .lock()
             .unwrap()
             .object_store_registry
-            .store_for_path(root_path);
+            .get_by_path(root_path);
         let root_desc = Self::get_source_desc(root_path, object_store.clone(), "parquet");
         Ok(Self {
             object_store,

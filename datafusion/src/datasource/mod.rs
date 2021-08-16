@@ -21,7 +21,6 @@ pub mod csv;
 pub mod datasource;
 pub mod empty;
 pub mod json;
-pub mod local;
 pub mod memory;
 pub mod object_store;
 pub mod parquet;
@@ -116,7 +115,7 @@ pub trait SourceRootDescBuilder {
         object_store: Arc<dyn ObjectStore>,
         ext: &str,
     ) -> Result<SourceRootDescriptor> {
-        let filenames = object_store.list_all_files(path, ext).await?;
+        let filenames = object_store.list(path, ext).await?;
         if filenames.is_empty() {
             return Err(DataFusionError::Plan(format!(
                 "No file (with .{} extension) found at path {}",

@@ -17,16 +17,22 @@
 
 //! Object Store abstracts access to an underlying file/object storage.
 
-use crate::datasource::local::LocalFileSystem;
-use crate::error::Result;
-use async_trait::async_trait;
+pub mod local;
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Read;
-use std::sync::{Arc, RwLock};
-use futures::{Stream, StreamExt};
 use std::pin::Pin;
+use std::sync::{Arc, RwLock};
+
+use async_trait::async_trait;
+use futures::{Stream, StreamExt};
+
+use local::LocalFileSystem;
+
+use crate::error::Result;
+
 
 /// Object Reader for one file in a object store
 #[async_trait]
@@ -49,7 +55,7 @@ pub trait ObjectStore: Sync + Send + Debug {
     fn as_any(&self) -> &dyn Any;
 
     /// Returns all the files with filename extension `ext` in path `prefix`
-    async fn list_all_files(&self, prefix: &str, ext: &str) -> Result<FileNameStream>;
+    async fn list(&self, prefix: &str, ext: &str) -> Result<FileNameStream>;
 
     /// Get object reader for one file
     fn get_reader(&self, file_path: &str) -> Result<Arc<dyn ObjectReader>>;
@@ -98,7 +104,7 @@ impl ObjectStoreRegistry {
     /// path with prefix file:/// or no prefix will return the default LocalFS store,
     /// path with prefix s3:/// will return the S3 store if it's registered,
     /// and will always return LocalFS store when a prefix is not registered in the path.
-    pub fn store_for_path(&self, path: &str) -> Arc<dyn ObjectStore> {
+    pub fn get_by_path(&self, path: &str) -> Arc<dyn ObjectStore> {
         if let Some((scheme, _)) = path.split_once(':') {
             let stores = self.object_stores.read().unwrap();
             if let Some(store) = stores.get(&*scheme.to_lowercase()) {
