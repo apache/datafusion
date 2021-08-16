@@ -17,7 +17,7 @@
 
 import React from "react";
 import { Box } from "@chakra-ui/react";
-import { Column, DateCell, DataTable } from "./DataTable";
+import { Column, ElapsedCell, DataTable } from "./DataTable";
 
 export enum NodeStatus {
   RUNNING = "RUNNING",
@@ -50,9 +50,9 @@ const columns: Column<any>[] = [
     accessor: "status",
   },
   {
-    Header: "Started",
-    accessor: "started",
-    Cell: DateCell,
+    Header: "Last Seen",
+    accessor: "last_seen",
+    Cell: ElapsedCell,
   },
 ];
 
