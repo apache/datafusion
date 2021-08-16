@@ -33,18 +33,21 @@ use local::LocalFileSystem;
 
 use crate::error::Result;
 
-
 /// Object Reader for one file in a object store
 #[async_trait]
 pub trait ObjectReader {
     /// Get reader for a part [start, start + length] in the file
     fn get_reader(&self, start: u64, length: usize) -> Box<dyn Read>;
 
+    /// Get reader for a part [start, start + length] in the file asynchronously
+    fn get_reader_async(&self, start: u64, length: usize) -> Box<dyn Read>;
+
     /// Get lenght for the file
     fn length(&self) -> u64;
 }
 
-pub type FileNameStream = Pin<Box<dyn Stream<Item = Result<String>> + Send + Sync + 'static>>;
+pub type FileNameStream =
+    Pin<Box<dyn Stream<Item = Result<String>> + Send + Sync + 'static>>;
 
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
@@ -55,7 +58,10 @@ pub trait ObjectStore: Sync + Send + Debug {
     fn as_any(&self) -> &dyn Any;
 
     /// Returns all the files with filename extension `ext` in path `prefix`
-    async fn list(&self, prefix: &str, ext: &str) -> Result<FileNameStream>;
+    fn list(&self, prefix: &str, ext: &str) -> Result<Vec<String>>;
+
+    /// Returns all the files with filename extension `ext` in path `prefix` asynchronously
+    async fn list_async(&self, prefix: &str, ext: &str) -> Result<FileNameStream>;
 
     /// Get object reader for one file
     fn get_reader(&self, file_path: &str) -> Result<Arc<dyn ObjectReader>>;

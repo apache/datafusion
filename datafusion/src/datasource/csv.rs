@@ -66,8 +66,8 @@ impl CsvFile {
         let schema = Arc::new(match options.schema {
             Some(s) => s.clone(),
             None => {
-                let filenames = LocalFileSystem
-                    .list(path.as_str(), options.file_extension).await?;
+                let filenames =
+                    LocalFileSystem.list(path.as_str(), options.file_extension)?;
                 if filenames.is_empty() {
                     return Err(DataFusionError::Plan(format!(
                         "No files found at {path} with file extension {file_extension}",

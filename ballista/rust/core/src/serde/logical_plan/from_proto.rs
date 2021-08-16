@@ -1102,7 +1102,10 @@ impl TryInto<Field> for &protobuf::Field {
 
 use datafusion::physical_plan::datetime_expressions::to_timestamp;
 use datafusion::physical_plan::{aggregates, windows};
-use datafusion::prelude::{array, date_part, date_trunc, length, lower, ltrim, md5, rtrim, sha224, sha256, sha384, sha512, trim, upper, ExecutionContext};
+use datafusion::prelude::{
+    array, date_part, date_trunc, length, lower, ltrim, md5, rtrim, sha224, sha256,
+    sha384, sha512, trim, upper, ExecutionContext,
+};
 use std::convert::TryFrom;
 
 impl TryFrom<i32> for protobuf::FileType {

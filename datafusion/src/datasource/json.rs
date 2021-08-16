@@ -58,8 +58,7 @@ impl NdJsonFile {
         let schema = if let Some(schema) = options.schema {
             schema
         } else {
-            let filenames =
-                LocalFileSystem.list(path, options.file_extension).await?;
+            let filenames = LocalFileSystem.list(path, options.file_extension)?;
             if filenames.is_empty() {
                 return Err(DataFusionError::Plan(format!(
                     "No files found at {path} with file extension {file_extension}",
