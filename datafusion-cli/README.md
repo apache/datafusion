@@ -22,7 +22,7 @@
 The DataFusion CLI allows SQL queries to be executed by an in-process DataFusion context, or by a distributed
 Ballista context.
 
-```no_run
+```ignore
 USAGE:
     datafusion-cli [FLAGS] [OPTIONS]
 
@@ -44,11 +44,11 @@ OPTIONS:
 
 Create a CSV file to query.
 
-```bash,no_run
+```bash,ignore
 $ echo "1,2" > data.csv
 ```
 
-```sql,no_run
+```sql,ignore
 $ datafusion-cli
 
 DataFusion CLI v4.0.0-SNAPSHOT
@@ -69,6 +69,6 @@ DataFusion CLI v4.0.0-SNAPSHOT
 
 The DataFusion CLI can connect to a Ballista scheduler for query execution.
 
-```bash,no_run
+```bash,ignore
 datafusion-cli --host localhost --port 50050
 ```
