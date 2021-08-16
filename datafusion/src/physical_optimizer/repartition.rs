@@ -123,6 +123,7 @@ mod tests {
             Arc::new(ParquetExec::new(
                 vec![ParquetPartition::new(
                     vec!["x".to_string()],
+                    vec![schema.clone()],
                     Statistics::default(),
                 )],
                 schema,
@@ -161,6 +162,7 @@ mod tests {
                 Arc::new(ParquetExec::new(
                     vec![ParquetPartition::new(
                         vec!["x".to_string()],
+                        vec![schema.clone()],
                         Statistics::default(),
                     )],
                     schema,
