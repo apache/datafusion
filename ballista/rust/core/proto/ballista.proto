@@ -249,9 +249,10 @@ message LogicalPlanNode {
     RepartitionNode repartition = 9;
     EmptyRelationNode empty_relation = 10;
     CreateExternalTableNode create_external_table = 11;
-    AnalyzeNode analyze = 14;
     ExplainNode explain = 12;
     WindowNode window = 13;
+    AnalyzeNode analyze = 14;
+    CrossJoinNode cross_join = 15;
   }
 }
 
@@ -399,6 +400,11 @@ message JoinNode {
   repeated Column right_join_column = 6;
 }
 
+message CrossJoinNode {
+  LogicalPlanNode left = 1;
+  LogicalPlanNode right = 2;
+}
+
 message LimitNode {
   LogicalPlanNode input = 1;
   uint32 limit = 2;
@@ -432,6 +438,7 @@ message PhysicalPlanNode {
     RepartitionExecNode repartition = 16;
     WindowAggExecNode window = 17;
     ShuffleWriterExecNode shuffle_writer = 18;
+    CrossJoinExecNode cross_join = 19;
   }
 }
 
@@ -591,6 +598,11 @@ message HashJoinExecNode {
   repeated JoinOn on = 3;
   JoinType join_type = 4;
   PartitionMode partition_mode = 6;
+}
+
+message CrossJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
 }
 
 message PhysicalColumn {

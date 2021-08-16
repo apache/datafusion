@@ -51,6 +51,7 @@ use datafusion::physical_plan::window_functions::{
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     coalesce_batches::CoalesceBatchesExec,
+    cross_join::CrossJoinExec,
     csv::CsvExec,
     empty::EmptyExec,
     expressions::{
@@ -371,6 +372,12 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     &join_type.into(),
                     partition_mode,
                 )?))
+            }
+            PhysicalPlanType::CrossJoin(crossjoin) => {
+                let left: Arc<dyn ExecutionPlan> = convert_box_required!(crossjoin.left)?;
+                let right: Arc<dyn ExecutionPlan> =
+                    convert_box_required!(crossjoin.right)?;
+                Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
             }
             PhysicalPlanType::ShuffleWriter(shuffle_writer) => {
                 let input: Arc<dyn ExecutionPlan> =
