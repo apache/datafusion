@@ -25,19 +25,21 @@ use crate::error::{DataFusionError, Result};
 /// * the `data_type` is not a Struct or,
 /// * there is no field named `name`
 pub fn get_field<'a>(data_type: &'a DataType, name: &str) -> Result<&'a Field> {
-    if let DataType::Struct(fields) = data_type {
-        let maybe_field = fields.iter().find(|x| x.name() == name);
-        if let Some(field) = maybe_field {
-            Ok(field)
-        } else {
-            Err(DataFusionError::Plan(format!(
-                "The `Struct` has no field named \"{}\"",
-                name
-            )))
+    match data_type {
+        DataType::Struct(fields) | DataType::Union(fields) => {
+            let maybe_field = fields.iter().find(|x| x.name() == name);
+            if let Some(field) = maybe_field {
+                Ok(field)
+            } else {
+                Err(DataFusionError::Plan(format!(
+                    "The `Struct` has no field named \"{}\"",
+                    name
+                )))
+            }
         }
-    } else {
-        Err(DataFusionError::Plan(
-            "The expression to get a field is only valid for `Struct`".to_string(),
-        ))
+        _ => Err(DataFusionError::Plan(
+            "The expression to get a field is only valid for `Struct` or 'Union'"
+                .to_string(),
+        )),
     }
 }
