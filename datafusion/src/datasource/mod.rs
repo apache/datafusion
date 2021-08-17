@@ -17,6 +17,7 @@
 
 //! DataFusion data sources
 
+pub mod avro;
 pub mod csv;
 pub mod datasource;
 pub mod empty;
