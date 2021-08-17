@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
     let df = ctx.sql(
         "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
         FROM alltypes_plain \
-        WHERE id > 1 AND tinyint_col < double_col",
+        WHERE id.int > 1 AND tinyint_col < double_col",
     )?;
     let results = df.collect().await?;
 

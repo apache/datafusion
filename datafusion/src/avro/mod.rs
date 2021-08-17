@@ -25,7 +25,6 @@ use avro_rs::types::Value;
 use avro_rs::Schema as AvroSchema;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
-use std::ptr::null;
 
 /// Converts an avro schema to an arrow schema
 pub fn to_arrow_schema(avro_schema: &avro_rs::Schema) -> Result<Schema> {
@@ -267,6 +266,7 @@ fn external_props(schema: &AvroSchema) -> BTreeMap<String, String> {
     props
 }
 
+#[allow(dead_code)]
 fn get_metadata(
     _schema: AvroSchema,
     props: BTreeMap<String, String>,
