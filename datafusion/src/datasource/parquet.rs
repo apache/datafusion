@@ -21,8 +21,7 @@ use std::any::Any;
 use std::io::Read;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-
+use async_trait::async_trait;
 use parquet::arrow::ArrowReader;
 use parquet::arrow::ParquetFileArrowReader;
 use parquet::file::reader::ChunkReader;
@@ -30,7 +29,7 @@ use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::datasource::TableProviderFilterPushDown;
-use crate::arrow::datatypes::{DataType, Field};
+use crate::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use crate::datasource::datasource::Statistics;
 use crate::datasource::object_store::{ObjectReader, ObjectStore};
 use crate::datasource::{
@@ -60,6 +59,30 @@ impl ParquetTable {
         let path = path.into();
         let max_concurrency = context.state.lock().unwrap().config.concurrency;
         let root_desc = ParquetRootDesc::new(path.as_str(), context);
+        Ok(Self {
+            path,
+            desc: Arc::new(root_desc?),
+            max_concurrency,
+            enable_pruning: true,
+        })
+    }
+
+    /// Attempt to initialize a new `ParquetTable` from a file path and known schema.
+    /// If collect_statistics is `false`, doesn't read files until necessary by scan
+    pub fn try_new_with_schema(
+        path: impl Into<String>,
+        context: ExecutionContext,
+        schema: Schema,
+        collect_statistics: bool,
+    ) -> Result<Self> {
+        let path = path.into();
+        let max_concurrency = context.state.lock().unwrap().config.concurrency;
+        let root_desc = ParquetRootDesc::new_with_schema(
+            path.as_str(),
+            context,
+            Some(schema),
+            collect_statistics,
+        );
         Ok(Self {
             path,
             desc: Arc::new(root_desc?),
@@ -158,7 +181,34 @@ impl ParquetRootDesc {
             .unwrap()
             .object_store_registry
             .get_by_path(root_path);
-        let root_desc = Self::get_source_desc(root_path, object_store.clone(), "parquet");
+        let root_desc =
+            Self::get_source_desc(root_path, object_store.clone(), "parquet", None, true);
+        Ok(Self {
+            object_store,
+            descriptor: root_desc?,
+        })
+    }
+
+    /// Construct a new parquet descriptor for a root path with known schema
+    pub fn new_with_schema(
+        root_path: &str,
+        context: ExecutionContext,
+        schema: Option<Schema>,
+        collect_statistics: bool,
+    ) -> Result<Self> {
+        let object_store = context
+            .state
+            .lock()
+            .unwrap()
+            .object_store_registry
+            .get_by_path(root_path);
+        let root_desc = Self::get_source_desc(
+            root_path,
+            object_store.clone(),
+            "parquet",
+            schema,
+            collect_statistics,
+        );
         Ok(Self {
             object_store,
             descriptor: root_desc?,
@@ -314,12 +364,13 @@ impl ParquetRootDesc {
     }
 }
 
+#[async_trait]
 impl SourceRootDescBuilder for ParquetRootDesc {
-    fn get_file_meta(
-        file_path: &str,
+    async fn get_file_meta(
+        file_path: String,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<PartitionedFile> {
-        let reader = object_store.get_reader(file_path)?;
+        let reader = object_store.get_reader(file_path.as_str())?;
         let file_reader =
             Arc::new(SerializedFileReader::new(ObjectReaderWrapper::new(reader))?);
         let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
@@ -384,8 +435,6 @@ impl SourceRootDescBuilder for ParquetRootDesc {
             file_path,
             schema,
             statistics,
-            partition_value: None,
-            partition_schema: None,
         })
     }
 }
@@ -418,7 +467,8 @@ impl Length for ObjectReaderWrapper {
     }
 }
 
-/// Thin wrapper over reader for a parquet file
+/// Thin wrapper over reader for a parquet file.
+/// To be removed once rust-lang/rfcs#1598 is stabilized
 pub struct InnerReaderWrapper {
     inner_reader: Box<dyn Read>,
 }

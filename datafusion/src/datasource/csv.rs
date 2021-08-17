@@ -49,7 +49,7 @@ use crate::physical_plan::csv::CsvExec;
 pub use crate::physical_plan::csv::CsvReadOptions;
 use crate::physical_plan::ExecutionPlan;
 
-/// Represents a CSV file with a provided schema
+/// Represents a CSV file with a provided scxhema
 pub struct CsvFile {
     source: Source,
     schema: SchemaRef,

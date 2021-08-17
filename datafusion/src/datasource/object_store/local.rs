@@ -16,18 +16,18 @@
 // under the License.
 
 //! Object store that represents the Local File System.
+use crate::datasource::get_runtime_handle;
 use crate::datasource::object_store::{FileNameStream, ObjectReader, ObjectStore};
 use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::parquet::file::reader::Length;
 use crate::parquet::file::serialized_reader::FileSource;
 use async_trait::async_trait;
-use futures::{stream, Stream, StreamExt};
+use futures::{stream, StreamExt};
 use std::any::Any;
+use std::fs::File;
 use std::io::Read;
-use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::fs::{self, File, ReadDir};
 
 #[derive(Debug)]
 /// Local File System as Object Store.
@@ -40,13 +40,12 @@ impl ObjectStore for LocalFileSystem {
     }
 
     fn list(&self, path: &str, ext: &str) -> Result<Vec<String>> {
-        let mut filenames: Vec<String> = Vec::new();
-        list_all_files(path, &mut filenames, ext)?;
+        let filenames: Vec<String> = list_all(path.to_string(), ext.to_string())?;
         Ok(filenames)
     }
 
     async fn list_async(&self, path: &str, ext: &str) -> Result<FileNameStream> {
-        list_all(path.to_string(), ext.to_string()).await
+        list_all_async(path.to_string(), ext.to_string()).await
     }
 
     fn get_reader(&self, file_path: &str) -> Result<Arc<dyn ObjectReader>> {
@@ -71,7 +70,7 @@ impl ObjectReader for LocalFSObjectReader {
         Box::new(FileSource::<File>::new(&self.file, start, length))
     }
 
-    fn get_reader_async(&self, start: u64, length: usize) -> Box<dyn Read> {
+    fn get_reader_async(&self, _start: u64, _length: usize) -> Box<dyn Read> {
         todo!()
     }
 
@@ -80,23 +79,39 @@ impl ObjectReader for LocalFSObjectReader {
     }
 }
 
-async fn list_all(root_path: String, ext: String) -> Result<FileNameStream> {
-    async fn one_level(
+fn list_all(root_path: String, ext: String) -> Result<Vec<String>> {
+    let handle = get_runtime_handle();
+    let mut file_results: Vec<Result<String>> = Vec::new();
+    handle.block_on(async {
+        match list_all_async(root_path, ext).await {
+            Ok(mut stream) => {
+                while let Some(result) = stream.next().await {
+                    file_results.push(result);
+                }
+            }
+            Err(_) => {
+                file_results.push(Err(DataFusionError::Plan("Invalid path".to_string())));
+            }
+        }
+    });
+    file_results.into_iter().collect()
+}
+
+async fn list_all_async(root_path: String, ext: String) -> Result<FileNameStream> {
+    async fn find_files_in_dir(
         path: String,
         to_visit: &mut Vec<String>,
         ext: String,
     ) -> Result<Vec<String>> {
-        let mut dir = fs::read_dir(path).await?;
+        let mut dir = tokio::fs::read_dir(path).await?;
         let mut files = Vec::new();
 
         while let Some(child) = dir.next_entry().await? {
             if let Some(child_path) = child.path().to_str() {
                 if child.metadata().await?.is_dir() {
                     to_visit.push(child_path.to_string());
-                } else {
-                    if child_path.ends_with(&ext) {
-                        files.push(child_path.to_string())
-                    }
+                } else if child_path.ends_with(&ext.clone()) {
+                    files.push(child_path.to_string())
                 }
             } else {
                 return Err(DataFusionError::Plan("Invalid path".to_string()));
@@ -105,39 +120,23 @@ async fn list_all(root_path: String, ext: String) -> Result<FileNameStream> {
         Ok(files)
     }
 
-    stream::unfold(vec![root_path], |mut to_visit| async {
-        let path = to_visit.pop()?;
-        let file_stream = match one_level(path, &mut to_visit, ext).await {
-            Ok(files) => stream::iter(files).map(Ok).left_stream(),
-            Err(e) => stream::once(async { Err(e) }).right_stream(),
-        };
+    let result = stream::unfold(vec![root_path], move |mut to_visit| {
+        let ext = ext.clone();
+        async move {
+            match to_visit.pop() {
+                None => None,
+                Some(path) => {
+                    let file_stream =
+                        match find_files_in_dir(path, &mut to_visit, ext).await {
+                            Ok(files) => stream::iter(files).map(Ok).left_stream(),
+                            Err(e) => stream::once(async { Err(e) }).right_stream(),
+                        };
 
-        Some((file_stream, to_visit))
-    })
-    .flatten()
-}
-
-/// Recursively build a list of files in a directory with a given extension with an accumulator list
-fn list_all_files(dir: &str, filenames: &mut Vec<String>, ext: &str) -> Result<()> {
-    let metadata = std::fs::metadata(dir)?;
-    if metadata.is_file() {
-        if dir.ends_with(ext) {
-            filenames.push(dir.to_string());
-        }
-    } else {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if let Some(path_name) = path.to_str() {
-                if path.is_dir() {
-                    list_all_files(path_name, filenames, ext).await?;
-                } else if path_name.ends_with(ext) {
-                    filenames.push(path_name.to_string());
+                    Some((file_stream, to_visit))
                 }
-            } else {
-                return Err(DataFusionError::Plan("Invalid path".to_string()));
             }
         }
-    }
-    Ok(())
+    })
+    .flatten();
+    Ok(Box::pin(result))
 }

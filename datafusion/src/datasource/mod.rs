@@ -31,12 +31,18 @@ pub use self::memory::MemTable;
 
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::datasource::datasource::{ColumnStatistics, Statistics};
-use crate::datasource::object_store::ObjectStore;
+use crate::datasource::object_store::{FileNameStream, ObjectStore};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::Accumulator;
-use crate::scalar::ScalarValue;
+use async_trait::async_trait;
+use futures::{Stream, StreamExt};
+use std::fmt::Debug;
+use std::pin::Pin;
 use std::sync::Arc;
+use tokio::runtime::{Handle, Runtime};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio_stream::wrappers::ReceiverStream;
 
 /// Source for table input data
 pub(crate) enum Source<R = Box<dyn std::io::Read + Send + Sync + 'static>> {
@@ -57,10 +63,10 @@ pub struct PartitionedFile {
     pub schema: Schema,
     /// Statistics of the file
     pub statistics: Statistics,
-    /// Values of partition columns to be appended to each row
-    pub partition_value: Option<Vec<ScalarValue>>,
-    /// Schema of partition columns
-    pub partition_schema: Option<Schema>,
+    // Values of partition columns to be appended to each row
+    // pub partition_value: Option<Vec<ScalarValue>>,
+    // Schema of partition columns
+    // pub partition_schema: Option<Schema>,
     // We may include row group range here for a more fine-grained parallel execution
 }
 
@@ -70,8 +76,6 @@ impl From<String> for PartitionedFile {
             file_path,
             schema: Schema::empty(),
             statistics: Default::default(),
-            partition_value: None,
-            partition_schema: None,
         }
     }
 }
@@ -107,57 +111,140 @@ pub struct SourceRootDescriptor {
     pub schema: SchemaRef,
 }
 
+/// Stream of
+pub type PartitionedFileStream =
+    Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
+
 /// Builder for ['SourceRootDescriptor'] inside given path
-pub trait SourceRootDescBuilder {
+#[async_trait]
+pub trait SourceRootDescBuilder: Sync + Send + Debug {
     /// Construct a ['SourceRootDescriptor'] from the provided path
     fn get_source_desc(
         path: &str,
         object_store: Arc<dyn ObjectStore>,
         ext: &str,
+        provided_schema: Option<Schema>,
+        collect_statistics: bool,
     ) -> Result<SourceRootDescriptor> {
-        let filenames = object_store.list(path, ext).await?;
-        if filenames.is_empty() {
+        let handle = get_runtime_handle();
+        let mut results: Vec<Result<PartitionedFile>> = Vec::new();
+        handle.block_on(async {
+            match Self::get_source_desc_async(
+                path,
+                object_store,
+                ext,
+                provided_schema,
+                collect_statistics,
+            )
+            .await
+            {
+                Ok(mut stream) => {
+                    while let Some(pf) = stream.next().await {
+                        results.push(pf);
+                    }
+                }
+                Err(e) => {
+                    results.push(Err(e));
+                }
+            }
+        });
+
+        let partition_results: Result<Vec<PartitionedFile>> =
+            results.into_iter().collect();
+        let partition_files = partition_results?;
+
+        // build a list of Parquet partitions with statistics and gather all unique schemas
+        // used in this data set
+        let mut schemas: Vec<Schema> = vec![];
+
+        for pf in &partition_files {
+            let schema = pf.schema.clone();
+            if schemas.is_empty() {
+                schemas.push(schema);
+            } else if schema != schemas[0] {
+                // we currently get the schema information from the first file rather than do
+                // schema merging and this is a limitation.
+                // See https://issues.apache.org/jira/browse/ARROW-11017
+                return Err(DataFusionError::Plan(format!(
+                    "The file {} have different schema from the first file and DataFusion does \
+                        not yet support schema merging",
+                    pf.file_path
+                )));
+            }
+        }
+
+        Ok(SourceRootDescriptor {
+            partition_files,
+            schema: Arc::new(schemas.pop().unwrap()),
+        })
+    }
+
+    /// Construct a ['SourceRootDescriptor'] from the provided path asynchronously
+    async fn get_source_desc_async(
+        path: &str,
+        object_store: Arc<dyn ObjectStore>,
+        ext: &str,
+        provided_schema: Option<Schema>,
+        collect_statistics: bool,
+    ) -> Result<PartitionedFileStream> {
+        let mut list_result: FileNameStream = object_store.list_async(path, ext).await?;
+
+        let (tx, rx): (
+            Sender<Result<PartitionedFile>>,
+            Receiver<Result<PartitionedFile>>,
+        ) = channel(2);
+
+        let mut contains_file = false;
+        while let Some(item) = list_result.next().await {
+            contains_file = true;
+            match item {
+                Ok(file_path) => {
+                    if collect_statistics {
+                        let tx = tx.clone();
+                        let object_store = object_store.clone();
+                        let path = file_path.clone();
+                        tokio::spawn(async move {
+                            let file_meta = Self::get_file_meta(path, object_store).await;
+                            tx.send(file_meta).await.unwrap();
+                        });
+                    } else {
+                        tx.send(Ok(PartitionedFile {
+                            file_path,
+                            schema: provided_schema.clone().unwrap(),
+                            statistics: Statistics::default(),
+                        }))
+                        .await
+                        .unwrap();
+                    }
+                }
+                Err(e) => {
+                    tx.send(Err(e)).await.unwrap();
+                }
+            }
+        }
+
+        if !contains_file {
             return Err(DataFusionError::Plan(format!(
                 "No file (with .{} extension) found at path {}",
                 ext, path
             )));
         }
 
-        // build a list of Parquet partitions with statistics and gather all unique schemas
-        // used in this data set
-        let mut schemas: Vec<Schema> = vec![];
-
-        let partitioned_files = filenames
-            .iter()
-            .map(|file_path| {
-                let pf = Self::get_file_meta(file_path, object_store.clone())?;
-                let schema = pf.schema.clone();
-                if schemas.is_empty() {
-                    schemas.push(schema);
-                } else if schema != schemas[0] {
-                    // we currently get the schema information from the first file rather than do
-                    // schema merging and this is a limitation.
-                    // See https://issues.apache.org/jira/browse/ARROW-11017
-                    return Err(DataFusionError::Plan(format!(
-                        "The file {} have different schema from the first file and DataFusion does \
-                        not yet support schema merging",
-                        file_path
-                    )));
-                }
-                Ok(pf)
-            }).collect::<Result<Vec<PartitionedFile>>>();
-
-        Ok(SourceRootDescriptor {
-            partition_files: partitioned_files?,
-            schema: Arc::new(schemas.pop().unwrap()),
-        })
+        Ok(Box::pin(ReceiverStream::new(rx)))
     }
 
     /// Get all metadata for a source file, including schema, statistics, partitions, etc.
-    fn get_file_meta(
-        file_path: &str,
+    async fn get_file_meta(
+        file_path: String,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<PartitionedFile>;
+}
+
+fn get_runtime_handle() -> Handle {
+    match Handle::try_current() {
+        Ok(h) => h,
+        Err(_) => Runtime::new().unwrap().handle().to_owned(),
+    }
 }
 
 /// Get all files as well as the summary statistics when a limit is provided

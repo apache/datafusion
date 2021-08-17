@@ -27,7 +27,7 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 
 use local::LocalFileSystem;
 
@@ -46,6 +46,11 @@ pub trait ObjectReader {
     fn length(&self) -> u64;
 }
 
+/// Stream of files get listed from object store. Currently, we only
+/// return file paths, but for many object stores, object listing will actually give us more
+/// information than just the file path, for example, last updated time and file size are
+/// often returned as part of the api/sys call.
+/// These extra metadata might be useful for other purposes.
 pub type FileNameStream =
     Pin<Box<dyn Stream<Item = Result<String>> + Send + Sync + 'static>>;
 

@@ -475,9 +475,12 @@ fn get_table(
         }
         "parquet" => {
             let path = format!("{}/{}", path, table);
-            Ok(Arc::new(ParquetTable::try_new(
+            let schema = get_schema(table);
+            Ok(Arc::new(ParquetTable::try_new_with_schema(
                 &path,
                 ExecutionContext::with_concurrency(max_concurrency),
+                schema,
+                false,
             )?))
         }
         other => {
