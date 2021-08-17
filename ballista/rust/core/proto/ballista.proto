@@ -355,7 +355,7 @@ enum WindowFrameUnits {
 message WindowFrame {
   WindowFrameUnits window_frame_units = 1;
   WindowFrameBound start_bound = 2;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
   // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
   oneof end_bound {
     WindowFrameBound bound = 3;
@@ -370,7 +370,7 @@ enum WindowFrameBoundType {
 
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
   // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
   oneof bound_value {
     uint64 value = 2;
@@ -782,7 +782,7 @@ message ExecutorMetadata {
 
 message ExecutorRegistration {
   string id = 1;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
   // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
   oneof optional_host {
     string host = 2;
