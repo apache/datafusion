@@ -24,6 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use parquet::arrow::ArrowReader;
 use parquet::arrow::ParquetFileArrowReader;
+use parquet::errors::ParquetError;
 use parquet::file::reader::ChunkReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
@@ -31,7 +32,7 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 use super::datasource::TableProviderFilterPushDown;
 use crate::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use crate::datasource::datasource::Statistics;
-use crate::datasource::object_store::{ObjectReader, ObjectStore};
+use crate::datasource::object_store::{ObjectReader, ObjectStore, ThreadSafeRead};
 use crate::datasource::{
     create_max_min_accs, get_col_stats, get_statistics_with_limit, PartitionedFile,
     SourceRootDescBuilder, SourceRootDescriptor, TableProvider,
@@ -455,22 +456,25 @@ impl ChunkReader for ObjectReaderWrapper {
     type T = InnerReaderWrapper;
 
     fn get_read(&self, start: u64, length: usize) -> parquet::errors::Result<Self::T> {
-        Ok(InnerReaderWrapper {
-            inner_reader: self.reader.get_reader(start, length),
-        })
+        match self.reader.get_reader(start, length) {
+            Ok(reader) => Ok(InnerReaderWrapper {
+                inner_reader: reader,
+            }),
+            Err(e) => Err(ParquetError::General(e.to_string())),
+        }
     }
 }
 
 impl Length for ObjectReaderWrapper {
     fn len(&self) -> u64 {
-        self.reader.length()
+        self.reader.length().unwrap_or(0u64)
     }
 }
 
 /// Thin wrapper over reader for a parquet file.
 /// To be removed once rust-lang/rfcs#1598 is stabilized
 pub struct InnerReaderWrapper {
-    inner_reader: Box<dyn Read>,
+    inner_reader: Box<dyn ThreadSafeRead>,
 }
 
 impl Read for InnerReaderWrapper {

@@ -17,17 +17,19 @@
 
 //! Object store that represents the Local File System.
 use crate::datasource::get_runtime_handle;
-use crate::datasource::object_store::{FileNameStream, ObjectReader, ObjectStore};
+use crate::datasource::object_store::{
+    FileNameStream, ObjectReader, ObjectStore, ThreadSafeRead,
+};
+use crate::datasource::parquet_io::FileSource2;
 use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::parquet::file::reader::Length;
-use crate::parquet::file::serialized_reader::FileSource;
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
 use std::any::Any;
 use std::fs::File;
-use std::io::Read;
 use std::sync::Arc;
+use tokio::task;
 
 #[derive(Debug)]
 /// Local File System as Object Store.
@@ -65,17 +67,42 @@ impl LocalFSObjectReader {
     }
 }
 
+#[async_trait]
 impl ObjectReader for LocalFSObjectReader {
-    fn get_reader(&self, start: u64, length: usize) -> Box<dyn Read> {
-        Box::new(FileSource::<File>::new(&self.file, start, length))
+    fn get_reader(&self, start: u64, length: usize) -> Result<Box<dyn ThreadSafeRead>> {
+        Ok(Box::new(FileSource2::<File>::new(
+            &self.file, start, length,
+        )))
     }
 
-    fn get_reader_async(&self, _start: u64, _length: usize) -> Box<dyn Read> {
-        todo!()
+    async fn get_reader_async(
+        &self,
+        start: u64,
+        length: usize,
+    ) -> Result<Box<dyn ThreadSafeRead>> {
+        let file = self.file.try_clone()?;
+        match task::spawn_blocking(move || {
+            let read: Result<Box<dyn ThreadSafeRead>> =
+                Ok(Box::new(FileSource2::<File>::new(&file, start, length)));
+            read
+        })
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => Err(DataFusionError::Internal(e.to_string())),
+        }
     }
 
-    fn length(&self) -> u64 {
-        self.file.len()
+    fn length(&self) -> Result<u64> {
+        Ok(self.file.len())
+    }
+
+    async fn length_async(&self) -> Result<u64> {
+        let file = self.file.try_clone()?;
+        match task::spawn_blocking(move || Ok(file.len())).await {
+            Ok(r) => r,
+            Err(e) => Err(DataFusionError::Internal(e.to_string())),
+        }
     }
 }
 

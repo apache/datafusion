@@ -31,19 +31,36 @@ use futures::Stream;
 
 use local::LocalFileSystem;
 
+use crate::datasource::get_runtime_handle;
 use crate::error::Result;
+
+/// Thread safe read
+pub trait ThreadSafeRead: Read + Send + Sync + 'static {}
 
 /// Object Reader for one file in a object store
 #[async_trait]
 pub trait ObjectReader {
     /// Get reader for a part [start, start + length] in the file
-    fn get_reader(&self, start: u64, length: usize) -> Box<dyn Read>;
+    fn get_reader(&self, start: u64, length: usize) -> Result<Box<dyn ThreadSafeRead>> {
+        let handle = get_runtime_handle();
+        handle.block_on(self.get_reader_async(start, length))
+    }
 
     /// Get reader for a part [start, start + length] in the file asynchronously
-    fn get_reader_async(&self, start: u64, length: usize) -> Box<dyn Read>;
+    async fn get_reader_async(
+        &self,
+        start: u64,
+        length: usize,
+    ) -> Result<Box<dyn ThreadSafeRead>>;
 
-    /// Get lenght for the file
-    fn length(&self) -> u64;
+    /// Get length for the file
+    fn length(&self) -> Result<u64> {
+        let handle = get_runtime_handle();
+        handle.block_on(self.length_async())
+    }
+
+    /// Get length for the file asynchronously
+    async fn length_async(&self) -> Result<u64>;
 }
 
 /// Stream of files get listed from object store. Currently, we only

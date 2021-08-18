@@ -24,6 +24,7 @@ pub mod json;
 pub mod memory;
 pub mod object_store;
 pub mod parquet;
+pub mod parquet_io;
 
 pub use self::csv::{CsvFile, CsvReadOptions};
 pub use self::datasource::{TableProvider, TableType};
