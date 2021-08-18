@@ -75,7 +75,7 @@ pub struct ParquetExec {
     /// Statistics for the data set (sum of statistics for all partitions)
     statistics: Statistics,
     /// Execution metrics
-    metrics: Arc<SharedMetricsSet>,
+    metrics: SharedMetricsSet,
     /// Optional predicate builder
     predicate_builder: Option<PruningPredicate>,
     /// Optional limit of the number of rows
@@ -98,7 +98,7 @@ pub struct ParquetPartition {
     /// Statistics for this partition
     pub statistics: Statistics,
     /// Execution metrics
-    metrics: Arc<SharedMetricsSet>,
+    metrics: SharedMetricsSet,
 }
 
 /// Stores metrics about the parquet execution for a particular parquet file
@@ -159,7 +159,7 @@ impl ParquetExec {
                filenames, projection, predicate, limit);
         // build a list of Parquet partitions with statistics and gather all unique schemas
         // used in this data set
-        let metrics = Arc::new(SharedMetricsSet::new());
+        let metrics = SharedMetricsSet::new();
         let mut schemas: Vec<Schema> = vec![];
         let mut partitions = Vec::with_capacity(max_concurrency);
         let filenames: Vec<String> = filenames.iter().map(|s| s.to_string()).collect();
@@ -408,7 +408,7 @@ impl ParquetExec {
         }
         let schema = Arc::new(schemas.pop().unwrap());
 
-        let metrics = Arc::new(SharedMetricsSet::new());
+        let metrics = SharedMetricsSet::new();
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("numPredicateCreationErrors");
 
@@ -442,7 +442,7 @@ impl ParquetExec {
         partitions: Vec<ParquetPartition>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
-        metrics: Arc<SharedMetricsSet>,
+        metrics: SharedMetricsSet,
         predicate_builder: Option<PruningPredicate>,
         batch_size: usize,
         limit: Option<usize>,
@@ -585,7 +585,7 @@ impl ParquetPartition {
     pub fn new(
         filenames: Vec<String>,
         statistics: Statistics,
-        metrics: Arc<SharedMetricsSet>,
+        metrics: SharedMetricsSet,
     ) -> Self {
         Self {
             filenames,
@@ -852,7 +852,7 @@ fn build_row_group_predicate(
 fn read_files(
     partition: usize,
     filenames: &[String],
-    metrics: Arc<SharedMetricsSet>,
+    metrics: SharedMetricsSet,
     projection: &[usize],
     predicate_builder: &Option<PruningPredicate>,
     batch_size: usize,

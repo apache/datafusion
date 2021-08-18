@@ -49,7 +49,7 @@ pub struct ShuffleReaderExec {
     pub(crate) partition: Vec<Vec<PartitionLocation>>,
     pub(crate) schema: SchemaRef,
     /// Execution metrics
-    metrics: Arc<SharedMetricsSet>,
+    metrics: SharedMetricsSet,
 }
 
 impl ShuffleReaderExec {
@@ -61,7 +61,7 @@ impl ShuffleReaderExec {
         Ok(Self {
             partition,
             schema,
-            metrics: Arc::new(SharedMetricsSet::new()),
+            metrics: SharedMetricsSet::new(),
         })
     }
 }

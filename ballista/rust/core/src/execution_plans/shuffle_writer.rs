@@ -75,7 +75,7 @@ pub struct ShuffleWriterExec {
     /// Optional shuffle output partitioning
     shuffle_output_partitioning: Option<Partitioning>,
     /// Execution metrics
-    metrics: Arc<SharedMetricsSet>,
+    metrics: SharedMetricsSet,
 }
 
 #[derive(Debug, Clone)]
@@ -117,7 +117,7 @@ impl ShuffleWriterExec {
             plan,
             work_dir,
             shuffle_output_partitioning,
-            metrics: Arc::new(SharedMetricsSet::new()),
+            metrics: SharedMetricsSet::new(),
         })
     }
 

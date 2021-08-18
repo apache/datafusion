@@ -395,16 +395,16 @@ impl Display for MetricsSet {
 
 /// A set of SQLMetrics that can be added to as partitions
 /// execute. Designed to be a convenience for operator implementation
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct SharedMetricsSet {
-    inner: Mutex<MetricsSet>,
+    inner: Arc<Mutex<MetricsSet>>,
 }
 
 impl SharedMetricsSet {
     /// Create a new empty shared metrics set
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(MetricsSet::new()),
+            inner: Arc::new(Mutex::new(MetricsSet::new())),
         }
     }
 

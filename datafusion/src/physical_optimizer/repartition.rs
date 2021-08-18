@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn added_repartition_to_single_partition() -> Result<()> {
         let schema = Arc::new(Schema::empty());
-        let metrics = Arc::new(SharedMetricsSet::new());
+        let metrics = SharedMetricsSet::new();
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ParquetExec::new(
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn repartition_deepest_node() -> Result<()> {
         let schema = Arc::new(Schema::empty());
-        let metrics = Arc::new(SharedMetricsSet::new());
+        let metrics = SharedMetricsSet::new();
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ProjectionExec::try_new(
