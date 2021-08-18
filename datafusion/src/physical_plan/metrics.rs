@@ -95,17 +95,17 @@ impl<'a> MetricBuilder<'a> {
 
     /// Consumes self and creates a new Countr for recording
     /// some metric of an operators
-    pub fn counter(self, counter_name: impl Into<Arc<str>>, partition: usize) -> Count {
+    pub fn counter(self, counter_name: &'static str, partition: usize) -> Count {
         let metric = self
             .with_partition(partition)
-            .build(MetricKind::Custom(counter_name.into()));
+            .build(MetricKind::Custom(counter_name));
         Count::new(metric)
     }
 
     /// Consumes self and creates a new Counter for recording
     /// some metric of an overall operator (not per partition
-    pub fn global_counter(self, counter_name: impl Into<Arc<str>>) -> Count {
-        let metric = self.build(MetricKind::Custom(counter_name.into()));
+    pub fn global_counter(self, counter_name: &'static str) -> Count {
+        let metric = self.build(MetricKind::Custom(counter_name));
         Count::new(metric)
     }
 
@@ -118,10 +118,10 @@ impl<'a> MetricBuilder<'a> {
 
     /// Consumes self and creates a new Timer for recording some
     /// subset of of an operators execution time
-    pub fn subset_time(self, subset_name: impl Into<Arc<str>>, partition: usize) -> Time {
+    pub fn subset_time(self, subset_name: &'static str, partition: usize) -> Time {
         let metric = self
             .with_partition(partition)
-            .build(MetricKind::Custom(subset_name.into()));
+            .build(MetricKind::Custom(subset_name));
         Time::new(metric)
     }
 }
@@ -265,7 +265,7 @@ pub enum MetricKind {
     // TODO timestamp, etc
     // https://github.com/apache/arrow-datafusion/issues/866
     /// Arbitarary user defined type
-    Custom(Arc<str>),
+    Custom(&'static str),
 }
 
 impl Display for MetricKind {
