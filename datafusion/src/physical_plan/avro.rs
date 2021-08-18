@@ -15,17 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution plan for reading line-delimited JSON files
+//! Execution plan for reading line-delimited Avro files
 use async_trait::async_trait;
 use futures::Stream;
 
 use super::{common, source::Source, ExecutionPlan, Partitioning, RecordBatchStream};
-use crate::avro;
+use crate::avro::infer_avro_schema_from_reader;
 use crate::error::{DataFusionError, Result};
 use arrow::{
     datatypes::{Schema, SchemaRef},
     error::Result as ArrowResult,
-    json,
     record_batch::RecordBatch,
 };
 use std::fs::File;
@@ -37,7 +36,7 @@ use std::{
     task::{Context, Poll},
 };
 
-/// Line-delimited JSON read options
+/// Line-delimited Avro read options
 #[derive(Clone)]
 pub struct AvroReadOptions<'a> {
     /// The data source schema.
@@ -60,12 +59,13 @@ impl<'a> Default for AvroReadOptions<'a> {
 trait SeekRead: Read + Seek {}
 
 impl<T: Seek + Read> SeekRead for T {}
-/// Execution plan for scanning NdJson data source
+/// Execution plan for scanning Avro data source
 #[derive(Debug)]
 pub struct AvroExec {
     source: Source<Box<dyn SeekRead + Send + Sync>>,
     schema: SchemaRef,
     projection: Option<Vec<usize>>,
+    projected_schema: SchemaRef,
     file_extension: String,
     batch_size: usize,
     limit: Option<usize>,
@@ -109,7 +109,8 @@ impl AvroExec {
                 path: path.to_string(),
                 filenames,
             },
-            schema: projected_schema.clone(),
+            schema,
+            projected_schema,
             file_extension,
             projection,
             batch_size,
@@ -143,9 +144,10 @@ impl AvroExec {
 
         Ok(Self {
             source: Source::Reader(Mutex::new(Some(Box::new(reader)))),
-            schema: projected_schema.clone(),
+            schema,
             file_extension: String::new(),
             projection,
+            projected_schema,
             batch_size,
             limit,
         })
@@ -191,20 +193,11 @@ impl AvroExec {
         let mut schemas = Vec::new();
         for filename in filenames {
             let mut file = File::open(filename)?;
-            let schema = Self::infer_avro_schema_from_reader(&mut file)?;
+            let schema = infer_avro_schema_from_reader(&mut file)?;
             schemas.push(schema);
         }
 
         Ok(Schema::try_merge(schemas)?)
-    }
-
-    /// Infer Avro schema given a reader
-    pub fn infer_avro_schema_from_reader<R: Read + Seek>(
-        reader: &mut R,
-    ) -> Result<Schema> {
-        let avro_reader = avro_rs::Reader::new(reader)?;
-        let schema = avro_reader.writer_schema();
-        avro::to_arrow_schema(schema)
     }
 }
 
@@ -215,7 +208,7 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.projected_schema.clone()
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -246,6 +239,7 @@ impl ExecutionPlan for AvroExec {
                 },
                 schema: self.schema.clone(),
                 projection: self.projection.clone(),
+                projected_schema: self.projected_schema.clone(),
                 batch_size: self.batch_size,
                 limit: self.limit,
                 file_extension: self.file_extension.clone(),
@@ -262,7 +256,7 @@ impl ExecutionPlan for AvroExec {
         &self,
         partition: usize,
     ) -> Result<super::SendableRecordBatchStream> {
-        let mut builder = json::ReaderBuilder::new()
+        let mut builder = crate::avro::ReaderBuilder::new()
             .with_schema(self.schema.clone())
             .with_batch_size(self.batch_size);
         if let Some(proj) = &self.projection {
@@ -298,13 +292,13 @@ impl ExecutionPlan for AvroExec {
     }
 }
 
-struct AvroStream<R: Read> {
-    reader: json::Reader<R>,
+struct AvroStream<'a, R: Read> {
+    reader: crate::avro::Reader<'a, R>,
     remain: Option<usize>,
 }
 
-impl<R: Read> AvroStream<R> {
-    fn new(reader: json::Reader<R>, limit: Option<usize>) -> Self {
+impl<'a, R: Read> AvroStream<'a, R> {
+    fn new(reader: crate::avro::Reader<'a, R>, limit: Option<usize>) -> Self {
         Self {
             reader,
             remain: limit,
@@ -312,7 +306,7 @@ impl<R: Read> AvroStream<R> {
     }
 }
 
-impl<R: Read + Unpin> Stream for AvroStream<R> {
+impl<R: Read + Unpin> Stream for AvroStream<'_, R> {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
@@ -352,7 +346,7 @@ impl<R: Read + Unpin> Stream for AvroStream<R> {
     }
 }
 
-impl<R: Read + Unpin> RecordBatchStream for AvroStream<R> {
+impl<R: Read + Unpin> RecordBatchStream for AvroStream<'_, R> {
     fn schema(&self) -> SchemaRef {
         self.reader.schema()
     }
@@ -361,112 +355,271 @@ impl<R: Read + Unpin> RecordBatchStream for AvroStream<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::avro::AvroFile;
+    use crate::datasource::TableProvider;
+    use crate::logical_plan::combine_filters;
+    use arrow::array::{
+        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
+        TimestampNanosecondArray,
+    };
+    use arrow::record_batch::RecordBatch;
     use futures::StreamExt;
 
-    const TEST_DATA_BASE: &str = "tests/jsons";
+    fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = format!("{}/avro/{}", testdata, name);
+        let table = AvroFile::try_new(&filename, AvroReadOptions::default())?;
+        Ok(Arc::new(table))
+    }
 
     #[tokio::test]
-    async fn avro_exec_file_without_projection() -> Result<()> {
-        use arrow::datatypes::DataType;
-        let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = AvroExec::try_new(&path, Default::default(), None, 1024, Some(3))?;
-        let inferred_schema = exec.schema();
-        assert_eq!(inferred_schema.fields().len(), 4);
+    async fn read_small_batches() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = None;
+        let exec = table.scan(&projection, 2, &[], None)?;
+        let stream = exec.execute(0).await?;
 
-        // a,b,c,d should be inferred
-        inferred_schema.field_with_name("a").unwrap();
-        inferred_schema.field_with_name("b").unwrap();
-        inferred_schema.field_with_name("c").unwrap();
-        inferred_schema.field_with_name("d").unwrap();
+        let _ = stream
+            .map(|batch| {
+                let batch = batch.unwrap();
+                assert_eq!(11, batch.num_columns());
+                assert_eq!(2, batch.num_rows());
+            })
+            .fold(0, |acc, _| async move { acc + 1i32 })
+            .await;
 
-        assert_eq!(
-            inferred_schema.field_with_name("a").unwrap().data_type(),
-            &DataType::Int64
-        );
-        assert!(matches!(
-            inferred_schema.field_with_name("b").unwrap().data_type(),
-            DataType::List(_)
-        ));
-        assert_eq!(
-            inferred_schema.field_with_name("d").unwrap().data_type(),
-            &DataType::Utf8
-        );
-
-        let mut it = exec.execute(0).await?;
-        let batch = it.next().await.unwrap()?;
-
-        assert_eq!(batch.num_rows(), 3);
-        let values = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
-        assert_eq!(values.value(0), 1);
-        assert_eq!(values.value(1), -10);
-        assert_eq!(values.value(2), 2);
+        // test metadata
+        assert_eq!(table.statistics().num_rows, Some(8));
+        assert_eq!(table.statistics().total_byte_size, Some(671));
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn avro_exec_file_projection() -> Result<()> {
-        let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec =
-            AvroExec::try_new(&path, Default::default(), Some(vec![0, 2]), 1024, None)?;
-        let inferred_schema = exec.schema();
-        assert_eq!(inferred_schema.fields().len(), 2);
+    async fn read_alltypes_plain_parquet() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
 
-        inferred_schema.field_with_name("a").unwrap();
-        inferred_schema.field_with_name("b").unwrap_err();
-        inferred_schema.field_with_name("c").unwrap();
-        inferred_schema.field_with_name("d").unwrap_err();
+        let x: Vec<String> = table
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+        let y = x.join("\n");
+        assert_eq!(
+            "id: Int32\n\
+             bool_col: Boolean\n\
+             tinyint_col: Int32\n\
+             smallint_col: Int32\n\
+             int_col: Int32\n\
+             bigint_col: Int64\n\
+             float_col: Float32\n\
+             double_col: Float64\n\
+             date_string_col: Binary\n\
+             string_col: Binary\n\
+             timestamp_col: Timestamp(Microsecond, None)",
+            y
+        );
 
-        let mut it = exec.execute(0).await?;
-        let batch = it.next().await.unwrap()?;
+        let projection = None;
+        let batch = get_first_batch(table, &projection).await?;
 
-        assert_eq!(batch.num_rows(), 4);
-        let values = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
-        assert_eq!(values.value(0), 1);
-        assert_eq!(values.value(1), -10);
-        assert_eq!(values.value(2), 2);
+        assert_eq!(11, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
         Ok(())
     }
 
     #[tokio::test]
-    async fn avro_exec_from_reader() -> Result<()> {
-        let content = r#"{"a":"aaa", "b":[2.0, 1.3, -6.1], "c":[false, true], "d":"4"}
-{"a":"bbb", "b":[2.0, 1.3, -6.1], "c":[true, true], "d":"4"}"#;
-        let cur = std::io::Cursor::new(content);
-        let mut bufrdr = std::io::BufReader::new(cur);
-        let schema =
-            arrow::json::reader::infer_json_schema_from_seekable(&mut bufrdr, None)?;
-        let exec = AvroExec::try_new_from_reader(
-            bufrdr,
-            AvroReadOptions {
-                schema: Some(Arc::new(schema)),
-                ..Default::default()
-            },
-            None,
-            1024,
-            Some(1),
-        )?;
+    async fn read_bool_alltypes_plain_parquet() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![1]);
+        let batch = get_first_batch(table, &projection).await?;
 
-        let mut it = exec.execute(0).await?;
-        let batch = it.next().await.unwrap()?;
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
 
-        assert_eq!(batch.num_rows(), 1);
-
-        let values = batch
+        let array = batch
             .column(0)
             .as_any()
-            .downcast_ref::<arrow::array::StringArray>()
+            .downcast_ref::<BooleanArray>()
             .unwrap();
-        assert_eq!(values.value(0), "aaa");
+        let mut values: Vec<bool> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(
+            "[true, false, true, false, true, false, true, false]",
+            format!("{:?}", values)
+        );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_i32_alltypes_plain_parquet() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![0]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let mut values: Vec<i32> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{:?}", values));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_i96_alltypes_plain_parquet() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![10]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap();
+        let mut values: Vec<i64> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{:?}", values));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_f32_alltypes_plain_parquet() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![6]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .unwrap();
+        let mut values: Vec<f32> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(
+            "[0.0, 1.1, 0.0, 1.1, 0.0, 1.1, 0.0, 1.1]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_f64_alltypes_plain_parquet() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![7]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        let mut values: Vec<f64> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(
+            "[0.0, 10.1, 0.0, 10.1, 0.0, 10.1, 0.0, 10.1]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_binary_alltypes_plain_parquet() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![9]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        let mut values: Vec<&str> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(std::str::from_utf8(array.value(i)).unwrap());
+        }
+
+        assert_eq!(
+            "[\"0\", \"1\", \"0\", \"1\", \"0\", \"1\", \"0\", \"1\"]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    async fn get_first_batch(
+        table: Arc<dyn TableProvider>,
+        projection: &Option<Vec<usize>>,
+    ) -> Result<RecordBatch> {
+        let exec = table.scan(projection, 1024, &[], None)?;
+        let mut it = exec.execute(0).await?;
+        it.next()
+            .await
+            .expect("should have received at least one batch")
+            .map_err(|e| e.into())
+    }
+
+    #[test]
+    fn combine_zero_filters() {
+        let result = combine_filters(&[]);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn combine_one_filter() {
+        use crate::logical_plan::{binary_expr, col, lit, Operator};
+        let filter = binary_expr(col("c1"), Operator::Lt, lit(1));
+        let result = combine_filters(&[filter.clone()]);
+        assert_eq!(result, Some(filter));
+    }
+
+    #[test]
+    fn combine_multiple_filters() {
+        use crate::logical_plan::{and, binary_expr, col, lit, Operator};
+        let filter1 = binary_expr(col("c1"), Operator::Lt, lit(1));
+        let filter2 = binary_expr(col("c2"), Operator::Lt, lit(2));
+        let filter3 = binary_expr(col("c3"), Operator::Lt, lit(3));
+        let result =
+            combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
+        assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
     }
 }

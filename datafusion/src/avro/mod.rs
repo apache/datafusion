@@ -17,14 +17,19 @@
 
 //! This module contains utilities to manipulate avro metadata.
 
+mod arrow_array_reader;
+mod reader;
+
 use crate::arrow::datatypes::{DataType, IntervalUnit, Schema, TimeUnit};
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 use arrow::datatypes::Field;
 use avro_rs::schema::Name;
 use avro_rs::types::Value;
 use avro_rs::Schema as AvroSchema;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
+
+pub use reader::{infer_avro_schema_from_reader, Reader, ReaderBuilder};
 
 /// Converts an avro schema to an arrow schema
 pub fn to_arrow_schema(avro_schema: &avro_rs::Schema) -> Result<Schema> {
@@ -83,13 +88,30 @@ fn schema_to_field_with_props(
             )
         }
         AvroSchema::Union(us) => {
-            nullable = us.find_schema(&Value::Null).is_some();
-            let fields: Result<Vec<Field>> = us
-                .variants()
-                .into_iter()
-                .map(|s| schema_to_field_with_props(&s, None, nullable, None))
-                .collect();
-            DataType::Union(fields?)
+            // If there are only two variants and one of them is null, set the other type as the field data type
+            let has_nullable = us.find_schema(&Value::Null).is_some();
+            let sub_schemas = us.variants();
+            if has_nullable && sub_schemas.len() == 2 {
+                nullable = true;
+                if let Some(schema) = sub_schemas
+                    .iter()
+                    .find(|&schema| !matches!(schema, AvroSchema::Null))
+                {
+                    schema_to_field_with_props(&schema, None, has_nullable, None)?
+                        .data_type()
+                        .clone()
+                } else {
+                    return Err(DataFusionError::AvroError(
+                        avro_rs::Error::GetUnionDuplicate,
+                    ));
+                }
+            } else {
+                let fields = sub_schemas
+                    .into_iter()
+                    .map(|s| schema_to_field_with_props(&s, None, has_nullable, None))
+                    .collect::<Result<Vec<Field>>>()?;
+                DataType::Union(fields)
+            }
         }
         AvroSchema::Record { name, fields, .. } => {
             let fields: Result<Vec<Field>> = fields

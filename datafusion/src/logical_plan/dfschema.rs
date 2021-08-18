@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Column;
 
+use crate::utils::get_field;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use std::fmt::{Display, Formatter};
 
@@ -140,6 +141,7 @@ impl DFSchema {
                 return Ok(i);
             }
         }
+        println!("{}", name);
         Err(DataFusionError::Plan(format!(
             "No field named '{}'. Valid fields are {}.",
             name,
@@ -160,14 +162,17 @@ impl DFSchema {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
                 // qualifer and name.
-                (Some(q), Some(field_q)) => q == field_q && field.name() == name,
+                (Some(q), Some(field_q)) => {
+                    (q == field_q && field.name() == name)
+                        || (q == field.name()
+                            && get_field(field.field.data_type(), name).is_ok())
+                }
                 // field to lookup is qualified but current field is unqualified.
                 (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier
                 (None, Some(_)) | (None, None) => field.name() == name,
             })
             .map(|(idx, _)| idx);
-
         match matches.next() {
             None => Err(DataFusionError::Plan(format!(
                 "No field named '{}.{}'. Valid fields are {}.",

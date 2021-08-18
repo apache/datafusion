@@ -40,7 +40,7 @@ trait SeekRead: Read + Seek {}
 
 impl<T: Seek + Read> SeekRead for T {}
 
-/// Represents a  line-delimited JSON file with a provided schema
+/// Represents a  line-delimited Avro file with a provided schema
 pub struct AvroFile {
     source: Source<Box<dyn SeekRead + Send + Sync + 'static>>,
     schema: SchemaRef,
@@ -97,7 +97,7 @@ impl AvroFile {
             if let Some(schema) = options.schema {
                 schema
             } else {
-                Arc::new(AvroExec::infer_avro_schema_from_reader(&mut reader)?)
+                Arc::new(crate::avro::infer_avro_schema_from_reader(&mut reader)?)
             }
         };
 
@@ -179,28 +179,245 @@ impl TableProvider for AvroFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::*;
-    const TEST_DATA_BASE: &str = "tests/jsons";
+    use crate::datasource::avro::AvroFile;
+    use crate::datasource::TableProvider;
+    use arrow::array::{
+        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
+        TimestampNanosecondArray,
+    };
+    use arrow::record_batch::RecordBatch;
+    use futures::StreamExt;
+
+    fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = format!("{}/avro/{}", testdata, name);
+        let table = AvroFile::try_new(&filename, AvroReadOptions::default())?;
+        Ok(Arc::new(table))
+    }
 
     #[tokio::test]
-    async fn csv_file_from_reader() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
-        let path = format!("{}/2.json", TEST_DATA_BASE);
-        ctx.register_table(
-            "ndjson",
-            Arc::new(AvroFile::try_new(&path, Default::default())?),
-        )?;
-        let df = ctx.sql("select sum(a) from ndjson")?;
-        let batches = df.collect().await?;
-        assert_eq!(
-            batches[0]
-                .column(0)
-                .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
-                .unwrap()
-                .value(0),
-            100000000000011
-        );
+    async fn read_small_batches() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = None;
+        let exec = table.scan(&projection, 2, &[], None)?;
+        let stream = exec.execute(0).await?;
+
+        let _ = stream
+            .map(|batch| {
+                let batch = batch.unwrap();
+                assert_eq!(11, batch.num_columns());
+                assert_eq!(2, batch.num_rows());
+            })
+            .fold(0, |acc, _| async move { acc + 1i32 })
+            .await;
+
+        // test metadata
+        assert_eq!(table.statistics().num_rows, Some(8));
+        assert_eq!(table.statistics().total_byte_size, Some(671));
+
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_alltypes_plain_avro() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+
+        let x: Vec<String> = table
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+        let y = x.join("\n");
+        assert_eq!(
+            "id: Int32\n\
+             bool_col: Boolean\n\
+             tinyint_col: Int32\n\
+             smallint_col: Int32\n\
+             int_col: Int32\n\
+             bigint_col: Int64\n\
+             float_col: Float32\n\
+             double_col: Float64\n\
+             date_string_col: Binary\n\
+             string_col: Binary\n\
+             timestamp_col: Timestamp(Nanosecond, None)",
+            y
+        );
+
+        let projection = None;
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(11, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_bool_alltypes_plain_avro() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![1]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        let mut values: Vec<bool> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(
+            "[true, false, true, false, true, false, true, false]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_i32_alltypes_plain_avro() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![0]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let mut values: Vec<i32> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{:?}", values));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_i96_alltypes_plain_avro() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![10]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap();
+        let mut values: Vec<i64> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{:?}", values));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_f32_alltypes_plain_avro() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![6]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .unwrap();
+        let mut values: Vec<f32> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(
+            "[0.0, 1.1, 0.0, 1.1, 0.0, 1.1, 0.0, 1.1]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_f64_alltypes_plain_avro() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![7]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        let mut values: Vec<f64> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(
+            "[0.0, 10.1, 0.0, 10.1, 0.0, 10.1, 0.0, 10.1]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_binary_alltypes_plain_avro() -> Result<()> {
+        let table = load_table("alltypes_plain.avro")?;
+        let projection = Some(vec![9]);
+        let batch = get_first_batch(table, &projection).await?;
+
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        let mut values: Vec<&str> = vec![];
+        for i in 0..batch.num_rows() {
+            values.push(std::str::from_utf8(array.value(i)).unwrap());
+        }
+
+        assert_eq!(
+            "[\"0\", \"1\", \"0\", \"1\", \"0\", \"1\", \"0\", \"1\"]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    async fn get_first_batch(
+        table: Arc<dyn TableProvider>,
+        projection: &Option<Vec<usize>>,
+    ) -> Result<RecordBatch> {
+        let exec = table.scan(projection, 1024, &[], None)?;
+        let mut it = exec.execute(0).await?;
+        it.next()
+            .await
+            .expect("should have received at least one batch")
+            .map_err(|e| e.into())
     }
 }
