@@ -17,13 +17,13 @@ use crate::arrow::error::ArrowError;
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::bit_util;
 use crate::error::{DataFusionError, Result};
-use arrow::array::GenericListArray;
+use arrow::array::{BinaryArray, GenericListArray};
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
 use avro_rs::schema::Schema as AvroSchema;
 use avro_rs::types::Value;
-use avro_rs::Reader as AvroReader;
+use avro_rs::{AvroResult, Reader as AvroReader};
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
@@ -85,10 +85,10 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 }
             }
         }
-        /*if rows.is_empty() {
+        if rows.is_empty() {
             // reached end of file
             return Ok(None);
-        }*/
+        }
         let rows = &rows[..];
         let projection = self.projection.clone().unwrap_or_else(Vec::new);
         let arrays = self.build_struct_array(rows, self.schema.fields(), &projection);
@@ -240,14 +240,14 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     }
 
     #[inline(always)]
-    fn list_array_string_array_builder<DICT_TY>(
+    fn list_array_string_array_builder<D>(
         &self,
         data_type: &DataType,
         col_name: &str,
         rows: RecordSlice,
     ) -> ArrowResult<ArrayRef>
     where
-        DICT_TY: ArrowPrimitiveType + ArrowDictionaryKeyType,
+        D: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
         let mut builder: Box<dyn ArrayBuilder> = match data_type {
             DataType::Utf8 => {
@@ -256,7 +256,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             }
             DataType::Dictionary(_, _) => {
                 let values_builder =
-                    self.build_string_dictionary_builder::<DICT_TY>(rows.len() * 5)?;
+                    self.build_string_dictionary_builder::<D>(rows.len() * 5)?;
                 Box::new(ListBuilder::new(values_builder))
             }
             e => {
@@ -321,7 +321,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         builder.append(true)?;
                     }
                     DataType::Dictionary(_, _) => {
-                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<DICT_TY>>>().ok_or_else(||ArrowError::JsonError(
+                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<D>>>().ok_or_else(||ArrowError::JsonError(
                             "Cast failed for ListBuilder<StringDictionaryBuilder> during nested data parsing".to_string(),
                         ))?;
                         for val in vals {
@@ -695,14 +695,24 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                             t
                         ))),
                     },
-                    DataType::Utf8 => Ok(Arc::new(
+                    DataType::Utf8 | DataType::LargeUtf8 => Ok(Arc::new(
                         rows.iter()
                             .map(|row| {
                                 let maybe_value = self.field_lookup(field.name(), row);
                                 maybe_value.and_then(|value| self.as_string(value))
                             })
                             .collect::<StringArray>(),
-                    ) as ArrayRef),
+                    )
+                        as ArrayRef),
+                    DataType::Binary | DataType::LargeBinary => Ok(Arc::new(
+                        rows.iter()
+                            .map(|row| {
+                                let maybe_value = self.field_lookup(field.name(), row);
+                                maybe_value.and_then(|value| self.as_bytes(value))
+                            })
+                            .collect::<BinaryArray>(),
+                    )
+                        as ArrayRef),
                     DataType::List(ref list_field) => {
                         match list_field.data_type() {
                             DataType::Dictionary(ref key_ty, _) => {
@@ -811,6 +821,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     }
 
     fn as_string(&self, v: Value) -> Option<String> {
+        let v = if let Value::Union(b) = v { *b } else { v };
         match v {
             Value::String(s) => Ok(Value::String(s)),
             Value::Bytes(bytes) => Ok(Value::String(
@@ -823,6 +834,27 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         .ok()
         .and_then(|v| match v {
             Value::String(s) => Some(s.clone()),
+            _ => None,
+        })
+    }
+
+    fn as_bytes(&self, v: Value) -> Option<Vec<u8>> {
+        let v = if let Value::Union(b) = v { *b } else { v };
+        match v {
+            Value::Bytes(bytes) => Ok(Value::Bytes(bytes)),
+            Value::String(s) => Ok(Value::Bytes(s.into_bytes())),
+            Value::Array(items) => Ok(Value::Bytes(
+                items
+                    .into_iter()
+                    .map(try_u8)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .ok()?,
+            )),
+            other => Err(avro_rs::Error::GetBytes(other.into())),
+        }
+        .ok()
+        .and_then(|v| match v {
+            Value::Bytes(s) => Some(s.clone()),
             _ => None,
         })
     }
@@ -895,4 +927,16 @@ fn value_as_f64(value: &Value) -> Option<f64> {
         Value::Double(f) => Some(f),
         _ => None,
     })
+}
+
+fn try_u8(v: Value) -> AvroResult<u8> {
+    println!("{:?}", v);
+    let int = v.resolve(&AvroSchema::Int)?;
+    if let Value::Int(n) = int {
+        if n >= 0 && n <= i32::from(u8::MAX) {
+            return Ok(n as u8);
+        }
+    }
+
+    Err(avro_rs::Error::GetU8(int.into()))
 }

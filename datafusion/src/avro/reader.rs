@@ -97,7 +97,6 @@ impl ReaderBuilder {
             Some(schema) => schema,
             None => Arc::new(infer_avro_schema_from_reader(&mut buf_reader)?),
         };
-
         Reader::try_new(buf_reader, schema, self.batch_size, self.projection)
     }
 }

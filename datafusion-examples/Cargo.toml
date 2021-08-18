@@ -36,3 +36,4 @@ tonic = "0.5"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 futures = "0.3"
 num_cpus = "1.13.0"
+avro-rs = { version = "0.13", features = ["snappy"] }
