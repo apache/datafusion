@@ -353,7 +353,7 @@ impl MetricsSet {
                     accum.set(accum.value() + metric.value())
                 })
                 .or_insert_with(|| {
-                    // accumuate with no partition
+                    // accumulate with no partition
                     let partition = None;
                     let accum = SQLMetric::new_with_labels(
                         metric.kind().clone(),
