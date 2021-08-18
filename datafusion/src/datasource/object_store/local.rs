@@ -16,7 +16,6 @@
 // under the License.
 
 //! Object store that represents the Local File System.
-use crate::datasource::get_runtime_handle;
 use crate::datasource::object_store::{
     FileNameStream, ObjectReader, ObjectStore, ThreadSafeRead,
 };
@@ -107,9 +106,8 @@ impl ObjectReader for LocalFSObjectReader {
 }
 
 fn list_all(root_path: String, ext: String) -> Result<Vec<String>> {
-    let (handle, _rt) = get_runtime_handle();
     let mut file_results: Vec<Result<String>> = Vec::new();
-    handle.block_on(async {
+    futures::executor::block_on(async {
         match list_all_async(root_path, ext).await {
             Ok(mut stream) => {
                 while let Some(result) = stream.next().await {

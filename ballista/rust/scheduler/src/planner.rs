@@ -269,8 +269,8 @@ mod test {
         };
     }
 
-    #[test]
-    fn distributed_hash_aggregate_plan() -> Result<(), BallistaError> {
+    #[tokio::test]
+    async fn distributed_hash_aggregate_plan() -> Result<(), BallistaError> {
         let mut ctx = datafusion_test_context("testdata")?;
 
         // simplified form of TPC-H query 1
@@ -352,8 +352,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn distributed_join_plan() -> Result<(), BallistaError> {
+    #[tokio::test]
+    async fn distributed_join_plan() -> Result<(), BallistaError> {
         let mut ctx = datafusion_test_context("testdata")?;
 
         // simplified form of TPC-H query 12
@@ -523,8 +523,8 @@ order by
         Ok(())
     }
 
-    #[test]
-    fn roundtrip_serde_hash_aggregate() -> Result<(), BallistaError> {
+    #[tokio::test]
+    async fn roundtrip_serde_hash_aggregate() -> Result<(), BallistaError> {
         let mut ctx = datafusion_test_context("testdata")?;
 
         // simplified form of TPC-H query 1

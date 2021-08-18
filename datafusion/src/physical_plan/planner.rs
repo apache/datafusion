@@ -1399,8 +1399,8 @@ mod tests {
         planner.create_physical_plan(logical_plan, &ctx_state)
     }
 
-    #[test]
-    fn test_all_operators() -> Result<()> {
+    #[tokio::test]
+    async fn test_all_operators() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
@@ -1444,8 +1444,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_with_csv_plan() -> Result<()> {
+    #[tokio::test]
+    async fn test_with_csv_plan() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
@@ -1463,8 +1463,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn errors() -> Result<()> {
+    #[tokio::test]
+    async fn errors() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
         let options = CsvReadOptions::new().schema_infer_max_records(100);
@@ -1565,8 +1565,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn in_list_types() -> Result<()> {
+    #[tokio::test]
+    async fn in_list_types() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
         let options = CsvReadOptions::new().schema_infer_max_records(100);
@@ -1612,8 +1612,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn hash_agg_input_schema() -> Result<()> {
+    #[tokio::test]
+    async fn hash_agg_input_schema() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
@@ -1635,8 +1635,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn hash_agg_group_by_partitioned() -> Result<()> {
+    #[tokio::test]
+    async fn hash_agg_group_by_partitioned() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 

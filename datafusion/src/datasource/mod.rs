@@ -41,7 +41,6 @@ use futures::{Stream, StreamExt};
 use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -127,9 +126,8 @@ pub trait SourceRootDescBuilder: Sync + Send + Debug {
         provided_schema: Option<Schema>,
         collect_statistics: bool,
     ) -> Result<SourceRootDescriptor> {
-        let (handle, _rt) = get_runtime_handle();
         let mut results: Vec<Result<PartitionedFile>> = Vec::new();
-        handle.block_on(async {
+        futures::executor::block_on(async {
             match Self::get_source_desc_async(
                 path,
                 object_store,
@@ -239,16 +237,6 @@ pub trait SourceRootDescBuilder: Sync + Send + Debug {
         file_path: String,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<PartitionedFile>;
-}
-
-fn get_runtime_handle() -> (Handle, Option<Runtime>) {
-    match Handle::try_current() {
-        Ok(h) => (h, None),
-        Err(_) => {
-            let rt = Runtime::new().unwrap();
-            (rt.handle().clone(), Some(rt))
-        }
-    }
 }
 
 /// Get all files as well as the summary statistics when a limit is provided

@@ -31,7 +31,6 @@ use futures::Stream;
 
 use local::LocalFileSystem;
 
-use crate::datasource::get_runtime_handle;
 use crate::error::Result;
 
 /// Thread safe read
@@ -42,8 +41,7 @@ pub trait ThreadSafeRead: Read + Send + Sync + 'static {}
 pub trait ObjectReader {
     /// Get reader for a part [start, start + length] in the file
     fn get_reader(&self, start: u64, length: usize) -> Result<Box<dyn ThreadSafeRead>> {
-        let (handle, _rt) = get_runtime_handle();
-        handle.block_on(self.get_reader_async(start, length))
+        futures::executor::block_on(self.get_reader_async(start, length))
     }
 
     /// Get reader for a part [start, start + length] in the file asynchronously
@@ -55,8 +53,7 @@ pub trait ObjectReader {
 
     /// Get length for the file
     fn length(&self) -> Result<u64> {
-        let (handle, _rt) = get_runtime_handle();
-        handle.block_on(self.length_async())
+        futures::executor::block_on(self.length_async())
     }
 
     /// Get length for the file asynchronously
