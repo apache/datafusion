@@ -18,7 +18,7 @@
 //! Metrics for recording information about execution
 
 use std::{
-    borrow::Cow,
+    borrow::{Borrow, Cow},
     fmt::{Debug, Display},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -197,6 +197,11 @@ impl Time {
         self.nanos.fetch_add(more_nanos, Ordering::Relaxed);
     }
 
+    /// Add the number of nanoseconds of other `Time` to self
+    pub fn add(&self, other: &Time) {
+        self.nanos.fetch_add(other.value(), Ordering::Relaxed);
+    }
+
     /// return a scoped guard that adds the amount of time elapsed
     /// between its creation and its drop or call to `stop` to the
     /// underlying metric.
@@ -246,47 +251,67 @@ impl<'a> Drop for ScopedTimerGuard<'a> {
 /// metrics are so common they are given special treatment.
 #[derive(Debug, Clone)]
 pub enum MetricValue {
-    /// Number of output rows produced
+    /// Number of output rows produced: "output_rows" metric
     OutputRows(Count),
-    /// CPU time
+    /// CPU time: the "cpu_time" metric
     CPUTime(Time),
-    /// Operator defined count
+    /// Operator defined count.
     Count {
+        /// The provided name of this metric
         name: Cow<'static, str>,
+        /// The value of the metric
         count: Count,
     },
     /// Operator defined time
-    Time { name: Cow<'static, str>, time: Time }, // TODO timestamp, etc
-                                                  // https://github.com/apache/arrow-datafusion/issues/866
+    Time {
+        /// The provided name of this metric
+        name: Cow<'static, str>,
+        /// The value of the metric
+        time: Time,
+    },
+    // TODO timestamp, etc
+    // https://github.com/apache/arrow-datafusion/issues/866
 }
 
 impl MetricValue {
+    /// Return the name of this SQL metric
     pub fn name(&self) -> &str {
-        // match self {
-        //     MetricKind::OutputRows => "outputRows",
-        //     MetricKind::Custom(name) => name,
-        //     MetricKind::CPUTime => "cpuTime",
-        // }
-        todo!();
+        match self {
+            Self::OutputRows(_) => "output_rows",
+            Self::CPUTime(_) => "cpu_time",
+            Self::Count { name, .. } => name.borrow(),
+            Self::Time { name, .. } => name.borrow(),
+        }
     }
 
     /// Return the value of the metric as a usize value
     pub fn as_usize(&self) -> usize {
         match self {
-            MetricValue::OutputRows(count) => count.value(),
-            MetricValue::CPUTime(time) => time.value(),
-            MetricValue::Count { count, .. } => count.value(),
-            MetricValue::Time { time, .. } => time.value(),
+            Self::OutputRows(count) => count.value(),
+            Self::CPUTime(time) => time.value(),
+            Self::Count { count, .. } => count.value(),
+            Self::Time { time, .. } => time.value(),
         }
     }
 
     /// create a new MetricValue with the same type as `self` suitable
     /// for accumulating
     pub fn new_empty(&self) -> Self {
-        todo!()
+        match self {
+            Self::OutputRows(_) => Self::OutputRows(Count::new()),
+            Self::CPUTime(_) => Self::CPUTime(Time::new()),
+            Self::Count { name, .. } => Self::Count {
+                name: name.clone(),
+                count: Count::new(),
+            },
+            Self::Time { name, .. } => Self::Time {
+                name: name.clone(),
+                time: Time::new(),
+            },
+        }
     }
 
-    /// Add the value of other to this. panic's if the type is mismatched or
+    /// Add the value of other to `self`. panic's if the type is mismatched or
     /// aggregating does not make sense for this value
     ///
     /// Note this is purposely marked `mut` (even though atomics are
@@ -295,27 +320,44 @@ impl MetricValue {
     /// using the original [`Count`] or [`Time`] they were created
     /// from.
     pub fn add(&mut self, other: &Self) {
-        todo!()
+        match (self, other) {
+            (Self::OutputRows(count), Self::OutputRows(other_count))
+            | (
+                Self::Count { count, .. },
+                Self::Count {
+                    count: other_count, ..
+                },
+            ) => count.add(other_count.value()),
+            (Self::CPUTime(time), Self::CPUTime(other_time))
+            | (
+                Self::Time { time, .. },
+                Self::Time {
+                    time: other_time, ..
+                },
+            ) => time.add(other_time),
+            m @ (_, _) => {
+                panic!(
+                    "Mismatched types aggregating metric values. Expected {:?} got {:?}",
+                    m.0.name(),
+                    m.1.name()
+                )
+            }
+        }
     }
 }
 
 impl Display for MetricValue {
     /// Prints the value of this metric
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
-        // // and now the value
-        // let format_as_duration = match &self.kind {
-        //     MetricKind::OutputRows => false,
-        //     MetricKind::CPUTime => true,
-        //     MetricKind::Custom(name) => name.contains("Time") || name.contains("time"),
-        // };
-
-        // if format_as_duration {
-        //     let duration = std::time::Duration::from_nanos(self.value() as u64);
-        //     write!(f, "={:?}", duration)
-        // } else {
-        //     write!(f, "={}", self.value())
-        // }
+        match self {
+            Self::OutputRows(count) | Self::Count { count, .. } => {
+                write!(f, "{}", count.value())
+            }
+            Self::CPUTime(time) | Self::Time { time, .. } => {
+                let duration = std::time::Duration::from_nanos(time.value() as u64);
+                write!(f, "{:?}", duration)
+            }
+        }
     }
 }
 
@@ -364,7 +406,7 @@ impl Display for SQLMetric {
         }
 
         // and now the value
-        write!(f, "{}", self.value)
+        write!(f, "={}", self.value)
     }
 }
 

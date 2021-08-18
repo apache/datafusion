@@ -445,7 +445,8 @@ impl TestOutput {
     /// retrieve the value of the named metric, if any
     fn metric_value(&self, metric_name: &str) -> Option<usize> {
         self.parquet_metrics
-            .sum(|metric| metric.kind().name() == metric_name)
+            .sum(|metric| metric.value().name() == metric_name)
+            .map(|v| v.as_usize())
     }
 
     /// The number of times the pruning predicate evaluation errors

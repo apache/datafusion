@@ -2150,6 +2150,8 @@ async fn csv_explain_analyze() {
     let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
     let formatted = normalize_for_explain(&formatted);
 
+    println!("ANALYZE EXPLAIN:\n{}", formatted);
+
     // Only test basic plumbing and try to avoid having to change too
     // many things
     let needle = "RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), metrics=[";
