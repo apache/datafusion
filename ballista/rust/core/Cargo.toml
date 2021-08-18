@@ -19,7 +19,7 @@
 name = "ballista-core"
 description = "Ballista Distributed Compute"
 license = "Apache-2.0"
-version = "0.5.0"
+version = "0.6.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -44,7 +44,7 @@ uuid = { version = "0.8", features = ["v4"] }
 
 arrow-flight = { version = "5.0"  }
 
-datafusion = { path = "../../../datafusion", version = "5.0.0" }
+datafusion = { path = "../../../datafusion", version = "5.1.0" }
 
 [dev-dependencies]
 tempfile = "3"

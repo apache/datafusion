@@ -89,6 +89,13 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
     }
 }
 
+/// coercion rules for like operations.
+/// This is a union of string coercion rules and dictionary coercion rules
+pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    string_coercion(lhs_type, rhs_type)
+        .or_else(|| dictionary_coercion(lhs_type, rhs_type))
+}
+
 /// Coercion rules for Temporal columns: the type that both lhs and rhs can be
 /// casted to for the purpose of a date computation
 pub fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {

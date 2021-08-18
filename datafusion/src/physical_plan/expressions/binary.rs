@@ -44,7 +44,7 @@ use crate::physical_plan::expressions::try_cast;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
-use super::coercion::{eq_coercion, numerical_coercion, order_coercion, string_coercion};
+use super::coercion::{eq_coercion, like_coercion, numerical_coercion, order_coercion};
 
 /// Binary expression
 #[derive(Debug)]
@@ -356,7 +356,7 @@ fn common_binary_type(
         // logical equality operators have their own rules, and always return a boolean
         Operator::Eq | Operator::NotEq => eq_coercion(lhs_type, rhs_type),
         // "like" operators operate on strings and always return a boolean
-        Operator::Like | Operator::NotLike => string_coercion(lhs_type, rhs_type),
+        Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
         // order-comparison operators have their own rules
         Operator::Lt | Operator::Gt | Operator::GtEq | Operator::LtEq => {
             order_coercion(lhs_type, rhs_type)

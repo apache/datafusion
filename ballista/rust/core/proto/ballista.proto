@@ -249,9 +249,10 @@ message LogicalPlanNode {
     RepartitionNode repartition = 9;
     EmptyRelationNode empty_relation = 10;
     CreateExternalTableNode create_external_table = 11;
-    AnalyzeNode analyze = 14;
     ExplainNode explain = 12;
     WindowNode window = 13;
+    AnalyzeNode analyze = 14;
+    CrossJoinNode cross_join = 15;
   }
 }
 
@@ -354,7 +355,7 @@ enum WindowFrameUnits {
 message WindowFrame {
   WindowFrameUnits window_frame_units = 1;
   WindowFrameBound start_bound = 2;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
   // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
   oneof end_bound {
     WindowFrameBound bound = 3;
@@ -369,7 +370,7 @@ enum WindowFrameBoundType {
 
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
   // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
   oneof bound_value {
     uint64 value = 2;
@@ -397,6 +398,11 @@ message JoinNode {
   JoinConstraint join_constraint = 4;
   repeated Column left_join_column = 5;
   repeated Column right_join_column = 6;
+}
+
+message CrossJoinNode {
+  LogicalPlanNode left = 1;
+  LogicalPlanNode right = 2;
 }
 
 message LimitNode {
@@ -432,6 +438,7 @@ message PhysicalPlanNode {
     RepartitionExecNode repartition = 16;
     WindowAggExecNode window = 17;
     ShuffleWriterExecNode shuffle_writer = 18;
+    CrossJoinExecNode cross_join = 19;
   }
 }
 
@@ -591,6 +598,11 @@ message HashJoinExecNode {
   repeated JoinOn on = 3;
   JoinType join_type = 4;
   PartitionMode partition_mode = 6;
+}
+
+message CrossJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
 }
 
 message PhysicalColumn {
@@ -770,7 +782,7 @@ message ExecutorMetadata {
 
 message ExecutorRegistration {
   string id = 1;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
   // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
   oneof optional_host {
     string host = 2;

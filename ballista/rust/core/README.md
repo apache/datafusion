@@ -17,6 +17,8 @@
   under the License.
 -->
 
-# Ballista - Rust
+# Ballista Core Library
 
-This crate contains the core Ballista types.
+This crate contains the Ballista core library which is used as a dependency by the `ballista`,
+`ballista-scheduler`, and `ballista-executor` crates. Refer to <https://crates.io/crates/ballista> for
+general Ballista documentation.

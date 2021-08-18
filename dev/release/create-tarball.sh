@@ -86,6 +86,11 @@ The changelog is located at [3].
 Please download, verify checksums and signatures, run the unit tests, and vote
 on the release. The vote will be open for at least 72 hours.
 
+Only votes from PMC members are binding, but all members of the community are
+encouraged to test the release and vote with "(non-binding)".
+
+The standard verification procedure is documented at https://github.com/apache/arrow-datafusion/blob/master/dev/release/README.md#verifying-release-candidates.
+
 [ ] +1 Release this as Apache Arrow Datafusion ${version}
 [ ] +0
 [ ] -1 Do not release this as Apache Arrow Datafusion ${version} because...
