@@ -28,7 +28,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-arrow-flight = { version = "5.0" }
+arrow-flight = { version = "^5.2" }
 datafusion = { path = "../datafusion" }
 ballista = { path = "../ballista/rust/client" }
 prost = "0.8"

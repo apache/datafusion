@@ -29,7 +29,7 @@ publish = false
 
 
 [dev-dependencies]
-arrow-flight = { version = "5.0" }
+arrow-flight = { version = "^5.2" }
 datafusion = { path = "../datafusion" }
 prost = "0.8"
 tonic = "0.5"
