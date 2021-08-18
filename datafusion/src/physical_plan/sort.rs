@@ -17,8 +17,7 @@
 
 //! Defines the SORT plan
 
-use super::metrics::wrappers::{Count, Time};
-use super::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -227,7 +226,7 @@ pin_project! {
         output: futures::channel::oneshot::Receiver<ArrowResult<Option<RecordBatch>>>,
         finished: bool,
         schema: SchemaRef,
-        output_rows: Count
+        output_rows: metrics::Count
     }
 }
 
@@ -235,8 +234,8 @@ impl SortStream {
     fn new(
         input: SendableRecordBatchStream,
         expr: Vec<PhysicalSortExpr>,
-        output_rows: Count,
-        sort_time: Time,
+        output_rows: metrics::Count,
+        sort_time: metrics::Time,
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
         let schema = input.schema();

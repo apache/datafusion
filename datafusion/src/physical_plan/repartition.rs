@@ -69,11 +69,11 @@ pub struct RepartitionExec {
 #[derive(Debug, Clone)]
 struct RepartitionMetrics {
     /// Time in nanos to execute child operator and fetch batches
-    fetch_time: metrics::wrappers::Time,
+    fetch_time: metrics::Time,
     /// Time in nanos to perform repartitioning
-    repart_time: metrics::wrappers::Time,
+    repart_time: metrics::Time,
     /// Time in nanos for sending resulting batches to channels
-    send_time: metrics::wrappers::Time,
+    send_time: metrics::Time,
 }
 
 impl RepartitionMetrics {

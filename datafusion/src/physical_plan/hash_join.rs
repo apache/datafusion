@@ -121,15 +121,15 @@ pub struct HashJoinExec {
 #[derive(Debug)]
 struct HashJoinMetrics {
     /// Total time for joining probe-side batches to the build-side batches
-    join_time: metrics::wrappers::Time,
+    join_time: metrics::Time,
     /// Number of batches consumed by this operator
-    input_batches: metrics::wrappers::Count,
+    input_batches: metrics::Count,
     /// Number of rows consumed by this operator
-    input_rows: metrics::wrappers::Count,
+    input_rows: metrics::Count,
     /// Number of batches produced by this operator
-    output_batches: metrics::wrappers::Count,
+    output_batches: metrics::Count,
     /// Number of rows produced by this operator
-    output_rows: metrics::wrappers::Count,
+    output_rows: metrics::Count,
 }
 
 impl HashJoinMetrics {

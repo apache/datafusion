@@ -17,22 +17,21 @@
 
 //! Metrics for recording information about execution
 
-pub mod wrappers;
-
-use std::{
-    borrow::Cow,
-    fmt::{Debug, Display},
-    sync::{
+use std::{borrow::Cow, fmt::{Debug, Display}, sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
-    },
-};
+    }, time::Instant};
 
 use hashbrown::HashMap;
 
-use self::wrappers::{Count, Time};
-
-/// Structure for constructing metrics, counters, timers, etc
+/// Structure for constructing metrics, counters, timers, etc.
+///
+/// Note the use of `Cow<..>` is to avoid allocations in the common
+/// case of constant strings
+///
+/// ```rust
+/// TODO doc example
+/// ```
 pub struct MetricBuilder<'a> {
     /// Location that the metric created by this builder will be added do
     metrics: &'a ExecutionPlanMetricsSet,
@@ -75,64 +74,225 @@ impl<'a> MetricBuilder<'a> {
         self
     }
 
-    /// Consume self and create a metric of the specified kind
+    /// Consume self and create a metric of the specified value
     /// registered with the MetricsSet
-    pub fn build(self, kind: MetricKind) -> Arc<SQLMetric> {
+    pub fn build(self, value: MetricValue) {
         let Self {
             labels,
             partition,
             metrics,
         } = self;
-        let metric = Arc::new(SQLMetric::new_with_labels(kind, partition, labels));
+        let metric = Arc::new(SQLMetric::new_with_labels(value, partition, labels));
         metrics.register(metric.clone());
-        metric
     }
 
     /// Consume self and create a new counter for recording output rows
     pub fn output_rows(self, partition: usize) -> Count {
-        let metric = self.with_partition(partition).build(MetricKind::OutputRows);
-        Count::new(metric)
+        let count = Count::new();
+        self.with_partition(partition).build(MetricValue::OutputRows(count.clone()));
+        count
     }
 
-    /// Consumes self and creates a new Countr for recording
-    /// some metric of an operators
-    pub fn counter(self, counter_name: &'static str, partition: usize) -> Count {
-        let metric = self
+    /// Consumes self and creates a new [`Count`] for recording some
+    /// arbitrary metric of an operator.
+    pub fn counter(self, counter_name: impl Into<Cow<'static, str>>, partition: usize) -> Count {
+        self
             .with_partition(partition)
-            .build(MetricKind::Custom(counter_name));
-        Count::new(metric)
+            .global_counter(counter_name)
     }
 
-    /// Consumes self and creates a new Counter for recording
-    /// some metric of an overall operator (not per partition
-    pub fn global_counter(self, counter_name: &'static str) -> Count {
-        let metric = self.build(MetricKind::Custom(counter_name));
-        Count::new(metric)
+    /// Consumes self and creates a new [`Count`] for recording a
+    /// metric of an overall operator (not per partition)
+    pub fn global_counter(self, counter_name: impl Into<Cow<'static, str>>) -> Count {
+        let count = Count::new();
+        self.build(MetricValue::Count {
+            name: counter_name.into(),
+            value: count.clone(),
+        });
+        count
     }
 
     /// Consume self and create a new Timer for recording the overall cpu time
     /// spent by an operator
     pub fn cpu_time(self, partition: usize) -> Time {
-        let metric = self.with_partition(partition).build(MetricKind::CPUTime);
-        Time::new(metric)
+        let time = Time::new();
+        self.with_partition(partition)
+            .build(MetricValue::CPUTime(time.clone()));
+        time
     }
 
     /// Consumes self and creates a new Timer for recording some
-    /// subset of of an operators execution time
-    pub fn subset_time(self, subset_name: &'static str, partition: usize) -> Time {
-        let metric = self
-            .with_partition(partition)
-            .build(MetricKind::Custom(subset_name));
-        Time::new(metric)
+    /// subset of of an operators execution time.
+    pub fn subset_time(self, subset_name: impl Into<Cow<'static, str>>, partition: usize) -> Time {
+        let time = Time::new();
+        self.with_partition(partition)
+            .build(MetricValue::Time {
+                name: subset_name.into(),
+                value: time.clone()
+            });
+        time
     }
 }
+
+
+/// A counter to record things such as number of input or output rows
+///
+/// Note `clone`ing counters update the same underlying metrics
+#[derive(Debug, Clone)]
+pub struct Count {
+    /// value of the metric counter
+    value: Arc<AtomicUsize>,
+}
+
+impl Count {
+    /// create a new counter
+    pub fn new() -> Self {
+        Self {
+            value : Arc::new(AtomicUsize::new(0))
+        }
+    }
+
+    /// Add `n` to the metric's value
+    pub fn add(&self, n: usize) {
+        // relaxed ordering for operations on `value` poses no issues
+        // we're purely using atomic ops with no associated memory ops
+        self.value.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Get the current value
+    pub fn value(&self) -> usize {
+        self.value.load(Ordering::Relaxed)
+    }
+}
+
+/// a SQLMetric for CPU timing information
+#[derive(Debug, Clone)]
+pub struct Time {
+    /// elapsed time, in nanoseconds
+    nanos: Arc<AtomicUsize>,
+}
+
+impl Time {
+    /// Create a new [`Time`] wrapper suitable for recording elapsed
+    /// times for operations.
+    pub fn new() -> Self {
+        Self {
+            nanos: Arc::new(AtomicUsize::new(0))
+        }
+    }
+
+    /// Add elapsed nanoseconds since `start`to self
+    pub fn add_elapsed(&self, start: Instant) {
+        let more_nanos = start.elapsed().as_nanos() as usize;
+        self.nanos.fetch_add(more_nanos, Ordering::Relaxed);
+    }
+
+    /// return a scoped guard that adds the amount of time elapsed
+    /// between its creation and its drop or call to `stop` to the
+    /// underlying metric.
+    pub fn timer(&self) -> ScopedTimerGuard<'_> {
+        ScopedTimerGuard {
+            inner: self,
+            start: Some(Instant::now()),
+        }
+    }
+
+    /// Get the number of nanoseconds record by this Time metric
+    pub fn value(&self) -> usize {
+        self.nanos.load(Ordering::Relaxed)
+    }
+}
+
+/// RAAI structure that adds all time between its construction and
+/// destruction to the CPU time or the first call to `stop` whichever
+/// comes first
+pub struct ScopedTimerGuard<'a> {
+    inner: &'a Time,
+    start: Option<Instant>,
+}
+
+impl<'a> ScopedTimerGuard<'a> {
+    /// Stop the timer timing and record the time taken
+    pub fn stop(&mut self) {
+        if let Some(start) = self.start.take() {
+            self.inner.add_elapsed(start)
+        }
+    }
+
+    /// Stop the timer, record the time taken and consume self
+    pub fn done(mut self) {
+        self.stop()
+    }
+}
+
+impl<'a> Drop for ScopedTimerGuard<'a> {
+    fn drop(&mut self) {
+        self.stop()
+    }
+}
+
+/// Possible values for each metric. Among other differences, the
+/// metric types have various ways to display their values and some
+/// metrics are so common they are given special treatment.
+#[derive(Debug, Clone)]
+pub enum MetricValue {
+    /// Number of output rows produced
+    OutputRows(Count),
+    /// CPU time
+    CPUTime(Time),
+    // Operator defined count
+    Count {
+        name: Cow<'static, str>,
+        value: Count
+    },
+    // Operator defined time
+    Time {
+        name: Cow<'static, str>,
+        value: Time
+    }
+    // TODO timestamp, etc
+    // https://github.com/apache/arrow-datafusion/issues/866
+}
+
+
+impl MetricValue {
+    pub fn name(&self) -> &str {
+        // match self {
+        //     MetricKind::OutputRows => "outputRows",
+        //     MetricKind::Custom(name) => name,
+        //     MetricKind::CPUTime => "cpuTime",
+        // }
+        todo!();
+    }
+}
+
+impl Display for MetricValue {
+    /// Prints the value of this metric
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+        // // and now the value
+        // let format_as_duration = match &self.kind {
+        //     MetricKind::OutputRows => false,
+        //     MetricKind::CPUTime => true,
+        //     MetricKind::Custom(name) => name.contains("Time") || name.contains("time"),
+        // };
+
+        // if format_as_duration {
+        //     let duration = std::time::Duration::from_nanos(self.value() as u64);
+        //     write!(f, "={:?}", duration)
+        // } else {
+        //     write!(f, "={}", self.value())
+        // }
+    }
+}
+
 
 /// Something that tracks the metrics of an execution using an atomic
 /// usize
 #[derive(Debug)]
 pub struct SQLMetric {
     /// value of the metric
-    value: AtomicUsize,
+    value: MetricValue,
 
     /// arbitrary name=value pairs identifiying this metric
     labels: Vec<Label>,
@@ -140,14 +300,11 @@ pub struct SQLMetric {
     /// To which partition of an operators output did this metric
     /// apply? If None means all partitions.
     partition: Option<usize>,
-
-    /// The kind of metric (how to logically interpret the value)
-    kind: MetricKind,
 }
 
 impl Display for SQLMetric {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.kind)?;
+        write!(f, "{}", self.value.name())?;
 
         let mut iter = self
             .partition
@@ -175,43 +332,32 @@ impl Display for SQLMetric {
         }
 
         // and now the value
-        let format_as_duration = match &self.kind {
-            MetricKind::OutputRows => false,
-            MetricKind::CPUTime => true,
-            MetricKind::Custom(name) => name.contains("Time") || name.contains("time"),
-        };
-
-        if format_as_duration {
-            let duration = std::time::Duration::from_nanos(self.value() as u64);
-            write!(f, "={:?}", duration)
-        } else {
-            write!(f, "={}", self.value())
-        }
+        write!(f, "{}", self.value)
     }
 }
 
 impl SQLMetric {
-    /// Create a new SQLMetric
-    pub fn new(kind: MetricKind, partition: Option<usize>) -> Self {
+    /// Create a new SQLMetric. Consider using [`MetricBuilder`]
+    /// rather than this function directly.
+    pub fn new(value: MetricValue, partition: Option<usize>) -> Self {
         Self {
-            value: 0.into(),
+            value,
             labels: vec![],
             partition,
-            kind,
         }
     }
 
-    /// Add a new label to this metric
+    /// Create a new SQLMetric. Consider using [`MetricBuilder`]
+    /// rather than this function directly.
     pub fn new_with_labels(
-        kind: MetricKind,
+        value: MetricValue,
         partition: Option<usize>,
         labels: Vec<Label>,
     ) -> Self {
         Self {
-            value: 0.into(),
+            value,
             labels,
             partition,
-            kind,
         }
     }
 
@@ -221,65 +367,16 @@ impl SQLMetric {
         self
     }
 
-    /// Add the standard name for output rows
-
-    /// Get the current value
-    pub fn value(&self) -> usize {
-        self.value.load(Ordering::Relaxed)
-    }
-
-    /// get the kind of this metric
-    pub fn kind(&self) -> &MetricKind {
-        &self.kind
-    }
-
-    /// Add `n` to the metric's value
-    pub fn add(&self, n: usize) {
-        // relaxed ordering for operations on `value` poses no issues
-        // we're purely using atomic ops with no associated memory ops
-        self.value.fetch_add(n, Ordering::Relaxed);
-    }
-
-    /// Set the metric's value to `n`
-    pub fn set(&self, n: usize) {
-        self.value.store(n, Ordering::Relaxed);
-    }
-
     /// What labels are present for this metric?
     fn labels(&self) -> &[Label] {
         &self.labels
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-/// How should the value of the metric be interpreted?
-pub enum MetricKind {
-    /// Number of output rows produced
-    OutputRows,
-    /// CPU time
-    CPUTime,
-    // TODO timestamp, etc
-    // https://github.com/apache/arrow-datafusion/issues/866
-    /// Arbitarary user defined type
-    Custom(&'static str),
-}
-
-impl Display for MetricKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name())
+    /// return the value of this metric
+    pub fn value(&self) -> &MetricValue {
     }
 }
 
-impl MetricKind {
-    /// return a user displayable name of this kind of metric
-    pub fn name(&self) -> &str {
-        match self {
-            MetricKind::OutputRows => "outputRows",
-            MetricKind::Custom(name) => name,
-            MetricKind::CPUTime => "cpuTime",
-        }
-    }
-}
 
 /// A set of SQLMetrics for a particular operator
 #[derive(Default, Debug, Clone)]

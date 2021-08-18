@@ -105,9 +105,9 @@ pub struct ParquetPartition {
 #[derive(Debug, Clone)]
 struct ParquetFileMetrics {
     /// Numer of times the predicate could not be evaluated
-    pub predicate_evaluation_errors: metrics::wrappers::Count,
+    pub predicate_evaluation_errors: metrics::Count,
     /// Number of row groups pruned using
-    pub row_groups_pruned: metrics::wrappers::Count,
+    pub row_groups_pruned: metrics::Count,
 }
 
 impl ParquetExec {

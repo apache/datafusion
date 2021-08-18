@@ -50,8 +50,7 @@ use pin_project_lite::pin_project;
 
 use async_trait::async_trait;
 
-use super::metrics::wrappers::Count;
-use super::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{expressions::Column, RecordBatchStream, SendableRecordBatchStream};
 
 /// Hash aggregate modes
@@ -316,7 +315,7 @@ pin_project! {
         #[pin]
         output: futures::channel::oneshot::Receiver<ArrowResult<RecordBatch>>,
         finished: bool,
-        output_rows: Count,
+        output_rows: metrics::Count,
     }
 }
 
@@ -525,7 +524,7 @@ impl GroupedHashAggregateStream {
         group_expr: Vec<Arc<dyn PhysicalExpr>>,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
-        output_rows: Count,
+        output_rows: metrics::Count,
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
 

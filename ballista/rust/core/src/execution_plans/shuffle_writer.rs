@@ -81,9 +81,9 @@ pub struct ShuffleWriterExec {
 #[derive(Debug, Clone)]
 struct ShuffleWriteMetrics {
     /// Time spend writing batches to shuffle files
-    write_time: metrics::wrappers::Time,
-    input_rows: metrics::wrappers::Count,
-    output_rows: metrics::wrappers::Count,
+    write_time: metrics::Time,
+    input_rows: metrics::Count,
+    output_rows: metrics::Count,
 }
 
 impl ShuffleWriteMetrics {
