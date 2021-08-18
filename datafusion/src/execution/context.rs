@@ -199,6 +199,11 @@ impl ExecutionContext {
                     let plan = LogicalPlanBuilder::empty(false).build()?;
                     Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
                 }
+                FileType::Avro => {
+                    self.register_avro(name, location, AvroReadOptions::default())?;
+                    let plan = LogicalPlanBuilder::empty(false).build()?;
+                    Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                }
                 _ => Err(DataFusionError::NotImplemented(format!(
                     "Unsupported file type {:?}.",
                     file_type

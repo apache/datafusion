@@ -1193,6 +1193,7 @@ impl TryFrom<i32> for protobuf::FileType {
             _x if _x == FileType::NdJson as i32 => Ok(FileType::NdJson),
             _x if _x == FileType::Parquet as i32 => Ok(FileType::Parquet),
             _x if _x == FileType::Csv as i32 => Ok(FileType::Csv),
+            _x if _x == FileType::Avro as i32 => Ok(FileType::Avro),
             invalid => Err(BallistaError::General(format!(
                 "Attempted to convert invalid i32 to protobuf::Filetype: {}",
                 invalid
