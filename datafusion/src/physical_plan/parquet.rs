@@ -56,7 +56,7 @@ use tokio::{
 use crate::datasource::datasource::{ColumnStatistics, Statistics};
 use async_trait::async_trait;
 
-use super::metrics::{self, MetricBuilder, MetricsSet, SharedMetricsSet};
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::stream::RecordBatchReceiverStream;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::Accumulator;
@@ -75,7 +75,7 @@ pub struct ParquetExec {
     /// Statistics for the data set (sum of statistics for all partitions)
     statistics: Statistics,
     /// Execution metrics
-    metrics: SharedMetricsSet,
+    metrics: ExecutionPlanMetricsSet,
     /// Optional predicate builder
     predicate_builder: Option<PruningPredicate>,
     /// Optional limit of the number of rows
@@ -98,7 +98,7 @@ pub struct ParquetPartition {
     /// Statistics for this partition
     pub statistics: Statistics,
     /// Execution metrics
-    metrics: SharedMetricsSet,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 /// Stores metrics about the parquet execution for a particular parquet file
@@ -159,7 +159,7 @@ impl ParquetExec {
                filenames, projection, predicate, limit);
         // build a list of Parquet partitions with statistics and gather all unique schemas
         // used in this data set
-        let metrics = SharedMetricsSet::new();
+        let metrics = ExecutionPlanMetricsSet::new();
         let mut schemas: Vec<Schema> = vec![];
         let mut partitions = Vec::with_capacity(max_concurrency);
         let filenames: Vec<String> = filenames.iter().map(|s| s.to_string()).collect();
@@ -408,7 +408,7 @@ impl ParquetExec {
         }
         let schema = Arc::new(schemas.pop().unwrap());
 
-        let metrics = SharedMetricsSet::new();
+        let metrics = ExecutionPlanMetricsSet::new();
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("numPredicateCreationErrors");
 
@@ -442,7 +442,7 @@ impl ParquetExec {
         partitions: Vec<ParquetPartition>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
-        metrics: SharedMetricsSet,
+        metrics: ExecutionPlanMetricsSet,
         predicate_builder: Option<PruningPredicate>,
         batch_size: usize,
         limit: Option<usize>,
@@ -585,7 +585,7 @@ impl ParquetPartition {
     pub fn new(
         filenames: Vec<String>,
         statistics: Statistics,
-        metrics: SharedMetricsSet,
+        metrics: ExecutionPlanMetricsSet,
     ) -> Self {
         Self {
             filenames,
@@ -607,7 +607,11 @@ impl ParquetPartition {
 
 impl ParquetFileMetrics {
     /// Create new metrics
-    pub fn new(partition: usize, filename: &str, metrics: &SharedMetricsSet) -> Self {
+    pub fn new(
+        partition: usize,
+        filename: &str,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Self {
         let predicate_evaluation_errors = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .counter("numPredicateEvaluationErrors", partition);
@@ -852,7 +856,7 @@ fn build_row_group_predicate(
 fn read_files(
     partition: usize,
     filenames: &[String],
-    metrics: SharedMetricsSet,
+    metrics: ExecutionPlanMetricsSet,
     projection: &[usize],
     predicate_builder: &Option<PruningPredicate>,
     batch_size: usize,
@@ -1003,7 +1007,7 @@ mod tests {
     }
 
     fn parquet_file_metrics() -> ParquetFileMetrics {
-        let metrics = Arc::new(SharedMetricsSet::new());
+        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
         ParquetFileMetrics::new(0, "file.parquet", &metrics)
     }
 

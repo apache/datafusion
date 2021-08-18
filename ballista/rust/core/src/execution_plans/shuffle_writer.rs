@@ -46,7 +46,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::hash_utils::create_hashes;
 use datafusion::physical_plan::metrics::{
-    self, MetricBuilder, MetricsSet, SharedMetricsSet,
+    self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::Partitioning::RoundRobinBatch;
@@ -75,7 +75,7 @@ pub struct ShuffleWriterExec {
     /// Optional shuffle output partitioning
     shuffle_output_partitioning: Option<Partitioning>,
     /// Execution metrics
-    metrics: SharedMetricsSet,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 #[derive(Debug, Clone)]
@@ -87,7 +87,7 @@ struct ShuffleWriteMetrics {
 }
 
 impl ShuffleWriteMetrics {
-    fn new(partition: usize, metrics: &SharedMetricsSet) -> Self {
+    fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
         let write_time = MetricBuilder::new(metrics).subset_time("writeTime", partition);
 
         let input_rows = MetricBuilder::new(metrics).counter("inputRows", partition);
@@ -117,7 +117,7 @@ impl ShuffleWriterExec {
             plan,
             work_dir,
             shuffle_output_partitioning,
-            metrics: SharedMetricsSet::new(),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 

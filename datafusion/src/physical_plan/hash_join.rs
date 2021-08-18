@@ -57,7 +57,7 @@ use super::{
 };
 use super::{
     expressions::Column,
-    metrics::{self, MetricBuilder, MetricsSet, SharedMetricsSet},
+    metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::JoinType;
@@ -114,7 +114,7 @@ pub struct HashJoinExec {
     /// Partitioning mode to use
     mode: PartitionMode,
     /// Execution metrics
-    metrics: SharedMetricsSet,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 /// Metrics for HashJoinExec
@@ -133,7 +133,7 @@ struct HashJoinMetrics {
 }
 
 impl HashJoinMetrics {
-    pub fn new(partition: usize, metrics: &SharedMetricsSet) -> Self {
+    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
         let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
 
         let input_batches =
@@ -201,7 +201,7 @@ impl HashJoinExec {
             build_side: Arc::new(Mutex::new(None)),
             random_state,
             mode: partition_mode,
-            metrics: SharedMetricsSet::new(),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 

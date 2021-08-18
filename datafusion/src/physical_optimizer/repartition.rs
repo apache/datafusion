@@ -110,14 +110,14 @@ mod tests {
 
     use super::*;
     use crate::datasource::datasource::Statistics;
-    use crate::physical_plan::metrics::SharedMetricsSet;
+    use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use crate::physical_plan::parquet::{ParquetExec, ParquetPartition};
     use crate::physical_plan::projection::ProjectionExec;
 
     #[test]
     fn added_repartition_to_single_partition() -> Result<()> {
         let schema = Arc::new(Schema::empty());
-        let metrics = SharedMetricsSet::new();
+        let metrics = ExecutionPlanMetricsSet::new();
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ParquetExec::new(
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn repartition_deepest_node() -> Result<()> {
         let schema = Arc::new(Schema::empty());
-        let metrics = SharedMetricsSet::new();
+        let metrics = ExecutionPlanMetricsSet::new();
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ProjectionExec::try_new(

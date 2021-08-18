@@ -35,7 +35,7 @@ use self::wrappers::{Count, Time};
 /// Structure for constructing metrics, counters, timers, etc
 pub struct MetricBuilder<'a> {
     /// Location that the metric created by this builder will be added do
-    metrics: &'a SharedMetricsSet,
+    metrics: &'a ExecutionPlanMetricsSet,
 
     /// optional partition number
     partition: Option<usize>,
@@ -46,7 +46,7 @@ pub struct MetricBuilder<'a> {
 
 impl<'a> MetricBuilder<'a> {
     /// Create a new `MetricBuilder` that will register the result of `build()` with the `metrics`
-    pub fn new(metrics: &'a SharedMetricsSet) -> Self {
+    pub fn new(metrics: &'a ExecutionPlanMetricsSet) -> Self {
         Self {
             metrics,
             partition: None,
@@ -352,7 +352,7 @@ impl MetricsSet {
                     // accumulate with no partition
                     let partition = None;
                     let accum = SQLMetric::new_with_labels(
-                        metric.kind(),
+                        *metric.kind(),
                         partition,
                         metric.labels().to_vec(),
                     );
@@ -389,14 +389,21 @@ impl Display for MetricsSet {
     }
 }
 
-/// A set of SQLMetrics that can be added to as partitions
-/// execute. Designed to be a convenience for operator implementation
+/// A set of SQLMetrics for an individual "operator" (e.g. `&dyn
+/// ExecutionPlan`).
+///
+/// This structure is intended as a convenience for [`ExecutionPlan`]
+/// implementations so they can generate different streams for multiple
+/// partitions but easily report them together.
+///
+/// Each `clone()` of this structure will add metrics to the same
+/// underlying metrics set
 #[derive(Default, Debug, Clone)]
-pub struct SharedMetricsSet {
+pub struct ExecutionPlanMetricsSet {
     inner: Arc<Mutex<MetricsSet>>,
 }
 
-impl SharedMetricsSet {
+impl ExecutionPlanMetricsSet {
     /// Create a new empty shared metrics set
     pub fn new() -> Self {
         Self {

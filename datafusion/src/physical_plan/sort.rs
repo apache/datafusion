@@ -18,7 +18,7 @@
 //! Defines the SORT plan
 
 use super::metrics::wrappers::{Count, Time};
-use super::metrics::{MetricBuilder, MetricsSet, SharedMetricsSet};
+use super::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -48,7 +48,7 @@ pub struct SortExec {
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     /// Execution metrics
-    metrics: SharedMetricsSet,
+    metrics: ExecutionPlanMetricsSet,
     /// Preserve partitions of input plan
     preserve_partitioning: bool,
 }
@@ -72,7 +72,7 @@ impl SortExec {
         Self {
             expr,
             input,
-            metrics: SharedMetricsSet::new(),
+            metrics: ExecutionPlanMetricsSet::new(),
             preserve_partitioning,
         }
     }

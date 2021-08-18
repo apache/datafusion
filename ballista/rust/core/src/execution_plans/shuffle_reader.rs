@@ -28,7 +28,9 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::physical_plan::metrics::{MetricBuilder, MetricsSet, SharedMetricsSet};
+use datafusion::physical_plan::metrics::{
+    ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SQLMetric,
 };
@@ -49,7 +51,7 @@ pub struct ShuffleReaderExec {
     pub(crate) partition: Vec<Vec<PartitionLocation>>,
     pub(crate) schema: SchemaRef,
     /// Execution metrics
-    metrics: SharedMetricsSet,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl ShuffleReaderExec {
@@ -61,7 +63,7 @@ impl ShuffleReaderExec {
         Ok(Self {
             partition,
             schema,
-            metrics: SharedMetricsSet::new(),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 }

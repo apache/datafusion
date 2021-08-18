@@ -51,7 +51,7 @@ use pin_project_lite::pin_project;
 use async_trait::async_trait;
 
 use super::metrics::wrappers::Count;
-use super::metrics::{MetricBuilder, MetricsSet, SharedMetricsSet};
+use super::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{expressions::Column, RecordBatchStream, SendableRecordBatchStream};
 
 /// Hash aggregate modes
@@ -88,7 +88,7 @@ pub struct HashAggregateExec {
     /// to the partial aggregate
     input_schema: SchemaRef,
     /// Execution Metrics
-    metrics: SharedMetricsSet,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 fn create_schema(
@@ -144,7 +144,7 @@ impl HashAggregateExec {
             input,
             schema,
             input_schema,
-            metrics: SharedMetricsSet::new(),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 

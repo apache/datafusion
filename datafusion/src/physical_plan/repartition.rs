@@ -31,7 +31,7 @@ use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use super::metrics::{self, MetricBuilder, MetricsSet, SharedMetricsSet};
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use async_trait::async_trait;
 
@@ -63,7 +63,7 @@ pub struct RepartitionExec {
     >,
 
     /// Execution metrics
-    metrics: SharedMetricsSet,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 #[derive(Debug, Clone)]
@@ -80,7 +80,7 @@ impl RepartitionMetrics {
     pub fn new(
         output_partition: usize,
         input_partition: usize,
-        metrics: &SharedMetricsSet,
+        metrics: &ExecutionPlanMetricsSet,
     ) -> Self {
         let label = metrics::Label::new("inputPartition", input_partition.to_string());
 
@@ -240,7 +240,7 @@ impl RepartitionExec {
             input,
             partitioning,
             channels: Arc::new(Mutex::new(HashMap::new())),
-            metrics: SharedMetricsSet::new(),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
