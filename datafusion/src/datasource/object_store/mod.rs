@@ -42,7 +42,7 @@ pub trait ThreadSafeRead: Read + Send + Sync + 'static {}
 pub trait ObjectReader {
     /// Get reader for a part [start, start + length] in the file
     fn get_reader(&self, start: u64, length: usize) -> Result<Box<dyn ThreadSafeRead>> {
-        let handle = get_runtime_handle();
+        let (handle, _rt) = get_runtime_handle();
         handle.block_on(self.get_reader_async(start, length))
     }
 
@@ -55,7 +55,7 @@ pub trait ObjectReader {
 
     /// Get length for the file
     fn length(&self) -> Result<u64> {
-        let handle = get_runtime_handle();
+        let (handle, _rt) = get_runtime_handle();
         handle.block_on(self.length_async())
     }
 

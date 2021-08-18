@@ -127,7 +127,7 @@ pub trait SourceRootDescBuilder: Sync + Send + Debug {
         provided_schema: Option<Schema>,
         collect_statistics: bool,
     ) -> Result<SourceRootDescriptor> {
-        let handle = get_runtime_handle();
+        let (handle, _rt) = get_runtime_handle();
         let mut results: Vec<Result<PartitionedFile>> = Vec::new();
         handle.block_on(async {
             match Self::get_source_desc_async(
@@ -241,10 +241,13 @@ pub trait SourceRootDescBuilder: Sync + Send + Debug {
     ) -> Result<PartitionedFile>;
 }
 
-fn get_runtime_handle() -> Handle {
+fn get_runtime_handle() -> (Handle, Option<Runtime>) {
     match Handle::try_current() {
-        Ok(h) => h,
-        Err(_) => Runtime::new().unwrap().handle().to_owned(),
+        Ok(h) => (h, None),
+        Err(_) => {
+            let rt = Runtime::new().unwrap();
+            (rt.handle().clone(), Some(rt))
+        }
     }
 }
 

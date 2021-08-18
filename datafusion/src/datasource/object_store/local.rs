@@ -107,7 +107,7 @@ impl ObjectReader for LocalFSObjectReader {
 }
 
 fn list_all(root_path: String, ext: String) -> Result<Vec<String>> {
-    let handle = get_runtime_handle();
+    let (handle, _rt) = get_runtime_handle();
     let mut file_results: Vec<Result<String>> = Vec::new();
     handle.block_on(async {
         match list_all_async(root_path, ext).await {
