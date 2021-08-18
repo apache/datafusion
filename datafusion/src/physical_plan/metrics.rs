@@ -20,6 +20,7 @@
 pub mod wrappers;
 
 use std::{
+    borrow::Cow,
     fmt::{Debug, Display},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -62,8 +63,8 @@ impl<'a> MetricBuilder<'a> {
     /// Add a label to the metric being constructed
     pub fn with_new_label(
         self,
-        name: impl Into<Arc<str>>,
-        value: impl Into<Arc<str>>,
+        name: impl Into<Cow<'static, str>>,
+        value: impl Into<Cow<'static, str>>,
     ) -> Self {
         self.with_label(Label::new(name.into(), value.into()))
     }
@@ -151,12 +152,7 @@ impl Display for SQLMetric {
         let mut iter = self
             .partition
             .iter()
-            .map(|partition| {
-                Label::new(
-                    Arc::from("partition"),
-                    Arc::from(partition.to_string().as_str()),
-                )
-            })
+            .map(|partition| Label::new("partition", partition.to_string()))
             .chain(self.labels().iter().cloned())
             .peekable();
 
@@ -439,15 +435,21 @@ impl SharedMetricsSet {
 /// , "attributes" in [open
 /// telemetry](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/datamodel.md],
 /// etc.
+///
+/// As the name and value are expected to mostly be constant strings,
+/// use a `Cow` to avoid copying / allocations in this common case.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Label {
-    name: Arc<str>,
-    value: Arc<str>,
+    name: Cow<'static, str>,
+    value: Cow<'static, str>,
 }
 
 impl Label {
     /// Create a new Label
-    pub fn new(name: impl Into<Arc<str>>, value: impl Into<Arc<str>>) -> Self {
+    pub fn new(
+        name: impl Into<Cow<'static, str>>,
+        value: impl Into<Cow<'static, str>>,
+    ) -> Self {
         let name = name.into();
         let value = value.into();
         Self { name, value }

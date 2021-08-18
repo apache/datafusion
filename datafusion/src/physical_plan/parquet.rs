@@ -609,11 +609,11 @@ impl ParquetFileMetrics {
     /// Create new metrics
     pub fn new(partition: usize, filename: &str, metrics: &SharedMetricsSet) -> Self {
         let predicate_evaluation_errors = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename)
+            .with_new_label("filename", filename.to_string())
             .counter("numPredicateEvaluationErrors", partition);
 
         let row_groups_pruned = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename)
+            .with_new_label("filename", filename.to_string())
             .counter("numRowGroupsPruned", partition);
 
         Self {
