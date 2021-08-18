@@ -343,7 +343,7 @@ impl MetricsSet {
 
         // There are all sorts of ways to make this more efficient
         for metric in &self.metrics {
-            let key = (metric.kind.clone(), metric.labels.clone());
+            let key = (metric.kind, metric.labels.clone());
             map.entry(key)
                 .and_modify(|accum: &mut SQLMetric| {
                     accum.set(accum.value() + metric.value())
@@ -352,7 +352,7 @@ impl MetricsSet {
                     // accumulate with no partition
                     let partition = None;
                     let accum = SQLMetric::new_with_labels(
-                        metric.kind().clone(),
+                        metric.kind(),
                         partition,
                         metric.labels().to_vec(),
                     );
