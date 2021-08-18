@@ -255,7 +255,7 @@ impl SQLMetric {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// How should the value of the metric be interpreted?
 pub enum MetricKind {
     /// Number of output rows produced
