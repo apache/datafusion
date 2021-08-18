@@ -974,6 +974,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     FileType::NdJson => protobuf::FileType::NdJson,
                     FileType::Parquet => protobuf::FileType::Parquet,
                     FileType::CSV => protobuf::FileType::Csv,
+                    FileType::Avro => protobuf::FileType::Avro,
                 };
 
                 Ok(protobuf::LogicalPlanNode {

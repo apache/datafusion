@@ -43,6 +43,8 @@ pub enum FileType {
     Parquet,
     /// Comma separated values
     CSV,
+    /// Avro binary records
+    Avro,
 }
 
 impl FromStr for FileType {
@@ -53,8 +55,9 @@ impl FromStr for FileType {
             "PARQUET" => Ok(Self::Parquet),
             "NDJSON" => Ok(Self::NdJson),
             "CSV" => Ok(Self::CSV),
+            "AVRO" => Ok(Self::Avro),
             other => Err(ParserError::ParserError(format!(
-                "expect one of PARQUET, NDJSON, or CSV, found: {}",
+                "expect one of PARQUET, AVRO, NDJSON, or CSV, found: {}",
                 other
             ))),
         }
