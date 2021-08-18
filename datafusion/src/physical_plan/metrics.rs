@@ -17,10 +17,15 @@
 
 //! Metrics for recording information about execution
 
-use std::{borrow::Cow, fmt::{Debug, Display}, sync::{
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Display},
+    sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
-    }, time::Instant};
+    },
+    time::Instant,
+};
 
 use hashbrown::HashMap;
 
@@ -89,16 +94,19 @@ impl<'a> MetricBuilder<'a> {
     /// Consume self and create a new counter for recording output rows
     pub fn output_rows(self, partition: usize) -> Count {
         let count = Count::new();
-        self.with_partition(partition).build(MetricValue::OutputRows(count.clone()));
+        self.with_partition(partition)
+            .build(MetricValue::OutputRows(count.clone()));
         count
     }
 
     /// Consumes self and creates a new [`Count`] for recording some
     /// arbitrary metric of an operator.
-    pub fn counter(self, counter_name: impl Into<Cow<'static, str>>, partition: usize) -> Count {
-        self
-            .with_partition(partition)
-            .global_counter(counter_name)
+    pub fn counter(
+        self,
+        counter_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Count {
+        self.with_partition(partition).global_counter(counter_name)
     }
 
     /// Consumes self and creates a new [`Count`] for recording a
@@ -107,7 +115,7 @@ impl<'a> MetricBuilder<'a> {
         let count = Count::new();
         self.build(MetricValue::Count {
             name: counter_name.into(),
-            value: count.clone(),
+            count: count.clone(),
         });
         count
     }
@@ -123,17 +131,19 @@ impl<'a> MetricBuilder<'a> {
 
     /// Consumes self and creates a new Timer for recording some
     /// subset of of an operators execution time.
-    pub fn subset_time(self, subset_name: impl Into<Cow<'static, str>>, partition: usize) -> Time {
+    pub fn subset_time(
+        self,
+        subset_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Time {
         let time = Time::new();
-        self.with_partition(partition)
-            .build(MetricValue::Time {
-                name: subset_name.into(),
-                value: time.clone()
-            });
+        self.with_partition(partition).build(MetricValue::Time {
+            name: subset_name.into(),
+            time: time.clone(),
+        });
         time
     }
 }
-
 
 /// A counter to record things such as number of input or output rows
 ///
@@ -148,7 +158,7 @@ impl Count {
     /// create a new counter
     pub fn new() -> Self {
         Self {
-            value : Arc::new(AtomicUsize::new(0))
+            value: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -177,7 +187,7 @@ impl Time {
     /// times for operations.
     pub fn new() -> Self {
         Self {
-            nanos: Arc::new(AtomicUsize::new(0))
+            nanos: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -240,20 +250,15 @@ pub enum MetricValue {
     OutputRows(Count),
     /// CPU time
     CPUTime(Time),
-    // Operator defined count
+    /// Operator defined count
     Count {
         name: Cow<'static, str>,
-        value: Count
+        count: Count,
     },
-    // Operator defined time
-    Time {
-        name: Cow<'static, str>,
-        value: Time
-    }
-    // TODO timestamp, etc
-    // https://github.com/apache/arrow-datafusion/issues/866
+    /// Operator defined time
+    Time { name: Cow<'static, str>, time: Time }, // TODO timestamp, etc
+                                                  // https://github.com/apache/arrow-datafusion/issues/866
 }
-
 
 impl MetricValue {
     pub fn name(&self) -> &str {
@@ -263,6 +268,34 @@ impl MetricValue {
         //     MetricKind::CPUTime => "cpuTime",
         // }
         todo!();
+    }
+
+    /// Return the value of the metric as a usize value
+    pub fn as_usize(&self) -> usize {
+        match self {
+            MetricValue::OutputRows(count) => count.value(),
+            MetricValue::CPUTime(time) => time.value(),
+            MetricValue::Count { count, .. } => count.value(),
+            MetricValue::Time { time, .. } => time.value(),
+        }
+    }
+
+    /// create a new MetricValue with the same type as `self` suitable
+    /// for accumulating
+    pub fn new_empty(&self) -> Self {
+        todo!()
+    }
+
+    /// Add the value of other to this. panic's if the type is mismatched or
+    /// aggregating does not make sense for this value
+    ///
+    /// Note this is purposely marked `mut` (even though atomics are
+    /// used) so Rust's type system can be used to ensure the
+    /// appropriate API access. `MetricValues` should be modified
+    /// using the original [`Count`] or [`Time`] they were created
+    /// from.
+    pub fn add(&mut self, other: &Self) {
+        todo!()
     }
 }
 
@@ -285,7 +318,6 @@ impl Display for MetricValue {
         // }
     }
 }
-
 
 /// Something that tracks the metrics of an execution using an atomic
 /// usize
@@ -372,11 +404,16 @@ impl SQLMetric {
         &self.labels
     }
 
-    /// return the value of this metric
+    /// return a reference to the value of this metric
     pub fn value(&self) -> &MetricValue {
+        &self.value
+    }
+
+    /// return a mutable reference to the value of this metric
+    pub fn value_mut(&mut self) -> &mut MetricValue {
+        &mut self.value
     }
 }
-
 
 /// A set of SQLMetrics for a particular operator
 #[derive(Default, Debug, Clone)]
@@ -403,19 +440,21 @@ impl MetricsSet {
     /// convenience: return the number of rows produced, aggregated
     /// across partitions or None if no metric is present
     pub fn output_rows(&self) -> Option<usize> {
-        self.sum(|metric| matches!(metric.kind(), MetricKind::OutputRows))
+        self.sum(|metric| matches!(metric.value(), MetricValue::OutputRows(_)))
+            .map(|v| v.as_usize())
     }
 
     /// convenience: return the amount of CPU time spent, aggregated
     /// across partitions or None if no metric is present
     pub fn cpu_time(&self) -> Option<usize> {
-        self.sum(|metric| matches!(metric.kind(), MetricKind::CPUTime))
+        self.sum(|metric| matches!(metric.value(), MetricValue::CPUTime(_)))
+            .map(|v| v.as_usize())
     }
 
     /// Sums the values for metrics for which `f(metric)` returns
     /// true, and returns the value. Returns None if no metrics match
     /// the predicate.
-    pub fn sum<F>(&self, mut f: F) -> Option<usize>
+    pub fn sum<F>(&self, mut f: F) -> Option<MetricValue>
     where
         F: FnMut(&SQLMetric) -> bool,
     {
@@ -425,35 +464,41 @@ impl MetricsSet {
             .filter(|metric| f(metric.as_ref()))
             .peekable();
 
-        if iter.peek().is_none() {
-            None
-        } else {
-            Some(iter.map(|metric| metric.value()).sum())
-        }
+        let mut accum = match iter.peek() {
+            None => {
+                return None;
+            }
+            Some(metric) => metric.value().new_empty(),
+        };
+
+        iter.for_each(|metric| accum.add(metric.value()));
+
+        Some(accum)
     }
 
     /// Returns returns a new derived `MetricsSet` where all metrics
-    /// that had partition=`Some(..)` have been aggregated
-    /// together. The resulting `MetricsSet` has all metrics with `Partition=None`
+    /// that had the same name and partition=`Some(..)` have been
+    /// aggregated together. The resulting `MetricsSet` has all
+    /// metrics with `Partition=None`
     pub fn aggregate_by_partition(&self) -> Self {
         let mut map = HashMap::new();
 
         // There are all sorts of ways to make this more efficient
         for metric in &self.metrics {
-            let key = (metric.kind, metric.labels.clone());
+            let key = (metric.value.name(), metric.labels.clone());
             map.entry(key)
                 .and_modify(|accum: &mut SQLMetric| {
-                    accum.set(accum.value() + metric.value())
+                    accum.value_mut().add(metric.value());
                 })
                 .or_insert_with(|| {
                     // accumulate with no partition
                     let partition = None;
-                    let accum = SQLMetric::new_with_labels(
-                        *metric.kind(),
+                    let mut accum = SQLMetric::new_with_labels(
+                        metric.value().new_empty(),
                         partition,
                         metric.labels().to_vec(),
                     );
-                    accum.set(metric.value());
+                    accum.value_mut().add(metric.value());
                     accum
                 });
         }
