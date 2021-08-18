@@ -931,6 +931,17 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )),
                 })
             }
+            LogicalPlan::Analyze { verbose, input, .. } => {
+                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Analyze(Box::new(
+                        protobuf::AnalyzeNode {
+                            input: Some(Box::new(input)),
+                            verbose: *verbose,
+                        },
+                    ))),
+                })
+            }
             LogicalPlan::Explain { verbose, plan, .. } => {
                 let input: protobuf::LogicalPlanNode = plan.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
@@ -944,7 +955,18 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
             }
             LogicalPlan::Extension { .. } => unimplemented!(),
             LogicalPlan::Union { .. } => unimplemented!(),
-            LogicalPlan::CrossJoin { .. } => unimplemented!(),
+            LogicalPlan::CrossJoin { left, right, .. } => {
+                let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
+                let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::CrossJoin(Box::new(
+                        protobuf::CrossJoinNode {
+                            left: Some(Box::new(left)),
+                            right: Some(Box::new(right)),
+                        },
+                    ))),
+                })
+            }
         }
     }
 }

@@ -30,12 +30,14 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use futures::{Stream, StreamExt};
-use tokio_stream::wrappers::ReceiverStream;
+use futures::Stream;
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+};
+use crate::{
+    error::{DataFusionError, Result},
+    physical_plan::stream::RecordBatchReceiverStream,
 };
 
 /// Index into the data that has been returned so far
@@ -161,8 +163,6 @@ impl ExecutionPlan for MockExec {
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         assert_eq!(partition, 0);
 
-        let schema = self.schema();
-
         // Result doesn't implement clone, so do it ourself
         let data: Vec<_> = self
             .data
@@ -188,11 +188,7 @@ impl ExecutionPlan for MockExec {
         });
 
         // returned stream simply reads off the rx stream
-        let stream = DelayedStream {
-            schema,
-            inner: ReceiverStream::new(rx),
-        };
-        Ok(Box::pin(stream))
+        Ok(RecordBatchReceiverStream::create(&self.schema, rx))
     }
 }
 
@@ -201,29 +197,6 @@ fn clone_error(e: &ArrowError) -> ArrowError {
     match e {
         ComputeError(msg) => ComputeError(msg.to_string()),
         _ => unimplemented!(),
-    }
-}
-
-#[derive(Debug)]
-pub struct DelayedStream {
-    schema: SchemaRef,
-    inner: ReceiverStream<ArrowResult<RecordBatch>>,
-}
-
-impl Stream for DelayedStream {
-    type Item = ArrowResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx)
-    }
-}
-
-impl RecordBatchStream for DelayedStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
     }
 }
 
@@ -289,8 +262,6 @@ impl ExecutionPlan for BarrierExec {
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         assert!(partition < self.data.len());
 
-        let schema = self.schema();
-
         let (tx, rx) = tokio::sync::mpsc::channel(2);
 
         // task simply sends data in order after barrier is reached
@@ -308,11 +279,7 @@ impl ExecutionPlan for BarrierExec {
         });
 
         // returned stream simply reads off the rx stream
-        let stream = DelayedStream {
-            schema,
-            inner: ReceiverStream::new(rx),
-        };
-        Ok(Box::pin(stream))
+        Ok(RecordBatchReceiverStream::create(&self.schema, rx))
     }
 }
 

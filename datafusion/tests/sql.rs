@@ -1797,8 +1797,6 @@ async fn equijoin_left_and_condition_from_right() -> Result<()> {
 }
 
 #[tokio::test]
-// Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
-#[cfg(not(feature = "force_hash_collisions"))]
 async fn equijoin_right_and_condition_from_left() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
@@ -1852,8 +1850,6 @@ async fn left_join() -> Result<()> {
 }
 
 #[tokio::test]
-// Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
-#[cfg(not(feature = "force_hash_collisions"))]
 async fn right_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
@@ -1874,8 +1870,6 @@ async fn right_join() -> Result<()> {
 }
 
 #[tokio::test]
-// Disable until https://github.com/apache/arrow-datafusion/issues/843 fixed
-#[cfg(not(feature = "force_hash_collisions"))]
 async fn full_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
@@ -2144,6 +2138,54 @@ async fn csv_explain() {
     let actual = execute(&mut ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
     assert_eq!(expected, actual);
+}
+
+#[tokio::test]
+async fn csv_explain_analyze() {
+    // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = normalize_for_explain(&formatted);
+
+    // Only test basic plumbing and try to avoid having to change too
+    // many things
+    let needle = "RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), metrics=[";
+    assert!(
+        formatted.contains(needle),
+        "did not find '{}' in\n{}",
+        needle,
+        formatted
+    );
+    let verbose_needle = "Output Rows       | 5";
+    assert!(
+        !formatted.contains(verbose_needle),
+        "found unexpected '{}' in\n{}",
+        verbose_needle,
+        formatted
+    );
+}
+
+#[tokio::test]
+async fn csv_explain_analyze_verbose() {
+    // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql =
+        "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = normalize_for_explain(&formatted);
+
+    let verbose_needle = "Output Rows       | 5";
+    assert!(
+        formatted.contains(verbose_needle),
+        "did not find '{}' in\n{}",
+        verbose_needle,
+        formatted
+    );
 }
 
 #[tokio::test]
@@ -4239,5 +4281,59 @@ async fn test_partial_qualified_name() -> Result<()> {
     ];
     let actual = execute(&mut ctx, sql).await;
     assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn like_on_strings() -> Result<()> {
+    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
+        .into_iter()
+        .collect::<StringArray>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| bar   |",
+        "| fazzz |",
+        "+-------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn like_on_string_dictionaries() -> Result<()> {
+    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
+        .into_iter()
+        .collect::<DictionaryArray<Int32Type>>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| bar   |",
+        "| fazzz |",
+        "+-------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }

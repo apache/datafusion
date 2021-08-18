@@ -130,7 +130,7 @@ To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-datafusion = "4.0.0-SNAPSHOT"
+datafusion = "5.0.0"
 ```
 
 ## Using DataFusion as a binary

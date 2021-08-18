@@ -662,6 +662,43 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_analyze() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("first_name", DataType::Utf8, false),
+            Field::new("last_name", DataType::Utf8, false),
+            Field::new("state", DataType::Utf8, false),
+            Field::new("salary", DataType::Int32, false),
+        ]);
+
+        let verbose_plan = LogicalPlanBuilder::scan_csv(
+            "employee.csv",
+            CsvReadOptions::new().schema(&schema).has_header(true),
+            Some(vec![3, 4]),
+        )
+        .and_then(|plan| plan.sort(vec![col("salary")]))
+        .and_then(|plan| plan.explain(true, true))
+        .and_then(|plan| plan.build())
+        .map_err(BallistaError::DataFusionError)?;
+
+        let plan = LogicalPlanBuilder::scan_csv(
+            "employee.csv",
+            CsvReadOptions::new().schema(&schema).has_header(true),
+            Some(vec![3, 4]),
+        )
+        .and_then(|plan| plan.sort(vec![col("salary")]))
+        .and_then(|plan| plan.explain(false, true))
+        .and_then(|plan| plan.build())
+        .map_err(BallistaError::DataFusionError)?;
+
+        roundtrip_test!(plan);
+
+        roundtrip_test!(verbose_plan);
+
+        Ok(())
+    }
+
+    #[test]
     fn roundtrip_explain() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -677,7 +714,7 @@ mod roundtrip_tests {
             Some(vec![3, 4]),
         )
         .and_then(|plan| plan.sort(vec![col("salary")]))
-        .and_then(|plan| plan.explain(true))
+        .and_then(|plan| plan.explain(true, false))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
@@ -687,7 +724,7 @@ mod roundtrip_tests {
             Some(vec![3, 4]),
         )
         .and_then(|plan| plan.sort(vec![col("salary")]))
-        .and_then(|plan| plan.explain(false))
+        .and_then(|plan| plan.explain(false, false))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 

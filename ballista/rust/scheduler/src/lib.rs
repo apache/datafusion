@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Ballista Scheduler Process
-//!
-//! This crate contains the Ballista scheduler process. Refer to <https://crates.io/crates/ballista> for
-//! documentation.
+#![doc = include_str!("../README.md")]
 
 pub mod api;
 pub mod planner;

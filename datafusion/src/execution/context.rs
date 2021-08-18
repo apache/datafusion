@@ -1012,7 +1012,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
             .unwrap()
-            .explain(true)
+            .explain(true, false)
             .unwrap()
             .build()
             .unwrap();

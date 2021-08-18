@@ -1,3 +1,5 @@
+#!/bin/bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,25 +16,14 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-[package]
-name = "ballista-examples"
-description = "Ballista usage examples"
-version = "0.6.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = [ "arrow", "distributed", "query", "sql" ]
-edition = "2018"
-publish = false
+# Usage:
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-datafusion.sh
 
-[dependencies]
-arrow-flight = { version = "5.0" }
-datafusion = { path = "../datafusion" }
-ballista = { path = "../ballista/rust/client" }
-prost = "0.8"
-tonic = "0.5"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
-futures = "0.3"
-num_cpus = "1.13.0"
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
+
+${SOURCE_DIR}/update_change_log-datafusion.sh
+${SOURCE_DIR}/update_change_log-ballista.sh
+${SOURCE_DIR}/update_change_log-python.sh
