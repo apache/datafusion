@@ -2161,7 +2161,7 @@ async fn csv_explain_analyze() {
         needle,
         formatted
     );
-    let verbose_needle = "Output Rows       | 5";
+    let verbose_needle = "Output Rows            | 5";
     assert!(
         !formatted.contains(verbose_needle),
         "found unexpected '{}' in\n{}",
