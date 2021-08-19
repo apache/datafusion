@@ -165,7 +165,7 @@ async fn list_all_async(root_path: String, ext: String) -> Result<FileNameStream
                 }
             }
         })
-            .flatten();
+        .flatten();
         Ok(Box::pin(result))
     }
 }
