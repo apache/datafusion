@@ -129,8 +129,11 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Return a copy of the set of [`SQLMetric`]s for this
     /// `ExecutionPlan`.
     ///
-    /// The [`MetricsSet`]s returned may not be the complete list of
-    /// metrics. Once `self.execute()` has returned (aka the future is
+    /// While the values of the metrics in the returned
+    /// [`MetricsSet`]s may change as execution progresses, the
+    /// specific metrics will not.
+    ///
+    /// Once `self.execute()` has returned (technically the future is
     /// resolved) for all available partitions, the set of metrics
     /// should be complete. If this function is called prior to
     /// `execute()` new metrics may appear in subsequent calls.
