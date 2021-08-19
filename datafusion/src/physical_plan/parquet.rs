@@ -410,7 +410,7 @@ impl ParquetExec {
 
         let metrics = ExecutionPlanMetricsSet::new();
         let predicate_creation_errors =
-            MetricBuilder::new(&metrics).global_counter("numPredicateCreationErrors");
+            MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
         let predicate_builder = predicate.and_then(|predicate_expr| {
             match PruningPredicate::try_new(&predicate_expr, schema.clone()) {
@@ -614,11 +614,11 @@ impl ParquetFileMetrics {
     ) -> Self {
         let predicate_evaluation_errors = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
-            .counter("numPredicateEvaluationErrors", partition);
+            .counter("predicate_evaluation_errors", partition);
 
         let row_groups_pruned = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
-            .counter("numRowGroupsPruned", partition);
+            .counter("row_groups_pruned", partition);
 
         Self {
             predicate_evaluation_errors,

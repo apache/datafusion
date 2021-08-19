@@ -2161,7 +2161,7 @@ async fn csv_explain_analyze() {
         needle,
         formatted
     );
-    let verbose_needle = "Output Rows            | 5";
+    let verbose_needle = "Output Rows";
     assert!(
         !formatted.contains(verbose_needle),
         "found unexpected '{}' in\n{}",
@@ -2181,7 +2181,7 @@ async fn csv_explain_analyze_verbose() {
     let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
     let formatted = normalize_for_explain(&formatted);
 
-    let verbose_needle = "Output Rows       | 5";
+    let verbose_needle = "Output Rows";
     assert!(
         formatted.contains(verbose_needle),
         "did not find '{}' in\n{}",

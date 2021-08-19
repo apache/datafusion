@@ -451,12 +451,12 @@ impl TestOutput {
 
     /// The number of times the pruning predicate evaluation errors
     fn predicate_evaluation_errors(&self) -> Option<usize> {
-        self.metric_value("numPredicateEvaluationErrors")
+        self.metric_value("predicate_evaluation_errors")
     }
 
     /// The number of times the pruning predicate evaluation errors
     fn row_groups_pruned(&self) -> Option<usize> {
-        self.metric_value("numRowGroupsPruned")
+        self.metric_value("row_groups_pruned")
     }
 
     fn description(&self) -> String {

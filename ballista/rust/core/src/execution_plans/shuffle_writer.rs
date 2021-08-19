@@ -88,9 +88,9 @@ struct ShuffleWriteMetrics {
 
 impl ShuffleWriteMetrics {
     fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let write_time = MetricBuilder::new(metrics).subset_time("writeTime", partition);
+        let write_time = MetricBuilder::new(metrics).subset_time("write_time", partition);
 
-        let input_rows = MetricBuilder::new(metrics).counter("inputRows", partition);
+        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
 
         let output_rows = MetricBuilder::new(metrics).output_rows(partition);
 

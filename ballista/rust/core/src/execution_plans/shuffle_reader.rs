@@ -102,7 +102,7 @@ impl ExecutionPlan for ShuffleReaderExec {
         info!("ShuffleReaderExec::execute({})", partition);
 
         let fetch_time =
-            MetricBuilder::new(&self.metrics).subset_time("fetchTime", partition);
+            MetricBuilder::new(&self.metrics).subset_time("fetch_time", partition);
         let timer = fetch_time.timer();
 
         let partition_locations = &self.partition[partition];
