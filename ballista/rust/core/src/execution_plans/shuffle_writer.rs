@@ -51,7 +51,7 @@ use datafusion::physical_plan::metrics::{
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::Partitioning::RoundRobinBatch;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream, SQLMetric,
+    DisplayFormatType, ExecutionPlan, Metric, Partitioning, RecordBatchStream,
 };
 use futures::StreamExt;
 use hashbrown::HashMap;

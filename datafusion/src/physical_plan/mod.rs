@@ -17,8 +17,8 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
+pub use self::metrics::Metric;
 use self::metrics::MetricsSet;
-pub use self::metrics::SQLMetric;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
@@ -126,8 +126,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// creates an iterator
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream>;
 
-    /// Return a copy of the set of [`SQLMetric`]s for this
-    /// `ExecutionPlan`.
+    /// Return a snapshot of the set of [`Metric`]s for this
+    /// [`ExecutionPlan`].
     ///
     /// While the values of the metrics in the returned
     /// [`MetricsSet`]s may change as execution progresses, the

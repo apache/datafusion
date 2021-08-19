@@ -56,7 +56,7 @@ impl Count {
     }
 }
 
-/// a SQLMetric for CPU timing information
+/// Measure a potentially non contiguous duration of time
 #[derive(Debug, Clone)]
 pub struct Time {
     /// elapsed time, in nanoseconds

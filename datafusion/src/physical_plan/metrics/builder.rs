@@ -19,7 +19,7 @@
 
 use std::{borrow::Cow, sync::Arc};
 
-use super::{Count, ExecutionPlanMetricsSet, Label, MetricValue, SQLMetric, Time};
+use super::{Count, ExecutionPlanMetricsSet, Label, Metric, MetricValue, Time};
 
 /// Structure for constructing metrics, counters, timers, etc.
 ///
@@ -79,7 +79,7 @@ impl<'a> MetricBuilder<'a> {
             partition,
             metrics,
         } = self;
-        let metric = Arc::new(SQLMetric::new_with_labels(value, partition, labels));
+        let metric = Arc::new(Metric::new_with_labels(value, partition, labels));
         metrics.register(metric.clone());
     }
 

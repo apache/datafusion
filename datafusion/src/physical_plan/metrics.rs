@@ -35,11 +35,11 @@ pub use value::{Count, MetricValue, ScopedTimerGuard, Time};
 /// Something that tracks a value of interest (metric) of a DataFusion
 /// [`ExecutionPlan`] execution.
 ///
-/// Typically these `SQLMetric`s are not created directly, but instead
+/// Typically [`Metric`]s are not created directly, but instead
 /// are created using [`MetricBuilder`] or methods on
 /// [`ExecutionPlanMetricsSet`].
 #[derive(Debug)]
-pub struct SQLMetric {
+pub struct Metric {
     /// The value the metric
     value: MetricValue,
 
@@ -51,7 +51,7 @@ pub struct SQLMetric {
     partition: Option<usize>,
 }
 
-impl Display for SQLMetric {
+impl Display for Metric {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.value.name())?;
 
@@ -85,8 +85,8 @@ impl Display for SQLMetric {
     }
 }
 
-impl SQLMetric {
-    /// Create a new SQLMetric. Consider using [`MetricBuilder`]
+impl Metric {
+    /// Create a new [`Metric`]. Consider using [`MetricBuilder`]
     /// rather than this function directly.
     pub fn new(value: MetricValue, partition: Option<usize>) -> Self {
         Self {
@@ -96,7 +96,7 @@ impl SQLMetric {
         }
     }
 
-    /// Create a new SQLMetric. Consider using [`MetricBuilder`]
+    /// Create a new [`Metric`]. Consider using [`MetricBuilder`]
     /// rather than this function directly.
     pub fn new_with_labels(
         value: MetricValue,
@@ -136,7 +136,7 @@ impl SQLMetric {
 /// ExecutionPlan`).
 #[derive(Default, Debug, Clone)]
 pub struct MetricsSet {
-    metrics: Vec<Arc<SQLMetric>>,
+    metrics: Vec<Arc<Metric>>,
 }
 
 impl MetricsSet {
@@ -146,13 +146,8 @@ impl MetricsSet {
     }
 
     /// Add the specified metric
-    pub fn push(&mut self, metric: Arc<SQLMetric>) {
+    pub fn push(&mut self, metric: Arc<Metric>) {
         self.metrics.push(metric)
-    }
-
-    /// Add all [`SQLMetric`]s in this set to the specified array.
-    fn extend_other(&mut self, metrics: &mut Vec<Arc<SQLMetric>>) {
-        metrics.extend(self.metrics.iter().cloned())
     }
 
     /// convenience: return the number of rows produced, aggregated
@@ -174,7 +169,7 @@ impl MetricsSet {
     /// the predicate.
     pub fn sum<F>(&self, mut f: F) -> Option<MetricValue>
     where
-        F: FnMut(&SQLMetric) -> bool,
+        F: FnMut(&Metric) -> bool,
     {
         let mut iter = self
             .metrics
@@ -205,13 +200,13 @@ impl MetricsSet {
         for metric in &self.metrics {
             let key = (metric.value.name(), metric.labels.clone());
             map.entry(key)
-                .and_modify(|accum: &mut SQLMetric| {
+                .and_modify(|accum: &mut Metric| {
                     accum.value_mut().add(metric.value());
                 })
                 .or_insert_with(|| {
                     // accumulate with no partition
                     let partition = None;
-                    let mut accum = SQLMetric::new_with_labels(
+                    let mut accum = Metric::new_with_labels(
                         metric.value().new_empty(),
                         partition,
                         metric.labels().to_vec(),
@@ -249,7 +244,7 @@ impl Display for MetricsSet {
     }
 }
 
-/// A set of SQLMetrics for an individual "operator" (e.g. `&dyn
+/// A set of [`Metric`] for an individual "operator" (e.g. `&dyn
 /// ExecutionPlan`).
 ///
 /// This structure is intended as a convenience for [`ExecutionPlan`]
@@ -271,18 +266,9 @@ impl ExecutionPlanMetricsSet {
         }
     }
 
-    /// Add the specified metric
-    pub fn register(&self, metric: Arc<SQLMetric>) {
+    /// Add the specified metric to the underlying metric set
+    pub fn register(&self, metric: Arc<Metric>) {
         self.inner.lock().expect("not poisoned").push(metric)
-    }
-
-    /// Add all [`SQLMetric`]s for this `ExecutionPlan` to the
-    /// specified array.
-    pub fn extend_other(&self, metrics: &mut Vec<Arc<SQLMetric>>) {
-        self.inner
-            .lock()
-            .expect("not poisoned")
-            .extend_other(metrics)
     }
 
     /// Return a clone of the inner MetricsSet

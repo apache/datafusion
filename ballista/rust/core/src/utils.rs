@@ -61,7 +61,7 @@ use datafusion::physical_plan::parquet::ParquetExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sort::SortExec;
 use datafusion::physical_plan::{
-    metrics, AggregateExpr, ExecutionPlan, PhysicalExpr, RecordBatchStream, SQLMetric,
+    metrics, AggregateExpr, ExecutionPlan, Metric, PhysicalExpr, RecordBatchStream,
 };
 use futures::{future, Stream, StreamExt};
 use std::time::Instant;

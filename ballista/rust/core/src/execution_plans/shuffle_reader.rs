@@ -31,9 +31,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SQLMetric,
-};
+use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Metric, Partitioning};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,
