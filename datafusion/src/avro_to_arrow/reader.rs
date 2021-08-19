@@ -1,6 +1,6 @@
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::arrow::record_batch::RecordBatch;
-use crate::avro::arrow_array_reader::AvroArrowArrayReader;
+use crate::avro_to_arrow::arrow_array_reader::AvroArrowArrayReader;
 use crate::error::Result;
 use arrow::error::Result as ArrowResult;
 use avro_rs::Reader as AvroReader;
@@ -49,7 +49,7 @@ impl ReaderBuilder {
     ///     let file = File::open("test/data/basic.avro").unwrap();
     ///
     ///     // create a builder, inferring the schema with the first 100 records
-    ///     let builder = crate::datafusion::avro::ReaderBuilder::new().infer_schema(Some(100));
+    ///     let builder = crate::datafusion::avro_to_arrow::ReaderBuilder::new().infer_schema(Some(100));
     ///
     ///     let reader = builder.build::<File>(file).unwrap();
     ///
