@@ -24,6 +24,8 @@
 //! ```
 //! use datafusion::datasource::TableProvider;
 //! use datafusion::datasource::csv::{CsvFile, CsvReadOptions};
+//! #[tokio::main]
+//! # async fn main() {
 //!
 //! let testdata = datafusion::test_util::arrow_test_data();
 //! let csvdata = CsvFile::try_new(
@@ -31,6 +33,7 @@
 //!     CsvReadOptions::new().delimiter(b'|'),
 //! ).unwrap();
 //! let schema = csvdata.schema();
+//! # }
 //! ```
 
 use arrow::datatypes::SchemaRef;

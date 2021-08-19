@@ -110,7 +110,7 @@ async fn nyc() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parquet_query() {
     let mut ctx = ExecutionContext::new();
     register_alltypes_parquet(&mut ctx);
@@ -136,7 +136,7 @@ async fn parquet_query() {
     assert_batches_eq!(expected, &actual);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parquet_single_nan_schema() {
     let mut ctx = ExecutionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();

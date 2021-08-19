@@ -97,7 +97,8 @@ use parquet::file::properties::WriterProperties;
 /// ```
 /// use datafusion::prelude::*;
 /// # use datafusion::error::Result;
-/// # fn main() -> Result<()> {
+/// #[tokio::main]
+/// # async fn main() -> Result<()> {
 /// let mut ctx = ExecutionContext::new();
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
@@ -114,7 +115,8 @@ use parquet::file::properties::WriterProperties;
 /// use datafusion::prelude::*;
 ///
 /// # use datafusion::error::Result;
-/// # fn main() -> Result<()> {
+/// #[tokio::main]
+/// # async fn main() -> Result<()> {
 /// let mut ctx = ExecutionContext::new();
 /// ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new())?;
 /// let results = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")?;
@@ -2708,7 +2710,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn write_parquet_results() -> Result<()> {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;

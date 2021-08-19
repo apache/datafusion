@@ -667,7 +667,7 @@ mod tests {
         assert_eq!(1, chunks[4].len());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);

@@ -145,23 +145,27 @@ async fn list_all_async(root_path: String, ext: String) -> Result<FileNameStream
         Ok(files)
     }
 
-    let result = stream::unfold(vec![root_path], move |mut to_visit| {
-        let ext = ext.clone();
-        async move {
-            match to_visit.pop() {
-                None => None,
-                Some(path) => {
-                    let file_stream =
-                        match find_files_in_dir(path, &mut to_visit, ext).await {
-                            Ok(files) => stream::iter(files).map(Ok).left_stream(),
-                            Err(e) => stream::once(async { Err(e) }).right_stream(),
-                        };
+    if tokio::fs::metadata(&root_path).await?.is_file() {
+        Ok(Box::pin(stream::once(async { Ok(root_path) })))
+    } else {
+        let result = stream::unfold(vec![root_path], move |mut to_visit| {
+            let ext = ext.clone();
+            async move {
+                match to_visit.pop() {
+                    None => None,
+                    Some(path) => {
+                        let file_stream =
+                            match find_files_in_dir(path, &mut to_visit, ext).await {
+                                Ok(files) => stream::iter(files).map(Ok).left_stream(),
+                                Err(e) => stream::once(async { Err(e) }).right_stream(),
+                            };
 
-                    Some((file_stream, to_visit))
+                        Some((file_stream, to_visit))
+                    }
                 }
             }
-        }
-    })
-    .flatten();
-    Ok(Box::pin(result))
+        })
+            .flatten();
+        Ok(Box::pin(result))
+    }
 }

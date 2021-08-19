@@ -217,6 +217,9 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 /// use datafusion::prelude::*;
 /// use datafusion::physical_plan::displayable;
 ///
+/// #[tokio::main]
+/// # async fn main() {
+///
 /// // Hard code concurrency as it appears in the RepartitionExec output
 /// let config = ExecutionConfig::new()
 ///     .with_concurrency(3);
@@ -242,6 +245,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 ///            \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
 ///            \n        CsvExec: source=Path(tests/example.csv: [tests/example.csv]), has_header=true",
 ///             plan_string.trim());
+/// # }
 /// ```
 ///
 pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {

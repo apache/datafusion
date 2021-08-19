@@ -41,7 +41,7 @@ use hashbrown::HashMap;
 use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
 use tempfile::NamedTempFile;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_timestamps_nanos() {
     let output = ContextWithParquet::new(Scenario::Timestamps)
         .await
@@ -54,7 +54,7 @@ async fn prune_timestamps_nanos() {
     assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_timestamps_micros() {
     let output = ContextWithParquet::new(Scenario::Timestamps)
         .await
@@ -69,7 +69,7 @@ async fn prune_timestamps_micros() {
     assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_timestamps_millis() {
     let output = ContextWithParquet::new(Scenario::Timestamps)
         .await
@@ -84,7 +84,7 @@ async fn prune_timestamps_millis() {
     assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_timestamps_seconds() {
     let output = ContextWithParquet::new(Scenario::Timestamps)
         .await
@@ -99,7 +99,7 @@ async fn prune_timestamps_seconds() {
     assert_eq!(output.result_rows, 10, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_date32() {
     let output = ContextWithParquet::new(Scenario::Dates)
         .await
@@ -112,7 +112,7 @@ async fn prune_date32() {
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_date64() {
     // work around for not being able to cast Date32 to Date64 automatically
     let date = "2020-01-02"
@@ -137,7 +137,7 @@ async fn prune_date64() {
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_disabled() {
     let query = "SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')";
     let expected_rows = 10;
@@ -178,7 +178,7 @@ async fn prune_disabled() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_int32_lt() {
     let (expected_errors, expected_row_group_pruned, expected_results) =
         (Some(0), Some(1), 11);
@@ -218,7 +218,7 @@ async fn prune_int32_lt() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_int32_eq() {
     // resulrt of sql "SELECT * FROM t where i = 1"
     let output = ContextWithParquet::new(Scenario::Int32)
@@ -233,7 +233,7 @@ async fn prune_int32_eq() {
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_int32_scalar_fun_and_eq() {
     // resulrt of sql "SELECT * FROM t where abs(i) = 1 and i = 1"
     // only use "i = 1" to prune
@@ -249,7 +249,7 @@ async fn prune_int32_scalar_fun_and_eq() {
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_int32_scalar_fun() {
     // resulrt of sql "SELECT * FROM t where abs(i) = 1" is not supported
     let output = ContextWithParquet::new(Scenario::Int32)
@@ -265,7 +265,7 @@ async fn prune_int32_scalar_fun() {
     assert_eq!(output.result_rows, 3, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_int32_complex_expr() {
     // resulrt of sql "SELECT * FROM t where i+1 = 1" is not supported
     let output = ContextWithParquet::new(Scenario::Int32)
@@ -281,7 +281,7 @@ async fn prune_int32_complex_expr() {
     assert_eq!(output.result_rows, 2, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_int32_complex_expr_subtract() {
     // resulrt of sql "SELECT * FROM t where 1-i > 1" is not supported
     let output = ContextWithParquet::new(Scenario::Int32)
@@ -297,7 +297,7 @@ async fn prune_int32_complex_expr_subtract() {
     assert_eq!(output.result_rows, 9, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_f64_lt() {
     let (expected_errors, expected_row_group_pruned, expected_results) =
         (Some(0), Some(1), 11);
@@ -337,7 +337,7 @@ async fn prune_f64_lt() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_f64_scalar_fun_and_gt() {
     // resulrt of sql "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1"
     // only use "f >= 0" to prune
@@ -353,7 +353,7 @@ async fn prune_f64_scalar_fun_and_gt() {
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_f64_scalar_fun() {
     // resulrt of sql "SELECT * FROM t where abs(f-1) <= 0.000001" is not supported
     let output = ContextWithParquet::new(Scenario::Float64)
@@ -369,7 +369,7 @@ async fn prune_f64_scalar_fun() {
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_f64_complex_expr() {
     // resulrt of sql "SELECT * FROM t where f+1 > 1.1"" is not supported
     let output = ContextWithParquet::new(Scenario::Float64)
@@ -385,7 +385,7 @@ async fn prune_f64_complex_expr() {
     assert_eq!(output.result_rows, 9, "{}", output.description());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prune_f64_complex_expr_subtract() {
     // resulrt of sql "SELECT * FROM t where 1-f > 1" is not supported
     let output = ContextWithParquet::new(Scenario::Float64)

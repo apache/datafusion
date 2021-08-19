@@ -493,7 +493,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use futures::StreamExt;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_small_batches() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
         let projection = None;
@@ -516,7 +516,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_alltypes_plain_parquet() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
 
@@ -551,7 +551,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_bool_alltypes_plain_parquet() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
         let projection = Some(vec![1]);
@@ -578,7 +578,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_i32_alltypes_plain_parquet() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
         let projection = Some(vec![0]);
@@ -602,7 +602,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_i96_alltypes_plain_parquet() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
         let projection = Some(vec![10]);
@@ -626,7 +626,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_f32_alltypes_plain_parquet() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
         let projection = Some(vec![6]);
@@ -653,7 +653,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_f64_alltypes_plain_parquet() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
         let projection = Some(vec![7]);
@@ -680,7 +680,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_binary_alltypes_plain_parquet() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
         let projection = Some(vec![9]);

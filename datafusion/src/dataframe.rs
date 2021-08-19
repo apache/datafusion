@@ -41,7 +41,8 @@ use async_trait::async_trait;
 /// ```
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
-/// # fn main() -> Result<()> {
+/// #[tokio::main]
+/// # async fn main() -> Result<()> {
 /// let mut ctx = ExecutionContext::new();
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
@@ -59,7 +60,8 @@ pub trait DataFrame: Send + Sync {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # fn main() -> Result<()> {
+    /// #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
     /// let df = df.select_columns(&["a", "b"])?;
@@ -73,7 +75,8 @@ pub trait DataFrame: Send + Sync {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # fn main() -> Result<()> {
+    /// #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
     /// let df = df.select(vec![col("a") * col("b"), col("c")])?;
@@ -87,7 +90,8 @@ pub trait DataFrame: Send + Sync {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # fn main() -> Result<()> {
+    /// #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
     /// let df = df.filter(col("a").lt_eq(col("b")))?;
@@ -101,7 +105,8 @@ pub trait DataFrame: Send + Sync {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # fn main() -> Result<()> {
+    /// #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
     ///
@@ -124,7 +129,8 @@ pub trait DataFrame: Send + Sync {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # fn main() -> Result<()> {
+    /// #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
     /// let df = df.limit(100)?;
@@ -138,7 +144,8 @@ pub trait DataFrame: Send + Sync {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # fn main() -> Result<()> {
+    /// #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
     /// let df = df.union(df.clone())?;
@@ -153,7 +160,8 @@ pub trait DataFrame: Send + Sync {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # fn main() -> Result<()> {
+    /// #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
     /// let df = df.sort(vec![col("a").sort(true, true), col("b").sort(false, false)])?;
@@ -196,7 +204,8 @@ pub trait DataFrame: Send + Sync {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # fn main() -> Result<()> {
+    /// #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
     /// let df1 = df.repartition(Partitioning::RoundRobinBatch(4))?;
@@ -275,7 +284,8 @@ pub trait DataFrame: Send + Sync {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # fn main() -> Result<()> {
+    /// #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
     /// let schema = df.schema();
@@ -309,7 +319,8 @@ pub trait DataFrame: Send + Sync {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # fn main() -> Result<()> {
+    /// #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
     /// let f = df.registry();
