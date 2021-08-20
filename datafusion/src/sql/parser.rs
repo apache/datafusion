@@ -393,6 +393,17 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
+        // positive case: it is ok for parquet files not to have columns specified
+        let sql = "CREATE EXTERNAL TABLE t STORED AS AVRO LOCATION 'foo.avro'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![],
+            file_type: FileType::Avro,
+            has_header: false,
+            location: "foo.avro".into(),
+        });
+        expect_parse_ok(sql, expected)?;
+
         // Error cases: Invalid type
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS UNKNOWN_TYPE LOCATION 'foo.csv'";
