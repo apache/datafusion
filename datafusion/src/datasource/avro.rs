@@ -168,7 +168,7 @@ impl TableProvider for AvroFile {
                 }
             }
             Source::Path(p) => {
-                AvroExec::try_new(p, opts, projection.clone(), batch_size, limit)?
+                AvroExec::try_from_path(p, opts, projection.clone(), batch_size, limit)?
             }
         };
         Ok(Arc::new(exec))
