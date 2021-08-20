@@ -279,7 +279,7 @@ fn external_props(schema: &AvroSchema) -> BTreeMap<String, String> {
         } => {
             let aliases: Vec<String> = aliases
                 .into_iter()
-                .map(|alias| fullname(alias, namespace.as_ref(), None))
+                .map(|alias| aliased(alias, namespace.as_deref(), None))
                 .collect();
             props.insert("aliases".to_string(), format!("[{}]", aliases.join(",")));
         }
@@ -299,9 +299,9 @@ fn get_metadata(
 }
 
 /// Returns the fully qualified name for a field
-pub fn fullname(
+pub fn aliased(
     name: &str,
-    namespace: Option<&String>,
+    namespace: Option<&str>,
     default_namespace: Option<&str>,
 ) -> String {
     if name.contains('.') {
@@ -313,5 +313,147 @@ pub fn fullname(
             Some(ref namespace) => format!("{}.{}", namespace, name),
             None => name.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::arrow::datatypes::DataType::{Binary, Float32, Float64, Timestamp, Utf8};
+    use crate::arrow::datatypes::TimeUnit::Microsecond;
+    use crate::arrow::datatypes::{Field, Schema};
+    use crate::avro_to_arrow::{aliased, external_props, to_arrow_schema};
+    use arrow::datatypes::DataType::{Boolean, Int32, Int64};
+    use avro_rs::schema::Name;
+    use avro_rs::Schema as AvroSchema;
+
+    #[test]
+    fn test_alias() {
+        assert_eq!(aliased("foo.bar", None, None), "foo.bar");
+        assert_eq!(aliased("bar", Some("foo"), None), "foo.bar");
+        assert_eq!(aliased("bar", Some("foo"), Some("cat")), "foo.bar");
+        assert_eq!(aliased("bar", None, Some("cat")), "cat.bar");
+    }
+
+    #[test]
+    fn test_external_props() {
+        let record_schema = AvroSchema::Record {
+            name: Name {
+                name: "record".to_string(),
+                namespace: None,
+                aliases: Some(vec!["fooalias".to_string(), "baralias".to_string()]),
+            },
+            doc: Some("record documentation".to_string()),
+            fields: vec![],
+            lookup: Default::default(),
+        };
+        let props = external_props(&record_schema);
+        assert_eq!(props.get("doc"), Some(&"record documentation".to_string()));
+        assert_eq!(
+            props.get("aliases"),
+            Some(&"[fooalias,baralias]".to_string())
+        );
+        let enum_schema = AvroSchema::Enum {
+            name: Name {
+                name: "enum".to_string(),
+                namespace: None,
+                aliases: Some(vec!["fooenum".to_string(), "barenum".to_string()]),
+            },
+            doc: Some("enum documentation".to_string()),
+            symbols: vec![],
+        };
+        let props = external_props(&enum_schema);
+        assert_eq!(props.get("doc"), Some(&"enum documentation".to_string()));
+        assert_eq!(props.get("aliases"), Some(&"[fooenum,barenum]".to_string()));
+        let fixed_schema = AvroSchema::Fixed {
+            name: Name {
+                name: "fixed".to_string(),
+                namespace: None,
+                aliases: Some(vec!["foofixed".to_string(), "barfixed".to_string()]),
+            },
+            size: 1,
+        };
+        let props = external_props(&fixed_schema);
+        assert_eq!(
+            props.get("aliases"),
+            Some(&"[foofixed,barfixed]".to_string())
+        );
+    }
+
+    #[test]
+    fn test_invalid_avro_schema() {}
+
+    #[test]
+    fn test_plain_types_schema() {
+        let schema = AvroSchema::parse_str(
+            r#"
+            {
+              "type" : "record",
+              "name" : "topLevelRecord",
+              "fields" : [ {
+                "name" : "id",
+                "type" : [ "int", "null" ]
+              }, {
+                "name" : "bool_col",
+                "type" : [ "boolean", "null" ]
+              }, {
+                "name" : "tinyint_col",
+                "type" : [ "int", "null" ]
+              }, {
+                "name" : "smallint_col",
+                "type" : [ "int", "null" ]
+              }, {
+                "name" : "int_col",
+                "type" : [ "int", "null" ]
+              }, {
+                "name" : "bigint_col",
+                "type" : [ "long", "null" ]
+              }, {
+                "name" : "float_col",
+                "type" : [ "float", "null" ]
+              }, {
+                "name" : "double_col",
+                "type" : [ "double", "null" ]
+              }, {
+                "name" : "date_string_col",
+                "type" : [ "bytes", "null" ]
+              }, {
+                "name" : "string_col",
+                "type" : [ "bytes", "null" ]
+              }, {
+                "name" : "timestamp_col",
+                "type" : [ {
+                  "type" : "long",
+                  "logicalType" : "timestamp-micros"
+                }, "null" ]
+              } ]
+            }"#,
+        );
+        assert!(schema.is_ok(), "{:?}", schema);
+        let arrow_schema = to_arrow_schema(&schema.unwrap());
+        assert!(arrow_schema.is_ok(), "{:?}", arrow_schema);
+        let expected = Schema::new(vec![
+            Field::new("id", Int32, true),
+            Field::new("bool_col", Boolean, true),
+            Field::new("tinyint_col", Int32, true),
+            Field::new("smallint_col", Int32, true),
+            Field::new("int_col", Int32, true),
+            Field::new("bigint_col", Int64, true),
+            Field::new("float_col", Float32, true),
+            Field::new("double_col", Float64, true),
+            Field::new("date_string_col", Binary, true),
+            Field::new("string_col", Binary, true),
+            Field::new("timestamp_col", Timestamp(Microsecond, None), true),
+        ]);
+        assert_eq!(arrow_schema.unwrap(), expected);
+    }
+
+    #[test]
+    fn test_non_record_schema() {
+        let arrow_schema = to_arrow_schema(&AvroSchema::String);
+        assert!(arrow_schema.is_ok(), "{:?}", arrow_schema);
+        assert_eq!(
+            arrow_schema.unwrap(),
+            Schema::new(vec![Field::new("", Utf8, false)])
+        );
     }
 }
