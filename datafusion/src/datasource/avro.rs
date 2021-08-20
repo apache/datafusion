@@ -26,15 +26,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use arrow::datatypes::SchemaRef;
+
+use crate::physical_plan::avro::{AvroExec, AvroReadOptions};
 use crate::{
     datasource::{Source, TableProvider},
     error::{DataFusionError, Result},
     physical_plan::{common, ExecutionPlan},
 };
-use arrow::datatypes::SchemaRef;
 
 use super::datasource::Statistics;
-use crate::physical_plan::avro::{AvroExec, AvroReadOptions};
 
 trait SeekRead: Read + Seek {}
 
@@ -97,7 +98,9 @@ impl AvroFile {
             if let Some(schema) = options.schema {
                 schema
             } else {
-                Arc::new(crate::avro::infer_avro_schema_from_reader(&mut reader)?)
+                Arc::new(crate::avro_to_arrow::infer_avro_schema_from_reader(
+                    &mut reader,
+                )?)
             }
         };
 
@@ -178,22 +181,14 @@ impl TableProvider for AvroFile {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::datasource::avro::AvroFile;
-    use crate::datasource::TableProvider;
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
-        TimestampNanosecondArray,
+        TimestampMicrosecondArray,
     };
     use arrow::record_batch::RecordBatch;
     use futures::StreamExt;
 
-    fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
-        let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/avro/{}", testdata, name);
-        let table = AvroFile::try_new(&filename, AvroReadOptions::default())?;
-        Ok(Arc::new(table))
-    }
+    use super::*;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
@@ -210,10 +205,6 @@ mod tests {
             })
             .fold(0, |acc, _| async move { acc + 1i32 })
             .await;
-
-        // test metadata
-        assert_eq!(table.statistics().num_rows, Some(8));
-        assert_eq!(table.statistics().total_byte_size, Some(671));
 
         Ok(())
     }
@@ -240,7 +231,7 @@ mod tests {
              double_col: Float64\n\
              date_string_col: Binary\n\
              string_col: Binary\n\
-             timestamp_col: Timestamp(Nanosecond, None)",
+             timestamp_col: Timestamp(Microsecond, None)",
             y
         );
 
@@ -309,21 +300,20 @@ mod tests {
         let table = load_table("alltypes_plain.avro")?;
         let projection = Some(vec![10]);
         let batch = get_first_batch(table, &projection).await?;
-
         assert_eq!(1, batch.num_columns());
         assert_eq!(8, batch.num_rows());
 
         let array = batch
             .column(0)
             .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
+            .downcast_ref::<TimestampMicrosecondArray>()
             .unwrap();
         let mut values: Vec<i64> = vec![];
         for i in 0..batch.num_rows() {
             values.push(array.value(i));
         }
 
-        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{:?}", values));
+        assert_eq!("[1235865600000000, 1235865660000000, 1238544000000000, 1238544060000000, 1233446400000000, 1233446460000000, 1230768000000000, 1230768060000000]", format!("{:?}", values));
 
         Ok(())
     }
@@ -407,6 +397,13 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = format!("{}/avro/{}", testdata, name);
+        let table = AvroFile::try_new(&filename, AvroReadOptions::default())?;
+        Ok(Arc::new(table))
     }
 
     async fn get_first_batch(

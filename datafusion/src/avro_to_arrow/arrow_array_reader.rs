@@ -22,8 +22,10 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
 use avro_rs::schema::Schema as AvroSchema;
+use avro_rs::schema::SchemaKind;
 use avro_rs::types::Value;
 use avro_rs::{AvroResult, Reader as AvroReader};
+use num_traits::NumCast;
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
@@ -118,7 +120,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         let mut builder = BooleanBuilder::new(rows.len());
         for row in rows {
             if let Some(value) = self.field_lookup(col_name, row) {
-                if let Value::Boolean(boolean) = value {
+                if let Some(boolean) = resolve_boolean(&value) {
                     builder.append_value(boolean)?
                 } else {
                     builder.append_null()?;
@@ -131,7 +133,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     }
 
     #[allow(clippy::unnecessary_wraps)]
-    fn build_primitive_array<T: ArrowPrimitiveType>(
+    fn build_primitive_array<T: ArrowPrimitiveType + Resolver>(
         &self,
         rows: RecordSlice,
         col_name: &str,
@@ -144,12 +146,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             rows.iter()
                 .map(|row| {
                     self.field_lookup(col_name, row)
-                        .and_then(|value| value.resolve(&AvroSchema::Double).ok())
-                        .and_then(|v| match v {
-                            Value::Double(f) => Some(f),
-                            _ => None,
-                        })
-                        .and_then(num_traits::cast::cast)
+                        .and_then(|value| resolve_item::<T>(&value))
                 })
                 .collect::<PrimitiveArray<T>>(),
         ))
@@ -275,7 +272,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 } else if let Value::Array(n) = value {
                     n.into_iter()
                         .map(|v| {
-                            if let Some(v) = self.as_string(v.clone()) {
+                            if let Some(v) = resolve_string(&v) {
                                 Some(v)
                             } else if matches!(
                                 v,
@@ -292,7 +289,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 } else if let Value::Null = value {
                     vec![None]
                 } else if !matches!(value, Value::Record(_)) {
-                    vec![self.as_string(value)]
+                    vec![resolve_string(&value)]
                 } else {
                     return Err(SchemaError(format!(
                         "Only scalars are currently supported in Avro arrays",
@@ -362,7 +359,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             self.build_string_dictionary_builder(rows.len())?;
         for row in rows {
             if let Some(value) = self.field_lookup(col_name, row) {
-                if let Some(str_v) = self.as_string(value) {
+                if let Some(str_v) = resolve_string(&value) {
                     builder.append(str_v).map(drop)?
                 } else {
                     builder.append_null()?
@@ -699,7 +696,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         rows.iter()
                             .map(|row| {
                                 let maybe_value = self.field_lookup(field.name(), row);
-                                maybe_value.and_then(|value| self.as_string(value))
+                                maybe_value.and_then(|value| resolve_string(&value))
                             })
                             .collect::<StringArray>(),
                     )
@@ -708,7 +705,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         rows.iter()
                             .map(|row| {
                                 let maybe_value = self.field_lookup(field.name(), row);
-                                maybe_value.and_then(|value| self.as_bytes(value))
+                                maybe_value.and_then(|value| resolve_bytes(value))
                             })
                             .collect::<BinaryArray>(),
                     )
@@ -794,16 +791,10 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 if let Value::Array(values) = row {
                     values
                         .iter()
-                        .map(|value| {
-                            let v: Option<T::Native> =
-                                value_as_f64(value).and_then(num_traits::cast::cast);
-                            v
-                        })
+                        .map(resolve_item::<T>)
                         .collect::<Vec<Option<T::Native>>>()
-                } else if let Some(f) = value_as_f64(row) {
-                    // handle the scalar number case
-                    let v: Option<T::Native> = num_traits::cast::cast(f);
-                    v.map(|v| vec![Some(v)]).unwrap_or_default()
+                } else if let Some(f) = resolve_item::<T>(row) {
+                    vec![Some(f)]
                 } else {
                     vec![]
                 }
@@ -818,45 +809,6 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             .get(name)
             .and_then(|i| row.get(*i))
             .map(|o| o.1.clone())
-    }
-
-    fn as_string(&self, v: Value) -> Option<String> {
-        let v = if let Value::Union(b) = v { *b } else { v };
-        match v {
-            Value::String(s) => Ok(Value::String(s)),
-            Value::Bytes(bytes) => Ok(Value::String(
-                String::from_utf8(bytes)
-                    .map_err(avro_rs::Error::ConvertToUtf8)
-                    .ok()?,
-            )),
-            other => Err(avro_rs::Error::GetString(other.into())),
-        }
-        .ok()
-        .and_then(|v| match v {
-            Value::String(s) => Some(s.clone()),
-            _ => None,
-        })
-    }
-
-    fn as_bytes(&self, v: Value) -> Option<Vec<u8>> {
-        let v = if let Value::Union(b) = v { *b } else { v };
-        match v {
-            Value::Bytes(bytes) => Ok(Value::Bytes(bytes)),
-            Value::String(s) => Ok(Value::Bytes(s.into_bytes())),
-            Value::Array(items) => Ok(Value::Bytes(
-                items
-                    .into_iter()
-                    .map(try_u8)
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .ok()?,
-            )),
-            other => Err(avro_rs::Error::GetBytes(other.into())),
-        }
-        .ok()
-        .and_then(|v| match v {
-            Value::Bytes(s) => Some(s.clone()),
-            _ => None,
-        })
     }
 }
 
@@ -891,12 +843,12 @@ fn flatten_string_values(values: &[Value]) -> Vec<Option<String>> {
             if let Value::Array(values) = row {
                 values
                     .iter()
-                    .map(value_as_string)
+                    .map(resolve_string)
                     .collect::<Vec<Option<_>>>()
             } else if let Value::Null = row {
                 vec![]
             } else {
-                vec![value_as_string(row)]
+                vec![resolve_string(row)]
             }
         })
         .collect::<Vec<Option<_>>>()
@@ -905,38 +857,96 @@ fn flatten_string_values(values: &[Value]) -> Vec<Option<String>> {
 /// Reads an Avro value as a string, regardless of its type.
 /// This is useful if the expected datatype is a string, in which case we preserve
 /// all the values regardless of they type.
-#[inline(always)]
-fn value_as_string(value: &Value) -> Option<String> {
-    match value {
-        Value::Null => None,
-        Value::String(string) => Some(string.clone()),
-        _ => None,
-    }
-}
-
-fn value_as_f64(value: &Value) -> Option<f64> {
-    match value {
-        Value::Int(n) => Ok(Value::Double(f64::from(*n))),
-        Value::Long(n) => Ok(Value::Double(*n as f64)),
-        Value::Float(x) => Ok(Value::Double(f64::from(*x))),
-        Value::Double(x) => Ok(Value::Double(*x)),
-        other => Err(avro_rs::Error::GetDouble(other.into())),
+fn resolve_string(v: &Value) -> Option<String> {
+    let v = if let Value::Union(b) = v { b } else { v };
+    match v {
+        Value::String(s) => Ok(s.clone()),
+        Value::Bytes(bytes) => Ok(String::from_utf8(bytes.to_vec())
+            .map_err(avro_rs::Error::ConvertToUtf8)
+            .ok()?),
+        other => Err(avro_rs::Error::GetString(other.into())),
     }
     .ok()
-    .and_then(|v| match v {
-        Value::Double(f) => Some(f),
-        _ => None,
-    })
 }
 
-fn try_u8(v: Value) -> AvroResult<u8> {
-    println!("{:?}", v);
+fn resolve_u8(v: Value) -> AvroResult<u8> {
     let int = v.resolve(&AvroSchema::Int)?;
     if let Value::Int(n) = int {
-        if n >= 0 && n <= i32::from(u8::MAX) {
+        if n >= 0 && n <= std::convert::From::from(u8::MAX) {
             return Ok(n as u8);
         }
     }
 
     Err(avro_rs::Error::GetU8(int.into()))
+}
+
+fn resolve_bytes(v: Value) -> Option<Vec<u8>> {
+    let v = if let Value::Union(b) = v { *b } else { v };
+    match v {
+        Value::Bytes(bytes) => Ok(Value::Bytes(bytes)),
+        Value::String(s) => Ok(Value::Bytes(s.into_bytes())),
+        Value::Array(items) => Ok(Value::Bytes(
+            items
+                .into_iter()
+                .map(resolve_u8)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .ok()?,
+        )),
+        other => Err(avro_rs::Error::GetBytes(other.into())),
+    }
+    .ok()
+    .and_then(|v| match v {
+        Value::Bytes(s) => Some(s.clone()),
+        _ => None,
+    })
+}
+
+fn resolve_boolean(value: &Value) -> Option<bool> {
+    let v = if let Value::Union(b) = value {
+        b
+    } else {
+        value
+    };
+    match v {
+        Value::Boolean(boolean) => Some(*boolean),
+        _ => None,
+    }
+}
+
+trait Resolver: ArrowPrimitiveType {
+    fn resolve(value: &Value) -> Option<Self::Native>;
+}
+
+fn resolve_item<T: Resolver>(value: &Value) -> Option<T::Native> {
+    T::resolve(value)
+}
+
+impl<N> Resolver for N
+where
+    N: ArrowNumericType,
+    N::Native: num_traits::cast::NumCast,
+{
+    fn resolve(value: &Value) -> Option<Self::Native> {
+        let value = if SchemaKind::from(value) == SchemaKind::Union {
+            // Pull out the Union, and attempt to resolve against it.
+            let v = match value {
+                Value::Union(b) => b,
+                _ => unreachable!(),
+            };
+            v
+        } else {
+            value
+        };
+        match value {
+            Value::Int(i) | Value::TimeMillis(i) | Value::Date(i) => NumCast::from(*i),
+            Value::Long(l)
+            | Value::TimeMicros(l)
+            | Value::TimestampMillis(l)
+            | Value::TimestampMicros(l) => NumCast::from(*l),
+            Value::Float(f) => NumCast::from(*f),
+            Value::Double(f) => NumCast::from(*f),
+            Value::Duration(_d) => unimplemented!(), // shenanigans type
+            _ => unreachable!(),
+        }
+    }
 }

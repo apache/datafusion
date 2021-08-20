@@ -20,7 +20,6 @@ use datafusion::arrow::util::pretty;
 use datafusion::error::Result;
 use datafusion::physical_plan::avro::AvroReadOptions;
 use datafusion::prelude::*;
-use std::fs::File;
 
 /// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
 /// fetching results
@@ -35,7 +34,6 @@ async fn main() -> Result<()> {
     let avro_file = &format!("{}/avro/alltypes_plain.avro", testdata);
     ctx.register_avro("alltypes_plain", avro_file, AvroReadOptions::default())?;
 
-    let df = ctx.table("alltypes_plain").unwrap();
     // execute the query
     let df = ctx.sql(
         "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \

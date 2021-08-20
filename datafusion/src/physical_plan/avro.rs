@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use futures::Stream;
 
 use super::{common, source::Source, ExecutionPlan, Partitioning, RecordBatchStream};
-use crate::avro::infer_avro_schema_from_reader;
+use crate::avro_to_arrow::infer_avro_schema_from_reader;
 use crate::error::{DataFusionError, Result};
 use arrow::{
     datatypes::{Schema, SchemaRef},
@@ -256,7 +256,7 @@ impl ExecutionPlan for AvroExec {
         &self,
         partition: usize,
     ) -> Result<super::SendableRecordBatchStream> {
-        let mut builder = crate::avro::ReaderBuilder::new()
+        let mut builder = crate::avro_to_arrow::ReaderBuilder::new()
             .with_schema(self.schema.clone())
             .with_batch_size(self.batch_size);
         if let Some(proj) = &self.projection {
@@ -293,12 +293,12 @@ impl ExecutionPlan for AvroExec {
 }
 
 struct AvroStream<'a, R: Read> {
-    reader: crate::avro::Reader<'a, R>,
+    reader: crate::avro_to_arrow::Reader<'a, R>,
     remain: Option<usize>,
 }
 
 impl<'a, R: Read> AvroStream<'a, R> {
-    fn new(reader: crate::avro::Reader<'a, R>, limit: Option<usize>) -> Self {
+    fn new(reader: crate::avro_to_arrow::Reader<'a, R>, limit: Option<usize>) -> Self {
         Self {
             reader,
             remain: limit,
@@ -489,7 +489,6 @@ mod tests {
 
         assert_eq!(1, batch.num_columns());
         assert_eq!(8, batch.num_rows());
-
         let array = batch
             .column(0)
             .as_any()
