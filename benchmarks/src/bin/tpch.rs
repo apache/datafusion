@@ -1147,7 +1147,10 @@ mod tests {
         test_round_trip!(q5, 5);
         test_round_trip!(q6, 6);
         test_round_trip!(q7, 7);
+        test_round_trip!(q8, 8);
+        test_round_trip!(q9, 9);
         test_round_trip!(q10, 10);
         test_round_trip!(q12, 12);
+        test_round_trip!(q13, 13);
     }
 }
