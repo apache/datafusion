@@ -645,7 +645,7 @@ impl QueryPlanner for DefaultQueryPlanner {
 /// Configuration options for execution context
 #[derive(Clone)]
 pub struct ExecutionConfig {
-    /// Number of concurrent threads for query execution.
+    /// Number of partitions for query execution. Increasing partitions can increase concurrency.
     pub target_partitions: usize,
     /// Default batch size when reading data sources
     pub batch_size: usize,
