@@ -30,7 +30,7 @@ services:
     image: quay.io/coreos/etcd:v3.4.9
     command: "etcd -advertise-client-urls http://etcd:2379 -listen-client-urls http://0.0.0.0:2379"
   ballista-scheduler:
-    image: ballista:0.5.0-SNAPSHOT
+    image: ballista:0.6.0
     command: "/scheduler --config-backend etcd --etcd-urls etcd:2379 --bind-host 0.0.0.0 --bind-port 50050"
     ports:
       - "50050:50050"
@@ -41,7 +41,7 @@ services:
     depends_on:
       - etcd
   ballista-executor:
-    image: ballista:0.5.0-SNAPSHOT
+    image: ballista:0.6.0
     command: "/executor --bind-host 0.0.0.0 --bind-port 50051 --scheduler-host ballista-scheduler"
     ports:
       - "50051:50051"
