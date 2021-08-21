@@ -132,7 +132,7 @@
 //! Logical planning yields [`logical plans`](logical_plan::LogicalPlan) and [`logical expressions`](logical_plan::Expr).
 //! These are [`Schema`](arrow::datatypes::Schema)-aware traits that represent statements whose result is independent of how it should physically be executed.
 //!
-//! A [`LogicalPlan`](logical_plan::LogicalPlan) is a Direct Asyclic graph of other [`LogicalPlan`s](logical_plan::LogicalPlan) and each node contains logical expressions ([`Expr`s](logical_plan::Expr)).
+//! A [`LogicalPlan`](logical_plan::LogicalPlan) is a Directed Acyclic Graph (DAG) of other [`LogicalPlan`s](logical_plan::LogicalPlan) and each node contains logical expressions ([`Expr`s](logical_plan::Expr)).
 //! All of these are located in [`logical_plan`](logical_plan).
 //!
 //! ### Physical plan
