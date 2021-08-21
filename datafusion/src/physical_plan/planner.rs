@@ -343,7 +343,10 @@ impl DefaultPhysicalPlanner {
                         .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
                     Arc::new(RepartitionExec::try_new(
                         input_exec,
-                        Partitioning::Hash(partition_keys, ctx_state.config.target_partitions),
+                        Partitioning::Hash(
+                            partition_keys,
+                            ctx_state.config.target_partitions,
+                        ),
                     )?)
                 } else {
                     input_exec
@@ -668,7 +671,8 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<hash_utils::JoinOn>>()?;
 
-                if ctx_state.config.target_partitions > 1 && ctx_state.config.repartition_joins
+                if ctx_state.config.target_partitions > 1
+                    && ctx_state.config.repartition_joins
                 {
                     let (left_expr, right_expr) = join_on
                         .iter()
@@ -684,11 +688,17 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(HashJoinExec::try_new(
                         Arc::new(RepartitionExec::try_new(
                             physical_left,
-                            Partitioning::Hash(left_expr, ctx_state.config.target_partitions),
+                            Partitioning::Hash(
+                                left_expr,
+                                ctx_state.config.target_partitions,
+                            ),
                         )?),
                         Arc::new(RepartitionExec::try_new(
                             physical_right,
-                            Partitioning::Hash(right_expr, ctx_state.config.target_partitions),
+                            Partitioning::Hash(
+                                right_expr,
+                                ctx_state.config.target_partitions,
+                            ),
                         )?),
                         join_on,
                         join_type,
