@@ -64,7 +64,7 @@ fn optimize_concurrency(
     };
 
     let perform_repartition = match new_plan.output_partitioning() {
-        // Apply when underlying node has less than `self.concurrency` amount of concurrency
+        // Apply when underlying node has less than `self.target_partitions` amount of concurrency
         RoundRobinBatch(x) => x < concurrency,
         UnknownPartitioning(x) => x < concurrency,
         // we don't want to introduce partitioning after hash partitioning
@@ -93,10 +93,10 @@ impl PhysicalOptimizerRule for Repartition {
         config: &ExecutionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Don't run optimizer if concurrency == 1
-        if config.concurrency == 1 {
+        if config.target_partitions == 1 {
             Ok(plan)
         } else {
-            optimize_concurrency(config.concurrency, true, plan)
+            optimize_concurrency(config.target_partitions, true, plan)
         }
     }
 
@@ -139,7 +139,7 @@ mod tests {
 
         let optimized = optimizer.optimize(
             Arc::new(parquet_project),
-            &ExecutionConfig::new().with_concurrency(10),
+            &ExecutionConfig::new().with_target_partitions(10),
         )?;
 
         assert_eq!(
@@ -180,7 +180,7 @@ mod tests {
 
         let optimized = optimizer.optimize(
             Arc::new(parquet_project),
-            &ExecutionConfig::new().with_concurrency(10),
+            &ExecutionConfig::new().with_target_partitions(10),
         )?;
 
         // RepartitionExec is added to deepest node
