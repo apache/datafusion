@@ -11,27 +11,40 @@
 // limitations under the License.
 
 use crate::SchedulerServer;
-use ballista_core::{serde::scheduler::ExecutorMeta, BALLISTA_VERSION};
+use ballista_core::BALLISTA_VERSION;
 use warp::Rejection;
 
 #[derive(Debug, serde::Serialize)]
 struct StateResponse {
-    executors: Vec<ExecutorMeta>,
+    executors: Vec<ExecutorMetaResponse>,
     started: u128,
     version: &'static str,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ExecutorMetaResponse {
+    pub id: String,
+    pub host: String,
+    pub port: u16,
+    pub last_seen: u128,
 }
 
 pub(crate) async fn scheduler_state(
     data_server: SchedulerServer,
 ) -> Result<impl warp::Reply, Rejection> {
     // TODO: Display last seen information in UI
-    let executors: Vec<ExecutorMeta> = data_server
+    let executors: Vec<ExecutorMetaResponse> = data_server
         .state
         .get_executors_metadata()
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|(metadata, _duration)| metadata)
+        .map(|(metadata, duration)| ExecutorMetaResponse {
+            id: metadata.id,
+            host: metadata.host,
+            port: metadata.port,
+            last_seen: duration.as_millis(),
+        })
         .collect();
     let response = StateResponse {
         executors,

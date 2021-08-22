@@ -60,6 +60,25 @@ interface DataTableProps {
   maxW?: number;
   pb?: number;
 }
+
+export const ElapsedCell: (props: any) => React.ReactNode = (props: any) => {
+  const time = new Date(new Date().getTime() - props.value);
+  return (
+    <TimeAgo
+      date={time}
+      formatter={(
+        value: number,
+        unit: TimeAgo.Unit,
+        suffix: TimeAgo.Suffix
+      ) => {
+        if (unit === "second") return "just now";
+        const plural: string = value !== 1 ? "s" : "";
+        return `${value} ${unit}${plural} ${suffix}`;
+      }}
+    />
+  );
+};
+
 export const DateCell: (props: any) => React.ReactNode = (props: any) => {
   return (
     <TimeAgo
