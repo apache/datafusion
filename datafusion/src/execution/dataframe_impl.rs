@@ -31,11 +31,11 @@ use crate::{
     physical_plan::{collect, collect_partitioned},
 };
 
+use crate::arrow::util::pretty;
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
 };
 use async_trait::async_trait;
-use crate::arrow::util::pretty;
 
 /// Implementation of DataFrame API
 pub struct DataFrameImpl {
