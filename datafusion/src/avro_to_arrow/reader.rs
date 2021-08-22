@@ -4,7 +4,7 @@ use crate::avro_to_arrow::arrow_array_reader::AvroArrowArrayReader;
 use crate::error::Result;
 use arrow::error::Result as ArrowResult;
 use avro_rs::Reader as AvroReader;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 /// Avro file reader builder
@@ -97,7 +97,7 @@ impl ReaderBuilder {
             Some(schema) => schema,
             None => Arc::new(infer_avro_schema_from_reader(&mut source)?),
         };
-        source.rewind()?;
+        source.seek(SeekFrom::Start(0))?;
         Reader::try_new(source, schema, self.batch_size, self.projection)
     }
 }
