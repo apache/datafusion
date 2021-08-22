@@ -223,6 +223,21 @@ pub trait DataFrame: Send + Sync {
     /// ```
     async fn collect(&self) -> Result<Vec<RecordBatch>>;
 
+    /// Print results.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let mut ctx = ExecutionContext::new();
+    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
+    /// df.show().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn show(&self) -> Result<()>;
+
     /// Executes this DataFrame and returns a stream over a single partition
     ///
     /// ```
