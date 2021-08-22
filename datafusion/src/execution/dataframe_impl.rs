@@ -157,7 +157,7 @@ impl DataFrame for DataFrameImpl {
         Ok(collect(plan).await?)
     }
 
-    // Print results.
+    /// Print results.
     async fn show(&self) -> Result<()> {
         let results = self.collect().await?;
         Ok(pretty::print_batches(&results)?)
