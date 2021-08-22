@@ -141,6 +141,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NOT NULL", expr))
         }
+        Expr::GetIndexedField { expr, key } => {
+            let expr = create_physical_name(expr, false)?;
+            Ok(format!("{}[{}]", expr, key))
+        }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_physical_name(&fun.to_string(), false, args)
         }
@@ -988,6 +992,10 @@ impl DefaultPhysicalPlanner {
             )?),
             Expr::IsNotNull(expr) => expressions::is_not_null(
                 self.create_physical_expr(expr, input_dfschema, input_schema, ctx_state)?,
+            ),
+            Expr::GetIndexedField { expr, key } => expressions::get_indexed_field(
+                self.create_physical_expr(expr, input_dfschema, input_schema, ctx_state)?,
+                key.clone(),
             ),
             Expr::ScalarFunction { fun, args } => {
                 let physical_args = args
