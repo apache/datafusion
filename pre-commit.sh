@@ -37,14 +37,12 @@ function BYELLOW() {
 	echo "\033[1;33m$@\033[0m"
 }
 
-RUST_DIR="rust"
-
 # env GIT_DIR is set by git when run a pre-commit hook.
 if [ -z "${GIT_DIR}" ]; then
 	GIT_DIR=$(git rev-parse --show-toplevel)
 fi
 
-cd ${GIT_DIR}/${RUST_DIR}
+cd ${GIT_DIR}
 
 NUM_CHANGES=$(git diff --cached --name-only . |
 	grep -e ".*/*.rs$" |
