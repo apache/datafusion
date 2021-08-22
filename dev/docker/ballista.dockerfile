@@ -42,9 +42,9 @@ COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
 RUN cargo chef prepare --recipe-path recipe.json
 
-# FROM base as cacher
-# COPY --from=planner /tmp/ballista/recipe.json recipe.json
-# RUN cargo chef cook $RELEASE_FLAG --recipe-path recipe.json
+FROM base as cacher
+COPY --from=planner /tmp/ballista/recipe.json recipe.json
+RUN cargo chef cook $RELEASE_FLAG --recipe-path recipe.json
 
 FROM base as builder
 RUN mkdir /tmp/ballista/ballista
@@ -60,7 +60,7 @@ COPY benchmarks ./benchmarks/
 COPY datafusion ./datafusion/
 COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
-# COPY --from=cacher /tmp/ballista/target target
+COPY --from=cacher /tmp/ballista/target target
 ARG RELEASE_FLAG=--release
 
 # force build.rs to run to generate configure_me code.
