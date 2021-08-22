@@ -665,13 +665,13 @@ pub struct ExecutionConfig {
     /// virtual tables for displaying schema information
     information_schema: bool,
     /// Should DataFusion repartition data using the join keys to execute joins in parallel
-    /// using the provided `default_partitions` level
+    /// using the provided `target_partitions` level
     pub repartition_joins: bool,
     /// Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel
-    /// using the provided `default_partitions` level
+    /// using the provided `target_partitions` level
     pub repartition_aggregations: bool,
     /// Should DataFusion repartition data using the partition keys to execute window functions in
-    /// parallel using the provided `default_partitions` level
+    /// parallel using the provided `target_partitions` level
     pub repartition_windows: bool,
     /// Should Datafusion parquet reader using the predicate to prune data
     parquet_pruning: bool,
