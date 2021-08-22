@@ -435,6 +435,16 @@ macro_rules! eq_array_primitive {
     }};
 }
 
+macro_rules! eq_array_no_nulls_primitive {
+    ($array:expr, $index:expr, $ARRAYTYPE:ident, $VALUE:expr) => {{
+        let array = $array.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
+        match $VALUE {
+            Some(val) => &array.value($index) == val,
+            None => false,
+        }
+    }};
+}
+
 impl ScalarValue {
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {
@@ -1094,6 +1104,78 @@ impl ScalarValue {
             }
         }
     }
+
+
+    /// an unsafe version of `eq_array` optimised for the situation
+    /// where we know in advance that the array has no nulls
+    #[inline]
+    pub fn eq_array_no_nulls(&self, array: &ArrayRef, index:usize) -> bool {
+        if let DataType::Dictionary(key_type, _) = array.data_type() {
+            return self.eq_array_dictionary(array, index, key_type);
+        }
+
+        match self {
+            ScalarValue::Boolean(val) => {
+                eq_array_no_nulls_primitive!(array, index, BooleanArray, val)
+            }
+            ScalarValue::Float32(val) => {
+                eq_array_no_nulls_primitive!(array, index, Float32Array, val)
+            }
+            ScalarValue::Float64(val) => {
+                eq_array_no_nulls_primitive!(array, index, Float64Array, val)
+            }
+            ScalarValue::Int8(val) => eq_array_no_nulls_primitive!(array, index, Int8Array, val),
+            ScalarValue::Int16(val) => eq_array_no_nulls_primitive!(array, index, Int16Array, val),
+            ScalarValue::Int32(val) => eq_array_no_nulls_primitive!(array, index, Int32Array, val),
+            ScalarValue::Int64(val) => eq_array_no_nulls_primitive!(array, index, Int64Array, val),
+            ScalarValue::UInt8(val) => eq_array_no_nulls_primitive!(array, index, UInt8Array, val),
+            ScalarValue::UInt16(val) => {
+                eq_array_no_nulls_primitive!(array, index, UInt16Array, val)
+            }
+            ScalarValue::UInt32(val) => {
+                eq_array_no_nulls_primitive!(array, index, UInt32Array, val)
+            }
+            ScalarValue::UInt64(val) => {
+                eq_array_no_nulls_primitive!(array, index, UInt64Array, val)
+            }
+            ScalarValue::Utf8(val) => eq_array_no_nulls_primitive!(array, index, StringArray, val),
+            ScalarValue::LargeUtf8(val) => {
+                eq_array_no_nulls_primitive!(array, index, LargeStringArray, val)
+            }
+            ScalarValue::Binary(val) => {
+                eq_array_no_nulls_primitive!(array, index, BinaryArray, val)
+            }
+            ScalarValue::LargeBinary(val) => {
+                eq_array_no_nulls_primitive!(array, index, LargeBinaryArray, val)
+            }
+            ScalarValue::List(_, _) => unimplemented!(),
+            ScalarValue::Date32(val) => {
+                eq_array_no_nulls_primitive!(array, index, Date32Array, val)
+            }
+            ScalarValue::Date64(val) => {
+                eq_array_no_nulls_primitive!(array, index, Date64Array, val)
+            }
+            ScalarValue::TimestampSecond(val) => {
+                eq_array_no_nulls_primitive!(array, index, TimestampSecondArray, val)
+            }
+            ScalarValue::TimestampMillisecond(val) => {
+                eq_array_no_nulls_primitive!(array, index, TimestampMillisecondArray, val)
+            }
+            ScalarValue::TimestampMicrosecond(val) => {
+                eq_array_no_nulls_primitive!(array, index, TimestampMicrosecondArray, val)
+            }
+            ScalarValue::TimestampNanosecond(val) => {
+                eq_array_no_nulls_primitive!(array, index, TimestampNanosecondArray, val)
+            }
+            ScalarValue::IntervalYearMonth(val) => {
+                eq_array_no_nulls_primitive!(array, index, IntervalYearMonthArray, val)
+            }
+            ScalarValue::IntervalDayTime(val) => {
+                eq_array_no_nulls_primitive!(array, index, IntervalDayTimeArray, val)
+            }
+        }
+    }
+
 
     /// Compares a dictionary array with indexes of type `key_type`
     /// with the array @ index for equality with self

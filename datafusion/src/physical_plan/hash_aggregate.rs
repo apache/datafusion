@@ -365,10 +365,16 @@ fn group_aggregate_batch(
             // actually the same key value as the group in
             // existing_idx  (aka group_values @ row)
             let group_state = &group_states[*group_idx];
-            group_values
-                .iter()
-                .zip(group_state.group_by_values.iter())
-                .all(|(array, scalar)| scalar.eq_array(array, row))
+                group_values
+                    .iter()
+                    .zip(group_state.group_by_values.iter())
+                    .all(|(array, scalar)| {
+                        if array.null_count() > 0 {
+                            scalar.eq_array(array, row)
+                        } else {
+                            scalar.eq_array_no_nulls(array, row)
+                        }
+                    })
         });
 
         match entry {
