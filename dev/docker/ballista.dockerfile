@@ -25,7 +25,7 @@ ARG RELEASE_FLAG=--release
 FROM ballista-base:0.6.0 AS base
 WORKDIR /tmp/ballista
 RUN apt-get -y install cmake
-RUN cargo install cargo-chef 
+RUN cargo install cargo-chef --version 0.1.23
 
 FROM base as planner
 RUN mkdir /tmp/ballista/ballista
