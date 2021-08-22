@@ -20,7 +20,7 @@
 # This file is git pre-commit hook.
 #
 # Soft link it as git hook under top dir of apache arrow git repository:
-# $ ln -s  ../../rust/pre-commit.sh .git/hooks/pre-commit
+# $ ln -s  ../../pre-commit.sh .git/hooks/pre-commit
 #
 # This file be run directly:
 # $ ./pre-commit.sh
