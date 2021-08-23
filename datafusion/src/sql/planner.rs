@@ -1256,7 +1256,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     BinaryOperator::Minus => Ok(Operator::Minus),
                     BinaryOperator::Multiply => Ok(Operator::Multiply),
                     BinaryOperator::Divide => Ok(Operator::Divide),
-                    BinaryOperator::Modulus => Ok(Operator::Modulus),
+                    BinaryOperator::Modulo => Ok(Operator::Modulo),
                     BinaryOperator::And => Ok(Operator::And),
                     BinaryOperator::Or => Ok(Operator::Or),
                     BinaryOperator::Like => Ok(Operator::Like),
