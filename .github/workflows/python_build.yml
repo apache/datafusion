@@ -15,11 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Build
+name: Python Release Build
 on:
   push:
     tags:
-      - v*
+      - '*-rc*'
+
+defaults:
+  run:
+    working-directory: ./python
 
 jobs:
   build-python-mac-win:
@@ -28,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.6", "3.7", "3.8", "3.9"]
+        python-version: ["3.6"]
         os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v2
@@ -44,18 +48,18 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install maturin
+          pip install maturin==0.11.2
 
       - name: Build Python package
-        run: cd python && maturin build --release --no-sdist --strip --interpreter python${{matrix.python_version}}
+        run: maturin build --release --no-sdist --strip
 
-      - name: List wheels
+      - name: List Windows wheels
         if: matrix.os == 'windows-latest'
-        run: dir python/target\wheels\
+        run: dir target\wheels\
 
-      - name: List wheels
+      - name: List Mac wheels
         if: matrix.os != 'windows-latest'
-        run: find ./python/target/wheels/
+        run: find target/wheels/
 
       - name: Archive wheels
         uses: actions/upload-artifact@v2
@@ -69,21 +73,25 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Build wheels
-        run: docker run --rm -v $(pwd):/io konstin2/maturin build --release --manylinux
+        run: |
+          docker run --rm -v $(pwd):/io \
+            konstin2/maturin:v0.11.2 \
+            build --release --manylinux 2010
       - name: Archive wheels
         uses: actions/upload-artifact@v2
         with:
           name: dist
           path: python/target/wheels/*
 
-  release:
-    name: Publish in PyPI
-    needs: [build-manylinux, build-python-mac-win]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v2
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@master
-        with:
-          user: __token__
-          password: ${{ secrets.pypi_password }}
+  # NOTE: PyPI publish needs to be done manually for now after release passed the vote
+  # release:
+  #   name: Publish in PyPI
+  #   needs: [build-manylinux, build-python-mac-win]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/download-artifact@v2
+  #     - name: Publish to PyPI
+  #       uses: pypa/gh-action-pypi-publish@master
+  #       with:
+  #         user: __token__
+  #         password: ${{ secrets.pypi_password }}
