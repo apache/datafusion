@@ -571,7 +571,7 @@ fn build_single_column_expr(
         if is_not {
             // The only way we know a column couldn't match is if both the min and max are true
             // !(min && max)
-            Some((min.and(max)).not())
+            Some(!(min.and(max)))
         } else {
             // the only way we know a column couldn't match is if both the min and max are false
             // !(!min && !max) --> min || max
