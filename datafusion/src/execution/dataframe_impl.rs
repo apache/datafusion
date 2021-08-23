@@ -160,11 +160,8 @@ impl DataFrame for DataFrameImpl {
     /// Print results.
     async fn show(&self) -> Result<()> {
         let mut num = 20;
-        match self.to_logical_plan() {
-            LogicalPlan::Limit { n, input: _ } => {
-                num = n;
-            }
-            _ => {}
+        if let LogicalPlan::Limit { n, input: _ } = self.to_logical_plan() {
+            num = n;
         }
         let results = self.limit(num)?.collect().await?;
         Ok(pretty::print_batches(&results)?)
