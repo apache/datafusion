@@ -18,6 +18,7 @@
 //! Execution plan for reading Parquet files
 
 use std::fmt;
+use std::fs::File;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
@@ -26,7 +27,7 @@ use crate::{
     logical_plan::{Column, Expr},
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
-        DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+        DisplayFormatType, ExecutionPlan, Partitioning,
         SendableRecordBatchStream,
     },
     scalar::ScalarValue,
@@ -61,7 +62,6 @@ use super::stream::RecordBatchReceiverStream;
 use super::SQLMetric;
 use crate::datasource::parquet::ParquetRootDesc;
 use crate::datasource::{get_statistics_with_limit, FilePartition, PartitionedFile};
-use std::fs::File;
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
@@ -538,7 +538,6 @@ fn build_row_group_predicate(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn read_partition(
     partition: ParquetPartition,
     metrics: ParquetPartitionMetrics,

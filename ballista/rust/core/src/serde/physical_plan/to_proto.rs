@@ -271,7 +271,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
             let filenames = exec
                 .partitions()
                 .iter()
-                .flat_map(|part| part.filenames().to_owned())
+                .flat_map(|part| part.filenames())
                 .collect();
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
