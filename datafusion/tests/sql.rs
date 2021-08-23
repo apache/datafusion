@@ -52,6 +52,28 @@ use datafusion::{
 };
 use datafusion::{execution::context::ExecutionContext, physical_plan::displayable};
 
+/// A macro to assert that one string is contained within another with
+/// a nice error message if they are not.
+///
+/// Usage: `assert_contains!(actual, expected)`
+///
+/// Is a macro so test error
+/// messages are on the same line as the failure;
+///
+/// Both arguments must be convertable into Strings (Into<String>)
+macro_rules! assert_contains {
+    ($ACTUAL: expr, $EXPECTED: expr) => {
+        let actual_value: String = $ACTUAL.into();
+        let expected_value: String = $EXPECTED.into();
+        assert!(
+            actual_value.contains(&expected_value),
+            "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
+            expected_value,
+            actual_value
+        );
+    };
+}
+
 #[tokio::test]
 async fn nyc() -> Result<()> {
     // schema for nyxtaxi csv files
@@ -2587,6 +2609,29 @@ async fn csv_explain_verbose_plans() {
         "Actual: '{}'",
         actual
     );
+}
+
+#[tokio::test]
+async fn explain_analyze_runs_optimizers() {
+    // repro for https://github.com/apache/arrow-datafusion/issues/917
+    // where EXPLAIN ANALYZE was not correctly running optiimizer
+    let mut ctx = ExecutionContext::new();
+    register_alltypes_parquet(&mut ctx);
+
+    // This happens as an optimization pass where count(*) can be
+    // answered using statistics only.
+    let expected = "EmptyExec: produce_one_row=true";
+
+    let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    assert_contains!(actual, expected);
+
+    // EXPLAIN ANALYZE should work the same
+    let sql = "EXPLAIN  ANALYZE SELECT count(*) from alltypes_plain";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    assert_contains!(actual, expected);
 }
 
 fn aggr_test_schema() -> SchemaRef {
