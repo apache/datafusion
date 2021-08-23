@@ -1274,6 +1274,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 })
             }
 
+            SQLExpr::Trim { expr, trim_where } => {
+                let fun = match trim_where {
+                    Some((trim_where, _expr)) => {
+                        return Err(DataFusionError::Plan(format!(
+                            "TRIM {} is not yet supported ",
+                            trim_where
+                        )))
+                    }
+                    None => functions::BuiltinScalarFunction::Trim,
+                };
+
+                let arg = self.sql_expr_to_logical_expr(expr, schema)?;
+                Ok(Expr::ScalarFunction {
+                    fun,
+                    args: vec![arg],
+                })
+            }
+
             SQLExpr::Function(function) => {
                 let name = if function.name.0.len() > 1 {
                     // DF doesn't handle compound identifiers
