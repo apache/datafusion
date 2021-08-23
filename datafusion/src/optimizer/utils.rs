@@ -195,11 +195,21 @@ pub fn from_plan(
             schema: schema.clone(),
             alias: alias.clone(),
         }),
+        LogicalPlan::Analyze {
+            verbose, schema, ..
+        } => {
+            assert!(expr.is_empty());
+            assert_eq!(inputs.len(), 1);
+            Ok(LogicalPlan::Analyze {
+                verbose: *verbose,
+                schema: schema.clone(),
+                input: Arc::new(inputs[0].clone()),
+            })
+        }
         LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable { .. }
-        | LogicalPlan::Explain { .. }
-        | LogicalPlan::Analyze { .. } => Ok(plan.clone()),
+        | LogicalPlan::Explain { .. } => Ok(plan.clone()),
     }
 }
 
