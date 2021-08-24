@@ -18,24 +18,39 @@
 use arrow::datatypes::{DataType, Field};
 
 use crate::error::{DataFusionError, Result};
+use crate::scalar::ScalarValue;
 
 /// Returns the a field access indexed by `name` from a [`DataType::List`] or [`DataType::Dictionnary`].
 /// # Error
 /// Errors if
 /// * the `data_type` is not a Struct or,
 /// * there is no field key is not of the required index type
-pub fn get_indexed_field<'a>(data_type: &'a DataType, key: &str) -> Result<Field> {
-    match data_type {
-        DataType::Dictionary(ref kt, ref vt) => {
+pub fn get_indexed_field<'a>(
+    data_type: &'a DataType,
+    key: &ScalarValue,
+) -> Result<Field> {
+    match (data_type, key) {
+        (DataType::Dictionary(ref kt, ref vt), ScalarValue::Utf8(Some(k))) => {
             match kt.as_ref() {
-                DataType::Utf8 => Ok(Field::new(key, *vt.clone(), true)),
+                DataType::Utf8 => Ok(Field::new(&k, *vt.clone(), true)),
                 _ => Err(DataFusionError::Plan(format!("The key for a dictionary has to be an utf8 string, was : \"{}\"", key))),
             }
         },
-        DataType::List(lt) => match key.parse::<usize>() {
-            Ok(_) => Ok(Field::new(key, lt.data_type().clone(), false)),
-            Err(_) => Err(DataFusionError::Plan(format!("The key for a list has to be an integer, was : \"{}\"", key))),
-        },
+        (DataType::Dictionary(_, _), _) => {
+            Err(DataFusionError::Plan(
+                "Only uf8 is valid as an indexed field in a dictionary"
+                    .to_string(),
+            ))
+        }
+        (DataType::List(lt), ScalarValue::Int64(Some(i))) => {
+            Ok(Field::new(&i.to_string(), lt.data_type().clone(), false))
+        }
+        (DataType::List(_), _) => {
+            Err(DataFusionError::Plan(
+                "Only ints are valid as an indexed field in a list"
+                    .to_string(),
+            ))
+        }
         _ => Err(DataFusionError::Plan(
             "The expression to get an indexed field is only valid for `List` or 'Dictionary'"
                 .to_string(),

@@ -251,7 +251,7 @@ pub enum Expr {
         /// the expression to take the field from
         expr: Box<Expr>,
         /// The name of the field to take
-        key: String,
+        key: ScalarValue,
     },
     /// Whether an expression is between a given range.
     Between {
@@ -443,6 +443,7 @@ impl Expr {
             )),
             Expr::GetIndexedField { ref expr, key } => {
                 let data_type = expr.get_type(schema)?;
+
                 get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
             }
         }

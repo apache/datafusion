@@ -234,6 +234,7 @@ pub use parquet;
 #[cfg(test)]
 pub mod test;
 pub mod test_util;
+pub mod utils;
 
 #[macro_use]
 #[cfg(feature = "regex_expressions")]
