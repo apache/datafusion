@@ -141,11 +141,8 @@ async fn main() -> Result<()> {
 
     // note that "b" is f32, not f64. DataFusion coerces the types to match the UDF's signature.
 
-    // execute the query
-    let results = df.collect().await?;
-
     // print the results
-    pretty::print_batches(&results)?;
+    df.show().await?;
 
     Ok(())
 }

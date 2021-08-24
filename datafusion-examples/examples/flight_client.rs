@@ -19,7 +19,6 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::util::pretty;
 
 use arrow_flight::flight_descriptor;
 use arrow_flight::flight_service_client::FlightServiceClient;
@@ -73,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // print the results
-    pretty::print_batches(&results)?;
+    df.show().await?;
 
     Ok(())
 }
