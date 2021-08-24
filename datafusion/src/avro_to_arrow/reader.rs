@@ -27,10 +27,10 @@ use std::sync::Arc;
 /// Avro file reader builder
 #[derive(Debug)]
 pub struct ReaderBuilder {
-    /// Optional schema for the JSON file
+    /// Optional schema for the Avro file
     ///
     /// If the schema is not supplied, the reader will try to infer the schema
-    /// based on the JSON structure.
+    /// based on the Avro structure.
     schema: Option<SchemaRef>,
     /// Batch size (number of records to load each time)
     ///
@@ -51,7 +51,7 @@ impl Default for ReaderBuilder {
 }
 
 impl ReaderBuilder {
-    /// Create a new builder for configuring JSON parsing options.
+    /// Create a new builder for configuring Avro parsing options.
     ///
     /// To convert a builder into a reader, call `Reader::from_builder`
     ///
@@ -199,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn test_json_basic() {
+    fn test_avro_basic() {
         let mut reader = build_reader("alltypes_dictionary.avro");
         let batch = reader.next().unwrap().unwrap();
 

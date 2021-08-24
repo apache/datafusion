@@ -315,7 +315,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         let builder = builder
                             .as_any_mut()
                             .downcast_mut::<ListBuilder<StringBuilder>>()
-                            .ok_or_else(||ArrowError::JsonError(
+                            .ok_or_else(||ArrowError::SchemaError(
                                 "Cast failed for ListBuilder<StringBuilder> during nested data parsing".to_string(),
                             ))?;
                         for val in vals {
@@ -330,7 +330,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         builder.append(true)?;
                     }
                     DataType::Dictionary(_, _) => {
-                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<D>>>().ok_or_else(||ArrowError::JsonError(
+                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<D>>>().ok_or_else(||ArrowError::SchemaError(
                             "Cast failed for ListBuilder<StringDictionaryBuilder> during nested data parsing".to_string(),
                         ))?;
                         for val in vals {
@@ -497,7 +497,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             DataType::UInt32 => self.read_primitive_list_values::<UInt32Type>(rows),
             DataType::UInt64 => self.read_primitive_list_values::<UInt64Type>(rows),
             DataType::Float16 => {
-                return Err(ArrowError::JsonError("Float16 not supported".to_string()))
+                return Err(ArrowError::SchemaError("Float16 not supported".to_string()))
             }
             DataType::Float32 => self.read_primitive_list_values::<Float32Type>(rows),
             DataType::Float64 => self.read_primitive_list_values::<Float64Type>(rows),
@@ -506,7 +506,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             | DataType::Date64
             | DataType::Time32(_)
             | DataType::Time64(_) => {
-                return Err(ArrowError::JsonError(
+                return Err(ArrowError::SchemaError(
                     "Temporal types are not yet supported, see ARROW-4803".to_string(),
                 ))
             }
@@ -574,7 +574,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     .build()
             }
             datatype => {
-                return Err(ArrowError::JsonError(format!(
+                return Err(ArrowError::SchemaError(format!(
                     "Nested list of {:?} not supported",
                     datatype
                 )));
