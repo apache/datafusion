@@ -41,6 +41,9 @@ use arrow::{
 use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::logical_plan::LogicalPlan;
+use datafusion::physical_plan::metrics::MetricValue;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::ExecutionPlanVisitor;
 use datafusion::prelude::*;
 use datafusion::{
     datasource::{csv::CsvReadOptions, MemTable},
@@ -2237,14 +2240,18 @@ macro_rules! assert_metrics {
 }
 
 #[tokio::test]
-async fn csv_explain_analyze_baseline_metrics() {
+async fn explain_analyze_baseline_metrics() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
-    // and then validate the presence of the baseline metrics
+    // and then validate the presence of baseline metrics for supported operators
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
+    // a query with as many operators as we have metrics for
     let sql = "EXPLAIN ANALYZE select count(*) from (SELECT count(*), c1 FROM aggregate_test_100 group by c1 ORDER BY c1)";
-    let actual = execute_to_batches(&mut ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
+    let physical_plan = ctx.create_physical_plan(&plan).unwrap();
+    let results = collect(physical_plan.clone()).await.unwrap();
+    let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
     let formatted = normalize_for_explain(&formatted);
 
     assert_metrics!(
@@ -2262,7 +2269,62 @@ async fn csv_explain_analyze_baseline_metrics() {
         "HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
         "metrics=[output_rows=5, elapsed_compute="
     );
-    assert_metrics!(&formatted, "Sort", "the metrics");
+    assert_metrics!(
+        &formatted,
+        "SortExec: [c1@0 ASC]",
+        "metrics=[output_rows=5, elapsed_compute="
+    );
+
+    fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
+        use datafusion::physical_plan::{
+            hash_aggregate::HashAggregateExec, sort::SortExec,
+        };
+
+        plan.as_any().downcast_ref::<SortExec>().is_some()
+            || plan.as_any().downcast_ref::<HashAggregateExec>().is_some()
+    }
+
+    // Validate that the recorded elapsed compute time was more than
+    // zero for all operators as well as the start/end timestamp are set
+    struct TimeValidator {}
+    impl ExecutionPlanVisitor for TimeValidator {
+        type Error = std::convert::Infallible;
+
+        fn pre_visit(
+            &mut self,
+            plan: &dyn ExecutionPlan,
+        ) -> std::result::Result<bool, Self::Error> {
+            if !expected_to_have_metrics(plan) {
+                return Ok(true);
+            }
+            let metrics = plan.metrics().unwrap().aggregate_by_partition();
+
+            assert!(metrics.output_rows().unwrap() > 0);
+            assert!(metrics.elapsed_compute().unwrap() > 0);
+
+            let mut saw_start = false;
+            let mut saw_end = false;
+            metrics.iter().for_each(|m| match m.value() {
+                MetricValue::StartTimestamp(ts) => {
+                    saw_start = true;
+                    assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                }
+                MetricValue::EndTimestamp(ts) => {
+                    saw_end = true;
+                    assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                }
+                _ => {}
+            });
+
+            assert!(saw_start);
+            assert!(saw_end);
+
+            Ok(true)
+        }
+    }
+
+    datafusion::physical_plan::accept(physical_plan.as_ref(), &mut TimeValidator {})
+        .unwrap();
 }
 
 #[tokio::test]

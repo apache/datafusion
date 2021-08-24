@@ -17,7 +17,9 @@
 
 //! Defines the SORT plan
 
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
+};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -151,18 +153,13 @@ impl ExecutionPlan for SortExec {
             }
         }
 
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let input = self.input.execute(partition).await?;
-
-        let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
-
-        let elapsed_compute =
-            MetricBuilder::new(&self.metrics).elapsed_compute(partition);
 
         Ok(Box::pin(SortStream::new(
             input,
             self.expr.clone(),
-            output_rows,
-            elapsed_compute,
+            baseline_metrics,
         )))
     }
 
@@ -227,7 +224,6 @@ pin_project! {
         output: futures::channel::oneshot::Receiver<ArrowResult<Option<RecordBatch>>>,
         finished: bool,
         schema: SchemaRef,
-        output_rows: metrics::Count
     }
 }
 
@@ -235,8 +231,7 @@ impl SortStream {
     fn new(
         input: SendableRecordBatchStream,
         expr: Vec<PhysicalSortExpr>,
-        output_rows: metrics::Count,
-        sort_time: metrics::Time,
+        baseline_metrics: BaselineMetrics,
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
         let schema = input.schema();
@@ -246,13 +241,14 @@ impl SortStream {
                 .await
                 .map_err(DataFusionError::into_arrow_external_error)
                 .and_then(move |batches| {
-                    let timer = sort_time.timer();
+                    let timer = baseline_metrics.elapsed_compute().timer();
                     // combine all record batches into one for each column
                     let combined = common::combine_batches(&batches, schema.clone())?;
                     // sort combined record batch
                     let result = combined
                         .map(|batch| sort_batch(batch, schema, &expr))
-                        .transpose()?;
+                        .transpose()?
+                        .record_output(&baseline_metrics);
                     timer.done();
                     Ok(result)
                 });
@@ -264,7 +260,6 @@ impl SortStream {
             output: rx,
             finished: false,
             schema,
-            output_rows,
         }
     }
 }
@@ -273,8 +268,6 @@ impl Stream for SortStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let output_rows = self.output_rows.clone();
-
         if self.finished {
             return Poll::Ready(None);
         }
@@ -292,10 +285,6 @@ impl Stream for SortStream {
                     Err(e) => Some(Err(ArrowError::ExternalError(Box::new(e)))), // error receiving
                     Ok(result) => result.transpose(),
                 };
-
-                if let Some(Ok(batch)) = &result {
-                    output_rows.add(batch.num_rows());
-                }
 
                 Poll::Ready(result)
             }
