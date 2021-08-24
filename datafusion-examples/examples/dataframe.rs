@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::util::pretty;
-
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
@@ -37,11 +35,8 @@ async fn main() -> Result<()> {
         .select_columns(&["id", "bool_col", "timestamp_col"])?
         .filter(col("id").gt(lit(1)))?;
 
-    // execute the query
-    let results = df.collect().await?;
-
     // print the results
-    pretty::print_batches(&results)?;
+    df.show().await?;
 
     Ok(())
 }
