@@ -124,11 +124,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 .collect()
         };
         let projected_schema = Arc::new(Schema::new(projected_fields));
-        arrays.and_then(|arr| {
-            RecordBatch::try_new(projected_schema, arr)
-                .map(Some)
-                .map_err(|e| e.into())
-        })
+        arrays.and_then(|arr| RecordBatch::try_new(projected_schema, arr).map(Some))
     }
 
     fn build_boolean_array(
@@ -291,18 +287,15 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 } else if let Value::Array(n) = value {
                     n.into_iter()
                         .map(|v| {
-                            if let Some(v) = resolve_string(&v) {
-                                Some(v)
-                            } else if matches!(
-                                v,
-                                Value::Array(_) | Value::Record(_) | Value::Null
-                            ) {
-                                // implicitly drop nested values
-                                // TODO support deep-nesting
-                                None
-                            } else {
-                                None
-                            }
+                            resolve_string(&v)
+                            // else if matches!(
+                            //     v,
+                            //     Value::Array(_) | Value::Record(_) | Value::Null
+                            // ) {
+                            //     // implicitly drop nested values
+                            //     // TODO support deep-nesting
+                            //     None
+                            // }
                         })
                         .collect()
                 } else if let Value::Null = value {
@@ -310,9 +303,9 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 } else if !matches!(value, Value::Record(_)) {
                     vec![resolve_string(&value)]
                 } else {
-                    return Err(SchemaError(format!(
-                        "Only scalars are currently supported in Avro arrays",
-                    )));
+                    return Err(SchemaError(
+                        "Only scalars are currently supported in Avro arrays".to_string(),
+                    ));
                 };
 
                 // TODO: ARROW-10335: APIs of dictionary arrays and others are different. Unify
@@ -724,7 +717,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         rows.iter()
                             .map(|row| {
                                 let maybe_value = self.field_lookup(field.name(), row);
-                                maybe_value.and_then(|value| resolve_bytes(value))
+                                maybe_value.and_then(resolve_bytes)
                             })
                             .collect::<BinaryArray>(),
                     )
@@ -915,7 +908,7 @@ fn resolve_bytes(v: Value) -> Option<Vec<u8>> {
     }
     .ok()
     .and_then(|v| match v {
-        Value::Bytes(s) => Some(s.clone()),
+        Value::Bytes(s) => Some(s),
         _ => None,
     })
 }
@@ -948,11 +941,10 @@ where
     fn resolve(value: &Value) -> Option<Self::Native> {
         let value = if SchemaKind::from(value) == SchemaKind::Union {
             // Pull out the Union, and attempt to resolve against it.
-            let v = match value {
+            match value {
                 Value::Union(b) => b,
                 _ => unreachable!(),
-            };
-            v
+            }
         } else {
             value
         };

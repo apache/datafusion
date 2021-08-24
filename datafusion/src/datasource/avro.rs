@@ -53,7 +53,7 @@ impl AvroFile {
     /// Attempt to initialize a `AvroFile` from a path. The schema can be inferred automatically.
     pub fn try_new(path: &str, options: AvroReadOptions) -> Result<Self> {
         let schema = if let Some(schema) = options.schema {
-            schema.clone()
+            schema
         } else {
             let filenames =
                 common::build_checked_file_list(path, options.file_extension)?;
@@ -74,7 +74,7 @@ impl AvroFile {
         options: AvroReadOptions,
     ) -> Result<Self> {
         let schema = match options.schema {
-            Some(s) => s.clone(),
+            Some(s) => s,
             None => {
                 return Err(DataFusionError::Execution(
                     "Schema must be provided to CsvRead".to_string(),

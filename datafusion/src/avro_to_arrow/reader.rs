@@ -220,8 +220,8 @@ mod tests {
         assert_eq!(1, bool_col.0);
         assert_eq!(&DataType::Boolean, bool_col.1.data_type());
         let col = get_col::<BooleanArray>(&batch, bool_col).unwrap();
-        assert_eq!(true, col.value(0));
-        assert_eq!(false, col.value(1));
+        assert!(col.value(0));
+        assert!(!col.value(1));
         let tinyint_col = schema.column_with_name("tinyint_col").unwrap();
         assert_eq!(2, tinyint_col.0);
         assert_eq!(&DataType::Int32, tinyint_col.1.data_type());

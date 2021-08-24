@@ -97,7 +97,7 @@ fn schema_to_field_with_props(
                     .iter()
                     .find(|&schema| !matches!(schema, AvroSchema::Null))
                 {
-                    schema_to_field_with_props(&schema, None, has_nullable, None)?
+                    schema_to_field_with_props(schema, None, has_nullable, None)?
                         .data_type()
                         .clone()
                 } else {
@@ -107,15 +107,15 @@ fn schema_to_field_with_props(
                 }
             } else {
                 let fields = sub_schemas
-                    .into_iter()
-                    .map(|s| schema_to_field_with_props(&s, None, has_nullable, None))
+                    .iter()
+                    .map(|s| schema_to_field_with_props(s, None, has_nullable, None))
                     .collect::<Result<Vec<Field>>>()?;
                 DataType::Union(fields)
             }
         }
         AvroSchema::Record { name, fields, .. } => {
             let fields: Result<Vec<Field>> = fields
-                .into_iter()
+                .iter()
                 .map(|field| {
                     let mut props = BTreeMap::new();
                     if let Some(doc) = &field.doc {
@@ -278,7 +278,7 @@ fn external_props(schema: &AvroSchema) -> BTreeMap<String, String> {
             ..
         } => {
             let aliases: Vec<String> = aliases
-                .into_iter()
+                .iter()
                 .map(|alias| aliased(alias, namespace.as_deref(), None))
                 .collect();
             props.insert("aliases".to_string(), format!("[{}]", aliases.join(",")));
@@ -295,7 +295,7 @@ fn get_metadata(
 ) -> BTreeMap<String, String> {
     let mut metadata: BTreeMap<String, String> = Default::default();
     metadata.extend(props);
-    return metadata;
+    metadata
 }
 
 /// Returns the fully qualified name for a field
@@ -307,7 +307,7 @@ pub fn aliased(
     if name.contains('.') {
         name.to_string()
     } else {
-        let namespace = namespace.as_ref().map(|s| s.as_ref()).or(default_namespace);
+        let namespace = namespace.as_ref().copied().or(default_namespace);
 
         match namespace {
             Some(ref namespace) => format!("{}.{}", namespace, name),
