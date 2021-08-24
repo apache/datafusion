@@ -19,7 +19,6 @@ use datafusion::arrow::{
     array::{ArrayRef, Float32Array, Float64Array},
     datatypes::DataType,
     record_batch::RecordBatch,
-    util::pretty,
 };
 
 use datafusion::prelude::*;
