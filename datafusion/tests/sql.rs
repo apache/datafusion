@@ -2194,8 +2194,6 @@ async fn csv_explain_analyze() {
     let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
     let formatted = normalize_for_explain(&formatted);
 
-    println!("ANALYZE EXPLAIN:\n{}", formatted);
-
     // Only test basic plumbing and try to avoid having to change too
     // many things
     let needle =
@@ -2219,6 +2217,52 @@ async fn csv_explain_analyze_verbose() {
 
     let verbose_needle = "Output Rows";
     assert_contains!(formatted, verbose_needle);
+}
+
+/// A macro to assert that some particular line contains two substrings
+///
+/// Usage: `assert_metrics!(actual, operator_name, metrics)`
+///
+macro_rules! assert_metrics {
+    ($ACTUAL: expr, $OPERATOR_NAME: expr, $METRICS: expr) => {
+        let found = $ACTUAL
+            .lines()
+            .any(|line| line.contains($OPERATOR_NAME) && line.contains($METRICS));
+        assert!(
+            found,
+            "Can not find a line with both '{}' and '{}' in\n\n{}",
+            $OPERATOR_NAME, $METRICS, $ACTUAL
+        );
+    };
+}
+
+#[tokio::test]
+async fn csv_explain_analyze_baseline_metrics() {
+    // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
+    // and then validate the presence of the baseline metrics
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql = "EXPLAIN ANALYZE select count(*) from (SELECT count(*), c1 FROM aggregate_test_100 group by c1 ORDER BY c1)";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = normalize_for_explain(&formatted);
+
+    assert_metrics!(
+        &formatted,
+        "CoalescePartitionsExec",
+        "metrics=[output_rows=5, elapsed_compute=NOT RECORDED"
+    );
+    assert_metrics!(
+        &formatted,
+        "HashAggregateExec: mode=Partial, gby=[]",
+        "metrics=[output_rows=16, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
+        "metrics=[output_rows=5, elapsed_compute="
+    );
+    assert_metrics!(&formatted, "Sort", "the metrics");
 }
 
 #[tokio::test]
