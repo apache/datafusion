@@ -20,7 +20,7 @@
 # This file is git pre-commit hook.
 #
 # Soft link it as git hook under top dir of apache arrow git repository:
-# $ ln -s  ../../rust/pre-commit.sh .git/hooks/pre-commit
+# $ ln -s  ../../pre-commit.sh .git/hooks/pre-commit
 #
 # This file be run directly:
 # $ ./pre-commit.sh
@@ -37,14 +37,12 @@ function BYELLOW() {
 	echo "\033[1;33m$@\033[0m"
 }
 
-RUST_DIR="rust"
-
 # env GIT_DIR is set by git when run a pre-commit hook.
 if [ -z "${GIT_DIR}" ]; then
 	GIT_DIR=$(git rev-parse --show-toplevel)
 fi
 
-cd ${GIT_DIR}/${RUST_DIR}
+cd ${GIT_DIR}
 
 NUM_CHANGES=$(git diff --cached --name-only . |
 	grep -e ".*/*.rs$" |
