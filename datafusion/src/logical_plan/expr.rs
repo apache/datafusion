@@ -587,7 +587,7 @@ impl Expr {
     /// Calculate the modulus of two expressions.
     /// Return `self % other`
     pub fn modulus(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::Modulus, other)
+        binary_expr(self, Operator::Modulo, other)
     }
 
     /// Return `self LIKE other`
