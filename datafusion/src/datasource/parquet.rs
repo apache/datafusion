@@ -29,10 +29,7 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 use super::datasource::TableProviderFilterPushDown;
 use crate::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use crate::datasource::datasource::Statistics;
-use crate::datasource::{
-    create_max_min_accs, get_col_stats, get_statistics_with_limit, PartitionedFile,
-    SourceRootDescBuilder, SourceRootDescriptor, TableProvider,
-};
+use crate::datasource::{create_max_min_accs, get_col_stats, get_statistics_with_limit, PartitionedFile, SourceRootDescBuilder, SourceRootDescriptor, TableProvider, FileAndSchema};
 use crate::error::Result;
 use crate::logical_plan::{combine_filters, Expr};
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -165,7 +162,7 @@ pub struct ParquetRootDesc {
 impl ParquetRootDesc {
     /// Construct a new parquet descriptor for a root path
     pub fn new(root_path: &str) -> Result<Self> {
-        let root_desc = Self::get_source_desc(root_path, "parquet", None, true);
+        let root_desc = Self::build_source_desc(root_path, "parquet", None, true);
         Ok(Self {
             descriptor: root_desc?,
         })
@@ -178,7 +175,7 @@ impl ParquetRootDesc {
         collect_statistics: bool,
     ) -> Result<Self> {
         let root_desc =
-            Self::get_source_desc(root_path, "parquet", schema, collect_statistics);
+            Self::build_source_desc(root_path, "parquet", schema, collect_statistics);
         Ok(Self {
             descriptor: root_desc?,
         })
@@ -334,7 +331,7 @@ impl ParquetRootDesc {
 }
 
 impl SourceRootDescBuilder for ParquetRootDesc {
-    fn get_file_meta(file_path: &str) -> Result<PartitionedFile> {
+    fn file_meta(file_path: &str) -> Result<FileAndSchema> {
         let file = File::open(file_path)?;
         let file_reader = Arc::new(SerializedFileReader::new(file)?);
         let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
@@ -395,11 +392,10 @@ impl SourceRootDescBuilder for ParquetRootDesc {
             column_statistics: column_stats,
         };
 
-        Ok(PartitionedFile {
+        Ok((PartitionedFile {
             file_path,
-            schema,
             statistics,
-        })
+        }, schema))
     }
 }
 

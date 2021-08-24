@@ -50,8 +50,6 @@ pub(crate) enum Source<R = Box<dyn std::io::Read + Send + Sync + 'static>> {
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
     pub file_path: String,
-    /// Schema of the file
-    pub schema: Schema,
     /// Statistics of the file
     pub statistics: Statistics,
     // Values of partition columns to be appended to each row
@@ -65,7 +63,6 @@ impl From<String> for PartitionedFile {
     fn from(file_path: String) -> Self {
         Self {
             file_path,
-            schema: Schema::empty(),
             statistics: Default::default(),
         }
     }
@@ -102,10 +99,13 @@ pub struct SourceRootDescriptor {
     pub schema: SchemaRef,
 }
 
+/// Returned partitioned file with its schema
+pub type FileAndSchema = (PartitionedFile, Schema);
+
 /// Builder for ['SourceRootDescriptor'] inside given path
 pub trait SourceRootDescBuilder {
     /// Construct a ['SourceRootDescriptor'] from the provided path
-    fn get_source_desc(
+    fn build_source_desc(
         path: &str,
         ext: &str,
         provided_schema: Option<Schema>,
@@ -129,8 +129,7 @@ pub trait SourceRootDescBuilder {
             .map(|file_path| {
                 contains_file = true;
                 let result = if collect_statistics {
-                    let pf = Self::get_file_meta(file_path)?;
-                    let schema = pf.schema.clone();
+                    let (pf, schema) = Self::file_meta(file_path)?;
                     if schemas.is_empty() {
                         schemas.push(schema);
                     } else if schema != schemas[0] {
@@ -147,7 +146,6 @@ pub trait SourceRootDescBuilder {
                 } else {
                     PartitionedFile {
                         file_path: file_path.to_owned(),
-                        schema: provided_schema.clone().unwrap(),
                         statistics: Statistics::default(),
                     }
                 };
@@ -171,7 +169,7 @@ pub trait SourceRootDescBuilder {
     }
 
     /// Get all metadata for a source file, including schema, statistics, partitions, etc.
-    fn get_file_meta(file_path: &str) -> Result<PartitionedFile>;
+    fn file_meta(file_path: &str) -> Result<FileAndSchema>;
 }
 
 /// Get all files as well as the summary statistics when a limit is provided
