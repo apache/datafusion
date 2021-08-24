@@ -62,11 +62,11 @@ impl ReaderBuilder {
     ///
     /// use std::fs::File;
     ///
-    /// fn example() -> avro_rs::Reader<File> {
+    /// fn example() -> crate::datafusion::avro_to_arrow::Reader<'static, File> {
     ///     let file = File::open("test/data/basic.avro").unwrap();
     ///
     ///     // create a builder, inferring the schema with the first 100 records
-    ///     let builder = crate::datafusion::avro_to_arrow::ReaderBuilder::new().infer_schema(Some(100));
+    ///     let builder = crate::datafusion::avro_to_arrow::ReaderBuilder::new().infer_schema().with_batch_size(100);
     ///
     ///     let reader = builder.build::<File>(file).unwrap();
     ///
