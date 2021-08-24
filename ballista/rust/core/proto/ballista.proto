@@ -253,6 +253,7 @@ message LogicalPlanNode {
     WindowNode window = 13;
     AnalyzeNode analyze = 14;
     CrossJoinNode cross_join = 15;
+    AvroTableScanNode avro_scan = 16;
   }
 }
 
@@ -294,6 +295,15 @@ message ParquetTableScanNode {
   TableDescriptor table_desc = 2;
   ProjectionColumns projection = 3;
   repeated LogicalExprNode filters = 4;
+}
+
+message AvroTableScanNode {
+  string table_name = 1;
+  string path = 2;
+  string file_extension = 3;
+  ProjectionColumns projection = 4;
+  Schema schema = 5;
+  repeated LogicalExprNode filters = 6;
 }
 
 message ProjectionNode {

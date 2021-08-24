@@ -25,6 +25,7 @@ use crate::serde::{protobuf, BallistaError};
 use datafusion::arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit,
 };
+use datafusion::datasource::avro::AvroFile;
 use datafusion::datasource::{CsvFile, PartitionedFile, TableDescriptor};
 use datafusion::logical_plan::{
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
@@ -789,6 +790,19 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                                 has_header: csv.has_header(),
                                 delimiter: delimiter.to_string(),
                                 file_extension: csv.file_extension().to_string(),
+                                filters,
+                            },
+                        )),
+                    })
+                } else if let Some(avro) = source.downcast_ref::<AvroFile>() {
+                    Ok(protobuf::LogicalPlanNode {
+                        logical_plan_type: Some(LogicalPlanType::AvroScan(
+                            protobuf::AvroTableScanNode {
+                                table_name: table_name.to_owned(),
+                                path: avro.path().to_owned(),
+                                projection,
+                                schema: Some(schema),
+                                file_extension: avro.file_extension().to_string(),
                                 filters,
                             },
                         )),
