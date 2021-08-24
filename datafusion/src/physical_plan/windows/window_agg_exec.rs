@@ -19,8 +19,8 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
-    common, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, WindowExpr,
+    common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, WindowExpr,
 };
 use arrow::{
     array::ArrayRef,
@@ -142,6 +142,18 @@ impl ExecutionPlan for WindowAggExec {
             input,
         ));
         Ok(stream)
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "WindowAggExec")
+            }
+        }
     }
 }
 

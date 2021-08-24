@@ -25,7 +25,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 
-use super::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use super::{DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use crate::error::Result;
 use async_trait::async_trait;
 
@@ -93,6 +93,18 @@ impl ExecutionPlan for UnionExec {
             "Partition {} not found in Union",
             partition
         )))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "UnionExec")
+            }
+        }
     }
 }
 
