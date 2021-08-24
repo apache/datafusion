@@ -27,13 +27,12 @@ use futures::{
     stream::{Stream, StreamExt},
     Future,
 };
-use hashbrown::HashMap;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{
     Accumulator, AggregateExpr, DisplayFormatType, Distribution, ExecutionPlan,
-    Partitioning, PhysicalExpr, SQLMetric,
+    Partitioning, PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
 
@@ -51,6 +50,7 @@ use pin_project_lite::pin_project;
 
 use async_trait::async_trait;
 
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{expressions::Column, RecordBatchStream, SendableRecordBatchStream};
 
 /// Hash aggregate modes
@@ -86,8 +86,8 @@ pub struct HashAggregateExec {
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate
     input_schema: SchemaRef,
-    /// Metric to track number of output rows
-    output_rows: Arc<SQLMetric>,
+    /// Execution Metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 fn create_schema(
@@ -136,8 +136,6 @@ impl HashAggregateExec {
 
         let schema = Arc::new(schema);
 
-        let output_rows = SQLMetric::counter();
-
         Ok(HashAggregateExec {
             mode,
             group_expr,
@@ -145,7 +143,7 @@ impl HashAggregateExec {
             input,
             schema,
             input_schema,
-            output_rows,
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -209,6 +207,8 @@ impl ExecutionPlan for HashAggregateExec {
         let input = self.input.execute(partition).await?;
         let group_expr = self.group_expr.iter().map(|x| x.0.clone()).collect();
 
+        let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
+
         if self.group_expr.is_empty() {
             Ok(Box::pin(HashAggregateStream::new(
                 self.mode,
@@ -223,7 +223,7 @@ impl ExecutionPlan for HashAggregateExec {
                 group_expr,
                 self.aggr_expr.clone(),
                 input,
-                self.output_rows.clone(),
+                output_rows,
             )))
         }
     }
@@ -246,10 +246,8 @@ impl ExecutionPlan for HashAggregateExec {
         }
     }
 
-    fn metrics(&self) -> HashMap<String, SQLMetric> {
-        let mut metrics = HashMap::new();
-        metrics.insert("outputRows".to_owned(), (*self.output_rows).clone());
-        metrics
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn fmt_as(
@@ -317,7 +315,7 @@ pin_project! {
         #[pin]
         output: futures::channel::oneshot::Receiver<ArrowResult<RecordBatch>>,
         finished: bool,
-        output_rows: Arc<SQLMetric>,
+        output_rows: metrics::Count,
     }
 }
 
@@ -526,7 +524,7 @@ impl GroupedHashAggregateStream {
         group_expr: Vec<Arc<dyn PhysicalExpr>>,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
-        output_rows: Arc<SQLMetric>,
+        output_rows: metrics::Count,
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
 
@@ -1072,9 +1070,9 @@ mod tests {
 
         assert_batches_sorted_eq!(&expected, &result);
 
-        let metrics = merged_aggregate.metrics();
-        let output_rows = metrics.get("outputRows").unwrap();
-        assert_eq!(3, output_rows.value());
+        let metrics = merged_aggregate.metrics().unwrap();
+        let output_rows = metrics.output_rows().unwrap();
+        assert_eq!(3, output_rows);
 
         Ok(())
     }

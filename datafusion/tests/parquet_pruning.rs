@@ -33,11 +33,13 @@ use chrono::{Datelike, Duration};
 use datafusion::{
     datasource::TableProvider,
     logical_plan::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder},
-    physical_plan::{plan_metrics, SQLMetric},
+    physical_plan::{
+        accept, metrics::MetricsSet, parquet::ParquetExec, ExecutionPlan,
+        ExecutionPlanVisitor,
+    },
     prelude::{ExecutionConfig, ExecutionContext},
     scalar::ScalarValue,
 };
-use hashbrown::HashMap;
 use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
 use tempfile::NamedTempFile;
 
@@ -417,6 +419,9 @@ enum Scenario {
 /// table "t" registered, pointing at a parquet file made with
 /// `make_test_file`
 struct ContextWithParquet {
+    #[allow(dead_code)]
+    /// temp file parquet data is written to. The file is cleaned up
+    /// when dropped
     file: NamedTempFile,
     provider: Arc<dyn TableProvider>,
     ctx: ExecutionContext,
@@ -426,8 +431,8 @@ struct ContextWithParquet {
 struct TestOutput {
     /// The input string
     sql: String,
-    /// Normalized metrics (filename replaced by a constant)
-    metrics: HashMap<String, SQLMetric>,
+    /// Execution metrics for the Parquet Scan
+    parquet_metrics: MetricsSet,
     /// number of rows in results
     result_rows: usize,
     /// the contents of the input, as a string
@@ -439,32 +444,25 @@ struct TestOutput {
 impl TestOutput {
     /// retrieve the value of the named metric, if any
     fn metric_value(&self, metric_name: &str) -> Option<usize> {
-        self.metrics.get(metric_name).map(|m| m.value())
+        self.parquet_metrics
+            .sum(|metric| metric.value().name() == metric_name)
+            .map(|v| v.as_usize())
     }
 
     /// The number of times the pruning predicate evaluation errors
     fn predicate_evaluation_errors(&self) -> Option<usize> {
-        self.metric_value("numPredicateEvaluationErrors for PARQUET_FILE")
+        self.metric_value("predicate_evaluation_errors")
     }
 
     /// The number of times the pruning predicate evaluation errors
     fn row_groups_pruned(&self) -> Option<usize> {
-        self.metric_value("numRowGroupsPruned for PARQUET_FILE")
+        self.metric_value("row_groups_pruned")
     }
 
     fn description(&self) -> String {
-        let metrics = self
-            .metrics
-            .iter()
-            .map(|(name, val)| format!("  {} = {:?}", name, val))
-            .collect::<Vec<_>>();
-
         format!(
             "Input:\n{}\nQuery:\n{}\nOutput:\n{}\nMetrics:\n{}",
-            self.pretty_input,
-            self.sql,
-            self.pretty_results,
-            metrics.join("\n")
+            self.pretty_input, self.sql, self.pretty_results, self.parquet_metrics,
         )
     }
 }
@@ -532,25 +530,35 @@ impl ContextWithParquet {
         let pretty_input = pretty_format_batches(&input).unwrap();
 
         let logical_plan = self.ctx.optimize(&logical_plan).expect("optimizing plan");
-        let execution_plan = self
+        let physical_plan = self
             .ctx
             .create_physical_plan(&logical_plan)
             .expect("creating physical plan");
 
-        let results = datafusion::physical_plan::collect(execution_plan.clone())
+        let results = datafusion::physical_plan::collect(physical_plan.clone())
             .await
             .expect("Running");
 
-        // replace the path name, which varies test to test,a with some
-        // constant for test comparisons
-        let path = self.file.path();
-        let path_name = path.to_string_lossy();
-        let metrics = plan_metrics(execution_plan)
-            .into_iter()
-            .map(|(name, metric)| {
-                (name.replace(path_name.as_ref(), "PARQUET_FILE"), metric)
-            })
-            .collect();
+        // find the parquet metrics
+        struct MetricsFinder {
+            metrics: Option<MetricsSet>,
+        }
+        impl ExecutionPlanVisitor for MetricsFinder {
+            type Error = std::convert::Infallible;
+            fn pre_visit(
+                &mut self,
+                plan: &dyn ExecutionPlan,
+            ) -> Result<bool, Self::Error> {
+                if plan.as_any().downcast_ref::<ParquetExec>().is_some() {
+                    self.metrics = plan.metrics();
+                }
+                // stop searching once we have found the metrics
+                Ok(self.metrics.is_none())
+            }
+        }
+        let mut finder = MetricsFinder { metrics: None };
+        accept(physical_plan.as_ref(), &mut finder).unwrap();
+        let parquet_metrics = finder.metrics.unwrap();
 
         let result_rows = results.iter().map(|b| b.num_rows()).sum();
 
@@ -559,7 +567,7 @@ impl ContextWithParquet {
         let sql = sql.into();
         TestOutput {
             sql,
-            metrics,
+            parquet_metrics,
             result_rows,
             pretty_input,
             pretty_results,

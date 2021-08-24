@@ -35,8 +35,8 @@ pub enum DisplayFormatType {
 /// Wraps an `ExecutionPlan` with various ways to display this plan
 pub struct DisplayableExecutionPlan<'a> {
     inner: &'a dyn ExecutionPlan,
-    /// whether to show metrics or not
-    with_metrics: bool,
+    /// How to show metrics
+    show_metrics: ShowMetrics,
 }
 
 impl<'a> DisplayableExecutionPlan<'a> {
@@ -45,16 +45,27 @@ impl<'a> DisplayableExecutionPlan<'a> {
     pub fn new(inner: &'a dyn ExecutionPlan) -> Self {
         Self {
             inner,
-            with_metrics: false,
+            show_metrics: ShowMetrics::None,
         }
     }
 
     /// Create a wrapper around an [`'ExecutionPlan'] which can be
-    /// pretty printed in a variety of ways
+    /// pretty printed in a variety of ways that also shows aggregated
+    /// metrics
     pub fn with_metrics(inner: &'a dyn ExecutionPlan) -> Self {
         Self {
             inner,
-            with_metrics: true,
+            show_metrics: ShowMetrics::Aggregated,
+        }
+    }
+
+    /// Create a wrapper around an [`'ExecutionPlan'] which can be
+    /// pretty printed in a variety of ways that also shows all low
+    /// level metrics
+    pub fn with_full_metrics(inner: &'a dyn ExecutionPlan) -> Self {
+        Self {
+            inner,
+            show_metrics: ShowMetrics::Full,
         }
     }
 
@@ -71,7 +82,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     pub fn indent(&self) -> impl fmt::Display + 'a {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
-            with_metrics: bool,
+            show_metrics: ShowMetrics,
         }
         impl<'a> fmt::Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -80,16 +91,28 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     t,
                     f,
                     indent: 0,
-                    with_metrics: self.with_metrics,
+                    show_metrics: self.show_metrics,
                 };
                 accept(self.plan, &mut visitor)
             }
         }
         Wrapper {
             plan: self.inner,
-            with_metrics: self.with_metrics,
+            show_metrics: self.show_metrics,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ShowMetrics {
+    /// Do not show any metrics
+    None,
+
+    /// Show aggregrated metrics across partition
+    Aggregated,
+
+    /// Show full per-partition metrics
+    Full,
 }
 
 /// Formats plans with a single line per node.
@@ -100,8 +123,8 @@ struct IndentVisitor<'a, 'b> {
     f: &'a mut fmt::Formatter<'b>,
     /// Indent size
     indent: usize,
-    /// whether to show metrics or not
-    with_metrics: bool,
+    /// How to show metrics
+    show_metrics: ShowMetrics,
 }
 
 impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
@@ -112,16 +135,22 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
     ) -> std::result::Result<bool, Self::Error> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         plan.fmt_as(self.t, self.f)?;
-        if self.with_metrics {
-            write!(
-                self.f,
-                ", metrics=[{}]",
-                plan.metrics()
-                    .iter()
-                    .map(|(k, v)| format!("{}={:?}", k, v.value))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )?;
+        match self.show_metrics {
+            ShowMetrics::None => {}
+            ShowMetrics::Aggregated => {
+                if let Some(metrics) = plan.metrics() {
+                    write!(self.f, ", metrics=[{}]", metrics.aggregate_by_partition())?;
+                } else {
+                    write!(self.f, ", metrics=[]")?;
+                }
+            }
+            ShowMetrics::Full => {
+                if let Some(metrics) = plan.metrics() {
+                    write!(self.f, ", metrics=[{}]", metrics)?;
+                } else {
+                    write!(self.f, ", metrics=[]")?;
+                }
+            }
         }
         writeln!(self.f)?;
         self.indent += 1;
