@@ -1256,7 +1256,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     BinaryOperator::Minus => Ok(Operator::Minus),
                     BinaryOperator::Multiply => Ok(Operator::Multiply),
                     BinaryOperator::Divide => Ok(Operator::Divide),
-                    BinaryOperator::Modulus => Ok(Operator::Modulus),
+                    BinaryOperator::Modulo => Ok(Operator::Modulo),
                     BinaryOperator::And => Ok(Operator::And),
                     BinaryOperator::Or => Ok(Operator::Or),
                     BinaryOperator::Like => Ok(Operator::Like),
@@ -1271,6 +1271,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     left: Box::new(self.sql_expr_to_logical_expr(left, schema)?),
                     op: operator,
                     right: Box::new(self.sql_expr_to_logical_expr(right, schema)?),
+                })
+            }
+
+            SQLExpr::Trim { expr, trim_where } => {
+                let fun = match trim_where {
+                    Some((trim_where, _expr)) => {
+                        return Err(DataFusionError::Plan(format!(
+                            "TRIM {} is not yet supported ",
+                            trim_where
+                        )))
+                    }
+                    None => functions::BuiltinScalarFunction::Trim,
+                };
+
+                let arg = self.sql_expr_to_logical_expr(expr, schema)?;
+                Ok(Expr::ScalarFunction {
+                    fun,
+                    args: vec![arg],
                 })
             }
 
