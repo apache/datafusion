@@ -159,10 +159,12 @@ impl DataFrame for DataFrameImpl {
 
     /// Print results.
     async fn show(&self) -> Result<()> {
-        let mut num = 20;
-        if let LogicalPlan::Limit { n, input: _ } = self.to_logical_plan() {
-            num = n;
-        }
+        let results = self.collect().await?;
+        Ok(pretty::print_batches(&results)?)
+    }
+
+    /// Print results and limit rows.
+    async fn show_limit(&self, num: usize) -> Result<()> {
         let results = self.limit(num)?.collect().await?;
         Ok(pretty::print_batches(&results)?)
     }

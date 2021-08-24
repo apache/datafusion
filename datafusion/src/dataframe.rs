@@ -238,6 +238,21 @@ pub trait DataFrame: Send + Sync {
     /// ```
     async fn show(&self) -> Result<()>;
 
+    /// Print results and limit rows.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let mut ctx = ExecutionContext::new();
+    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
+    /// df.show_limit(10).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn show_limit(&self, n: usize) -> Result<()>;
+
     /// Executes this DataFrame and returns a stream over a single partition
     ///
     /// ```
