@@ -468,6 +468,7 @@ message PhysicalPlanNode {
     WindowAggExecNode window = 17;
     ShuffleWriterExecNode shuffle_writer = 18;
     CrossJoinExecNode cross_join = 19;
+    AvroScanExecNode avro_scan = 20;
   }
 }
 
@@ -616,6 +617,17 @@ message CsvScanExecNode {
   bool has_header = 5;
   uint32 batch_size = 6;
   string delimiter = 7;
+
+  // partition filenames
+  repeated string filename = 8;
+}
+
+message AvroScanExecNode {
+  string path = 1;
+  repeated uint32 projection = 2;
+  Schema schema = 3;
+  string file_extension = 4;
+  uint32 batch_size = 5;
 
   // partition filenames
   repeated string filename = 8;

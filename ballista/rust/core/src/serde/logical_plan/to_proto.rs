@@ -1113,7 +1113,13 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                         )
                     }
                 };
-                let arg = &args[0];
+                let arg_expr: Option<Box<protobuf::LogicalExprNode>> = if !args.is_empty()
+                {
+                    let arg = &args[0];
+                    Some(Box::new(arg.try_into()?))
+                } else {
+                    None
+                };
                 let partition_by = partition_by
                     .iter()
                     .map(|e| e.try_into())
@@ -1126,7 +1132,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     protobuf::window_expr_node::WindowFrame::Frame(window_frame.into())
                 });
                 let window_expr = Box::new(protobuf::WindowExprNode {
-                    expr: Some(Box::new(arg.try_into()?)),
+                    expr: arg_expr,
                     window_function: Some(window_function),
                     partition_by,
                     order_by,
