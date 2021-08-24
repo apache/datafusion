@@ -1488,6 +1488,9 @@ impl TryInto<protobuf::ScalarFunction> for &BuiltinScalarFunction {
             BuiltinScalarFunction::SHA256 => Ok(protobuf::ScalarFunction::Sha256),
             BuiltinScalarFunction::SHA384 => Ok(protobuf::ScalarFunction::Sha384),
             BuiltinScalarFunction::SHA512 => Ok(protobuf::ScalarFunction::Sha512),
+            BuiltinScalarFunction::ToTimestampMillis => {
+                Ok(protobuf::ScalarFunction::Totimestampmillis)
+            }
             _ => Err(BallistaError::General(format!(
                 "logical_plan::to_proto() unsupported scalar function {:?}",
                 self

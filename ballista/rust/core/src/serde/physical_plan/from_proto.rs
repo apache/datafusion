@@ -544,6 +544,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha384 => BuiltinScalarFunction::SHA384,
             ScalarFunction::Sha512 => BuiltinScalarFunction::SHA512,
             ScalarFunction::Ln => BuiltinScalarFunction::Ln,
+            ScalarFunction::Totimestampmillis => BuiltinScalarFunction::ToTimestampMillis,
         }
     }
 }

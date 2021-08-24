@@ -152,6 +152,7 @@ enum ScalarFunction {
   SHA384 = 32;
   SHA512 = 33;
   LN = 34;
+  TOTIMESTAMPMILLIS = 35;
 }
 
 message ScalarFunctionNode {
