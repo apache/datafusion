@@ -21,17 +21,17 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
 use std::{any::Any, vec};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
-use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, SQLMetric};
+use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use async_trait::async_trait;
 
@@ -63,37 +63,47 @@ pub struct RepartitionExec {
     >,
 
     /// Execution metrics
-    metrics: RepartitionMetrics,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 #[derive(Debug, Clone)]
 struct RepartitionMetrics {
     /// Time in nanos to execute child operator and fetch batches
-    fetch_nanos: Arc<SQLMetric>,
+    fetch_time: metrics::Time,
     /// Time in nanos to perform repartitioning
-    repart_nanos: Arc<SQLMetric>,
+    repart_time: metrics::Time,
     /// Time in nanos for sending resulting batches to channels
-    send_nanos: Arc<SQLMetric>,
+    send_time: metrics::Time,
 }
 
 impl RepartitionMetrics {
-    fn new() -> Self {
+    pub fn new(
+        output_partition: usize,
+        input_partition: usize,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Self {
+        let label = metrics::Label::new("inputPartition", input_partition.to_string());
+
+        // Time in nanos to execute child operator and fetch batches
+        let fetch_time = MetricBuilder::new(metrics)
+            .with_label(label.clone())
+            .subset_time("fetch_time", output_partition);
+
+        // Time in nanos to perform repartitioning
+        let repart_time = MetricBuilder::new(metrics)
+            .with_label(label.clone())
+            .subset_time("repart_time", output_partition);
+
+        // Time in nanos for sending resulting batches to channels
+        let send_time = MetricBuilder::new(metrics)
+            .with_label(label)
+            .subset_time("send_time", output_partition);
+
         Self {
-            fetch_nanos: SQLMetric::time_nanos(),
-            repart_nanos: SQLMetric::time_nanos(),
-            send_nanos: SQLMetric::time_nanos(),
+            fetch_time,
+            repart_time,
+            send_time,
         }
-    }
-    /// Convert into the external metrics form
-    fn to_hashmap(&self) -> HashMap<String, SQLMetric> {
-        let mut metrics = HashMap::new();
-        metrics.insert("fetchTime".to_owned(), self.fetch_nanos.as_ref().clone());
-        metrics.insert(
-            "repartitionTime".to_owned(),
-            self.repart_nanos.as_ref().clone(),
-        );
-        metrics.insert("sendTime".to_owned(), self.send_nanos.as_ref().clone());
-        metrics
     }
 }
 
@@ -175,6 +185,8 @@ impl ExecutionPlan for RepartitionExec {
                     .map(|(partition, (tx, _rx))| (*partition, tx.clone()))
                     .collect();
 
+                let r_metrics = RepartitionMetrics::new(i, partition, &self.metrics);
+
                 let input_task: JoinHandle<Result<()>> =
                     tokio::spawn(Self::pull_from_input(
                         random.clone(),
@@ -182,7 +194,7 @@ impl ExecutionPlan for RepartitionExec {
                         i,
                         txs.clone(),
                         self.partitioning.clone(),
-                        self.metrics.clone(),
+                        r_metrics,
                     ));
 
                 // In a separate task, wait for each input to be done
@@ -201,8 +213,8 @@ impl ExecutionPlan for RepartitionExec {
         }))
     }
 
-    fn metrics(&self) -> HashMap<String, SQLMetric> {
-        self.metrics.to_hashmap()
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn fmt_as(
@@ -228,7 +240,7 @@ impl RepartitionExec {
             input,
             partitioning,
             channels: Arc::new(Mutex::new(HashMap::new())),
-            metrics: RepartitionMetrics::new(),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -244,14 +256,14 @@ impl RepartitionExec {
         i: usize,
         mut txs: HashMap<usize, UnboundedSender<Option<ArrowResult<RecordBatch>>>>,
         partitioning: Partitioning,
-        metrics: RepartitionMetrics,
+        r_metrics: RepartitionMetrics,
     ) -> Result<()> {
         let num_output_partitions = txs.len();
 
         // execute the child operator
-        let now = Instant::now();
+        let timer = r_metrics.fetch_time.timer();
         let mut stream = input.execute(i).await?;
-        metrics.fetch_nanos.add_elapsed(now);
+        timer.done();
 
         let mut counter = 0;
         let hashes_buf = &mut vec![];
@@ -260,9 +272,9 @@ impl RepartitionExec {
         // pulling inputs
         while !txs.is_empty() {
             // fetch the next batch
-            let now = Instant::now();
+            let timer = r_metrics.fetch_time.timer();
             let result = stream.next().await;
-            metrics.fetch_nanos.add_elapsed(now);
+            timer.done();
 
             // Input is done
             if result.is_none() {
@@ -272,7 +284,7 @@ impl RepartitionExec {
 
             match &partitioning {
                 Partitioning::RoundRobinBatch(_) => {
-                    let now = Instant::now();
+                    let timer = r_metrics.send_time.timer();
                     let output_partition = counter % num_output_partitions;
                     // if there is still a receiver, send to it
                     if let Some(tx) = txs.get_mut(&output_partition) {
@@ -281,10 +293,10 @@ impl RepartitionExec {
                             txs.remove(&output_partition);
                         }
                     }
-                    metrics.send_nanos.add_elapsed(now);
+                    timer.done();
                 }
                 Partitioning::Hash(exprs, _) => {
-                    let now = Instant::now();
+                    let timer = r_metrics.repart_time.timer();
                     let input_batch = result?;
                     let arrays = exprs
                         .iter()
@@ -303,11 +315,12 @@ impl RepartitionExec {
                         indices[(*hash % num_output_partitions as u64) as usize]
                             .push(index as u64)
                     }
-                    metrics.repart_nanos.add_elapsed(now);
+                    timer.done();
+
                     for (num_output_partition, partition_indices) in
                         indices.into_iter().enumerate()
                     {
-                        let now = Instant::now();
+                        let timer = r_metrics.repart_time.timer();
                         let indices = partition_indices.into();
                         // Produce batches based on indices
                         let columns = input_batch
@@ -321,8 +334,9 @@ impl RepartitionExec {
                             .collect::<Result<Vec<Arc<dyn Array>>>>()?;
                         let output_batch =
                             RecordBatch::try_new(input_batch.schema(), columns);
-                        metrics.repart_nanos.add_elapsed(now);
-                        let now = Instant::now();
+                        timer.done();
+
+                        let timer = r_metrics.repart_time.timer();
                         // if there is still a receiver, send to it
                         if let Some(tx) = txs.get_mut(&num_output_partition) {
                             if tx.send(Some(output_batch)).is_err() {
@@ -330,7 +344,7 @@ impl RepartitionExec {
                                 txs.remove(&num_output_partition);
                             }
                         }
-                        metrics.send_nanos.add_elapsed(now);
+                        timer.done();
                     }
                 }
                 other => {
