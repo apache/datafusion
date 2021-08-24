@@ -36,10 +36,12 @@ use crate::{
 
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
+use crate::datasource::avro::AvroFile;
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
     DFSchemaRef, Partitioning,
 };
+use crate::physical_plan::avro::AvroReadOptions;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -151,6 +153,27 @@ impl LogicalPlanBuilder {
         table_name: impl Into<String>,
     ) -> Result<Self> {
         let provider = Arc::new(ParquetTable::try_new(path, max_partitions)?);
+        Self::scan(table_name, provider, projection)
+    }
+
+    /// Scan an Avro data source
+    pub fn scan_avro(
+        path: impl Into<String>,
+        options: AvroReadOptions,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self> {
+        let path = path.into();
+        Self::scan_avro_with_name(path.clone(), options, projection, path)
+    }
+
+    /// Scan an Avro data source and register it with a given table name
+    pub fn scan_avro_with_name(
+        path: impl Into<String>,
+        options: AvroReadOptions,
+        projection: Option<Vec<usize>>,
+        table_name: impl Into<String>,
+    ) -> Result<Self> {
+        let provider = Arc::new(AvroFile::try_new(&path.into(), options)?);
         Self::scan(table_name, provider, projection)
     }
 

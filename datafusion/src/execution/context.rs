@@ -278,6 +278,19 @@ impl ExecutionContext {
             .insert(f.name.clone(), Arc::new(f));
     }
 
+    /// Creates a DataFrame for reading an Avro data source.
+
+    pub fn read_avro(
+        &mut self,
+        filename: impl Into<String>,
+        options: AvroReadOptions,
+    ) -> Result<Arc<dyn DataFrame>> {
+        Ok(Arc::new(DataFrameImpl::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::scan_avro(filename, options, None)?.build()?,
+        )))
+    }
+
     /// Creates a DataFrame for reading a CSV data source.
     pub fn read_csv(
         &mut self,
