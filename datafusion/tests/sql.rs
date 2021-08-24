@@ -2243,7 +2243,8 @@ macro_rules! assert_metrics {
 async fn explain_analyze_baseline_metrics() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     // and then validate the presence of baseline metrics for supported operators
-    let mut ctx = ExecutionContext::new();
+    let config = ExecutionConfig::new().with_concurrency(3);
+    let mut ctx = ExecutionContext::with_config(config);
     register_aggregate_csv_by_sql(&mut ctx).await;
     // a query with as many operators as we have metrics for
     let sql = "EXPLAIN ANALYZE select count(*) from (SELECT count(*), c1 FROM aggregate_test_100 group by c1 ORDER BY c1)";
@@ -2262,7 +2263,7 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "HashAggregateExec: mode=Partial, gby=[]",
-        "metrics=[output_rows=16, elapsed_compute="
+        "metrics=[output_rows=3, elapsed_compute="
     );
     assert_metrics!(
         &formatted,
