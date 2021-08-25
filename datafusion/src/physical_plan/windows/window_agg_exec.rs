@@ -151,9 +151,16 @@ impl ExecutionPlan for WindowAggExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "WindowAggExec")
+                write!(f, "WindowAggExec: ")?;
+                let g: Vec<String> = self
+                    .window_expr
+                    .iter()
+                    .map(|e| format!("{}: {:?}", e.name().to_owned(), e.field()))
+                    .collect();
+                write!(f, "wdw=[{}]", g.join(", "))?;
             }
         }
+        Ok(())
     }
 }
 
