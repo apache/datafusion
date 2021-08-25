@@ -1006,7 +1006,6 @@ mod test {
             &DataType::Timestamp(TimeUnit::Microsecond, None),
             timestamp_col.1.data_type()
         );
-        eprintln!("batch.column(a.0) = {:?}", batch.column(timestamp_col.0));
         let timestamp_array = batch
             .column(timestamp_col.0)
             .as_any()
