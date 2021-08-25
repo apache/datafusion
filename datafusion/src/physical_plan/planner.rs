@@ -1386,6 +1386,7 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 mod tests {
     use super::*;
     use crate::logical_plan::{DFField, DFSchema, DFSchemaRef};
+    use crate::physical_plan::DisplayFormatType;
     use crate::physical_plan::{csv::CsvReadOptions, expressions, Partitioning};
     use crate::scalar::ScalarValue;
     use crate::{
@@ -1786,6 +1787,18 @@ mod tests {
 
         async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
+        }
+
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default => {
+                    write!(f, "NoOpExecutionPlan")
+                }
+            }
         }
     }
 
