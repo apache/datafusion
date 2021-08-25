@@ -441,6 +441,8 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         let list_nulls = list_nulls.as_slice_mut();
         offsets.push(cur_offset);
         rows.iter().enumerate().for_each(|(i, v)| {
+            // TODO: unboxing Union(Array(Union(...))) should probably be done earlier
+            let v = maybe_resolve_union(v);
             if let Value::Array(a) = v {
                 cur_offset += OffsetSize::from_usize(a.len()).unwrap();
                 bit_util::set_bit(list_nulls, i);
@@ -799,7 +801,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         let values = rows
             .iter()
             .flat_map(|row| {
-                // read values from list
+                let row = maybe_resolve_union(row);
                 if let Value::Array(values) = row {
                     values
                         .iter()
@@ -933,21 +935,25 @@ fn resolve_item<T: Resolver>(value: &Value) -> Option<T::Native> {
     T::resolve(value)
 }
 
+fn maybe_resolve_union(value: &Value) -> &Value {
+    if SchemaKind::from(value) == SchemaKind::Union {
+        // Pull out the Union, and attempt to resolve against it.
+        match value {
+            Value::Union(b) => b,
+            _ => unreachable!(),
+        }
+    } else {
+        value
+    }
+}
+
 impl<N> Resolver for N
 where
     N: ArrowNumericType,
     N::Native: num_traits::cast::NumCast,
 {
     fn resolve(value: &Value) -> Option<Self::Native> {
-        let value = if SchemaKind::from(value) == SchemaKind::Union {
-            // Pull out the Union, and attempt to resolve against it.
-            match value {
-                Value::Union(b) => b,
-                _ => unreachable!(),
-            }
-        } else {
-            value
-        };
+        let value = maybe_resolve_union(value);
         match value {
             Value::Int(i) | Value::TimeMillis(i) | Value::Date(i) => NumCast::from(*i),
             Value::Long(l)
@@ -957,7 +963,94 @@ where
             Value::Float(f) => NumCast::from(*f),
             Value::Double(f) => NumCast::from(*f),
             Value::Duration(_d) => unimplemented!(), // shenanigans type
+            Value::Null => None,
             _ => unreachable!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::arrow::array::Array;
+    use crate::arrow::datatypes::Field;
+    use crate::avro_to_arrow::{Reader, ReaderBuilder};
+    use arrow::array::{Int32Array, Int64Array, ListArray, StructArray, UnionArray};
+    use arrow::datatypes::DataType;
+    use std::fs::File;
+
+    fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = format!("{}/avro/{}", testdata, name);
+        let builder = ReaderBuilder::new()
+            .infer_schema()
+            .with_batch_size(batch_size);
+        builder.build(File::open(filename).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn test_avro_read_list() {
+        let mut reader = build_reader("list_columns.avro", 3);
+        let schema = reader.schema();
+        let (col_id_index, _) = schema.column_with_name("int64_list").unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 3);
+        let a_array = batch
+            .column(col_id_index)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(
+            *a_array.data_type(),
+            DataType::List(Box::new(Field::new("bigint", DataType::Int64, true)))
+        );
+        let array = a_array.value(0);
+        assert_eq!(*array.data_type(), DataType::Int64);
+
+        assert_eq!(
+            6,
+            array
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .iter()
+                .flatten()
+                .sum::<i64>()
+        );
+    }
+    #[test]
+    fn test_avro_read_nested_list() {
+        let mut reader = build_reader("nested_lists.snappy.avro", 3);
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 3);
+    }
+
+    #[test]
+    fn test_avro_iterator() {
+        let reader = build_reader("alltypes_plain.avro", 5);
+        let schema = reader.schema();
+        let (col_id_index, _) = schema.column_with_name("id").unwrap();
+
+        let mut sum_num_rows = 0;
+        let mut num_batches = 0;
+        let mut sum_id = 0;
+        for batch in reader {
+            let batch = batch.unwrap();
+            assert_eq!(11, batch.num_columns());
+            sum_num_rows += batch.num_rows();
+            num_batches += 1;
+            let batch_schema = batch.schema();
+            assert_eq!(schema, batch_schema);
+            let a_array = batch
+                .column(col_id_index)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            sum_id += (0..a_array.len()).map(|i| a_array.value(i)).sum::<i32>();
+        }
+        assert_eq!(8, sum_num_rows);
+        assert_eq!(2, num_batches);
+        assert_eq!(28, sum_id);
     }
 }
