@@ -20,7 +20,7 @@ set -e
 # This bash script is meant to be run inside the docker-compose environment. Check the README for instructions
 
 cd /
-for query in 1 3 5 6 7 10 12
+for query in 1 3 5 6 7 10 12 13
 do
   /tpch benchmark ballista --host ballista-scheduler --port 50050 --query $query --path /data --format tbl --iterations 1 --debug
 done

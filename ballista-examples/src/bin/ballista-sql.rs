@@ -16,7 +16,6 @@
 // under the License.
 
 use ballista::prelude::*;
-use datafusion::arrow::util::pretty;
 use datafusion::prelude::CsvReadOptions;
 
 /// This example demonstrates executing a simple query against an Arrow data source (CSV) and
@@ -45,8 +44,8 @@ async fn main() -> Result<()> {
         GROUP BY c1",
     )?;
 
-    let results = df.collect().await?;
-    pretty::print_batches(&results)?;
+    // print the results
+    df.show().await?;
 
     Ok(())
 }

@@ -111,25 +111,26 @@ mod tests {
     use super::*;
     use crate::datasource::datasource::Statistics;
     use crate::datasource::PartitionedFile;
-    use crate::physical_plan::parquet::{
-        ParquetExec, ParquetExecMetrics, ParquetPartition,
-    };
+    use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
+    use crate::physical_plan::parquet::{ParquetExec, ParquetPartition};
     use crate::physical_plan::projection::ProjectionExec;
 
     #[test]
     fn added_repartition_to_single_partition() -> Result<()> {
         let schema = Arc::new(Schema::empty());
+        let metrics = ExecutionPlanMetricsSet::new();
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ParquetExec::new(
                 vec![ParquetPartition::new(
                     vec![PartitionedFile::from("x".to_string())],
                     0,
+                    metrics.clone(),
                 )],
                 schema,
                 None,
                 Statistics::default(),
-                ParquetExecMetrics::new(),
+                metrics,
                 None,
                 2048,
                 None,
@@ -156,6 +157,7 @@ mod tests {
     #[test]
     fn repartition_deepest_node() -> Result<()> {
         let schema = Arc::new(Schema::empty());
+        let metrics = ExecutionPlanMetricsSet::new();
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ProjectionExec::try_new(
@@ -164,11 +166,12 @@ mod tests {
                     vec![ParquetPartition::new(
                         vec![PartitionedFile::from("x".to_string())],
                         0,
+                        metrics.clone(),
                     )],
                     schema,
                     None,
                     Statistics::default(),
-                    ParquetExecMetrics::new(),
+                    metrics,
                     None,
                     2048,
                     None,

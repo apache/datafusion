@@ -16,7 +16,6 @@
 // under the License.
 
 use ballista::prelude::*;
-use datafusion::arrow::util::pretty;
 use datafusion::prelude::{col, lit};
 
 /// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
@@ -38,8 +37,8 @@ async fn main() -> Result<()> {
         .select_columns(&["id", "bool_col", "timestamp_col"])?
         .filter(col("id").gt(lit(1)))?;
 
-    let results = df.collect().await?;
-    pretty::print_batches(&results)?;
+    // print the results
+    df.show().await?;
 
     Ok(())
 }

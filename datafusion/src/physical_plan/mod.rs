@@ -17,14 +17,8 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
-use std::fmt;
-use std::fmt::{Debug, Display};
-use std::ops::Range;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::{any::Any, pin::Pin};
-
+pub use self::metrics::Metric;
+use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
@@ -42,7 +36,12 @@ use arrow::{array::ArrayRef, datatypes::Field};
 use async_trait::async_trait;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
-use hashbrown::HashMap;
+use std::fmt;
+use std::fmt::{Debug, Display};
+use std::ops::Range;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::{any::Any, pin::Pin};
 
 /// Trait for types that stream [arrow::record_batch::RecordBatch]
 pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
@@ -87,72 +86,6 @@ impl Stream for EmptyRecordBatchStream {
     }
 }
 
-/// SQL metric type
-#[derive(Debug, Clone)]
-pub enum MetricType {
-    /// Simple counter
-    Counter,
-    /// Wall clock time in nanoseconds
-    TimeNanos,
-}
-
-/// SQL metric such as counter (number of input or output rows) or timing information about
-/// a physical operator.
-#[derive(Debug)]
-pub struct SQLMetric {
-    /// Metric value
-    value: AtomicUsize,
-    /// Metric type
-    metric_type: MetricType,
-}
-
-impl Clone for SQLMetric {
-    fn clone(&self) -> Self {
-        Self {
-            value: AtomicUsize::new(self.value.load(Ordering::Relaxed)),
-            metric_type: self.metric_type.clone(),
-        }
-    }
-}
-
-impl SQLMetric {
-    // relaxed ordering for operations on `value` poses no issues
-    // we're purely using atomic ops with no associated memory ops
-
-    /// Create a new metric for tracking a counter
-    pub fn counter() -> Arc<SQLMetric> {
-        Arc::new(SQLMetric::new(MetricType::Counter))
-    }
-
-    /// Create a new metric for tracking time in nanoseconds
-    pub fn time_nanos() -> Arc<SQLMetric> {
-        Arc::new(SQLMetric::new(MetricType::TimeNanos))
-    }
-
-    /// Create a new SQLMetric
-    pub fn new(metric_type: MetricType) -> Self {
-        Self {
-            value: AtomicUsize::new(0),
-            metric_type,
-        }
-    }
-
-    /// Add to the value
-    pub fn add(&self, n: usize) {
-        self.value.fetch_add(n, Ordering::Relaxed);
-    }
-
-    /// Add elapsed nanoseconds since `start`to self
-    pub fn add_elapsed(&self, start: std::time::Instant) {
-        self.add(start.elapsed().as_nanos() as usize)
-    }
-
-    /// Get the current value
-    pub fn value(&self) -> usize {
-        self.value.load(Ordering::Relaxed)
-    }
-}
-
 /// Physical planner interface
 pub use self::planner::PhysicalPlanner;
 
@@ -193,9 +126,19 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// creates an iterator
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream>;
 
-    /// Return a snapshot of the metrics collected during execution
-    fn metrics(&self) -> HashMap<String, SQLMetric> {
-        HashMap::new()
+    /// Return a snapshot of the set of [`Metric`]s for this
+    /// [`ExecutionPlan`].
+    ///
+    /// While the values of the metrics in the returned
+    /// [`MetricsSet`]s may change as execution progresses, the
+    /// specific metrics will not.
+    ///
+    /// Once `self.execute()` has returned (technically the future is
+    /// resolved) for all available partitions, the set of metrics
+    /// should be complete. If this function is called prior to
+    /// `execute()` new metrics may appear in subsequent calls.
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
     }
 
     /// Format this `ExecutionPlan` to `f` in the specified type.
@@ -328,20 +271,6 @@ pub fn visit_execution_plan<V: ExecutionPlanVisitor>(
     }
     visitor.post_visit(plan)?;
     Ok(())
-}
-
-/// Recursively gateher all execution metrics from this plan and all of its input plans
-pub fn plan_metrics(plan: Arc<dyn ExecutionPlan>) -> HashMap<String, SQLMetric> {
-    fn get_metrics_inner(
-        plan: &dyn ExecutionPlan,
-        mut metrics: HashMap<String, SQLMetric>,
-    ) -> HashMap<String, SQLMetric> {
-        metrics.extend(plan.metrics().into_iter());
-        plan.children().into_iter().fold(metrics, |metrics, child| {
-            get_metrics_inner(child.as_ref(), metrics)
-        })
-    }
-    get_metrics_inner(plan.as_ref(), HashMap::new())
 }
 
 /// Execute the [ExecutionPlan] and collect the results in memory
@@ -663,6 +592,7 @@ pub mod json;
 pub mod limit;
 pub mod math_expressions;
 pub mod memory;
+pub mod metrics;
 pub mod parquet;
 pub mod planner;
 pub mod projection;

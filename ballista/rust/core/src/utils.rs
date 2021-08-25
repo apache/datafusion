@@ -61,7 +61,7 @@ use datafusion::physical_plan::parquet::ParquetExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sort::SortExec;
 use datafusion::physical_plan::{
-    AggregateExpr, ExecutionPlan, PhysicalExpr, RecordBatchStream, SQLMetric,
+    metrics, AggregateExpr, ExecutionPlan, Metric, PhysicalExpr, RecordBatchStream,
 };
 use futures::{future, Stream, StreamExt};
 use std::time::Instant;
@@ -71,7 +71,7 @@ use std::time::Instant;
 pub async fn write_stream_to_disk(
     stream: &mut Pin<Box<dyn RecordBatchStream + Send + Sync>>,
     path: &str,
-    disk_write_metric: Arc<SQLMetric>,
+    disk_write_metric: &metrics::Time,
 ) -> Result<PartitionStats> {
     let file = File::create(&path).map_err(|e| {
         BallistaError::General(format!(
@@ -97,13 +97,13 @@ pub async fn write_stream_to_disk(
         num_rows += batch.num_rows();
         num_bytes += batch_size_bytes;
 
-        let start = Instant::now();
+        let timer = disk_write_metric.timer();
         writer.write(&batch)?;
-        disk_write_metric.add_elapsed(start);
+        timer.done();
     }
-    let start = Instant::now();
+    let timer = disk_write_metric.timer();
     writer.finish()?;
-    disk_write_metric.add_elapsed(start);
+    timer.done();
     Ok(PartitionStats::new(
         Some(num_rows as u64),
         Some(num_batches),

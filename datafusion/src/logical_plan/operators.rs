@@ -43,7 +43,7 @@ pub enum Operator {
     /// Division operator, like `/`
     Divide,
     /// Remainder operator, like `%`
-    Modulus,
+    Modulo,
     /// Logical AND, like `&&`
     And,
     /// Logical OR, like `||`
@@ -67,7 +67,7 @@ impl fmt::Display for Operator {
             Operator::Minus => "-",
             Operator::Multiply => "*",
             Operator::Divide => "/",
-            Operator::Modulus => "%",
+            Operator::Modulo => "%",
             Operator::And => "AND",
             Operator::Or => "OR",
             Operator::Like => "LIKE",

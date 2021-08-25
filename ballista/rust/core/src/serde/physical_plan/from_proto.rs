@@ -46,7 +46,8 @@ use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunc
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::PartitionMode;
-use datafusion::physical_plan::parquet::{ParquetExecMetrics, ParquetPartition};
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion::physical_plan::parquet::ParquetPartition;
 use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
@@ -144,7 +145,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     schema,
                     Some(projection),
                     Statistics::default(),
-                    ParquetExecMetrics::new(),
+                    ExecutionPlanMetricsSet::new(),
                     None,
                     scan.batch_size as usize,
                     None,
@@ -489,7 +490,11 @@ impl TryInto<ParquetPartition> for &protobuf::ParquetPartition {
             .iter()
             .map(|f| f.try_into())
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(ParquetPartition::new(files, self.index as usize))
+        Ok(ParquetPartition::new(
+            files,
+            self.index as usize,
+            ExecutionPlanMetricsSet::new(),
+        ))
     }
 }
 
