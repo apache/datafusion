@@ -361,16 +361,16 @@ mod tests {
     async fn test() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let parquet_exec = AvroExec::try_from_path(
+        let avro_exec = AvroExec::try_from_path(
             &filename,
             AvroReadOptions::default(),
             Some(vec![0, 1, 2]),
             1024,
             None,
         )?;
-        assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+        assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0).await?;
+        let mut results = avro_exec.execute(0).await?;
         let batch = results.next().await.unwrap()?;
 
         assert_eq!(8, batch.num_rows());

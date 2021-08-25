@@ -21,7 +21,7 @@ use datafusion::error::Result;
 use datafusion::physical_plan::avro::AvroReadOptions;
 use datafusion::prelude::*;
 
-/// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
+/// This example demonstrates executing a simple query against an Arrow data source (Avro) and
 /// fetching results
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
 
     let testdata = datafusion::arrow::util::test_util::arrow_test_data();
 
-    // register parquet file with the execution context
+    // register avro file with the execution context
     let avro_file = &format!("{}/avro/alltypes_plain.avro", testdata);
     ctx.register_avro("alltypes_plain", avro_file, AvroReadOptions::default())?;
 
