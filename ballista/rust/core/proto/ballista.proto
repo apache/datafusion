@@ -583,10 +583,15 @@ message FilterExecNode {
   PhysicalExprNode expr = 2;
 }
 
+message ParquetPartition {
+  uint32 index = 1;
+  repeated PartitionedFile files = 2;
+}
+
 message ParquetScanExecNode {
-  repeated string filename = 1;
-  repeated uint32 projection = 2;
-  uint32 num_partitions = 3;
+  repeated ParquetPartition partitions = 1;
+  Schema schema = 2;
+  repeated uint32 projection = 3;
   uint32 batch_size = 4;
 }
 

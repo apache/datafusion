@@ -66,9 +66,9 @@ use crate::datasource::{get_statistics_with_limit, FilePartition, PartitionedFil
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
     /// Parquet partitions to read
-    partitions: Vec<ParquetPartition>,
+    pub partitions: Vec<ParquetPartition>,
     /// Schema after projection is applied
-    schema: SchemaRef,
+    pub schema: SchemaRef,
     /// Projection for which columns to load
     projection: Vec<usize>,
     /// Batch size
