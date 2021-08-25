@@ -513,8 +513,8 @@ impl SchedulerGrpc for SchedulerServer {
 
 /// Create a DataFusion context that is compatible with Ballista
 pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
-    let config =
-        ExecutionConfig::new().with_concurrency(config.default_shuffle_partitions());
+    let config = ExecutionConfig::new()
+        .with_target_partitions(config.default_shuffle_partitions());
     ExecutionContext::with_config(config)
 }
 

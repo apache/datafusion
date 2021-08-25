@@ -81,8 +81,8 @@ struct BallistaBenchmarkOpt {
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
 
-    /// Number of partitions to create when using MemTable as input
-    #[structopt(short = "n", long = "partitions", default_value = "8")]
+    /// Number of partitions to process in parallel
+    #[structopt(short = "p", long = "partitions", default_value = "2")]
     partitions: usize,
 
     /// Ballista executor host
@@ -92,10 +92,6 @@ struct BallistaBenchmarkOpt {
     /// Ballista executor port
     #[structopt(long = "port")]
     port: Option<u16>,
-
-    /// Number of shuffle partitions
-    #[structopt(short, long, default_value = "2")]
-    shuffle_partitions: usize,
 }
 
 #[derive(Debug, StructOpt, Clone)]
@@ -112,9 +108,9 @@ struct DataFusionBenchmarkOpt {
     #[structopt(short = "i", long = "iterations", default_value = "3")]
     iterations: usize,
 
-    /// Number of threads to use for parallel execution
-    #[structopt(short = "c", long = "concurrency", default_value = "2")]
-    concurrency: usize,
+    /// Number of partitions to process in parallel
+    #[structopt(short = "p", long = "partitions", default_value = "2")]
+    partitions: usize,
 
     /// Batch size when reading CSV or Parquet files
     #[structopt(short = "s", long = "batch-size", default_value = "8192")]
@@ -131,10 +127,6 @@ struct DataFusionBenchmarkOpt {
     /// Load the data into a MemTable before executing the query
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
-
-    /// Number of partitions to create when using MemTable as input
-    #[structopt(short = "n", long = "partitions", default_value = "8")]
-    partitions: usize,
 }
 
 #[derive(Debug, StructOpt)]
@@ -203,7 +195,7 @@ async fn main() -> Result<()> {
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let config = ExecutionConfig::new()
-        .with_concurrency(opt.concurrency)
+        .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size);
     let mut ctx = ExecutionContext::with_config(config);
 
@@ -213,7 +205,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
             opt.path.to_str().unwrap(),
             table,
             opt.file_format.as_str(),
-            opt.concurrency,
+            opt.partitions,
         )?;
         if opt.mem_table {
             println!("Loading table '{}' into memory", table);
@@ -257,7 +249,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     let config = BallistaConfig::builder()
         .set(
             BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
-            &format!("{}", opt.shuffle_partitions),
+            &format!("{}", opt.partitions),
         )
         .build()
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
@@ -451,7 +443,7 @@ fn get_table(
     path: &str,
     table: &str,
     table_format: &str,
-    max_concurrency: usize,
+    max_partitions: usize,
 ) -> Result<Arc<dyn TableProvider>> {
     match table_format {
         // dbgen creates .tbl ('|' delimited) files without header
@@ -479,7 +471,7 @@ fn get_table(
             Ok(Arc::new(ParquetTable::try_new_with_schema(
                 &path,
                 schema,
-                max_concurrency,
+                max_partitions,
                 false,
             )?))
         }
@@ -980,7 +972,7 @@ mod tests {
         // Tests running query with empty tables, to see whether they run succesfully.
 
         let config = ExecutionConfig::new()
-            .with_concurrency(1)
+            .with_target_partitions(1)
             .with_batch_size(10);
         let mut ctx = ExecutionContext::with_config(config);
 
@@ -1033,12 +1025,11 @@ mod tests {
                 query: n,
                 debug: false,
                 iterations: 1,
-                concurrency: 2,
+                partitions: 2,
                 batch_size: 8192,
                 path: PathBuf::from(path.to_string()),
                 file_format: "tbl".to_string(),
                 mem_table: false,
-                partitions: 16,
             };
             let actual = benchmark_datafusion(opt).await?;
 
@@ -1074,7 +1065,7 @@ mod tests {
 
         fn round_trip_query(n: usize) -> Result<()> {
             let config = ExecutionConfig::new()
-                .with_concurrency(1)
+                .with_target_partitions(1)
                 .with_batch_size(10);
             let mut ctx = ExecutionContext::with_config(config);
 

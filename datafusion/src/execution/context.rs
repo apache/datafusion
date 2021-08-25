@@ -291,7 +291,7 @@ impl ExecutionContext {
             &LogicalPlanBuilder::scan_parquet(
                 filename,
                 None,
-                self.state.lock().unwrap().config.concurrency,
+                self.state.lock().unwrap().config.target_partitions,
             )?
             .build()?,
         )))
@@ -325,7 +325,7 @@ impl ExecutionContext {
     pub fn register_parquet(&mut self, name: &str, filename: &str) -> Result<()> {
         let table = {
             let m = self.state.lock().unwrap();
-            ParquetTable::try_new(filename, m.config.concurrency)?
+            ParquetTable::try_new(filename, m.config.target_partitions)?
                 .with_enable_pruning(m.config.parquet_pruning)
         };
         self.register_table(name, Arc::new(table))?;
@@ -645,8 +645,8 @@ impl QueryPlanner for DefaultQueryPlanner {
 /// Configuration options for execution context
 #[derive(Clone)]
 pub struct ExecutionConfig {
-    /// Number of concurrent threads for query execution.
-    pub concurrency: usize,
+    /// Number of partitions for query execution. Increasing partitions can increase concurrency.
+    pub target_partitions: usize,
     /// Default batch size when reading data sources
     pub batch_size: usize,
     /// Responsible for optimizing a logical plan
@@ -665,13 +665,13 @@ pub struct ExecutionConfig {
     /// virtual tables for displaying schema information
     information_schema: bool,
     /// Should DataFusion repartition data using the join keys to execute joins in parallel
-    /// using the provided `concurrency` level
+    /// using the provided `target_partitions` level
     pub repartition_joins: bool,
     /// Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel
-    /// using the provided `concurrency` level
+    /// using the provided `target_partitions` level
     pub repartition_aggregations: bool,
     /// Should DataFusion repartition data using the partition keys to execute window functions in
-    /// parallel using the provided `concurrency` level
+    /// parallel using the provided `target_partitions` level
     pub repartition_windows: bool,
     /// Should Datafusion parquet reader using the predicate to prune data
     parquet_pruning: bool,
@@ -680,7 +680,7 @@ pub struct ExecutionConfig {
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
-            concurrency: num_cpus::get(),
+            target_partitions: num_cpus::get(),
             batch_size: 8192,
             optimizers: vec![
                 Arc::new(ConstantFolding::new()),
@@ -716,11 +716,20 @@ impl ExecutionConfig {
         Default::default()
     }
 
-    /// Customize max_concurrency
-    pub fn with_concurrency(mut self, n: usize) -> Self {
-        // concurrency must be greater than zero
+    /// Deprecated. Use with_target_partitions instead.
+    #[deprecated(
+        since = "5.1.0",
+        note = "This method is deprecated in favor of `with_target_partitions`."
+    )]
+    pub fn with_concurrency(self, n: usize) -> Self {
+        self.with_target_partitions(n)
+    }
+
+    /// Customize target_partitions
+    pub fn with_target_partitions(mut self, n: usize) -> Self {
+        // partition count must be greater than zero
         assert!(n > 0);
-        self.concurrency = n;
+        self.target_partitions = n;
         self
     }
 
@@ -3749,8 +3758,9 @@ mod tests {
 
     /// Generate a partitioned CSV file and register it with an execution context
     fn create_ctx(tmp_dir: &TempDir, partition_count: usize) -> Result<ExecutionContext> {
-        let mut ctx =
-            ExecutionContext::with_config(ExecutionConfig::new().with_concurrency(8));
+        let mut ctx = ExecutionContext::with_config(
+            ExecutionConfig::new().with_target_partitions(8),
+        );
 
         let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
 
