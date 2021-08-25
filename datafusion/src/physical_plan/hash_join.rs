@@ -142,7 +142,7 @@ impl HashJoinMetrics {
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
 
         let output_batches =
-            MetricBuilder::new(metrics).counter("output_rows", partition);
+            MetricBuilder::new(metrics).counter("output_batches", partition);
 
         let output_rows = MetricBuilder::new(metrics).output_rows(partition);
 
