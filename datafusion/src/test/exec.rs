@@ -33,7 +33,8 @@ use arrow::{
 use futures::Stream;
 
 use crate::physical_plan::{
-    ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream,
 };
 use crate::{
     error::{DataFusionError, Result},
@@ -190,6 +191,18 @@ impl ExecutionPlan for MockExec {
         // returned stream simply reads off the rx stream
         Ok(RecordBatchReceiverStream::create(&self.schema, rx))
     }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "MockExec")
+            }
+        }
+    }
 }
 
 fn clone_error(e: &ArrowError) -> ArrowError {
@@ -281,6 +294,18 @@ impl ExecutionPlan for BarrierExec {
         // returned stream simply reads off the rx stream
         Ok(RecordBatchReceiverStream::create(&self.schema, rx))
     }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "BarrierExec")
+            }
+        }
+    }
 }
 
 /// A mock execution plan that errors on a call to execute
@@ -330,5 +355,17 @@ impl ExecutionPlan for ErrorExec {
             "ErrorExec, unsurprisingly, errored in partition {}",
             partition
         )))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "ErrorExec")
+            }
+        }
     }
 }
