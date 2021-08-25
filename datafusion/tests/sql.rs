@@ -4169,8 +4169,8 @@ async fn test_cast_expressions_error() -> Result<()> {
 
 #[tokio::test]
 async fn test_physical_plan_display_indent() {
-    // Hard code concurrency as it appears in the RepartitionExec output
-    let config = ExecutionConfig::new().with_concurrency(3);
+    // Hard code target_partitions as it appears in the RepartitionExec output
+    let config = ExecutionConfig::new().with_target_partitions(3);
     let mut ctx = ExecutionContext::with_config(config);
     register_aggregate_csv(&mut ctx).unwrap();
     let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
@@ -4215,8 +4215,8 @@ async fn test_physical_plan_display_indent() {
 
 #[tokio::test]
 async fn test_physical_plan_display_indent_multi_children() {
-    // Hard code concurrency as it appears in the RepartitionExec output
-    let config = ExecutionConfig::new().with_concurrency(3);
+    // Hard code target_partitions as it appears in the RepartitionExec output
+    let config = ExecutionConfig::new().with_target_partitions(3);
     let mut ctx = ExecutionContext::with_config(config);
     // ensure indenting works for nodes with multiple children
     register_aggregate_csv(&mut ctx).unwrap();

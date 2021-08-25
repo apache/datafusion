@@ -80,7 +80,7 @@ fn create_context() -> Arc<Mutex<ExecutionContext>> {
 
         // create local execution context
         let mut ctx = ExecutionContext::new();
-        ctx.state.lock().unwrap().config.concurrency = 1;
+        ctx.state.lock().unwrap().config.target_partitions = 1;
         ctx.register_table("aggregate_test_100", Arc::new(mem_table))
             .unwrap();
         ctx_holder.lock().unwrap().push(Arc::new(Mutex::new(ctx)))

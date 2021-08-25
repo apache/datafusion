@@ -453,7 +453,6 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                // Update concurrency here in the future
                 Ok(Arc::new(SortExec::try_new(exprs, input)?))
             }
             PhysicalPlanType::Unresolved(unresolved_shuffle) => {

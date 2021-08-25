@@ -251,7 +251,7 @@ pub fn create_df_ctx_with_ballista_query_planner(
             scheduler_url,
             config.clone(),
         )))
-        .with_concurrency(config.default_shuffle_partitions());
+        .with_target_partitions(config.default_shuffle_partitions());
     ExecutionContext::with_config(config)
 }
 

@@ -159,7 +159,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     projection,
                     24,
                     &scan.table_name,
-                )? //TODO concurrency
+                )? //TODO remove hard-coded max_partitions
                 .build()
                 .map_err(|e| e.into())
             }

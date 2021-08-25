@@ -47,9 +47,9 @@ struct Opt {
     #[structopt(short = "i", long = "iterations", default_value = "3")]
     iterations: usize,
 
-    /// Number of threads for query execution
-    #[structopt(short = "c", long = "concurrency", default_value = "2")]
-    concurrency: usize,
+    /// Number of partitions to process in parallel
+    #[structopt(short = "p", long = "partitions", default_value = "2")]
+    partitions: usize,
 
     /// Batch size when reading CSV or Parquet files
     #[structopt(short = "s", long = "batch-size", default_value = "8192")]
@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
     println!("Running benchmarks with the following options: {:?}", opt);
 
     let config = ExecutionConfig::new()
-        .with_concurrency(opt.concurrency)
+        .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size);
     let mut ctx = ExecutionContext::with_config(config);
 
