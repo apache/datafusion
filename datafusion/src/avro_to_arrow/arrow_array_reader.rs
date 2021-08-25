@@ -972,9 +972,9 @@ where
 #[cfg(test)]
 mod test {
     use crate::arrow::array::Array;
-    use crate::arrow::datatypes::Field;
+    use crate::arrow::datatypes::{Field, TimeUnit};
     use crate::avro_to_arrow::{Reader, ReaderBuilder};
-    use arrow::array::{Int32Array, Int64Array, ListArray, StructArray, UnionArray};
+    use arrow::array::{Int32Array, Int64Array, ListArray, TimestampMicrosecondArray};
     use arrow::datatypes::DataType;
     use std::fs::File;
 
@@ -985,6 +985,44 @@ mod test {
             .infer_schema()
             .with_batch_size(batch_size);
         builder.build(File::open(filename).unwrap()).unwrap()
+    }
+
+    // TODO: Fixed, Enum, Dictionary
+
+    #[test]
+    fn test_time_avro_milliseconds() {
+        let mut reader = build_reader("alltypes_plain.avro", 10);
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(11, batch.num_columns());
+        assert_eq!(8, batch.num_rows());
+
+        let schema = reader.schema();
+        let batch_schema = batch.schema();
+        assert_eq!(schema, batch_schema);
+
+        let timestamp_col = schema.column_with_name("timestamp_col").unwrap();
+        assert_eq!(
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+            timestamp_col.1.data_type()
+        );
+        eprintln!("batch.column(a.0) = {:?}", batch.column(timestamp_col.0));
+        let timestamp_array = batch
+            .column(timestamp_col.0)
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        for i in 0..timestamp_array.len() {
+            assert!(timestamp_array.is_valid(i));
+        }
+        assert_eq!(1235865600000000, timestamp_array.value(0));
+        assert_eq!(1235865660000000, timestamp_array.value(1));
+        assert_eq!(1238544000000000, timestamp_array.value(2));
+        assert_eq!(1238544060000000, timestamp_array.value(3));
+        assert_eq!(1233446400000000, timestamp_array.value(4));
+        assert_eq!(1233446460000000, timestamp_array.value(5));
+        assert_eq!(1230768000000000, timestamp_array.value(6));
+        assert_eq!(1230768060000000, timestamp_array.value(7));
     }
 
     #[test]
