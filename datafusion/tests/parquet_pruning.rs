@@ -499,12 +499,13 @@ impl ContextWithParquet {
     /// the number of output rows and normalized execution metrics
     async fn query_with_expr(&mut self, expr: Expr) -> TestOutput {
         let sql = format!("EXPR only: {:?}", expr);
-        let logical_plan = LogicalPlanBuilder::scan("t", self.provider.clone(), None)
-            .unwrap()
-            .filter(expr)
-            .unwrap()
-            .build()
-            .unwrap();
+        let logical_plan =
+            LogicalPlanBuilder::scan("t", self.provider.clone(), None, None)
+                .unwrap()
+                .filter(expr)
+                .unwrap()
+                .build()
+                .unwrap();
         self.run_test(logical_plan, sql).await
     }
 

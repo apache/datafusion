@@ -22,8 +22,11 @@
 use super::super::proto_error;
 use crate::datasource::DfTableAdapter;
 use crate::serde::{protobuf, BallistaError};
-use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-use datafusion::datasource::CsvFile;
+use datafusion::arrow::datatypes::{
+    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit,
+};
+use datafusion::datasource::datasource::Statistics;
+use datafusion::datasource::{CsvFile, PartitionedFile, TableDescriptor};
 use datafusion::logical_plan::{
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
     Column, Expr, JoinConstraint, JoinType, LogicalPlan,
@@ -249,6 +252,44 @@ impl TryInto<DataType> for &protobuf::ArrowType {
                     Box::new(pb_value.as_ref().try_into()?),
                 )
             }
+        })
+    }
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<protobuf::Statistics> for Statistics {
+    fn into(self) -> protobuf::Statistics {
+        let none_value = -1_i64;
+        protobuf::Statistics {
+            num_rows: self.num_rows.map(|n| n as i64).unwrap_or(none_value),
+            total_byte_size: self.total_byte_size.map(|n| n as i64).unwrap_or(none_value),
+            column_stats: vec![],
+        }
+    }
+}
+
+impl From<&PartitionedFile> for protobuf::PartitionedFile {
+    fn from(pf: &PartitionedFile) -> protobuf::PartitionedFile {
+        protobuf::PartitionedFile {
+            path: pf.file_path.clone(),
+            statistics: Some(pf.statistics.clone().into()),
+        }
+    }
+}
+
+impl TryFrom<TableDescriptor> for protobuf::TableDescriptor {
+    type Error = BallistaError;
+
+    fn try_from(desc: TableDescriptor) -> Result<protobuf::TableDescriptor, Self::Error> {
+        let partition_files: Vec<protobuf::PartitionedFile> =
+            desc.partition_files.iter().map(|pf| pf.into()).collect();
+
+        let schema: protobuf::Schema = desc.schema.into();
+
+        Ok(protobuf::TableDescriptor {
+            path: desc.path,
+            partition_files,
+            schema: Some(schema),
         })
     }
 }
@@ -706,13 +747,14 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     .collect::<Result<Vec<_>, _>>()?;
 
                 if let Some(parquet) = source.downcast_ref::<ParquetTable>() {
+                    let table_desc: protobuf::TableDescriptor =
+                        parquet.desc.descriptor.clone().try_into()?;
                     Ok(protobuf::LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ParquetScan(
                             protobuf::ParquetTableScanNode {
                                 table_name: table_name.to_owned(),
-                                path: parquet.path().to_owned(),
+                                table_desc: Some(table_desc),
                                 projection,
-                                schema: Some(schema),
                                 filters,
                             },
                         )),
@@ -1251,6 +1293,19 @@ impl From<&Column> for protobuf::Column {
 
 #[allow(clippy::from_over_into)]
 impl Into<protobuf::Schema> for &Schema {
+    fn into(self) -> protobuf::Schema {
+        protobuf::Schema {
+            columns: self
+                .fields()
+                .iter()
+                .map(protobuf::Field::from)
+                .collect::<Vec<_>>(),
+        }
+    }
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<protobuf::Schema> for SchemaRef {
     fn into(self) -> protobuf::Schema {
         protobuf::Schema {
             columns: self

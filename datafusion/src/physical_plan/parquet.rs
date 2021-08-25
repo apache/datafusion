@@ -27,8 +27,7 @@ use crate::{
     logical_plan::{Column, Expr},
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
-        DisplayFormatType, ExecutionPlan, Partitioning,
-        SendableRecordBatchStream,
+        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
     },
     scalar::ScalarValue,
 };
@@ -60,7 +59,7 @@ use async_trait::async_trait;
 
 use super::stream::RecordBatchReceiverStream;
 use super::SQLMetric;
-use crate::datasource::parquet::ParquetRootDesc;
+use crate::datasource::parquet::ParquetTableDescriptor;
 use crate::datasource::{get_statistics_with_limit, FilePartition, PartitionedFile};
 
 /// Execution plan for scanning one or more Parquet partitions
@@ -130,9 +129,9 @@ impl ParquetExec {
     ) -> Result<Self> {
         // build a list of filenames from the specified path, which could be a single file or
         // a directory containing one or more parquet files
-        let root_desc = ParquetRootDesc::new(path)?;
+        let table_desc = ParquetTableDescriptor::new(path)?;
         Self::try_new(
-            Arc::new(root_desc),
+            Arc::new(table_desc),
             projection,
             predicate,
             batch_size,
@@ -143,7 +142,7 @@ impl ParquetExec {
 
     /// Create a new Parquet reader execution plan with root descriptor, provided partitions and schema
     pub fn try_new(
-        desc: Arc<ParquetRootDesc>,
+        desc: Arc<ParquetTableDescriptor>,
         projection: Option<Vec<usize>>,
         predicate: Option<Expr>,
         batch_size: usize,

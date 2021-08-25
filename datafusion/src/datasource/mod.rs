@@ -54,8 +54,6 @@ pub struct PartitionedFile {
     pub statistics: Statistics,
     // Values of partition columns to be appended to each row
     // pub partition_value: Option<Vec<ScalarValue>>,
-    // Schema of partition columns
-    // pub partition_schema: Option<Schema>,
     // We may include row group range here for a more fine-grained parallel execution
 }
 
@@ -92,7 +90,9 @@ impl std::fmt::Display for FilePartition {
 
 #[derive(Debug, Clone)]
 /// All source files with same schema exists in a path
-pub struct SourceRootDescriptor {
+pub struct TableDescriptor {
+    /// root path of the table
+    pub path: String,
     /// All source files in the path
     pub partition_files: Vec<PartitionedFile>,
     /// The schema of the files
@@ -102,15 +102,15 @@ pub struct SourceRootDescriptor {
 /// Returned partitioned file with its schema
 pub type FileAndSchema = (PartitionedFile, Schema);
 
-/// Builder for ['SourceRootDescriptor'] inside given path
-pub trait SourceRootDescBuilder {
-    /// Construct a ['SourceRootDescriptor'] from the provided path
-    fn build_source_desc(
+/// Builder for ['TableDescriptor'] inside given path
+pub trait TableDescriptorBuilder {
+    /// Construct a ['TableDescriptor'] from the provided path
+    fn build_table_desc(
         path: &str,
         ext: &str,
         provided_schema: Option<Schema>,
         collect_statistics: bool,
-    ) -> Result<SourceRootDescriptor> {
+    ) -> Result<TableDescriptor> {
         let filenames = build_file_list(path, ext)?;
         if filenames.is_empty() {
             return Err(DataFusionError::Plan(format!(
@@ -162,7 +162,8 @@ pub trait SourceRootDescBuilder {
 
         let result_schema = provided_schema.unwrap_or_else(|| schemas.pop().unwrap());
 
-        Ok(SourceRootDescriptor {
+        Ok(TableDescriptor {
+            path: path.to_string(),
             partition_files: partitioned_files?,
             schema: Arc::new(result_schema),
         })
@@ -174,11 +175,11 @@ pub trait SourceRootDescBuilder {
 
 /// Get all files as well as the summary statistics when a limit is provided
 pub fn get_statistics_with_limit(
-    source_desc: &SourceRootDescriptor,
+    table_desc: &TableDescriptor,
     limit: Option<usize>,
 ) -> (Vec<PartitionedFile>, Statistics) {
-    let mut all_files = source_desc.partition_files.clone();
-    let schema = source_desc.schema.clone();
+    let mut all_files = table_desc.partition_files.clone();
+    let schema = table_desc.schema.clone();
 
     let mut total_byte_size = 0;
     let mut null_counts = vec![0; schema.fields().len()];

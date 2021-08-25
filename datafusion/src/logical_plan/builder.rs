@@ -109,7 +109,7 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let provider = Arc::new(MemTable::try_new(schema, partitions)?);
-        Self::scan(UNNAMED_TABLE, provider, projection)
+        Self::scan(UNNAMED_TABLE, provider, projection, None)
     }
 
     /// Scan a CSV data source
@@ -130,7 +130,7 @@ impl LogicalPlanBuilder {
         table_name: impl Into<String>,
     ) -> Result<Self> {
         let provider = Arc::new(CsvFile::try_new(path, options)?);
-        Self::scan(table_name, provider, projection)
+        Self::scan(table_name, provider, projection, None)
     }
 
     /// Scan a Parquet data source
@@ -151,7 +151,7 @@ impl LogicalPlanBuilder {
         table_name: impl Into<String>,
     ) -> Result<Self> {
         let provider = Arc::new(ParquetTable::try_new(path, max_concurrency)?);
-        Self::scan(table_name, provider, projection)
+        Self::scan(table_name, provider, projection, None)
     }
 
     /// Scan an empty data source, mainly used in tests
@@ -162,7 +162,7 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let table_schema = Arc::new(table_schema.clone());
         let provider = Arc::new(EmptyTable::new(table_schema));
-        Self::scan(name.unwrap_or(UNNAMED_TABLE), provider, projection)
+        Self::scan(name.unwrap_or(UNNAMED_TABLE), provider, projection, None)
     }
 
     /// Convert a table provider into a builder with a TableScan
@@ -170,6 +170,7 @@ impl LogicalPlanBuilder {
         table_name: impl Into<String>,
         provider: Arc<dyn TableProvider>,
         projection: Option<Vec<usize>>,
+        filters: Option<Vec<Expr>>,
     ) -> Result<Self> {
         let table_name = table_name.into();
 
@@ -201,7 +202,7 @@ impl LogicalPlanBuilder {
             source: provider,
             projected_schema: Arc::new(projected_schema),
             projection,
-            filters: vec![],
+            filters: filters.unwrap_or_default(),
             limit: None,
         };
 

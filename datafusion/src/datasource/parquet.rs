@@ -29,7 +29,10 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 use super::datasource::TableProviderFilterPushDown;
 use crate::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use crate::datasource::datasource::Statistics;
-use crate::datasource::{create_max_min_accs, get_col_stats, get_statistics_with_limit, PartitionedFile, SourceRootDescBuilder, SourceRootDescriptor, TableProvider, FileAndSchema};
+use crate::datasource::{
+    create_max_min_accs, get_col_stats, get_statistics_with_limit, FileAndSchema,
+    PartitionedFile, TableDescriptor, TableDescriptorBuilder, TableProvider,
+};
 use crate::error::Result;
 use crate::logical_plan::{combine_filters, Expr};
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -39,8 +42,8 @@ use crate::scalar::ScalarValue;
 
 /// Table-based representation of a `ParquetFile`.
 pub struct ParquetTable {
-    path: String,
-    desc: Arc<ParquetRootDesc>,
+    /// Descriptor of the table, including schema, files, etc.
+    pub desc: Arc<ParquetTableDescriptor>,
     max_concurrency: usize,
     enable_pruning: bool,
 }
@@ -49,10 +52,9 @@ impl ParquetTable {
     /// Attempt to initialize a new `ParquetTable` from a file path.
     pub fn try_new(path: impl Into<String>, max_concurrency: usize) -> Result<Self> {
         let path = path.into();
-        let root_desc = ParquetRootDesc::new(path.as_str());
+        let table_desc = ParquetTableDescriptor::new(path.as_str());
         Ok(Self {
-            path,
-            desc: Arc::new(root_desc?),
+            desc: Arc::new(table_desc?),
             max_concurrency,
             enable_pruning: true,
         })
@@ -67,22 +69,34 @@ impl ParquetTable {
         collect_statistics: bool,
     ) -> Result<Self> {
         let path = path.into();
-        let root_desc = ParquetRootDesc::new_with_schema(
+        let table_desc = ParquetTableDescriptor::new_with_schema(
             path.as_str(),
             Some(schema),
             collect_statistics,
         );
         Ok(Self {
-            path,
-            desc: Arc::new(root_desc?),
+            desc: Arc::new(table_desc?),
             max_concurrency,
             enable_pruning: true,
         })
     }
 
+    /// Attempt to initialize a new `ParquetTable` from a table descriptor.
+    pub fn try_new_with_desc(
+        desc: Arc<ParquetTableDescriptor>,
+        max_concurrency: usize,
+        enable_pruning: bool,
+    ) -> Result<Self> {
+        Ok(Self {
+            desc,
+            max_concurrency,
+            enable_pruning,
+        })
+    }
+
     /// Get the path for the Parquet file(s) represented by this ParquetTable instance
     pub fn path(&self) -> &str {
-        &self.path
+        &self.desc.descriptor.path
     }
 
     /// Get parquet pruning option
@@ -152,19 +166,19 @@ impl TableProvider for ParquetTable {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// Descriptor for a parquet root path
-pub struct ParquetRootDesc {
+pub struct ParquetTableDescriptor {
     /// metadata for files inside the root path
-    pub descriptor: SourceRootDescriptor,
+    pub descriptor: TableDescriptor,
 }
 
-impl ParquetRootDesc {
+impl ParquetTableDescriptor {
     /// Construct a new parquet descriptor for a root path
     pub fn new(root_path: &str) -> Result<Self> {
-        let root_desc = Self::build_source_desc(root_path, "parquet", None, true);
+        let table_desc = Self::build_table_desc(root_path, "parquet", None, true);
         Ok(Self {
-            descriptor: root_desc?,
+            descriptor: table_desc?,
         })
     }
 
@@ -174,10 +188,10 @@ impl ParquetRootDesc {
         schema: Option<Schema>,
         collect_statistics: bool,
     ) -> Result<Self> {
-        let root_desc =
-            Self::build_source_desc(root_path, "parquet", schema, collect_statistics);
+        let table_desc =
+            Self::build_table_desc(root_path, "parquet", schema, collect_statistics);
         Ok(Self {
-            descriptor: root_desc?,
+            descriptor: table_desc?,
         })
     }
 
@@ -330,7 +344,7 @@ impl ParquetRootDesc {
     }
 }
 
-impl SourceRootDescBuilder for ParquetRootDesc {
+impl TableDescriptorBuilder for ParquetTableDescriptor {
     fn file_meta(file_path: &str) -> Result<FileAndSchema> {
         let file = File::open(file_path)?;
         let file_reader = Arc::new(SerializedFileReader::new(file)?);
@@ -364,7 +378,7 @@ impl SourceRootDescBuilder for ParquetRootDesc {
             for (i, column) in row_group_meta.columns().iter().enumerate() {
                 if let Some(stat) = column.statistics() {
                     has_statistics = true;
-                    ParquetRootDesc::summarize_min_max(
+                    ParquetTableDescriptor::summarize_min_max(
                         &mut max_values,
                         &mut min_values,
                         &fields,
@@ -392,10 +406,13 @@ impl SourceRootDescBuilder for ParquetRootDesc {
             column_statistics: column_stats,
         };
 
-        Ok((PartitionedFile {
-            file_path,
-            statistics,
-        }, schema))
+        Ok((
+            PartitionedFile {
+                file_path,
+                statistics,
+            },
+            schema,
+        ))
     }
 }
 

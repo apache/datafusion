@@ -21,6 +21,8 @@ use crate::error::BallistaError;
 use crate::serde::{from_proto_binary_op, proto_error, protobuf};
 use crate::{convert_box_required, convert_required};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::datasource::parquet::{ParquetTable, ParquetTableDescriptor};
+use datafusion::datasource::{PartitionedFile, TableDescriptor};
 use datafusion::logical_plan::window_frames::{
     WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
@@ -134,10 +136,11 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                 .map_err(|e| e.into())
             }
             LogicalPlanType::ParquetScan(scan) => {
+                let descriptor: TableDescriptor = convert_required!(scan.table_desc)?;
                 let projection = match scan.projection.as_ref() {
                     None => None,
                     Some(columns) => {
-                        let schema: Schema = convert_required!(scan.schema)?;
+                        let schema = descriptor.schema.clone();
                         let r: Result<Vec<usize>, _> = columns
                             .columns
                             .iter()
@@ -154,11 +157,22 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                         Some(r?)
                     }
                 };
-                LogicalPlanBuilder::scan_parquet_with_name(
-                    &scan.path,
-                    projection,
+
+                let filters: Vec<Expr> = scan
+                    .filters
+                    .iter()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<Expr>, _>>()?;
+                let parquet_table = ParquetTable::try_new_with_desc(
+                    Arc::new(ParquetTableDescriptor { descriptor }),
                     24,
+                    true,
+                )?;
+                LogicalPlanBuilder::scan(
                     &scan.table_name,
+                    Arc::new(parquet_table),
+                    projection,
+                    Some(filters),
                 )? //TODO concurrency
                 .build()
                 .map_err(|e| e.into())
@@ -298,6 +312,48 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .map_err(|e| e.into())
             }
         }
+    }
+}
+
+impl TryInto<TableDescriptor> for &protobuf::TableDescriptor {
+    type Error = BallistaError;
+
+    fn try_into(self) -> Result<TableDescriptor, Self::Error> {
+        let partition_files = self
+            .partition_files
+            .iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<PartitionedFile>, _>>()?;
+        let schema = convert_required!(self.schema)?;
+        Ok(TableDescriptor {
+            path: self.path.to_owned(),
+            partition_files,
+            schema: Arc::new(schema),
+        })
+    }
+}
+
+impl TryInto<PartitionedFile> for &protobuf::PartitionedFile {
+    type Error = BallistaError;
+
+    fn try_into(self) -> Result<PartitionedFile, Self::Error> {
+        let statistics = convert_required!(self.statistics)?;
+        Ok(PartitionedFile {
+            file_path: self.path.clone(),
+            statistics,
+        })
+    }
+}
+
+impl TryInto<Statistics> for &protobuf::Statistics {
+    type Error = BallistaError;
+
+    fn try_into(self) -> Result<Statistics, Self::Error> {
+        Ok(Statistics {
+            num_rows: Some(self.num_rows as usize),
+            total_byte_size: Some(self.total_byte_size as usize),
+            column_statistics: None,
+        })
     }
 }
 
@@ -1114,6 +1170,7 @@ impl TryInto<Field> for &protobuf::Field {
     }
 }
 
+use datafusion::datasource::datasource::Statistics;
 use datafusion::physical_plan::{aggregates, windows};
 use datafusion::prelude::{
     array, date_part, date_trunc, length, lower, ltrim, md5, rtrim, sha224, sha256,
