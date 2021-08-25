@@ -74,6 +74,28 @@ macro_rules! assert_contains {
     };
 }
 
+/// A macro to assert that one string is NOT contained within another with
+/// a nice error message if they are are.
+///
+/// Usage: `assert_not_contains!(actual, unexpected)`
+///
+/// Is a macro so test error
+/// messages are on the same line as the failure;
+///
+/// Both arguments must be convertable into Strings (Into<String>)
+macro_rules! assert_not_contains {
+    ($ACTUAL: expr, $UNEXPECTED: expr) => {
+        let actual_value: String = $ACTUAL.into();
+        let unexpected_value: String = $UNEXPECTED.into();
+        assert!(
+            !actual_value.contains(&unexpected_value),
+            "Found unexpected in actual.\n\nUnexpected:\n{}\n\nActual:\n{}",
+            unexpected_value,
+            actual_value
+        );
+    };
+}
+
 #[tokio::test]
 async fn nyc() -> Result<()> {
     // schema for nyxtaxi csv files
@@ -2177,19 +2199,10 @@ async fn csv_explain_analyze() {
     // Only test basic plumbing and try to avoid having to change too
     // many things
     let needle = "RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), metrics=[";
-    assert!(
-        formatted.contains(needle),
-        "did not find '{}' in\n{}",
-        needle,
-        formatted
-    );
+    assert_contains!(&formatted, needle);
+
     let verbose_needle = "Output Rows";
-    assert!(
-        !formatted.contains(verbose_needle),
-        "found unexpected '{}' in\n{}",
-        verbose_needle,
-        formatted
-    );
+    assert_not_contains!(formatted, verbose_needle);
 }
 
 #[tokio::test]
@@ -2204,12 +2217,7 @@ async fn csv_explain_analyze_verbose() {
     let formatted = normalize_for_explain(&formatted);
 
     let verbose_needle = "Output Rows";
-    assert!(
-        formatted.contains(verbose_needle),
-        "did not find '{}' in\n{}",
-        verbose_needle,
-        formatted
-    );
+    assert_contains!(formatted, verbose_needle);
 }
 
 #[tokio::test]
@@ -2382,17 +2390,9 @@ async fn csv_explain_plans() {
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
     // Since the plan contains path that are environmentally dependant (e.g. full path of the test file), only verify important content
-    assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
-    assert!(
-        actual.contains("Projection: #aggregate_test_100.c1"),
-        "Actual: '{}'",
-        actual
-    );
-    assert!(
-        actual.contains("Filter: #aggregate_test_100.c2 Gt Int64(10)"),
-        "Actual: '{}'",
-        actual
-    );
+    assert_contains!(&actual, "logical_plan");
+    assert_contains!(&actual, "Projection: #aggregate_test_100.c1");
+    assert_contains!(actual, "Filter: #aggregate_test_100.c2 Gt Int64(10)");
 }
 
 #[tokio::test]
@@ -2408,20 +2408,12 @@ async fn csv_explain_verbose() {
     // Don't actually test the contents of the debuging output (as
     // that may change and keeping this test updated will be a
     // pain). Instead just check for a few key pieces.
-    assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
-    assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
-    assert!(
-        actual.contains("#aggregate_test_100.c2 Gt Int64(10)"),
-        "Actual: '{}'",
-        actual
-    );
+    assert_contains!(&actual, "logical_plan");
+    assert_contains!(&actual, "physical_plan");
+    assert_contains!(&actual, "#aggregate_test_100.c2 Gt Int64(10)");
 
     // ensure the "same text as above" optimization is working
-    assert!(
-        actual.contains("SAME TEXT AS ABOVE"),
-        "Actual 2: '{}'",
-        actual
-    );
+    assert_contains!(actual, "SAME TEXT AS ABOVE");
 }
 
 #[tokio::test]
@@ -2594,23 +2586,13 @@ async fn csv_explain_verbose_plans() {
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
-    // Since the plan contains path that are environmentally dependant(e.g. full path of the test file), only verify important content
-    assert!(
-        actual.contains("logical_plan after projection_push_down"),
-        "Actual: '{}'",
-        actual
-    );
-    assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
-    assert!(
-        actual.contains("FilterExec: CAST(c2@1 AS Int64) > 10"),
-        "Actual: '{}'",
-        actual
-    );
-    assert!(
-        actual.contains("ProjectionExec: expr=[c1@0 as c1]"),
-        "Actual: '{}'",
-        actual
-    );
+    // Since the plan contains path that are environmentally
+    // dependant(e.g. full path of the test file), only verify
+    // important content
+    assert_contains!(&actual, "logical_plan after projection_push_down");
+    assert_contains!(&actual, "physical_plan");
+    assert_contains!(&actual, "FilterExec: CAST(c2@1 AS Int64) > 10");
+    assert_contains!(actual, "ProjectionExec: expr=[c1@0 as c1]");
 }
 
 #[tokio::test]
@@ -4176,9 +4158,9 @@ async fn test_cast_expressions_error() -> Result<()> {
     match result {
         Ok(_) => panic!("expected error"),
         Err(e) => {
-            assert!(e.to_string().contains(
-                "Cast error: Cannot cast string 'c' to value of arrow::datatypes::types::Int32Type type"
-            ))
+            assert_contains!(e.to_string(),
+                             "Cast error: Cannot cast string 'c' to value of arrow::datatypes::types::Int32Type type"
+            );
         }
     }
 
