@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::datatypes::{Schema, SchemaRef};
+use super::arrow_array_reader::AvroArrowArrayReader;
+use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
-use crate::avro_to_arrow::arrow_array_reader::AvroArrowArrayReader;
 use crate::error::Result;
 use arrow::error::Result as ArrowResult;
-use avro_rs::Reader as AvroReader;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
@@ -112,7 +111,7 @@ impl ReaderBuilder {
         // check if schema should be inferred
         let schema = match self.schema {
             Some(schema) => schema,
-            None => Arc::new(infer_avro_schema_from_reader(&mut source)?),
+            None => Arc::new(super::infer_avro_schema_from_reader(&mut source)?),
         };
         source.seek(SeekFrom::Start(0))?;
         Reader::try_new(source, schema, self.batch_size, self.projection)
@@ -139,7 +138,7 @@ impl<'a, R: Read> Reader<'a, R> {
     ) -> Result<Self> {
         Ok(Self {
             array_reader: AvroArrowArrayReader::try_new(
-                AvroReader::new(reader)?,
+                reader,
                 schema.clone(),
                 projection,
             )?,
@@ -154,8 +153,8 @@ impl<'a, R: Read> Reader<'a, R> {
         self.schema.clone()
     }
 
-    /// Read the next batch of records
-    #[allow(clippy::should_implement_trait)]
+    /// Returns the next batch of results (defined by `self.batch_size`), or `None` if there
+    /// are no more results
     pub fn next(&mut self) -> ArrowResult<Option<RecordBatch>> {
         self.array_reader.next_batch(self.batch_size)
     }
@@ -167,13 +166,6 @@ impl<'a, R: Read> Iterator for Reader<'a, R> {
     fn next(&mut self) -> Option<Self::Item> {
         self.next().transpose()
     }
-}
-
-/// Infer Avro schema given a reader
-pub fn infer_avro_schema_from_reader<R: Read + Seek>(reader: &mut R) -> Result<Schema> {
-    let avro_reader = avro_rs::Reader::new(reader)?;
-    let schema = avro_reader.writer_schema();
-    super::to_arrow_schema(schema)
 }
 
 #[cfg(test)]

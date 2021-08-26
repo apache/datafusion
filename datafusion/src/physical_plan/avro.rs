@@ -16,23 +16,26 @@
 // under the License.
 
 //! Execution plan for reading line-delimited Avro files
-use async_trait::async_trait;
-use futures::Stream;
-
-use super::{common, source::Source, ExecutionPlan, Partitioning, RecordBatchStream};
+#[cfg(feature = "avro")]
+use super::RecordBatchStream;
+use super::{common, source::Source, ExecutionPlan, Partitioning};
 use crate::avro_to_arrow::infer_avro_schema_from_reader;
 use crate::error::{DataFusionError, Result};
-use arrow::{
-    datatypes::{Schema, SchemaRef},
-    error::Result as ArrowResult,
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::{Schema, SchemaRef};
+#[cfg(feature = "avro")]
+use arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
+use async_trait::async_trait;
+#[cfg(feature = "avro")]
+use futures::Stream;
 use std::fs::File;
 use std::{any::Any, io::Seek};
 use std::{
     io::Read,
-    pin::Pin,
     sync::{Arc, Mutex},
+};
+#[cfg(feature = "avro")]
+use std::{
+    pin::Pin,
     task::{Context, Poll},
 };
 
@@ -252,6 +255,17 @@ impl ExecutionPlan for AvroExec {
         }
     }
 
+    #[cfg(not(feature = "avro"))]
+    async fn execute(
+        &self,
+        _partition: usize,
+    ) -> Result<super::SendableRecordBatchStream> {
+        Err(DataFusionError::NotImplemented(
+            "Cannot execute avro plan without avro feature enabled".to_string(),
+        ))
+    }
+
+    #[cfg(feature = "avro")]
     async fn execute(
         &self,
         partition: usize,
@@ -292,11 +306,13 @@ impl ExecutionPlan for AvroExec {
     }
 }
 
+#[cfg(feature = "avro")]
 struct AvroStream<'a, R: Read> {
     reader: crate::avro_to_arrow::Reader<'a, R>,
     remain: Option<usize>,
 }
 
+#[cfg(feature = "avro")]
 impl<'a, R: Read> AvroStream<'a, R> {
     fn new(reader: crate::avro_to_arrow::Reader<'a, R>, limit: Option<usize>) -> Self {
         Self {
@@ -306,6 +322,7 @@ impl<'a, R: Read> AvroStream<'a, R> {
     }
 }
 
+#[cfg(feature = "avro")]
 impl<R: Read + Unpin> Stream for AvroStream<'_, R> {
     type Item = ArrowResult<RecordBatch>;
 
@@ -346,6 +363,7 @@ impl<R: Read + Unpin> Stream for AvroStream<'_, R> {
     }
 }
 
+#[cfg(feature = "avro")]
 impl<R: Read + Unpin> RecordBatchStream for AvroStream<'_, R> {
     fn schema(&self) -> SchemaRef {
         self.reader.schema()

@@ -23,6 +23,7 @@ use std::io;
 use std::result;
 
 use arrow::error::ArrowError;
+#[cfg(feature = "avro")]
 use avro_rs::Error as AvroError;
 use parquet::errors::ParquetError;
 use sqlparser::parser::ParserError;
@@ -39,6 +40,7 @@ pub enum DataFusionError {
     /// Wraps an error from the Parquet crate
     ParquetError(ParquetError),
     /// Wraps an error from the Avro crate
+    #[cfg(feature = "avro")]
     AvroError(AvroError),
     /// Error associated to I/O operations and associated traits.
     IoError(io::Error),
@@ -86,6 +88,7 @@ impl From<ParquetError> for DataFusionError {
     }
 }
 
+#[cfg(feature = "avro")]
 impl From<AvroError> for DataFusionError {
     fn from(e: AvroError) -> Self {
         DataFusionError::AvroError(e)
@@ -105,6 +108,7 @@ impl Display for DataFusionError {
             DataFusionError::ParquetError(ref desc) => {
                 write!(f, "Parquet error: {}", desc)
             }
+            #[cfg(feature = "avro")]
             DataFusionError::AvroError(ref desc) => {
                 write!(f, "Avro error: {}", desc)
             }

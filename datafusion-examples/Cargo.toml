@@ -27,6 +27,10 @@ keywords = [ "arrow", "query", "sql" ]
 edition = "2018"
 publish = false
 
+[[example]]
+name = "avro_sql"
+path = "examples/avro_sql.rs"
+required-features = ["datafusion/avro"]
 
 [dev-dependencies]
 arrow-flight = { version = "^5.3" }
@@ -36,4 +40,3 @@ tonic = "0.5"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 futures = "0.3"
 num_cpus = "1.13.0"
-avro-rs = { version = "0.13", features = ["snappy"] }

@@ -40,10 +40,11 @@ use arrow::array::{BinaryArray, GenericListArray};
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
-use avro_rs::schema::Schema as AvroSchema;
-use avro_rs::schema::SchemaKind;
-use avro_rs::types::Value;
-use avro_rs::{AvroResult, Reader as AvroReader};
+use avro_rs::{
+    schema::{Schema as AvroSchema, SchemaKind},
+    types::Value,
+    AvroResult, Error as AvroError, Reader as AvroReader,
+};
 use num_traits::NumCast;
 use std::collections::HashMap;
 use std::io::Read;
@@ -60,10 +61,11 @@ pub struct AvroArrowArrayReader<'a, R: Read> {
 
 impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     pub fn try_new(
-        reader: AvroReader<'a, R>,
+        reader: R,
         schema: SchemaRef,
         projection: Option<Vec<String>>,
     ) -> Result<Self> {
+        let reader = AvroReader::new(reader)?;
         let writer_schema = reader.writer_schema().clone();
         let schema_lookup = Self::schema_lookup(writer_schema)?;
         Ok(Self {
@@ -876,9 +878,9 @@ fn resolve_string(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => Ok(s.clone()),
         Value::Bytes(bytes) => Ok(String::from_utf8(bytes.to_vec())
-            .map_err(avro_rs::Error::ConvertToUtf8)
+            .map_err(AvroError::ConvertToUtf8)
             .ok()?),
-        other => Err(avro_rs::Error::GetString(other.into())),
+        other => Err(AvroError::GetString(other.into())),
     }
     .ok()
 }
@@ -891,7 +893,7 @@ fn resolve_u8(v: Value) -> AvroResult<u8> {
         }
     }
 
-    Err(avro_rs::Error::GetU8(int.into()))
+    Err(AvroError::GetU8(int.into()))
 }
 
 fn resolve_bytes(v: Value) -> Option<Vec<u8>> {
@@ -906,7 +908,7 @@ fn resolve_bytes(v: Value) -> Option<Vec<u8>> {
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .ok()?,
         )),
-        other => Err(avro_rs::Error::GetBytes(other.into())),
+        other => Err(AvroError::GetBytes(other.into())),
     }
     .ok()
     .and_then(|v| match v {
