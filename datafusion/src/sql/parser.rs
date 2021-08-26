@@ -393,7 +393,7 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
-        // positive case: it is ok for parquet files not to have columns specified
+        // positive case: it is ok for avro files not to have columns specified
         let sql = "CREATE EXTERNAL TABLE t STORED AS AVRO LOCATION 'foo.avro'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
