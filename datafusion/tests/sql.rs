@@ -35,6 +35,7 @@ use arrow::{
 use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::logical_plan::LogicalPlan;
+use datafusion::physical_plan::avro::AvroReadOptions;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
@@ -2934,6 +2935,16 @@ fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
     .unwrap();
 }
 
+fn register_alltypes_avro(ctx: &mut ExecutionContext) {
+    let testdata = datafusion::test_util::arrow_test_data();
+    ctx.register_avro(
+        "alltypes_plain",
+        &format!("{}/avro/alltypes_plain.avro", testdata),
+        AvroReadOptions::default(),
+    )
+    .unwrap();
+}
+
 /// Execute query and return result set as 2-d table of Vecs
 /// `result[row][column]`
 async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<RecordBatch> {
@@ -4658,4 +4669,113 @@ async fn test_regexp_is_match() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
+}
+
+#[cfg(feature = "avro")]
+#[tokio::test]
+async fn avro_query() {
+    let mut ctx = ExecutionContext::new();
+    register_alltypes_avro(&mut ctx);
+    // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
+    // so we need an explicit cast
+    let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+--------------------------+",
+        "| id | CAST(string_col AS Utf8) |",
+        "+----+--------------------------+",
+        "| 4  | 0                        |",
+        "| 5  | 1                        |",
+        "| 6  | 0                        |",
+        "| 7  | 1                        |",
+        "| 2  | 0                        |",
+        "| 3  | 1                        |",
+        "| 0  | 0                        |",
+        "| 1  | 1                        |",
+        "+----+--------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+}
+
+#[cfg(feature = "avro")]
+#[tokio::test]
+async fn avro_single_nan_schema() {
+    let mut ctx = ExecutionContext::new();
+    let testdata = datafusion::test_util::arrow_test_data();
+    ctx.register_avro(
+        "single_nan",
+        &format!("{}/avro/single_nan.avro", testdata),
+        AvroReadOptions::default(),
+    )
+    .unwrap();
+    let sql = "SELECT mycol FROM single_nan";
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).unwrap();
+    let results = collect(plan).await.unwrap();
+    for batch in results {
+        assert_eq!(1, batch.num_rows());
+        assert_eq!(1, batch.num_columns());
+    }
+}
+
+#[cfg(feature = "avro")]
+#[tokio::test]
+async fn avro_explain() {
+    let mut ctx = ExecutionContext::new();
+    register_alltypes_avro(&mut ctx);
+
+    let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
+    let actual = execute(&mut ctx, sql).await;
+    let actual = normalize_vec_for_explain(actual);
+    let expected = vec![
+        vec![
+            "logical_plan",
+            "Projection: #COUNT(UInt8(1))\
+            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n    TableScan: alltypes_plain projection=Some([0])",
+        ],
+        vec![
+            "physical_plan",
+            "ProjectionExec: expr=[COUNT(UInt8(1))@0 as COUNT(UInt8(1))]\
+            \n  HashAggregateExec: mode=Final, gby=[], aggr=[COUNT(UInt8(1))]\
+            \n    CoalescePartitionsExec\
+            \n      HashAggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
+            \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
+            \n          ExecutionPlan(PlaceHolder)\
+            \n",
+        ],
+    ];
+    assert_eq!(expected, actual);
+}
+
+#[cfg(feature = "avro")]
+#[tokio::test]
+async fn avro_explain_analyze() {
+    // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
+    let mut ctx = ExecutionContext::new();
+    register_alltypes_avro(&mut ctx);
+
+    let sql = "EXPLAIN ANALYZE SELECT count(*), tinyint_col from alltypes_plain group by tinyint_col";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = normalize_for_explain(&formatted);
+
+    // Only test basic plumbing and try to avoid having to change too
+    // many things
+    let needle = "RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), metrics=[";
+    assert!(
+        formatted.contains(needle),
+        "did not find '{}' in\n{}",
+        needle,
+        formatted
+    );
+    let verbose_needle = "Output Rows       | 5";
+    assert!(
+        !formatted.contains(verbose_needle),
+        "found unexpected '{}' in\n{}",
+        verbose_needle,
+        formatted
+    );
 }
