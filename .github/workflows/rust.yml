@@ -105,8 +105,8 @@ jobs:
         run: |
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          # run tests on all workspace members with default feature list
-          cargo test
+          # run tests on all workspace members with default feature list + avro
+          cargo test --features=avro
           # test datafusion examples
           cd datafusion-examples
           cargo test --no-default-features
