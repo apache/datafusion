@@ -25,7 +25,6 @@ use std::sync::Arc;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Column;
 
-use crate::utils::get_field;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use std::fmt::{Display, Formatter};
 
@@ -161,11 +160,7 @@ impl DFSchema {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
                 // qualifer and name.
-                (Some(q), Some(field_q)) => {
-                    (q == field_q && field.name() == name)
-                        || (q == field.name()
-                            && get_field(field.field.data_type(), name).is_ok())
-                }
+                (Some(q), Some(field_q)) => q == field_q && field.name() == name,
                 // field to lookup is qualified but current field is unqualified.
                 (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier

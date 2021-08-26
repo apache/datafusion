@@ -81,22 +81,6 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     schema_provider: &'a S,
 }
 
-fn plan_compound(mut identifiers: Vec<String>) -> Expr {
-    if &identifiers[0][0..1] == "@" {
-        Expr::ScalarVariable(identifiers)
-    } else if identifiers.len() == 2 {
-        // "table.column"
-        let name = identifiers.pop().unwrap();
-        let relation = Some(identifiers.pop().unwrap());
-        Expr::Column(Column { relation, name })
-    } else {
-        // "table.column.field..."
-        let name = identifiers.pop().unwrap();
-        let expr = Box::new(plan_compound(identifiers));
-        Expr::GetField { expr, name }
-    }
-}
-
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
     pub fn new(schema_provider: &'a S) -> Self {
@@ -1110,8 +1094,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
-                let var_names = ids.iter().map(|x| x.value.clone()).collect::<Vec<_>>();
-                Ok(plan_compound(var_names))
+                let mut var_names = vec![];
+                for id in ids {
+                    var_names.push(id.value.clone());
+                }
+                if &var_names[0][0..1] == "@" {
+                    Ok(Expr::ScalarVariable(var_names))
+                } else if var_names.len() == 2 {
+                    // table.column identifier
+                    let name = var_names.pop().unwrap();
+                    let relation = Some(var_names.pop().unwrap());
+                    Ok(Expr::Column(Column { relation, name }))
+                } else {
+                    Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported compound identifier '{:?}'",
+                        var_names,
+                    )))
+                }
             }
 
             SQLExpr::Wildcard => Ok(Expr::Wildcard),

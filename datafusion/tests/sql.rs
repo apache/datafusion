@@ -3341,31 +3341,6 @@ async fn query_is_not_null() -> Result<()> {
 }
 
 #[tokio::test]
-async fn query_get_field() -> Result<()> {
-    let inner_field = Field::new("inner", DataType::Float64, true);
-    let field = Field::new("c1", DataType::Struct(vec![inner_field.clone()]), true);
-    let schema = Arc::new(Schema::new(vec![field]));
-
-    let array = Arc::new(Float64Array::from(vec![Some(1.1), None])) as ArrayRef;
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(StructArray::from(vec![(inner_field, array)]))],
-    )?;
-
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
-    let mut ctx = ExecutionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
-    let sql = "SELECT test.c1.inner FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1.1"], vec!["NULL"]];
-
-    assert_eq!(expected, actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn query_count_distinct() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
 
