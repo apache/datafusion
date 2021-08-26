@@ -17,6 +17,7 @@
 
 //! Metrics for recording information about execution
 
+mod baseline;
 mod builder;
 mod value;
 
@@ -29,8 +30,9 @@ use std::{
 use hashbrown::HashMap;
 
 // public exports
+pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
-pub use value::{Count, MetricValue, ScopedTimerGuard, Time};
+pub use value::{Count, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
 /// [`ExecutionPlan`] execution.
@@ -189,10 +191,10 @@ impl MetricsSet {
             .map(|v| v.as_usize())
     }
 
-    /// convenience: return the amount of CPU time spent, aggregated
-    /// across partitions or None if no metric is present
-    pub fn cpu_time(&self) -> Option<usize> {
-        self.sum(|metric| matches!(metric.value(), MetricValue::CPUTime(_)))
+    /// convenience: return the amount of elapsed CPU time spent,
+    /// aggregated across partitions or None if no metric is present
+    pub fn elapsed_compute(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::ElapsedCompute(_)))
             .map(|v| v.as_usize())
     }
 
@@ -216,7 +218,7 @@ impl MetricsSet {
             Some(metric) => metric.value().new_empty(),
         };
 
-        iter.for_each(|metric| accum.add(metric.value()));
+        iter.for_each(|metric| accum.aggregate(metric.value()));
 
         Some(accum)
     }
@@ -233,7 +235,7 @@ impl MetricsSet {
             let key = (metric.value.name(), metric.labels.clone());
             map.entry(key)
                 .and_modify(|accum: &mut Metric| {
-                    accum.value_mut().add(metric.value());
+                    accum.value_mut().aggregate(metric.value());
                 })
                 .or_insert_with(|| {
                     // accumulate with no partition
@@ -243,7 +245,7 @@ impl MetricsSet {
                         partition,
                         metric.labels().to_vec(),
                     );
-                    accum.value_mut().add(metric.value());
+                    accum.value_mut().aggregate(metric.value());
                     accum
                 });
         }
@@ -256,6 +258,25 @@ impl MetricsSet {
         Self {
             metrics: new_metrics,
         }
+    }
+
+    /// Sort the order of metrics so the "most useful" show up first
+    pub fn sorted_for_display(mut self) -> Self {
+        self.metrics
+            .sort_unstable_by_key(|metric| metric.value().display_sort_key());
+        self
+    }
+
+    /// remove all timestamp metrics (for more compact display
+    pub fn timestamps_removed(self) -> Self {
+        let Self { metrics } = self;
+
+        let metrics = metrics
+            .into_iter()
+            .filter(|m| !m.value.is_timestamp())
+            .collect::<Vec<_>>();
+
+        Self { metrics }
     }
 }
 
@@ -351,6 +372,8 @@ impl Display for Label {
 mod tests {
     use std::time::Duration;
 
+    use chrono::{TimeZone, Utc};
+
     use super::*;
 
     #[test]
@@ -414,17 +437,17 @@ mod tests {
     }
 
     #[test]
-    fn test_cpu_time() {
+    fn test_elapsed_compute() {
         let metrics = ExecutionPlanMetricsSet::new();
-        assert!(metrics.clone_inner().cpu_time().is_none());
+        assert!(metrics.clone_inner().elapsed_compute().is_none());
 
         let partition = 1;
-        let cpu_time = MetricBuilder::new(&metrics).cpu_time(partition);
-        cpu_time.add_duration(Duration::from_nanos(1234));
+        let elapsed_compute = MetricBuilder::new(&metrics).elapsed_compute(partition);
+        elapsed_compute.add_duration(Duration::from_nanos(1234));
 
-        let cpu_time = MetricBuilder::new(&metrics).cpu_time(partition + 1);
-        cpu_time.add_duration(Duration::from_nanos(6));
-        assert_eq!(metrics.clone_inner().cpu_time().unwrap(), 1240);
+        let elapsed_compute = MetricBuilder::new(&metrics).elapsed_compute(partition + 1);
+        elapsed_compute.add_duration(Duration::from_nanos(6));
+        assert_eq!(metrics.clone_inner().elapsed_compute().unwrap(), 1240);
     }
 
     #[test]
@@ -473,16 +496,16 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
 
         // Note cpu_time1 has labels so it is not aggregated with 2 and 3
-        let cpu_time1 = MetricBuilder::new(&metrics)
+        let elapsed_compute1 = MetricBuilder::new(&metrics)
             .with_new_label("foo", "bar")
-            .cpu_time(1);
-        cpu_time1.add_duration(Duration::from_nanos(12));
+            .elapsed_compute(1);
+        elapsed_compute1.add_duration(Duration::from_nanos(12));
 
-        let cpu_time2 = MetricBuilder::new(&metrics).cpu_time(2);
-        cpu_time2.add_duration(Duration::from_nanos(34));
+        let elapsed_compute2 = MetricBuilder::new(&metrics).elapsed_compute(2);
+        elapsed_compute2.add_duration(Duration::from_nanos(34));
 
-        let cpu_time3 = MetricBuilder::new(&metrics).cpu_time(4);
-        cpu_time3.add_duration(Duration::from_nanos(56));
+        let elapsed_compute3 = MetricBuilder::new(&metrics).elapsed_compute(4);
+        elapsed_compute3.add_duration(Duration::from_nanos(56));
 
         let output_rows = MetricBuilder::new(&metrics).output_rows(1); // output rows
         output_rows.add(56);
@@ -490,16 +513,16 @@ mod tests {
         let aggregated = metrics.clone_inner().aggregate_by_partition();
 
         // cpu time should be aggregated:
-        let cpu_times = aggregated
+        let elapsed_computes = aggregated
             .iter()
             .filter(|metric| {
-                matches!(metric.value(), MetricValue::CPUTime(_))
+                matches!(metric.value(), MetricValue::ElapsedCompute(_))
                     && metric.labels().is_empty()
             })
             .collect::<Vec<_>>();
-        assert_eq!(cpu_times.len(), 1);
-        assert_eq!(cpu_times[0].value().as_usize(), 34 + 56);
-        assert!(cpu_times[0].partition().is_none());
+        assert_eq!(elapsed_computes.len(), 1);
+        assert_eq!(elapsed_computes[0].value().as_usize(), 34 + 56);
+        assert!(elapsed_computes[0].partition().is_none());
 
         // output rows should
         let output_rows = aggregated
@@ -524,5 +547,89 @@ mod tests {
 
         // can't aggregate time and count -- expect a panic
         metrics.clone_inner().aggregate_by_partition();
+    }
+
+    #[test]
+    fn test_aggregate_partition_timestamps() {
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        // 1431648000000000 == 1970-01-17 13:40:48 UTC
+        let t1 = Utc.timestamp_nanos(1431648000000000);
+        // 1531648000000000 == 1970-01-18 17:27:28 UTC
+        let t2 = Utc.timestamp_nanos(1531648000000000);
+        // 1631648000000000 == 1970-01-19 21:14:08 UTC
+        let t3 = Utc.timestamp_nanos(1631648000000000);
+        // 1731648000000000 == 1970-01-21 01:00:48 UTC
+        let t4 = Utc.timestamp_nanos(1731648000000000);
+
+        let start_timestamp0 = MetricBuilder::new(&metrics).start_timestamp(0);
+        start_timestamp0.set(t1);
+        let end_timestamp0 = MetricBuilder::new(&metrics).end_timestamp(0);
+        end_timestamp0.set(t2);
+        let start_timestamp1 = MetricBuilder::new(&metrics).start_timestamp(0);
+        start_timestamp1.set(t3);
+        let end_timestamp1 = MetricBuilder::new(&metrics).end_timestamp(0);
+        end_timestamp1.set(t4);
+
+        // aggregate
+        let aggregated = metrics.clone_inner().aggregate_by_partition();
+
+        let mut ts = aggregated
+            .iter()
+            .filter(|metric| {
+                matches!(metric.value(), MetricValue::StartTimestamp(_))
+                    && metric.labels().is_empty()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ts.len(), 1);
+        match ts.remove(0).value() {
+            MetricValue::StartTimestamp(ts) => {
+                // expect earliest of t1, t2
+                assert_eq!(ts.value(), Some(t1));
+            }
+            _ => {
+                panic!("Not a timestamp");
+            }
+        };
+
+        let mut ts = aggregated
+            .iter()
+            .filter(|metric| {
+                matches!(metric.value(), MetricValue::EndTimestamp(_))
+                    && metric.labels().is_empty()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ts.len(), 1);
+        match ts.remove(0).value() {
+            MetricValue::EndTimestamp(ts) => {
+                // expect latest of t3, t4
+                assert_eq!(ts.value(), Some(t4));
+            }
+            _ => {
+                panic!("Not a timestamp");
+            }
+        };
+    }
+
+    #[test]
+    fn test_sorted_for_display() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&metrics).end_timestamp(0);
+        MetricBuilder::new(&metrics).start_timestamp(0);
+        MetricBuilder::new(&metrics).elapsed_compute(0);
+        MetricBuilder::new(&metrics).counter("the_counter", 0);
+        MetricBuilder::new(&metrics).subset_time("the_time", 0);
+        MetricBuilder::new(&metrics).output_rows(0);
+        let metrics = metrics.clone_inner();
+
+        fn metric_names(metrics: &MetricsSet) -> String {
+            let n = metrics.iter().map(|m| m.value().name()).collect::<Vec<_>>();
+            n.join(", ")
+        }
+
+        assert_eq!("end_timestamp, start_timestamp, elapsed_compute, the_counter, the_time, output_rows", metric_names(&metrics));
+
+        let metrics = metrics.sorted_for_display();
+        assert_eq!("output_rows, elapsed_compute, the_counter, the_time, start_timestamp, end_timestamp", metric_names(&metrics));
     }
 }

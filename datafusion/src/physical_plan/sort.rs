@@ -155,13 +155,14 @@ impl ExecutionPlan for SortExec {
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
 
-        let cpu_time = MetricBuilder::new(&self.metrics).cpu_time(partition);
+        let elapsed_compute =
+            MetricBuilder::new(&self.metrics).elapsed_compute(partition);
 
         Ok(Box::pin(SortStream::new(
             input,
             self.expr.clone(),
             output_rows,
-            cpu_time,
+            elapsed_compute,
         )))
     }
 
@@ -436,7 +437,7 @@ mod tests {
 
         let result: Vec<RecordBatch> = collect(sort_exec.clone()).await?;
         let metrics = sort_exec.metrics().unwrap();
-        assert!(metrics.cpu_time().unwrap() > 0);
+        assert!(metrics.elapsed_compute().unwrap() > 0);
         assert_eq!(metrics.output_rows().unwrap(), 8);
         assert_eq!(result.len(), 1);
 

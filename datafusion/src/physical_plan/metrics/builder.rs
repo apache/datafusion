@@ -19,7 +19,9 @@
 
 use std::{borrow::Cow, sync::Arc};
 
-use super::{Count, ExecutionPlanMetricsSet, Label, Metric, MetricValue, Time};
+use super::{
+    Count, ExecutionPlanMetricsSet, Label, Metric, MetricValue, Time, Timestamp,
+};
 
 /// Structure for constructing metrics, counters, timers, etc.
 ///
@@ -124,12 +126,12 @@ impl<'a> MetricBuilder<'a> {
         count
     }
 
-    /// Consume self and create a new Timer for recording the overall cpu time
-    /// spent by an operator
-    pub fn cpu_time(self, partition: usize) -> Time {
+    /// Consume self and create a new Timer for recording the elapsed
+    /// CPU time spent by an operator
+    pub fn elapsed_compute(self, partition: usize) -> Time {
         let time = Time::new();
         self.with_partition(partition)
-            .build(MetricValue::CPUTime(time.clone()));
+            .build(MetricValue::ElapsedCompute(time.clone()));
         time
     }
 
@@ -146,5 +148,23 @@ impl<'a> MetricBuilder<'a> {
             time: time.clone(),
         });
         time
+    }
+
+    /// Consumes self and creates a new Timestamp for recording the
+    /// starting time of execution for a partition
+    pub fn start_timestamp(self, partition: usize) -> Timestamp {
+        let timestamp = Timestamp::new();
+        self.with_partition(partition)
+            .build(MetricValue::StartTimestamp(timestamp.clone()));
+        timestamp
+    }
+
+    /// Consumes self and creates a new Timestamp for recording the
+    /// ending time of execution for a partition
+    pub fn end_timestamp(self, partition: usize) -> Timestamp {
+        let timestamp = Timestamp::new();
+        self.with_partition(partition)
+            .build(MetricValue::EndTimestamp(timestamp.clone()));
+        timestamp
     }
 }

@@ -20,6 +20,7 @@
 
 use std::any::Any;
 use std::sync::Arc;
+use std::task::Poll;
 
 use futures::channel::mpsc;
 use futures::Stream;
@@ -29,6 +30,7 @@ use async_trait::async_trait;
 use arrow::record_batch::RecordBatch;
 use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::RecordBatchStream;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
@@ -43,12 +45,17 @@ use pin_project_lite::pin_project;
 pub struct CoalescePartitionsExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl CoalescePartitionsExec {
     /// Create a new CoalescePartitionsExec
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        CoalescePartitionsExec { input }
+        CoalescePartitionsExec {
+            input,
+            metrics: ExecutionPlanMetricsSet::new(),
+        }
     }
 
     /// Input execution plan
@@ -90,6 +97,8 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+
         // CoalescePartitionsExec produces a single partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
@@ -123,6 +132,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 Ok(Box::pin(MergeStream {
                     input: receiver,
                     schema: self.schema(),
+                    baseline_metrics,
                 }))
             }
         }
@@ -139,6 +149,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
             }
         }
     }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
 }
 
 pin_project! {
@@ -146,6 +160,7 @@ pin_project! {
         schema: SchemaRef,
         #[pin]
         input: mpsc::Receiver<ArrowResult<RecordBatch>>,
+        baseline_metrics: BaselineMetrics
     }
 }
 
@@ -155,9 +170,10 @@ impl Stream for MergeStream {
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         let this = self.project();
-        this.input.poll_next(cx)
+        let poll = this.input.poll_next(cx);
+        this.baseline_metrics.record_poll(poll)
     }
 }
 

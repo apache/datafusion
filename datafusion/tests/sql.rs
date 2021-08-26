@@ -2198,7 +2198,8 @@ async fn csv_explain_analyze() {
 
     // Only test basic plumbing and try to avoid having to change too
     // many things
-    let needle = "RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), metrics=[";
+    let needle =
+        "CoalescePartitionsExec, metrics=[output_rows=5, elapsed_compute=NOT RECORDED";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";

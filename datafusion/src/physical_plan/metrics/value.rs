@@ -19,12 +19,15 @@
 
 use std::{
     borrow::{Borrow, Cow},
+    fmt::Display,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
+
+use chrono::{DateTime, Utc};
 
 /// A counter to record things such as number of input or output rows
 ///
@@ -38,6 +41,12 @@ pub struct Count {
 impl PartialEq for Count {
     fn eq(&self, other: &Self) -> bool {
         self.value().eq(&other.value())
+    }
+}
+
+impl Display for Count {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value())
     }
 }
 
@@ -72,6 +81,13 @@ pub struct Time {
 impl PartialEq for Time {
     fn eq(&self, other: &Self) -> bool {
         self.value().eq(&other.value())
+    }
+}
+
+impl Display for Time {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let duration = std::time::Duration::from_nanos(self.value() as u64);
+        write!(f, "{:?}", duration)
     }
 }
 
@@ -116,6 +132,82 @@ impl Time {
     }
 }
 
+/// Stores a single timestamp, stored as the number of nanoseconds
+/// elapsed from Jan 1, 1970 UTC
+#[derive(Debug, Clone)]
+pub struct Timestamp {
+    /// Time thing started
+    timestamp: Arc<Mutex<Option<DateTime<Utc>>>>,
+}
+
+impl Timestamp {
+    /// Create a new timestamp and sets its value to 0
+    pub fn new() -> Self {
+        Self {
+            timestamp: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Sets the timestamps value to the current time
+    pub fn record(&self) {
+        self.set(Utc::now())
+    }
+
+    /// Sets the timestamps value to a specified time
+    pub fn set(&self, now: DateTime<Utc>) {
+        *self.timestamp.lock().unwrap() = Some(now);
+    }
+
+    /// return the timestamps value at the last time `record()` was
+    /// called.
+    ///
+    /// Returns `None` if `record()` has not been called
+    pub fn value(&self) -> Option<DateTime<Utc>> {
+        *self.timestamp.lock().unwrap()
+    }
+
+    /// sets the value of this timestamp to the minimum of this and other
+    pub fn update_to_min(&self, other: &Timestamp) {
+        let min = match (self.value(), other.value()) {
+            (None, None) => None,
+            (Some(v), None) => Some(v),
+            (None, Some(v)) => Some(v),
+            (Some(v1), Some(v2)) => Some(if v1 < v2 { v1 } else { v2 }),
+        };
+
+        *self.timestamp.lock().unwrap() = min;
+    }
+
+    /// sets the value of this timestamp to the maximum of this and other
+    pub fn update_to_max(&self, other: &Timestamp) {
+        let max = match (self.value(), other.value()) {
+            (None, None) => None,
+            (Some(v), None) => Some(v),
+            (None, Some(v)) => Some(v),
+            (Some(v1), Some(v2)) => Some(if v1 < v2 { v2 } else { v1 }),
+        };
+
+        *self.timestamp.lock().unwrap() = max;
+    }
+}
+
+impl PartialEq for Timestamp {
+    fn eq(&self, other: &Self) -> bool {
+        self.value().eq(&other.value())
+    }
+}
+
+impl Display for Timestamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.value() {
+            None => write!(f, "NONE"),
+            Some(v) => {
+                write!(f, "{}", v)
+            }
+        }
+    }
+}
+
 /// RAAI structure that adds all time between its construction and
 /// destruction to the CPU time or the first call to `stop` whichever
 /// comes first
@@ -144,7 +236,7 @@ impl<'a> Drop for ScopedTimerGuard<'a> {
     }
 }
 
-/// Possible values for a metric.
+/// Possible values for a [`Metric`].
 ///
 /// Among other differences, the metric types have different ways to
 /// logically interpret their underlying values and some metrics are
@@ -153,8 +245,26 @@ impl<'a> Drop for ScopedTimerGuard<'a> {
 pub enum MetricValue {
     /// Number of output rows produced: "output_rows" metric
     OutputRows(Count),
-    /// CPU time: the "cpu_time" metric
-    CPUTime(Time),
+    /// Elapsed Compute Time: the wall clock time spent in "cpu
+    /// intensive" work.
+    ///
+    /// This measurement represents, roughly:
+    /// ```
+    /// use std::time::Instant;
+    /// let start = Instant::now();
+    /// // ...CPU intensive work here...
+    /// let elapsed_compute = (Instant::now() - start).as_nanos();
+    /// ```
+    ///
+    /// Note 1: Does *not* include time other operators spend
+    /// computing input.
+    ///
+    /// Note 2: *Does* includes time when the thread could have made
+    /// progress but the OS did not schedule it (e.g. due to CPU
+    /// contention), thus making this value different than the
+    /// classical defintion of "cpu_time", which is the time reported
+    /// from `clock_gettime(CLOCK_THREAD_CPUTIME_ID, ..)`.
+    ElapsedCompute(Time),
     /// Operator defined count.
     Count {
         /// The provided name of this metric
@@ -169,8 +279,10 @@ pub enum MetricValue {
         /// The value of the metric
         time: Time,
     },
-    // TODO timestamp, etc
-    // https://github.com/apache/arrow-datafusion/issues/866
+    /// The time at which execution started
+    StartTimestamp(Timestamp),
+    /// The time at which execution ended
+    EndTimestamp(Timestamp),
 }
 
 impl MetricValue {
@@ -178,9 +290,11 @@ impl MetricValue {
     pub fn name(&self) -> &str {
         match self {
             Self::OutputRows(_) => "output_rows",
-            Self::CPUTime(_) => "cpu_time",
+            Self::ElapsedCompute(_) => "elapsed_compute",
             Self::Count { name, .. } => name.borrow(),
             Self::Time { name, .. } => name.borrow(),
+            Self::StartTimestamp(_) => "start_timestamp",
+            Self::EndTimestamp(_) => "end_timestamp",
         }
     }
 
@@ -188,9 +302,17 @@ impl MetricValue {
     pub fn as_usize(&self) -> usize {
         match self {
             Self::OutputRows(count) => count.value(),
-            Self::CPUTime(time) => time.value(),
+            Self::ElapsedCompute(time) => time.value(),
             Self::Count { count, .. } => count.value(),
             Self::Time { time, .. } => time.value(),
+            Self::StartTimestamp(timestamp) => timestamp
+                .value()
+                .map(|ts| ts.timestamp_nanos() as usize)
+                .unwrap_or(0),
+            Self::EndTimestamp(timestamp) => timestamp
+                .value()
+                .map(|ts| ts.timestamp_nanos() as usize)
+                .unwrap_or(0),
         }
     }
 
@@ -199,7 +321,7 @@ impl MetricValue {
     pub fn new_empty(&self) -> Self {
         match self {
             Self::OutputRows(_) => Self::OutputRows(Count::new()),
-            Self::CPUTime(_) => Self::CPUTime(Time::new()),
+            Self::ElapsedCompute(_) => Self::ElapsedCompute(Time::new()),
             Self::Count { name, .. } => Self::Count {
                 name: name.clone(),
                 count: Count::new(),
@@ -208,18 +330,21 @@ impl MetricValue {
                 name: name.clone(),
                 time: Time::new(),
             },
+            Self::StartTimestamp(_) => Self::StartTimestamp(Timestamp::new()),
+            Self::EndTimestamp(_) => Self::EndTimestamp(Timestamp::new()),
         }
     }
 
-    /// Add the value of other to `self`. panic's if the type is mismatched or
-    /// aggregating does not make sense for this value
+    /// Aggregates the value of other to `self`. panic's if the types
+    /// are mismatched or aggregating does not make sense for this
+    /// value
     ///
     /// Note this is purposely marked `mut` (even though atomics are
     /// used) so Rust's type system can be used to ensure the
     /// appropriate API access. `MetricValues` should be modified
     /// using the original [`Count`] or [`Time`] they were created
     /// from.
-    pub fn add(&mut self, other: &Self) {
+    pub fn aggregate(&mut self, other: &Self) {
         match (self, other) {
             (Self::OutputRows(count), Self::OutputRows(other_count))
             | (
@@ -228,13 +353,21 @@ impl MetricValue {
                     count: other_count, ..
                 },
             ) => count.add(other_count.value()),
-            (Self::CPUTime(time), Self::CPUTime(other_time))
+            (Self::ElapsedCompute(time), Self::ElapsedCompute(other_time))
             | (
                 Self::Time { time, .. },
                 Self::Time {
                     time: other_time, ..
                 },
             ) => time.add(other_time),
+            // timestamps are aggregated by min/max
+            (Self::StartTimestamp(timestamp), Self::StartTimestamp(other_timestamp)) => {
+                timestamp.update_to_min(other_timestamp);
+            }
+            // timestamps are aggregated by min/max
+            (Self::EndTimestamp(timestamp), Self::EndTimestamp(other_timestamp)) => {
+                timestamp.update_to_max(other_timestamp);
+            }
             m @ (_, _) => {
                 panic!(
                     "Mismatched metric types. Can not aggregate {:?} with value {:?}",
@@ -243,6 +376,24 @@ impl MetricValue {
             }
         }
     }
+
+    /// Returns a number by which to sort metrics by display. Lower
+    /// numbers are "more useful" (and displayed first)
+    pub fn display_sort_key(&self) -> u8 {
+        match self {
+            Self::OutputRows(_) => 0,     // show first
+            Self::ElapsedCompute(_) => 1, // show second
+            Self::Count { .. } => 2,
+            Self::Time { .. } => 3,
+            Self::StartTimestamp(_) => 4, // show timestamps last
+            Self::EndTimestamp(_) => 5,
+        }
+    }
+
+    /// returns true if this metric has a timestamp value
+    pub fn is_timestamp(&self) -> bool {
+        matches!(self, Self::StartTimestamp(_) | Self::EndTimestamp(_))
+    }
 }
 
 impl std::fmt::Display for MetricValue {
@@ -250,12 +401,94 @@ impl std::fmt::Display for MetricValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OutputRows(count) | Self::Count { count, .. } => {
-                write!(f, "{}", count.value())
+                write!(f, "{}", count)
             }
-            Self::CPUTime(time) | Self::Time { time, .. } => {
-                let duration = std::time::Duration::from_nanos(time.value() as u64);
-                write!(f, "{:?}", duration)
+            Self::ElapsedCompute(time) | Self::Time { time, .. } => {
+                // distinguish between no time recorded and very small
+                // amount of time recorded
+                if time.value() > 0 {
+                    write!(f, "{}", time)
+                } else {
+                    write!(f, "NOT RECORDED")
+                }
             }
+            Self::StartTimestamp(timestamp) | Self::EndTimestamp(timestamp) => {
+                write!(f, "{}", timestamp)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    #[test]
+    fn test_display_output_rows() {
+        let count = Count::new();
+        let values = vec![
+            MetricValue::OutputRows(count.clone()),
+            MetricValue::Count {
+                name: "my_counter".into(),
+                count: count.clone(),
+            },
+        ];
+
+        for value in &values {
+            assert_eq!("0", value.to_string(), "value {:?}", value);
+        }
+
+        count.add(42);
+        for value in &values {
+            assert_eq!("42", value.to_string(), "value {:?}", value);
+        }
+    }
+
+    #[test]
+    fn test_display_time() {
+        let time = Time::new();
+        let values = vec![
+            MetricValue::ElapsedCompute(time.clone()),
+            MetricValue::Time {
+                name: "my_time".into(),
+                time: time.clone(),
+            },
+        ];
+
+        // if time is not set, it should not be reported as zero
+        for value in &values {
+            assert_eq!("NOT RECORDED", value.to_string(), "value {:?}", value);
+        }
+
+        time.add_duration(Duration::from_nanos(1042));
+        for value in &values {
+            assert_eq!("1.042µs", value.to_string(), "value {:?}", value);
+        }
+    }
+
+    #[test]
+    fn test_display_timestamp() {
+        let timestamp = Timestamp::new();
+        let values = vec![
+            MetricValue::StartTimestamp(timestamp.clone()),
+            MetricValue::EndTimestamp(timestamp.clone()),
+        ];
+
+        // if time is not set, it should not be reported as zero
+        for value in &values {
+            assert_eq!("NONE", value.to_string(), "value {:?}", value);
+        }
+
+        timestamp.set(Utc.timestamp_nanos(1431648000000000));
+        for value in &values {
+            assert_eq!(
+                "1970-01-17 13:40:48 UTC",
+                value.to_string(),
+                "value {:?}",
+                value
+            );
         }
     }
 }

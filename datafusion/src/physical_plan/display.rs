@@ -139,7 +139,12 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
             ShowMetrics::None => {}
             ShowMetrics::Aggregated => {
                 if let Some(metrics) = plan.metrics() {
-                    write!(self.f, ", metrics=[{}]", metrics.aggregate_by_partition())?;
+                    let metrics = metrics
+                        .aggregate_by_partition()
+                        .sorted_for_display()
+                        .timestamps_removed();
+
+                    write!(self.f, ", metrics=[{}]", metrics)?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
                 }
