@@ -288,22 +288,15 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     vec![Some(v.to_string())]
                 } else if let Value::Array(n) = value {
                     n.into_iter()
-                        .map(|v| {
-                            resolve_string(&v)
-                            // else if matches!(
-                            //     v,
-                            //     Value::Array(_) | Value::Record(_) | Value::Null
-                            // ) {
-                            //     // implicitly drop nested values
-                            //     // TODO support deep-nesting
-                            //     None
-                            // }
-                        })
-                        .collect()
+                        .map(|v| resolve_string(&v))
+                        .collect::<ArrowResult<Vec<String>>>()?
+                        .into_iter()
+                        .map(Some)
+                        .collect::<Vec<Option<String>>>()
                 } else if let Value::Null = value {
                     vec![None]
                 } else if !matches!(value, Value::Record(_)) {
-                    vec![resolve_string(&value)]
+                    vec![Some(resolve_string(&value)?)]
                 } else {
                     return Err(SchemaError(
                         "Only scalars are currently supported in Avro arrays".to_string(),
@@ -373,7 +366,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             self.build_string_dictionary_builder(rows.len())?;
         for row in rows {
             if let Some(value) = self.field_lookup(col_name, row) {
-                if let Some(str_v) = resolve_string(&value) {
+                if let Ok(str_v) = resolve_string(&value) {
                     builder.append(str_v).map(drop)?
                 } else {
                     builder.append_null()?
@@ -712,9 +705,11 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         rows.iter()
                             .map(|row| {
                                 let maybe_value = self.field_lookup(field.name(), row);
-                                maybe_value.and_then(|value| resolve_string(&value))
+                                maybe_value
+                                    .map(|value| resolve_string(&value))
+                                    .transpose()
                             })
-                            .collect::<StringArray>(),
+                            .collect::<ArrowResult<StringArray>>()?,
                     )
                         as ArrayRef),
                     DataType::Binary | DataType::LargeBinary => Ok(Arc::new(
@@ -859,12 +854,12 @@ fn flatten_string_values(values: &[Value]) -> Vec<Option<String>> {
             if let Value::Array(values) = row {
                 values
                     .iter()
-                    .map(resolve_string)
+                    .map(|s| resolve_string(s).ok())
                     .collect::<Vec<Option<_>>>()
             } else if let Value::Null = row {
                 vec![]
             } else {
-                vec![resolve_string(row)]
+                vec![resolve_string(row).ok()]
             }
         })
         .collect::<Vec<Option<_>>>()
@@ -873,16 +868,16 @@ fn flatten_string_values(values: &[Value]) -> Vec<Option<String>> {
 /// Reads an Avro value as a string, regardless of its type.
 /// This is useful if the expected datatype is a string, in which case we preserve
 /// all the values regardless of they type.
-fn resolve_string(v: &Value) -> Option<String> {
+fn resolve_string(v: &Value) -> ArrowResult<String> {
     let v = if let Value::Union(b) = v { b } else { v };
     match v {
         Value::String(s) => Ok(s.clone()),
-        Value::Bytes(bytes) => Ok(String::from_utf8(bytes.to_vec())
-            .map_err(AvroError::ConvertToUtf8)
-            .ok()?),
+        Value::Bytes(bytes) => {
+            String::from_utf8(bytes.to_vec()).map_err(AvroError::ConvertToUtf8)
+        }
         other => Err(AvroError::GetString(other.into())),
     }
-    .ok()
+    .map_err(|e| SchemaError(format!("expected resolvable string : {}", e)))
 }
 
 fn resolve_u8(v: Value) -> AvroResult<u8> {
