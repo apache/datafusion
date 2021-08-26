@@ -2243,7 +2243,7 @@ macro_rules! assert_metrics {
 async fn explain_analyze_baseline_metrics() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     // and then validate the presence of baseline metrics for supported operators
-    let config = ExecutionConfig::new().with_concurrency(3);
+    let config = ExecutionConfig::new().with_target_partitions(3);
     let mut ctx = ExecutionContext::with_config(config);
     register_aggregate_csv_by_sql(&mut ctx).await;
     // a query with as many operators as we have metrics for
