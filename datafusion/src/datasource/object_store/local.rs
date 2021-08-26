@@ -17,16 +17,17 @@
 
 //! Object store that represents the Local File System.
 
+use std::fs::Metadata;
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
-use std::sync::Arc;
 
 use crate::datasource::object_store::{
     FileMeta, FileMetaStream, ObjectReader, ObjectStore,
 };
 use crate::error::DataFusionError;
 use crate::error::Result;
-use std::fs::Metadata;
 
 #[derive(Debug)]
 /// Local File System as Object Store.
