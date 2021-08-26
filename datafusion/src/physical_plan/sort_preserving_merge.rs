@@ -1243,7 +1243,7 @@ mod tests {
         // Now, validate metrics
         let metrics = merge.metrics().unwrap();
 
-        assert!(metrics.output_rows().unwrap() > 0);
+        assert_eq!(metrics.output_rows().unwrap(), 4);
         assert!(metrics.elapsed_compute().unwrap() > 0);
 
         let mut saw_start = false;
