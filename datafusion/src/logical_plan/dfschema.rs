@@ -141,7 +141,6 @@ impl DFSchema {
                 return Ok(i);
             }
         }
-        println!("{}", name);
         Err(DataFusionError::Plan(format!(
             "No field named '{}'. Valid fields are {}.",
             name,
