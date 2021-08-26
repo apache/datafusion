@@ -290,14 +290,14 @@ impl ExecutionPlan for AvroExec {
             Source::Reader(rdr) => {
                 if partition != 0 {
                     Err(DataFusionError::Internal(
-                        "Only partition 0 is valid when CSV comes from a reader"
+                        "Only partition 0 is valid when Avro comes from a reader"
                             .to_string(),
                     ))
                 } else if let Some(rdr) = rdr.lock().unwrap().take() {
                     Ok(Box::pin(AvroStream::new(builder.build(rdr)?, self.limit)))
                 } else {
                     Err(DataFusionError::Execution(
-                        "Error reading CSV: Data can only be read a single time when the source is a reader"
+                        "Error reading Avro: Data can only be read a single time when the source is a reader"
                             .to_string(),
                     ))
                 }
