@@ -173,7 +173,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     Arc::new(parquet_table),
                     projection,
                     Some(filters),
-                )? //TODO concurrency
+                )? //TODO remove hard-coded max_partitions
                 .build()
                 .map_err(|e| e.into())
             }

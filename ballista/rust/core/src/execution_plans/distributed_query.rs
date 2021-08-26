@@ -34,7 +34,8 @@ use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::{
-    ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream,
 };
 
 use async_trait::async_trait;
@@ -184,6 +185,22 @@ impl ExecutionPlan for DistributedQueryExec {
                     break Ok(Box::pin(result));
                 }
             };
+        }
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "DistributedQueryExec: scheduler_url={}",
+                    self.scheduler_url
+                )
+            }
         }
     }
 }
