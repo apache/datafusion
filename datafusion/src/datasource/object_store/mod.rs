@@ -39,8 +39,8 @@ pub trait ObjectReader {
     /// Get reader for a part [start, start + length] in the file asynchronously
     async fn get_reader(&self, start: u64, length: usize) -> Result<Arc<dyn AsyncRead>>;
 
-    /// Get length for the file asynchronously
-    fn length(&self) -> Result<u64>;
+    /// Get length for the file
+    fn length(&self) -> u64;
 }
 
 /// File meta we got from object store

@@ -37,7 +37,6 @@ pub struct LocalFileSystem;
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
     async fn list(&self, prefix: &str, _filters: &[Expr]) -> Result<FileMetaStream> {
-        // TODO handle pushed down filters
         list_all(prefix.to_owned()).await
     }
 
@@ -66,8 +65,8 @@ impl ObjectReader for LocalFileReader {
         todo!()
     }
 
-    fn length(&self) -> Result<u64> {
-        Ok(self.file.size)
+    fn length(&self) -> u64 {
+        self.file.size
     }
 }
 
