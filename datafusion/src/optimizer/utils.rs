@@ -207,7 +207,7 @@ pub fn from_plan(
             })
         }
         LogicalPlan::Explain { .. } => {
-            // Explain shoudl be handled specially in the optimizers;
+            // Explain should be handled specially in the optimizers;
             // If this assert fails it means some optimizer pass is
             // trying to optimize Explain directly
             assert!(
