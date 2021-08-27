@@ -3241,7 +3241,7 @@ async fn query_group_on_null_multi_col() -> Result<()> {
     ];
     assert_batches_sorted_eq!(expected, &actual);
 
-    // Also run query with group columns reversed (results shoudl be the same)
+    // Also run query with group columns reversed (results should be the same)
     let sql = "SELECT COUNT(*), c1, c2 FROM test GROUP BY c2, c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     assert_batches_sorted_eq!(expected, &actual);
