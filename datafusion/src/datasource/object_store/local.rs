@@ -28,6 +28,7 @@ use crate::datasource::object_store::{
 };
 use crate::error::DataFusionError;
 use crate::error::Result;
+use crate::logical_plan::Expr;
 
 #[derive(Debug)]
 /// Local File System as Object Store.
@@ -35,11 +36,12 @@ pub struct LocalFileSystem;
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn list(&self, prefix: &str) -> Result<FileMetaStream> {
+    async fn list(&self, prefix: &str, _filters: &[Expr]) -> Result<FileMetaStream> {
+        // TODO handle pushed down filters
         list_all(prefix.to_owned()).await
     }
 
-    async fn get_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
+    fn get_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 }
@@ -64,11 +66,8 @@ impl ObjectReader for LocalFileReader {
         todo!()
     }
 
-    async fn length(&self) -> Result<u64> {
-        match self.file.size {
-            Some(size) => Ok(size),
-            None => Ok(0u64),
-        }
+    fn length(&self) -> Result<u64> {
+        Ok(self.file.size)
     }
 }
 
@@ -77,7 +76,7 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
         FileMeta {
             path,
             last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
-            size: Some(metadata.len()),
+            size: metadata.len(),
         }
     }
 

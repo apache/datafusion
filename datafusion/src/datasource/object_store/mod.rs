@@ -30,6 +30,7 @@ use futures::{AsyncRead, Stream};
 use local::LocalFileSystem;
 
 use crate::error::{DataFusionError, Result};
+use crate::logical_plan::Expr;
 use chrono::Utc;
 
 /// Object Reader for one file in a object store
@@ -39,7 +40,7 @@ pub trait ObjectReader {
     async fn get_reader(&self, start: u64, length: usize) -> Result<Arc<dyn AsyncRead>>;
 
     /// Get length for the file asynchronously
-    async fn length(&self) -> Result<u64>;
+    fn length(&self) -> Result<u64>;
 }
 
 /// File meta we got from object store
@@ -49,7 +50,7 @@ pub struct FileMeta {
     /// Last time the file was modified in UTC
     pub last_modified: Option<chrono::DateTime<Utc>>,
     /// File size in total
-    pub size: Option<u64>,
+    pub size: u64,
 }
 
 /// Stream of files get listed from object store
@@ -60,11 +61,12 @@ pub type FileMetaStream =
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
 #[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
-    /// Returns all the files in path `prefix` asynchronously
-    async fn list(&self, prefix: &str) -> Result<FileMetaStream>;
+    /// Returns all the files in path `prefix` asynchronously, implementations could
+    /// choose to use the pushed down filters for list filtering.
+    async fn list(&self, prefix: &str, filters: &[Expr]) -> Result<FileMetaStream>;
 
     /// Get object reader for one file
-    async fn get_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
+    fn get_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
 }
 
 static LOCAL_SCHEME: &str = "file";
@@ -112,14 +114,15 @@ impl ObjectStoreRegistry {
     pub fn get_by_uri(&self, uri: &str) -> Result<Arc<dyn ObjectStore>> {
         if let Some((scheme, _)) = uri.split_once(':') {
             let stores = self.object_stores.read().unwrap();
-            if let Some(store) = stores.get(&*scheme.to_lowercase()) {
-                Ok(store.clone())
-            } else {
-                Err(DataFusionError::Internal(format!(
-                    "No suitable object store found for {}",
-                    scheme
-                )))
-            }
+            stores
+                .get(&*scheme.to_lowercase())
+                .map(Clone::clone)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "No suitable object store found for {}",
+                        scheme
+                    ))
+                })
         } else {
             Ok(Arc::new(LocalFileSystem))
         }
