@@ -30,20 +30,21 @@ use futures::{AsyncRead, Stream};
 use local::LocalFileSystem;
 
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::Expr;
 use chrono::Utc;
 
 /// Object Reader for one file in a object store
 #[async_trait]
 pub trait ObjectReader {
     /// Get reader for a part [start, start + length] in the file asynchronously
-    async fn get_reader(&self, start: u64, length: usize) -> Result<Arc<dyn AsyncRead>>;
+    async fn chunk_reader(&self, start: u64, length: usize)
+        -> Result<Arc<dyn AsyncRead>>;
 
     /// Get length for the file
     fn length(&self) -> u64;
 }
 
 /// File meta we got from object store
+#[derive(Debug)]
 pub struct FileMeta {
     /// Path of the file
     pub path: String,
@@ -61,12 +62,11 @@ pub type FileMetaStream =
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
 #[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
-    /// Returns all the files in path `prefix` asynchronously, implementations could
-    /// choose to use the pushed down filters for list filtering.
-    async fn list(&self, prefix: &str, filters: &[Expr]) -> Result<FileMetaStream>;
+    /// Returns all the files in path `prefix` asynchronously.
+    async fn list(&self, prefix: &str) -> Result<FileMetaStream>;
 
     /// Get object reader for one file
-    fn get_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
+    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
 }
 
 static LOCAL_SCHEME: &str = "file";

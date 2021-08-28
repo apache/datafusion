@@ -28,7 +28,6 @@ use crate::datasource::object_store::{
 };
 use crate::error::DataFusionError;
 use crate::error::Result;
-use crate::logical_plan::Expr;
 
 #[derive(Debug)]
 /// Local File System as Object Store.
@@ -36,11 +35,11 @@ pub struct LocalFileSystem;
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn list(&self, prefix: &str, _filters: &[Expr]) -> Result<FileMetaStream> {
+    async fn list(&self, prefix: &str) -> Result<FileMetaStream> {
         list_all(prefix.to_owned()).await
     }
 
-    fn get_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
+    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 }
@@ -57,7 +56,7 @@ impl LocalFileReader {
 
 #[async_trait]
 impl ObjectReader for LocalFileReader {
-    async fn get_reader(
+    async fn chunk_reader(
         &self,
         _start: u64,
         _length: usize,
@@ -123,5 +122,43 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
         })
         .flatten();
         Ok(Box::pin(result))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+    use std::collections::HashSet;
+    use std::fs::create_dir;
+    use std::fs::File;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_recursive_listing() -> Result<()> {
+        let tmp = tempdir()?;
+        create_dir(tmp.path().join("x"))?;
+        create_dir(tmp.path().join("y"))?;
+        let a_path = tmp.path().join("a.txt");
+        let b_path = tmp.path().join("x/b.txt");
+        let c_path = tmp.path().join("y/c.txt");
+        File::create(&a_path)?;
+        File::create(&b_path)?;
+        File::create(&c_path)?;
+
+        let mut all_files = HashSet::new();
+        let mut files = list_all(tmp.path().to_str().unwrap().to_string()).await?;
+        while let Some(file) = files.next().await {
+            let file = file?;
+            assert_eq!(file.size, 0);
+            all_files.insert(file.path);
+        }
+
+        assert_eq!(all_files.len(), 3);
+        assert!(all_files.contains(a_path.to_str().unwrap()));
+        assert!(all_files.contains(b_path.to_str().unwrap()));
+        assert!(all_files.contains(c_path.to_str().unwrap()));
+
+        Ok(())
     }
 }
