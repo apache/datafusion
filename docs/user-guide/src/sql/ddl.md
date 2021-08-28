@@ -21,7 +21,7 @@
 
 ## CREATE EXTERNAL TABLE
 
-Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary 
+Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary
 to provide schema information for Parquet files.
 
 ```sql
@@ -30,8 +30,8 @@ STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/tripdata.parquet';
 ```
 
-CSV data sources can also be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is necessary to 
-provide schema information for CSV files since DataFusion does not automatically infer the schema when using SQL 
+CSV data sources can also be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is necessary to
+provide schema information for CSV files since DataFusion does not automatically infer the schema when using SQL
 to query CSV files.
 
 ```sql
