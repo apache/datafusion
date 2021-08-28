@@ -146,9 +146,7 @@ impl DataFrame {
         let ctx = _ExecutionContext::from(self.ctx_state.clone());
         let plan = ctx
             .optimize(&self.limit(num)?.plan)
-            .map_err(|e| -> errors::DataFusionError { e.into() })?;
-        let plan = ctx
-            .create_physical_plan(&plan)
+            .and_then(|plan| ctx.create_physical_plan(&plan))
             .map_err(|e| -> errors::DataFusionError { e.into() })?;
 
         let rt = Runtime::new().unwrap();
