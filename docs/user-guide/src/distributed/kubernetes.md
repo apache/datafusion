@@ -234,6 +234,26 @@ $ kubectl logs ballista-scheduler-0
 [2021-02-19T00:24:17Z INFO  ballista::scheduler] Received register_executor request for ExecutorMetadata { id: "816e4502-a876-4ed8-b33f-86d243dcf63f", host: "10.1.23.150", port: 50051 }
 ```
 
+## Port Forwarding
+
+If you want to run applications outside of the cluster and have them connect to the scheduler then it is necessary to 
+set up port forwarding.
+
+First, check that the `ballista-scheduler` service is running.
+
+```bash
+$ kubectl get services
+NAME                 TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)     AGE
+kubernetes           ClusterIP   10.152.183.1    <none>        443/TCP     26h
+ballista-scheduler   ClusterIP   10.152.183.21   <none>        50050/TCP   24m
+```
+
+Use the following command to set up port-forwarding.
+
+```bash
+kubectl port-forward service/ballista-scheduler 50050:50050
+```
+
 ## Deleting the Ballista cluster
 
 Run the following kubectl command to delete the cluster.
