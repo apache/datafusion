@@ -1636,16 +1636,24 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
-            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_csv_with_name(
+            path,
+            options,
+            None,
+            "aggregate_test_100",
+        )?
+        .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+        .build()?;
 
         let execution_plan = plan(&logical_plan)?;
         let final_hash_agg = execution_plan
             .as_any()
             .downcast_ref::<HashAggregateExec>()
             .expect("hash aggregate");
-        assert_eq!("SUM(c2)", final_hash_agg.schema().field(1).name());
+        assert_eq!(
+            "SUM(aggregate_test_100.c2)",
+            final_hash_agg.schema().field(1).name()
+        );
         // we need access to the input to the partial aggregate so that other projects can
         // implement serde
         assert_eq!("c2", final_hash_agg.input_schema().field(1).name());
