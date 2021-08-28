@@ -26,12 +26,12 @@
 
   - [SELECT](sql/select.md)
   - [DDL](sql/ddl.md)
-    - [CREATE EXTERNAL TABLE](sql/ddl.md)
   - [Datafusion Specific Functions](sql/datafusion-functions.md)
 
-- [Distributed](distributed/introduction.md)
-  - [Create a Ballista Cluster](distributed/deployment.md)
-    - [Docker](distributed/standalone.md)
+- [Ballista Distributed Compute](distributed/introduction.md)
+  - [Start a Ballista Cluster](distributed/deployment.md)
+    - [Cargo Install](distributed/cargo-install.md)
+    - [Docker](distributed/docker.md)
     - [Docker Compose](distributed/docker-compose.md)
     - [Kubernetes](distributed/kubernetes.md)
     - [Raspberry Pi](distributed/raspberrypi.md)
