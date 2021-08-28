@@ -136,12 +136,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_recursive_listing() -> Result<()> {
+        // tmp/a.txt
+        // tmp/x/b.txt
+        // tmp/y/c.txt
         let tmp = tempdir()?;
-        create_dir(tmp.path().join("x"))?;
-        create_dir(tmp.path().join("y"))?;
+        let x_path = tmp.path().join("x");
+        let y_path = tmp.path().join("y");
+        create_dir(&x_path)?;
+        create_dir(&y_path)?;
+
         let a_path = tmp.path().join("a.txt");
-        let b_path = tmp.path().join("x/b.txt");
-        let c_path = tmp.path().join("y/c.txt");
+        let b_path = x_path.join("b.txt");
+        let c_path = y_path.join("c.txt");
         File::create(&a_path)?;
         File::create(&b_path)?;
         File::create(&c_path)?;
