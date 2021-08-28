@@ -57,8 +57,6 @@ impl DistributedPlanner {
     /// Returns a vector of ExecutionPlans, where the root node is a [ShuffleWriterExec].
     /// Plans that depend on the input of other plans will have leaf nodes of type [UnresolvedShuffleExec].
     /// A [ShuffleWriterExec] is created whenever the partitioning changes.
-    ///
-    /// Returns an empty vector if the execution_plan doesn't need to be sliced into several stages.
     pub fn plan_query_stages(
         &mut self,
         job_id: &str,
