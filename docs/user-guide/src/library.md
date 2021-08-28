@@ -25,5 +25,5 @@ To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-datafusion = "5.0.0"
+datafusion = "5.1.0"
 ```
