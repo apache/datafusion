@@ -37,8 +37,8 @@ This will create an image with the tag `ballista:0.6.0`.
 
 ## Start a cluster
 
-The following Docker Compose example demonstrates how to start a cluster using one scheduler process and one 
-executor process, with the scheduler using etcd as a backing store. A data volume is mounted into each container 
+The following Docker Compose example demonstrates how to start a cluster using one scheduler process and one
+executor process, with the scheduler using etcd as a backing store. A data volume is mounted into each container
 so that Ballista can access the host file system.
 
 ```yaml

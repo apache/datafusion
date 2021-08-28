@@ -32,7 +32,7 @@ The Ballista deployment consists of:
 
 ## Testing locally
 
-[Microk8s](https://microk8s.io/) is recommended for installing a local k8s cluster. Once Microk8s is installed, DNS 
+[Microk8s](https://microk8s.io/) is recommended for installing a local k8s cluster. Once Microk8s is installed, DNS
 must be enabled using the following command.
 
 ```bash
@@ -236,7 +236,7 @@ $ kubectl logs ballista-scheduler-0
 
 ## Port Forwarding
 
-If you want to run applications outside of the cluster and have them connect to the scheduler then it is necessary to 
+If you want to run applications outside of the cluster and have them connect to the scheduler then it is necessary to
 set up port forwarding.
 
 First, check that the `ballista-scheduler` service is running.

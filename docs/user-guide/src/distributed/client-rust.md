@@ -19,7 +19,7 @@
 
 ## Ballista Rust Client
 
-Ballista usage is very similar to DataFusion. Tha main difference is that the starting point is a `BallistaContext` 
+Ballista usage is very similar to DataFusion. Tha main difference is that the starting point is a `BallistaContext`
 instead of the DataFusion `ExecutionContext`. Ballista uses the same DataFrame API as DataFusion.
 
 The following code sample demonstrates how to create a `BallistaContext` to connect to a Ballista scheduler process.
@@ -29,7 +29,7 @@ let config = BallistaConfig::builder()
     .set("ballista.shuffle.partitions", "4")
     .build()?;
 
-// connect to Ballista scheduler 
+// connect to Ballista scheduler
 let ctx = BallistaContext::remote("localhost", 50050, &config);
 ```
 
@@ -41,8 +41,8 @@ async fn main() -> Result<()> {
     let config = BallistaConfig::builder()
         .set("ballista.shuffle.partitions", "4")
         .build()?;
-    
-    // connect to Ballista scheduler 
+
+    // connect to Ballista scheduler
     let ctx = BallistaContext::remote("localhost", 50050, &config);
 
     let testdata = datafusion::arrow::util::test_util::parquet_test_data();
@@ -64,7 +64,6 @@ async fn main() -> Result<()> {
 
 Here is a full example demonstrating SQL usage.
 
-
 ```rust
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -72,7 +71,7 @@ async fn main() -> Result<()> {
         .set("ballista.shuffle.partitions", "4")
         .build()?;
 
-    // connect to Ballista scheduler 
+    // connect to Ballista scheduler
     let ctx = BallistaContext::remote("localhost", 50050, &config);
 
     let testdata = datafusion::arrow::util::test_util::arrow_test_data();

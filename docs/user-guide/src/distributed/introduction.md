@@ -34,15 +34,15 @@ The foundational technologies in Ballista are:
 
 Although Ballista is largely inspired by Apache Spark, there are some key differences.
 
-- The choice of Rust as the main execution language means that memory usage is deterministic and avoids the overhead 
+- The choice of Rust as the main execution language means that memory usage is deterministic and avoids the overhead
   of GC pauses.
 - Ballista is designed from the ground up to use columnar data, enabling a number of efficiencies such as vectorized
   processing (SIMD and GPU) and efficient compression. Although Spark does have some columnar support, it is still
   largely row-based today.
-- The combination of Rust and Arrow provides excellent memory efficiency and memory usage can be 5x - 10x lower than 
-  Apache Spark in some cases, which means that more processing can fit on a single node, reducing the overhead of 
+- The combination of Rust and Arrow provides excellent memory efficiency and memory usage can be 5x - 10x lower than
+  Apache Spark in some cases, which means that more processing can fit on a single node, reducing the overhead of
   distributed compute.
-- The use of Apache Arrow as the memory model and network protocol means that data can be exchanged between executors 
+- The use of Apache Arrow as the memory model and network protocol means that data can be exchanged between executors
   in any programming language with minimal serialization overhead.
 
 ## Status

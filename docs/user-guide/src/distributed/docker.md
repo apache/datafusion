@@ -21,7 +21,7 @@
 
 ## Build Docker image
 
-There is no officially published Docker image so it is currently necessary to build the image from source instead. 
+There is no officially published Docker image so it is currently necessary to build the image from source instead.
 
 Run the following commands to clone the source repository and build the Docker image.
 
@@ -31,7 +31,7 @@ cd arrow-datafusion
 ./dev/build-ballista-docker.sh
 ```
 
-This will create an image with the tag `ballista:0.6.0`. 
+This will create an image with the tag `ballista:0.6.0`.
 
 ### Start a Scheduler
 
@@ -91,7 +91,7 @@ $ docker logs 7c6941bb8dc0
 
 _NOTE: This functionality is currently experimental_
 
-Ballista can optionally use [etcd](https://etcd.io/) as a backing store for the scheduler. Use the following commands 
+Ballista can optionally use [etcd](https://etcd.io/) as a backing store for the scheduler. Use the following commands
 to launch the scheduler with this option enabled.
 
 ```bash
