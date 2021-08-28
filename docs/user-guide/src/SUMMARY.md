@@ -22,6 +22,7 @@
 - [Introduction](introduction.md)
 - [Example Usage](example-usage.md)
 - [Use as a Library](library.md)
+- [DataFusion CLI](cli.md)
 - [SQL Reference](sql/introduction.md)
 
   - [SELECT](sql/select.md)
