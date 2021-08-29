@@ -288,12 +288,19 @@ impl SchedulerGrpc for SchedulerServer {
                     tonic::Status::internal(msg)
                 })?;
 
+                let partitions = parquet_desc
+                    .descriptor
+                    .partition_files
+                    .iter()
+                    .map(|pf| FilePartitionMetadata {
+                        filename: vec![pf.file_path.clone()],
+                    })
+                    .collect();
+
                 //TODO include statistics and any other info needed to reconstruct ParquetExec
                 Ok(Response::new(GetFileMetadataResult {
                     schema: Some(parquet_desc.schema().as_ref().into()),
-                    partitions: vec![FilePartitionMetadata {
-                        filename: vec![path],
-                    }],
+                    partitions,
                 }))
             }
             //TODO implement for CSV

@@ -345,14 +345,26 @@ impl TryInto<PartitionedFile> for &protobuf::PartitionedFile {
     }
 }
 
+impl From<&protobuf::ColumnStats> for ColumnStatistics {
+    fn from(cs: &protobuf::ColumnStats) -> ColumnStatistics {
+        ColumnStatistics {
+            null_count: Some(cs.null_count as usize),
+            max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
+            min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
+            distinct_count: Some(cs.distinct_count as usize),
+        }
+    }
+}
+
 impl TryInto<Statistics> for &protobuf::Statistics {
     type Error = BallistaError;
 
     fn try_into(self) -> Result<Statistics, Self::Error> {
+        let column_statistics = self.column_stats.iter().map(|s| s.into()).collect();
         Ok(Statistics {
             num_rows: Some(self.num_rows as usize),
             total_byte_size: Some(self.total_byte_size as usize),
-            column_statistics: None,
+            column_statistics: Some(column_statistics),
         })
     }
 }
@@ -1170,7 +1182,8 @@ impl TryInto<Field> for &protobuf::Field {
     }
 }
 
-use datafusion::datasource::datasource::Statistics;
+use crate::serde::protobuf::ColumnStats;
+use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
 use datafusion::physical_plan::{aggregates, windows};
 use datafusion::prelude::{
     array, date_part, date_trunc, length, lower, ltrim, md5, rtrim, sha224, sha256,

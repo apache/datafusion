@@ -25,7 +25,7 @@ use crate::serde::{protobuf, BallistaError};
 use datafusion::arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit,
 };
-use datafusion::datasource::datasource::Statistics;
+use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
 use datafusion::datasource::{CsvFile, PartitionedFile, TableDescriptor};
 use datafusion::logical_plan::{
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
@@ -256,14 +256,28 @@ impl TryInto<DataType> for &protobuf::ArrowType {
     }
 }
 
-#[allow(clippy::from_over_into)]
-impl Into<protobuf::Statistics> for Statistics {
-    fn into(self) -> protobuf::Statistics {
+impl From<&ColumnStatistics> for protobuf::ColumnStats {
+    fn from(cs: &ColumnStatistics) -> protobuf::ColumnStats {
+        protobuf::ColumnStats {
+            min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
+            max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
+            null_count: cs.null_count.map(|n| n as u32).unwrap_or(0),
+            distinct_count: cs.distinct_count.map(|n| n as u32).unwrap_or(0),
+        }
+    }
+}
+
+impl From<&Statistics> for protobuf::Statistics {
+    fn from(s: &Statistics) -> protobuf::Statistics {
         let none_value = -1_i64;
+        let column_stats = match &s.column_statistics {
+            None => vec![],
+            Some(column_stats) => column_stats.iter().map(|s| s.into()).collect(),
+        };
         protobuf::Statistics {
-            num_rows: self.num_rows.map(|n| n as i64).unwrap_or(none_value),
-            total_byte_size: self.total_byte_size.map(|n| n as i64).unwrap_or(none_value),
-            column_stats: vec![],
+            num_rows: s.num_rows.map(|n| n as i64).unwrap_or(none_value),
+            total_byte_size: s.total_byte_size.map(|n| n as i64).unwrap_or(none_value),
+            column_stats,
         }
     }
 }
@@ -272,7 +286,7 @@ impl From<&PartitionedFile> for protobuf::PartitionedFile {
     fn from(pf: &PartitionedFile) -> protobuf::PartitionedFile {
         protobuf::PartitionedFile {
             path: pf.file_path.clone(),
-            statistics: Some(pf.statistics.clone().into()),
+            statistics: Some((&pf.statistics).into()),
         }
     }
 }
