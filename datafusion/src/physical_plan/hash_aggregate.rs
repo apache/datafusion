@@ -342,9 +342,17 @@ fn group_aggregate_batch(
     // this is an optimization to avoid allocating `key` on every row.
     // it will be overwritten on every iteration of the loop below
     let mut group_by_values = Vec::with_capacity(group_values.len());
+    let mut null_information = Vec::with_capacity(group_values.len());
+    /*
     for _ in 0..group_values.len() {
         group_by_values.push(ScalarValue::UInt32(Some(0)));
     }
+    */
+
+    group_values.iter().for_each(|array| {
+        null_information.push(array.null_count() > 0);
+        group_by_values.push(ScalarValue::UInt32(Some(0)));
+    });
 
     // 1.1 construct the key from the group values
     // 1.2 construct the mapping key if it does not exist
@@ -365,16 +373,13 @@ fn group_aggregate_batch(
             // actually the same key value as the group in
             // existing_idx  (aka group_values @ row)
             let group_state = &group_states[*group_idx];
-                group_values
-                    .iter()
-                    .zip(group_state.group_by_values.iter())
-                    .all(|(array, scalar)| {
-                        if array.null_count() > 0 {
-                            scalar.eq_array(array, row)
-                        } else {
-                            scalar.eq_array_no_nulls(array, row)
-                        }
-                    })
+            group_values
+                .iter()
+                .zip(group_state.group_by_values.iter())
+                .zip(null_information.iter())
+                .all(|((array, scalar), has_nulls)| {
+                    scalar.eq_array(array, row, has_nulls)
+                })
         });
 
         match entry {
