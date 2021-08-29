@@ -49,7 +49,7 @@ pub(crate) enum Source<R = Box<dyn std::io::Read + Send + Sync + 'static>> {
 /// and partition column values that need to be appended to each row.
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
-    pub file_path: String,
+    pub path: String,
     /// Statistics of the file
     pub statistics: Statistics,
     // Values of partition columns to be appended to each row
@@ -58,9 +58,9 @@ pub struct PartitionedFile {
 }
 
 impl From<String> for PartitionedFile {
-    fn from(file_path: String) -> Self {
+    fn from(path: String) -> Self {
         Self {
-            file_path,
+            path,
             statistics: Default::default(),
         }
     }
@@ -68,7 +68,7 @@ impl From<String> for PartitionedFile {
 
 impl std::fmt::Display for PartitionedFile {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.file_path)
+        write!(f, "{}", self.path)
     }
 }
 
@@ -100,7 +100,10 @@ pub struct TableDescriptor {
 }
 
 /// Returned partitioned file with its schema
-pub type FileAndSchema = (PartitionedFile, Schema);
+pub struct FileAndSchema {
+    file: PartitionedFile,
+    schema: Schema,
+}
 
 /// Builder for ['TableDescriptor'] inside given path
 pub trait TableDescriptorBuilder {
@@ -119,7 +122,7 @@ pub trait TableDescriptorBuilder {
             )));
         }
 
-        // build a list of Parquet partitions with statistics and gather all unique schemas
+        // build a list of partitions with statistics and gather all unique schemas
         // used in this data set
         let mut schemas: Vec<Schema> = vec![];
         let mut contains_file = false;
@@ -129,7 +132,7 @@ pub trait TableDescriptorBuilder {
             .map(|file_path| {
                 contains_file = true;
                 let result = if collect_statistics {
-                    let (pf, schema) = Self::file_meta(file_path)?;
+                    let FileAndSchema {file, schema} = Self::file_meta(file_path)?;
                     if schemas.is_empty() {
                         schemas.push(schema);
                     } else if schema != schemas[0] {
@@ -142,10 +145,10 @@ pub trait TableDescriptorBuilder {
                             file_path
                         )));
                     }
-                    pf
+                    file
                 } else {
                     PartitionedFile {
-                        file_path: file_path.to_owned(),
+                        path: file_path.to_owned(),
                         statistics: Statistics::default(),
                     }
                 };
@@ -170,10 +173,12 @@ pub trait TableDescriptorBuilder {
     }
 
     /// Get all metadata for a source file, including schema, statistics, partitions, etc.
-    fn file_meta(file_path: &str) -> Result<FileAndSchema>;
+    fn file_meta(path: &str) -> Result<FileAndSchema>;
 }
 
-/// Get all files as well as the summary statistics when a limit is provided
+/// Get all files as well as the summary statistic
+/// if the optional `limit` is provided, includes only sufficient files
+/// needed to read up to `limit` number of rows
 pub fn get_statistics_with_limit(
     table_desc: &TableDescriptor,
     limit: Option<usize>,

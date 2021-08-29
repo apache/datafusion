@@ -285,7 +285,7 @@ impl From<&Statistics> for protobuf::Statistics {
 impl From<&PartitionedFile> for protobuf::PartitionedFile {
     fn from(pf: &PartitionedFile) -> protobuf::PartitionedFile {
         protobuf::PartitionedFile {
-            path: pf.file_path.clone(),
+            path: pf.path.clone(),
             statistics: Some((&pf.statistics).into()),
         }
     }

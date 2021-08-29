@@ -158,11 +158,6 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     }
                 };
 
-                let filters: Vec<Expr> = scan
-                    .filters
-                    .iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<Expr>, _>>()?;
                 let parquet_table = ParquetTable::try_new_with_desc(
                     Arc::new(ParquetTableDescriptor { descriptor }),
                     24,
@@ -172,7 +167,6 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     &scan.table_name,
                     Arc::new(parquet_table),
                     projection,
-                    Some(filters),
                 )? //TODO remove hard-coded max_partitions
                 .build()
                 .map_err(|e| e.into())
@@ -339,7 +333,7 @@ impl TryInto<PartitionedFile> for &protobuf::PartitionedFile {
     fn try_into(self) -> Result<PartitionedFile, Self::Error> {
         let statistics = convert_required!(self.statistics)?;
         Ok(PartitionedFile {
-            file_path: self.path.clone(),
+            path: self.path.clone(),
             statistics,
         })
     }

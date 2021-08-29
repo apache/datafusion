@@ -345,11 +345,11 @@ impl ParquetTableDescriptor {
 }
 
 impl TableDescriptorBuilder for ParquetTableDescriptor {
-    fn file_meta(file_path: &str) -> Result<FileAndSchema> {
-        let file = File::open(file_path)?;
+    fn file_meta(path: &str) -> Result<FileAndSchema> {
+        let file = File::open(path)?;
         let file_reader = Arc::new(SerializedFileReader::new(file)?);
         let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
-        let file_path = file_path.to_string();
+        let path = path.to_string();
         let schema = arrow_reader.get_schema()?;
         let num_fields = schema.fields().len();
         let fields = schema.fields().to_vec();
@@ -406,13 +406,10 @@ impl TableDescriptorBuilder for ParquetTableDescriptor {
             column_statistics: column_stats,
         };
 
-        Ok((
-            PartitionedFile {
-                file_path,
-                statistics,
-            },
+        Ok(FileAndSchema {
+            file: PartitionedFile { path, statistics },
             schema,
-        ))
+        })
     }
 }
 

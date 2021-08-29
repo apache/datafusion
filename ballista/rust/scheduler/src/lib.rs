@@ -293,7 +293,7 @@ impl SchedulerGrpc for SchedulerServer {
                     .partition_files
                     .iter()
                     .map(|pf| FilePartitionMetadata {
-                        filename: vec![pf.file_path.clone()],
+                        filename: vec![pf.path.clone()],
                     })
                     .collect();
 

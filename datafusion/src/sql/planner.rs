@@ -519,7 +519,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 .unwrap_or(&table_name),
                             provider,
                             None,
-                            None,
                         )?
                         .build(),
                         (None, None) => Err(DataFusionError::Plan(format!(

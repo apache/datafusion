@@ -304,7 +304,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None, None)?.build()?,
+            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
         )))
     }
 
@@ -412,7 +412,6 @@ impl ExecutionContext {
                 let plan = LogicalPlanBuilder::scan(
                     table_ref.table(),
                     Arc::clone(provider),
-                    None,
                     None,
                 )?
                 .build()?;

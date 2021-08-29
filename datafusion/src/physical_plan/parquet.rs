@@ -531,12 +531,9 @@ fn read_partition(
     let mut total_rows = 0;
     let all_files = partition.file_partition.files;
     'outer: for partitioned_file in all_files {
-        let file_metrics = ParquetFileMetrics::new(
-            partition_index,
-            &*partitioned_file.file_path,
-            &metrics,
-        );
-        let file = File::open(partitioned_file.file_path.as_str())?;
+        let file_metrics =
+            ParquetFileMetrics::new(partition_index, &*partitioned_file.path, &metrics);
+        let file = File::open(partitioned_file.path.as_str())?;
         let mut file_reader = SerializedFileReader::new(file)?;
         if let Some(predicate_builder) = predicate_builder {
             let row_group_predicate = build_row_group_predicate(
