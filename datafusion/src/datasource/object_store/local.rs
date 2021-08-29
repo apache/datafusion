@@ -35,7 +35,11 @@ pub struct LocalFileSystem;
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn list(&self, prefix: &str) -> Result<FileMetaStream> {
+    async fn list(
+        &self,
+        prefix: &str,
+        _delimiter: Option<String>,
+    ) -> Result<FileMetaStream> {
         list_all(prefix.to_owned()).await
     }
 

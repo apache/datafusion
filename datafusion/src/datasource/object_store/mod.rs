@@ -62,8 +62,13 @@ pub type FileMetaStream =
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
 #[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
-    /// Returns all the files in path `prefix` asynchronously.
-    async fn list(&self, prefix: &str) -> Result<FileMetaStream>;
+    /// Returns all the files in path `prefix`, or all paths between
+    /// the `prefix` and the first occurrence of the delimiter if it is provided.
+    async fn list(
+        &self,
+        prefix: &str,
+        delimiter: Option<String>,
+    ) -> Result<FileMetaStream>;
 
     /// Get object reader for one file
     async fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
