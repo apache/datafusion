@@ -66,7 +66,7 @@ pub trait ObjectStore: Sync + Send + Debug {
     async fn list(&self, prefix: &str) -> Result<FileMetaStream>;
 
     /// Get object reader for one file
-    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
+    async fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
 }
 
 static LOCAL_SCHEME: &str = "file";
