@@ -43,7 +43,7 @@ impl ObjectStore for LocalFileSystem {
         list_all(prefix.to_owned()).await
     }
 
-    async fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
+    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 }
