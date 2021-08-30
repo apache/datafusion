@@ -18,25 +18,32 @@
 //! Parquet data source
 
 use std::any::Any;
-use std::string::String;
+use std::fs::File;
 use std::sync::Arc;
 
-use arrow::datatypes::*;
-
-use crate::datasource::datasource::Statistics;
-use crate::datasource::TableProvider;
-use crate::error::Result;
-use crate::logical_plan::{combine_filters, Expr};
-use crate::physical_plan::parquet::ParquetExec;
-use crate::physical_plan::ExecutionPlan;
+use parquet::arrow::ArrowReader;
+use parquet::arrow::ParquetFileArrowReader;
+use parquet::file::serialized_reader::SerializedFileReader;
+use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::datasource::TableProviderFilterPushDown;
+use crate::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use crate::datasource::datasource::Statistics;
+use crate::datasource::{
+    create_max_min_accs, get_col_stats, get_statistics_with_limit, FileAndSchema,
+    PartitionedFile, TableDescriptor, TableDescriptorBuilder, TableProvider,
+};
+use crate::error::Result;
+use crate::logical_plan::{combine_filters, Expr};
+use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
+use crate::physical_plan::parquet::ParquetExec;
+use crate::physical_plan::{Accumulator, ExecutionPlan};
+use crate::scalar::ScalarValue;
 
 /// Table-based representation of a `ParquetFile`.
 pub struct ParquetTable {
-    path: String,
-    schema: SchemaRef,
-    statistics: Statistics,
+    /// Descriptor of the table, including schema, files, etc.
+    pub desc: Arc<ParquetTableDescriptor>,
     max_partitions: usize,
     enable_pruning: bool,
 }
@@ -45,12 +52,9 @@ impl ParquetTable {
     /// Attempt to initialize a new `ParquetTable` from a file path.
     pub fn try_new(path: impl Into<String>, max_partitions: usize) -> Result<Self> {
         let path = path.into();
-        let parquet_exec = ParquetExec::try_from_path(&path, None, None, 0, 1, None)?;
-        let schema = parquet_exec.schema();
+        let table_desc = ParquetTableDescriptor::new(path.as_str());
         Ok(Self {
-            path,
-            schema,
-            statistics: parquet_exec.statistics().to_owned(),
+            desc: Arc::new(table_desc?),
             max_partitions,
             enable_pruning: true,
         })
@@ -65,29 +69,34 @@ impl ParquetTable {
         collect_statistics: bool,
     ) -> Result<Self> {
         let path = path.into();
-        if collect_statistics {
-            let parquet_exec = ParquetExec::try_from_path(&path, None, None, 0, 1, None)?;
-            Ok(Self {
-                path,
-                schema: Arc::new(schema),
-                statistics: parquet_exec.statistics().to_owned(),
-                max_partitions,
-                enable_pruning: true,
-            })
-        } else {
-            Ok(Self {
-                path,
-                schema: Arc::new(schema),
-                statistics: Statistics::default(),
-                max_partitions,
-                enable_pruning: true,
-            })
-        }
+        let table_desc = ParquetTableDescriptor::new_with_schema(
+            path.as_str(),
+            Some(schema),
+            collect_statistics,
+        );
+        Ok(Self {
+            desc: Arc::new(table_desc?),
+            max_partitions,
+            enable_pruning: true,
+        })
+    }
+
+    /// Attempt to initialize a new `ParquetTable` from a table descriptor.
+    pub fn try_new_with_desc(
+        desc: Arc<ParquetTableDescriptor>,
+        max_partitions: usize,
+        enable_pruning: bool,
+    ) -> Result<Self> {
+        Ok(Self {
+            desc,
+            max_partitions,
+            enable_pruning,
+        })
     }
 
     /// Get the path for the Parquet file(s) represented by this ParquetTable instance
     pub fn path(&self) -> &str {
-        &self.path
+        &self.desc.descriptor.path
     }
 
     /// Get parquet pruning option
@@ -109,7 +118,7 @@ impl TableProvider for ParquetTable {
 
     /// Get the schema for this parquet file.
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.desc.schema()
     }
 
     fn supports_filter_pushdown(
@@ -136,8 +145,8 @@ impl TableProvider for ParquetTable {
         } else {
             None
         };
-        Ok(Arc::new(ParquetExec::try_from_path(
-            &self.path,
+        Ok(Arc::new(ParquetExec::try_new(
+            self.desc.clone(),
             projection.clone(),
             predicate,
             limit
@@ -149,11 +158,258 @@ impl TableProvider for ParquetTable {
     }
 
     fn statistics(&self) -> Statistics {
-        self.statistics.clone()
+        self.desc.statistics()
     }
 
     fn has_exact_statistics(&self) -> bool {
         true
+    }
+}
+
+#[derive(Debug, Clone)]
+/// Descriptor for a parquet root path
+pub struct ParquetTableDescriptor {
+    /// metadata for files inside the root path
+    pub descriptor: TableDescriptor,
+}
+
+impl ParquetTableDescriptor {
+    /// Construct a new parquet descriptor for a root path
+    pub fn new(root_path: &str) -> Result<Self> {
+        let table_desc = Self::build_table_desc(root_path, "parquet", None, true);
+        Ok(Self {
+            descriptor: table_desc?,
+        })
+    }
+
+    /// Construct a new parquet descriptor for a root path with known schema
+    pub fn new_with_schema(
+        root_path: &str,
+        schema: Option<Schema>,
+        collect_statistics: bool,
+    ) -> Result<Self> {
+        let table_desc =
+            Self::build_table_desc(root_path, "parquet", schema, collect_statistics);
+        Ok(Self {
+            descriptor: table_desc?,
+        })
+    }
+
+    /// Get file schema for all parquet files
+    pub fn schema(&self) -> SchemaRef {
+        self.descriptor.schema.clone()
+    }
+
+    /// Get the summary statistics for all parquet files
+    pub fn statistics(&self) -> Statistics {
+        get_statistics_with_limit(&self.descriptor, None).1
+    }
+
+    fn summarize_min_max(
+        max_values: &mut Vec<Option<MaxAccumulator>>,
+        min_values: &mut Vec<Option<MinAccumulator>>,
+        fields: &[Field],
+        i: usize,
+        stat: &ParquetStatistics,
+    ) {
+        match stat {
+            ParquetStatistics::Boolean(s) => {
+                if let DataType::Boolean = fields[i].data_type() {
+                    if s.has_min_max_set() {
+                        if let Some(max_value) = &mut max_values[i] {
+                            match max_value
+                                .update(&[ScalarValue::Boolean(Some(*s.max()))])
+                            {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    max_values[i] = None;
+                                }
+                            }
+                        }
+                        if let Some(min_value) = &mut min_values[i] {
+                            match min_value
+                                .update(&[ScalarValue::Boolean(Some(*s.min()))])
+                            {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    min_values[i] = None;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ParquetStatistics::Int32(s) => {
+                if let DataType::Int32 = fields[i].data_type() {
+                    if s.has_min_max_set() {
+                        if let Some(max_value) = &mut max_values[i] {
+                            match max_value.update(&[ScalarValue::Int32(Some(*s.max()))])
+                            {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    max_values[i] = None;
+                                }
+                            }
+                        }
+                        if let Some(min_value) = &mut min_values[i] {
+                            match min_value.update(&[ScalarValue::Int32(Some(*s.min()))])
+                            {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    min_values[i] = None;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ParquetStatistics::Int64(s) => {
+                if let DataType::Int64 = fields[i].data_type() {
+                    if s.has_min_max_set() {
+                        if let Some(max_value) = &mut max_values[i] {
+                            match max_value.update(&[ScalarValue::Int64(Some(*s.max()))])
+                            {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    max_values[i] = None;
+                                }
+                            }
+                        }
+                        if let Some(min_value) = &mut min_values[i] {
+                            match min_value.update(&[ScalarValue::Int64(Some(*s.min()))])
+                            {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    min_values[i] = None;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ParquetStatistics::Float(s) => {
+                if let DataType::Float32 = fields[i].data_type() {
+                    if s.has_min_max_set() {
+                        if let Some(max_value) = &mut max_values[i] {
+                            match max_value
+                                .update(&[ScalarValue::Float32(Some(*s.max()))])
+                            {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    max_values[i] = None;
+                                }
+                            }
+                        }
+                        if let Some(min_value) = &mut min_values[i] {
+                            match min_value
+                                .update(&[ScalarValue::Float32(Some(*s.min()))])
+                            {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    min_values[i] = None;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ParquetStatistics::Double(s) => {
+                if let DataType::Float64 = fields[i].data_type() {
+                    if s.has_min_max_set() {
+                        if let Some(max_value) = &mut max_values[i] {
+                            match max_value
+                                .update(&[ScalarValue::Float64(Some(*s.max()))])
+                            {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    max_values[i] = None;
+                                }
+                            }
+                        }
+                        if let Some(min_value) = &mut min_values[i] {
+                            match min_value
+                                .update(&[ScalarValue::Float64(Some(*s.min()))])
+                            {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    min_values[i] = None;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl TableDescriptorBuilder for ParquetTableDescriptor {
+    fn file_meta(path: &str) -> Result<FileAndSchema> {
+        let file = File::open(path)?;
+        let file_reader = Arc::new(SerializedFileReader::new(file)?);
+        let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
+        let path = path.to_string();
+        let schema = arrow_reader.get_schema()?;
+        let num_fields = schema.fields().len();
+        let fields = schema.fields().to_vec();
+        let meta_data = arrow_reader.get_metadata();
+
+        let mut num_rows = 0;
+        let mut total_byte_size = 0;
+        let mut null_counts = vec![0; num_fields];
+        let mut has_statistics = false;
+
+        let (mut max_values, mut min_values) = create_max_min_accs(&schema);
+
+        for row_group_meta in meta_data.row_groups() {
+            num_rows += row_group_meta.num_rows();
+            total_byte_size += row_group_meta.total_byte_size();
+
+            let columns_null_counts = row_group_meta
+                .columns()
+                .iter()
+                .flat_map(|c| c.statistics().map(|stats| stats.null_count()));
+
+            for (i, cnt) in columns_null_counts.enumerate() {
+                null_counts[i] += cnt as usize
+            }
+
+            for (i, column) in row_group_meta.columns().iter().enumerate() {
+                if let Some(stat) = column.statistics() {
+                    has_statistics = true;
+                    ParquetTableDescriptor::summarize_min_max(
+                        &mut max_values,
+                        &mut min_values,
+                        &fields,
+                        i,
+                        stat,
+                    )
+                }
+            }
+        }
+
+        let column_stats = if has_statistics {
+            Some(get_col_stats(
+                &schema,
+                null_counts,
+                &mut max_values,
+                &mut min_values,
+            ))
+        } else {
+            None
+        };
+
+        let statistics = Statistics {
+            num_rows: Some(num_rows as usize),
+            total_byte_size: Some(total_byte_size as usize),
+            column_statistics: column_stats,
+        };
+
+        Ok(FileAndSchema {
+            file: PartitionedFile { path, statistics },
+            schema,
+        })
     }
 }
 
