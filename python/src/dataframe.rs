@@ -28,6 +28,7 @@ use datafusion::{execution::context::ExecutionContextState, logical_plan};
 
 use crate::{errors, to_py};
 use crate::{errors::DataFusionError, expression};
+use datafusion::arrow::util::pretty;
 
 /// A DataFrame is a representation of a logical plan and an API to compose statements.
 /// Use it to build a plan and `.collect()` to execute the plan and collect the result.
@@ -138,6 +139,28 @@ impl DataFrame {
         })?;
         to_py::to_py(&batches)
     }
+
+    /// Print the result, 20 lines by default
+    #[args(num = "20")]
+    fn show(&self, py: Python, num: usize) -> PyResult<()> {
+        let ctx = _ExecutionContext::from(self.ctx_state.clone());
+        let plan = ctx
+            .optimize(&self.limit(num)?.plan)
+            .and_then(|plan| ctx.create_physical_plan(&plan))
+            .map_err(|e| -> errors::DataFusionError { e.into() })?;
+
+        let rt = Runtime::new().unwrap();
+        let batches = py.allow_threads(|| {
+            rt.block_on(async {
+                collect(plan)
+                    .await
+                    .map_err(|e| -> errors::DataFusionError { e.into() })
+            })
+        })?;
+
+        Ok(pretty::print_batches(&batches).unwrap())
+    }
+
 
     /// Returns the join of two DataFrames `on`.
     fn join(&self, right: &DataFrame, on: Vec<&str>, how: &str) -> PyResult<Self> {
