@@ -34,8 +34,8 @@ use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
     CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
 };
-use datafusion::datasource::object_store::ObjectStoreRegistry;
 use datafusion::datasource::datasource::Statistics;
+use datafusion::datasource::object_store::ObjectStoreRegistry;
 use datafusion::datasource::FilePartition;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
