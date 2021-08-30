@@ -35,6 +35,7 @@ use arrow::{
 use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::logical_plan::LogicalPlan;
+#[cfg(feature = "avro")]
 use datafusion::physical_plan::avro::AvroReadOptions;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
@@ -2935,6 +2936,7 @@ fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
     .unwrap();
 }
 
+#[cfg(feature = "avro")]
 fn register_alltypes_avro(ctx: &mut ExecutionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
     ctx.register_avro(
@@ -4798,39 +4800,9 @@ async fn avro_explain() {
             \n    CoalescePartitionsExec\
             \n      HashAggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
             \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-            \n          ExecutionPlan(PlaceHolder)\
+            \n          AvroExec: source=Path(ARROW_TEST_DATA/avro/alltypes_plain.avro: [ARROW_TEST_DATA/avro/alltypes_plain.avro]), batch_size=8192, limit=None\
             \n",
         ],
     ];
     assert_eq!(expected, actual);
-}
-
-#[cfg(feature = "avro")]
-#[tokio::test]
-async fn avro_explain_analyze() {
-    // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
-    let mut ctx = ExecutionContext::new();
-    register_alltypes_avro(&mut ctx);
-
-    let sql = "EXPLAIN ANALYZE SELECT count(*), tinyint_col from alltypes_plain group by tinyint_col";
-    let actual = execute_to_batches(&mut ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
-    let formatted = normalize_for_explain(&formatted);
-
-    // Only test basic plumbing and try to avoid having to change too
-    // many things
-    let needle = "RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), metrics=[";
-    assert!(
-        formatted.contains(needle),
-        "did not find '{}' in\n{}",
-        needle,
-        formatted
-    );
-    let verbose_needle = "Output Rows       | 5";
-    assert!(
-        !formatted.contains(verbose_needle),
-        "found unexpected '{}' in\n{}",
-        verbose_needle,
-        formatted
-    );
 }

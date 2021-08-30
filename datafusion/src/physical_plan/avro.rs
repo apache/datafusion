@@ -21,6 +21,7 @@ use super::RecordBatchStream;
 use super::{common, source::Source, ExecutionPlan, Partitioning};
 use crate::avro_to_arrow::infer_avro_schema_from_reader;
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::DisplayFormatType;
 use arrow::datatypes::{Schema, SchemaRef};
 #[cfg(feature = "avro")]
 use arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
@@ -301,6 +302,22 @@ impl ExecutionPlan for AvroExec {
                             .to_string(),
                     ))
                 }
+            }
+        }
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "AvroExec: source={}, batch_size={}, limit={:?}",
+                    self.source, self.batch_size, self.limit
+                )
             }
         }
     }
