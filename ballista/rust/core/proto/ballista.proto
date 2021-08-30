@@ -271,12 +271,28 @@ message CsvTableScanNode {
   repeated LogicalExprNode filters = 8;
 }
 
+message Statistics {
+  int64 num_rows = 1;
+  int64 total_byte_size = 2;
+  repeated ColumnStats column_stats = 3;
+}
+
+message PartitionedFile {
+  string path = 1;
+  Statistics statistics = 2;
+}
+
+message TableDescriptor {
+  string path = 1;
+  repeated PartitionedFile partition_files = 2;
+  Schema schema = 3;
+}
+
 message ParquetTableScanNode {
   string table_name = 1;
-  string path = 2;
+  TableDescriptor table_desc = 2;
   ProjectionColumns projection = 3;
-  Schema schema = 4;
-  repeated LogicalExprNode filters = 5;
+  repeated LogicalExprNode filters = 4;
 }
 
 message ProjectionNode {
@@ -567,10 +583,15 @@ message FilterExecNode {
   PhysicalExprNode expr = 2;
 }
 
+message ParquetPartition {
+  uint32 index = 1;
+  repeated PartitionedFile files = 2;
+}
+
 message ParquetScanExecNode {
-  repeated string filename = 1;
-  repeated uint32 projection = 2;
-  uint32 num_partitions = 3;
+  repeated ParquetPartition partitions = 1;
+  Schema schema = 2;
+  repeated uint32 projection = 3;
   uint32 batch_size = 4;
 }
 
