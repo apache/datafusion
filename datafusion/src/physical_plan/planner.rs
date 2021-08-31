@@ -62,11 +62,10 @@ fn create_function_physical_name(
     fun: &str,
     distinct: bool,
     args: &[Expr],
-    input_schema: &DFSchema,
 ) -> Result<String> {
     let names: Vec<String> = args
         .iter()
-        .map(|e| physical_name(e, input_schema))
+        .map(|e| create_physical_name(e, false))
         .collect::<Result<_>>()?;
 
     let distinct_str = match distinct {
@@ -76,15 +75,25 @@ fn create_function_physical_name(
     Ok(format!("{}({}{})", fun, distinct_str, names.join(",")))
 }
 
-fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
+fn physical_name(e: &Expr) -> Result<String> {
+    create_physical_name(e, true)
+}
+
+fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
     match e {
-        Expr::Column(c) => Ok(c.name.clone()),
+        Expr::Column(c) => {
+            if is_first_expr {
+                Ok(c.name.clone())
+            } else {
+                Ok(c.flat_name())
+            }
+        }
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::ScalarVariable(variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
         Expr::BinaryExpr { left, op, right } => {
-            let left = physical_name(left, input_schema)?;
-            let right = physical_name(right, input_schema)?;
+            let left = create_physical_name(left, false)?;
+            let right = create_physical_name(right, false)?;
             Ok(format!("{} {:?} {}", left, op, right))
         }
         Expr::Case {
@@ -106,50 +115,48 @@ fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             Ok(name)
         }
         Expr::Cast { expr, data_type } => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("CAST({} AS {:?})", expr, data_type))
         }
         Expr::TryCast { expr, data_type } => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("TRY_CAST({} AS {:?})", expr, data_type))
         }
         Expr::Not(expr) => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("NOT {}", expr))
         }
         Expr::Negative(expr) => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("(- {})", expr))
         }
         Expr::IsNull(expr) => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NULL", expr))
         }
         Expr::IsNotNull(expr) => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NOT NULL", expr))
         }
         Expr::ScalarFunction { fun, args, .. } => {
-            create_function_physical_name(&fun.to_string(), false, args, input_schema)
+            create_function_physical_name(&fun.to_string(), false, args)
         }
         Expr::ScalarUDF { fun, args, .. } => {
-            create_function_physical_name(&fun.name, false, args, input_schema)
+            create_function_physical_name(&fun.name, false, args)
         }
         Expr::WindowFunction { fun, args, .. } => {
-            create_function_physical_name(&fun.to_string(), false, args, input_schema)
+            create_function_physical_name(&fun.to_string(), false, args)
         }
         Expr::AggregateFunction {
             fun,
             distinct,
             args,
             ..
-        } => {
-            create_function_physical_name(&fun.to_string(), *distinct, args, input_schema)
-        }
+        } => create_function_physical_name(&fun.to_string(), *distinct, args),
         Expr::AggregateUDF { fun, args } => {
             let mut names = Vec::with_capacity(args.len());
             for e in args {
-                names.push(physical_name(e, input_schema)?);
+                names.push(create_physical_name(e, false)?);
             }
             Ok(format!("{}({})", fun.name, names.join(",")))
         }
@@ -158,8 +165,8 @@ fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             list,
             negated,
         } => {
-            let expr = physical_name(expr, input_schema)?;
-            let list = list.iter().map(|expr| physical_name(expr, input_schema));
+            let expr = create_physical_name(expr, false)?;
+            let list = list.iter().map(|expr| create_physical_name(expr, false));
             if *negated {
                 Ok(format!("{} NOT IN ({:?})", expr, list))
             } else {
@@ -444,7 +451,7 @@ impl DefaultPhysicalPlanner {
                                 &physical_input_schema,
                                 ctx_state,
                             ),
-                            physical_name(e, logical_input_schema),
+                            physical_name(e),
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -545,10 +552,10 @@ impl DefaultPhysicalPlanner {
                                 }
                                 // logical column is not a derived column, safe to pass along to
                                 // physical_name
-                                Err(_) => physical_name(e, input_schema),
+                                Err(_) => physical_name(e),
                             }
                         } else {
-                            physical_name(e, input_schema)
+                            physical_name(e)
                         };
 
                         tuple_err((
@@ -1192,7 +1199,7 @@ impl DefaultPhysicalPlanner {
         // unpack aliased logical expressions, e.g. "sum(col) over () as total"
         let (name, e) = match e {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-            _ => (physical_name(e, logical_input_schema)?, e),
+            _ => (physical_name(e)?, e),
         };
         self.create_window_expr_with_name(
             e,
@@ -1271,7 +1278,7 @@ impl DefaultPhysicalPlanner {
         // unpack aliased logical expressions, e.g. "sum(col) as total"
         let (name, e) = match e {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-            _ => (physical_name(e, logical_input_schema)?, e),
+            _ => (physical_name(e)?, e),
         };
 
         self.create_aggregate_expr_with_name(
@@ -1629,16 +1636,24 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
-            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_csv_with_name(
+            path,
+            options,
+            None,
+            "aggregate_test_100",
+        )?
+        .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+        .build()?;
 
         let execution_plan = plan(&logical_plan)?;
         let final_hash_agg = execution_plan
             .as_any()
             .downcast_ref::<HashAggregateExec>()
             .expect("hash aggregate");
-        assert_eq!("SUM(c2)", final_hash_agg.schema().field(1).name());
+        assert_eq!(
+            "SUM(aggregate_test_100.c2)",
+            final_hash_agg.schema().field(1).name()
+        );
         // we need access to the input to the partial aggregate so that other projects can
         // implement serde
         assert_eq!("c2", final_hash_agg.input_schema().field(1).name());
