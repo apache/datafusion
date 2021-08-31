@@ -25,10 +25,12 @@ Datafusion queries planned from both SQL queries and Dataframe APIs.
 
 ## Field name rules
 
-- All field names MUST not contain relation/table qualifier.
+- All bare column field names MUST not contain relation/table qualifier.
   - Both `SELECT t1.id`, `SELECT id` and `df.select_columns(&["id"])` SHOULD result in field name: `id`
+- All compound column field names MUST contain relation/table qualifier.
+  - `SELECT foo + bar` SHOULD result in field name: `table.foo PLUS table.bar`
 - Function names MUST be converted to lowercase.
-  - `SELECT AVG(c1)` SHOULD result in field name: `avg(c1)`
+  - `SELECT AVG(c1)` SHOULD result in field name: `avg(table.c1)`
 - Literal string MUST not be wrapped with quotes or double quotes.
   - `SELECT 'foo'` SHOULD result in field name: `foo`
 - Operator expressions MUST be wrapped with parentheses.
@@ -36,7 +38,7 @@ Datafusion queries planned from both SQL queries and Dataframe APIs.
 - Operator and operand MUST be separated by spaces.
   - `SELECT 1+2` SHOULD result in field name: `(1 + 2)`
 - Function arguments MUST be separated by a comma `,` and a space.
-  - `SELECT f(c1,c2)` and `df.select(vec![f.udf("f")?.call(vec![col("c1"), col("c2")])])` SHOULD result in field name: `f(c1, c2)`
+  - `SELECT f(c1,c2)` and `df.select(vec![f.udf("f")?.call(vec![col("c1"), col("c2")])])` SHOULD result in field name: `f(table.c1, table.c2)`
 
 ## Appendices
 
@@ -95,10 +97,10 @@ SELECT ABS(t1.id), abs(-id) FROM t1;
 
 Datafusion Arrow record batches output:
 
-| abs(id) | abs((- id)) |
-| ------- | ----------- |
-| 1       | 1           |
-| 2       | 2           |
+| abs(t1.id) | abs((- t1.id)) |
+| ---------- | -------------- |
+| 1          | 1              |
+| 2          | 2              |
 
 Spark output:
 
@@ -138,10 +140,10 @@ SELECT t1.id + ABS(id), ABS(id * t1.id) FROM t1;
 
 Datafusion Arrow record batches output:
 
-| id + abs(id) | abs(id \* id) |
-| ------------ | ------------- |
-| 2            | 1             |
-| 4            | 4             |
+| t1.id + abs(t1.id) | abs(t1.id \* t1.id) |
+| ------------------ | ------------------- |
+| 2                  | 1                   |
+| 4                  | 4                   |
 
 Spark output:
 
