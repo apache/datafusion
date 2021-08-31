@@ -17,13 +17,34 @@
   under the License.
 -->
 
-# Using DataFusion as a library
+## Deploying a standalone Ballista cluster using cargo install
 
-DataFusion is [published on crates.io](https://crates.io/crates/datafusion), and is [well documented on docs.rs](https://docs.rs/datafusion/).
+A simple way to start a local cluster for testing purposes is to use cargo to install
+the scheduler and executor crates.
 
-To get started, add the following to your `Cargo.toml` file:
+```bash
+cargo install ballista-scheduler
+cargo install ballista-executor
+```
 
-```toml
-[dependencies]
-datafusion = "5.1.0"
+With these crates installed, it is now possible to start a scheduler process.
+
+```bash
+RUST_LOG=info ballista-scheduler
+```
+
+The scheduler will bind to port 50050 by default.
+
+Next, start an executor processes in a new terminal session with the specified concurrency
+level.
+
+```bash
+RUST_LOG=info ballista-executor -c 4
+```
+
+The executor will bind to port 50051 by default. Additional executors can be started by
+manually specifying a bind port. For example:
+
+```bash
+RUST_LOG=info ballista-executor --bind-port 50052 -c 4
 ```
