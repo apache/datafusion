@@ -50,7 +50,9 @@ use pin_project_lite::pin_project;
 
 use async_trait::async_trait;
 
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::metrics::{
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
+};
 use super::{expressions::Column, RecordBatchStream, SendableRecordBatchStream};
 
 /// Hash aggregate modes
@@ -207,7 +209,7 @@ impl ExecutionPlan for HashAggregateExec {
         let input = self.input.execute(partition).await?;
         let group_expr = self.group_expr.iter().map(|x| x.0.clone()).collect();
 
-        let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         if self.group_expr.is_empty() {
             Ok(Box::pin(HashAggregateStream::new(
@@ -215,6 +217,7 @@ impl ExecutionPlan for HashAggregateExec {
                 self.schema.clone(),
                 self.aggr_expr.clone(),
                 input,
+                baseline_metrics,
             )))
         } else {
             Ok(Box::pin(GroupedHashAggregateStream::new(
@@ -223,7 +226,7 @@ impl ExecutionPlan for HashAggregateExec {
                 group_expr,
                 self.aggr_expr.clone(),
                 input,
-                output_rows,
+                baseline_metrics,
             )))
         }
     }
@@ -315,7 +318,6 @@ pin_project! {
         #[pin]
         output: futures::channel::oneshot::Receiver<ArrowResult<RecordBatch>>,
         finished: bool,
-        output_rows: metrics::Count,
     }
 }
 
@@ -487,7 +489,9 @@ async fn compute_grouped_hash_aggregate(
     group_expr: Vec<Arc<dyn PhysicalExpr>>,
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     mut input: SendableRecordBatchStream,
+    elapsed_compute: metrics::Time,
 ) -> ArrowResult<RecordBatch> {
+    let timer = elapsed_compute.timer();
     // The expressions to evaluate the batch, one vec of expressions per aggregation.
     // Assume create_schema() always put group columns in front of aggr columns, we set
     // col_idx_base to group expression count.
@@ -499,8 +503,10 @@ async fn compute_grouped_hash_aggregate(
 
     // iterate over all input batches and update the accumulators
     let mut accumulators = Accumulators::default();
+    timer.done();
     while let Some(batch) = input.next().await {
         let batch = batch?;
+        let timer = elapsed_compute.timer();
         accumulators = group_aggregate_batch(
             &mode,
             &random_state,
@@ -511,9 +517,13 @@ async fn compute_grouped_hash_aggregate(
             &aggregate_expressions,
         )
         .map_err(DataFusionError::into_arrow_external_error)?;
+        timer.done();
     }
 
-    create_batch_from_map(&mode, &accumulators, group_expr.len(), &schema)
+    let timer = elapsed_compute.timer();
+    let batch = create_batch_from_map(&mode, &accumulators, group_expr.len(), &schema);
+    timer.done();
+    batch
 }
 
 impl GroupedHashAggregateStream {
@@ -524,11 +534,12 @@ impl GroupedHashAggregateStream {
         group_expr: Vec<Arc<dyn PhysicalExpr>>,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
-        output_rows: metrics::Count,
+        baseline_metrics: BaselineMetrics,
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
 
         let schema_clone = schema.clone();
+        let elapsed_compute = baseline_metrics.elapsed_compute().clone();
         tokio::spawn(async move {
             let result = compute_grouped_hash_aggregate(
                 mode,
@@ -536,8 +547,10 @@ impl GroupedHashAggregateStream {
                 group_expr,
                 aggr_expr,
                 input,
+                elapsed_compute,
             )
-            .await;
+            .await
+            .record_output(&baseline_metrics);
             tx.send(result)
         });
 
@@ -545,7 +558,6 @@ impl GroupedHashAggregateStream {
             schema,
             output: rx,
             finished: false,
-            output_rows,
         }
     }
 }
@@ -604,8 +616,6 @@ impl Stream for GroupedHashAggregateStream {
             return Poll::Ready(None);
         }
 
-        let output_rows = self.output_rows.clone();
-
         // is the output ready?
         let this = self.project();
         let output_poll = this.output.poll(cx);
@@ -619,10 +629,6 @@ impl Stream for GroupedHashAggregateStream {
                     Err(e) => Err(ArrowError::ExternalError(Box::new(e))), // error receiving
                     Ok(result) => result,
                 };
-
-                if let Ok(batch) = &result {
-                    output_rows.add(batch.num_rows())
-                }
 
                 Poll::Ready(Some(result))
             }
@@ -720,25 +726,33 @@ async fn compute_hash_aggregate(
     schema: SchemaRef,
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     mut input: SendableRecordBatchStream,
+    elapsed_compute: metrics::Time,
 ) -> ArrowResult<RecordBatch> {
+    let timer = elapsed_compute.timer();
     let mut accumulators = create_accumulators(&aggr_expr)
         .map_err(DataFusionError::into_arrow_external_error)?;
     let expressions = aggregate_expressions(&aggr_expr, &mode, 0)
         .map_err(DataFusionError::into_arrow_external_error)?;
     let expressions = Arc::new(expressions);
+    timer.done();
 
     // 1 for each batch, update / merge accumulators with the expressions' values
     // future is ready when all batches are computed
     while let Some(batch) = input.next().await {
         let batch = batch?;
+        let timer = elapsed_compute.timer();
         aggregate_batch(&mode, &batch, &mut accumulators, &expressions)
             .map_err(DataFusionError::into_arrow_external_error)?;
+        timer.done();
     }
 
     // 2. convert values to a record batch
-    finalize_aggregation(&accumulators, &mode)
+    let timer = elapsed_compute.timer();
+    let batch = finalize_aggregation(&accumulators, &mode)
         .map(|columns| RecordBatch::try_new(schema.clone(), columns))
-        .map_err(DataFusionError::into_arrow_external_error)?
+        .map_err(DataFusionError::into_arrow_external_error)?;
+    timer.done();
+    batch
 }
 
 impl HashAggregateStream {
@@ -748,13 +762,23 @@ impl HashAggregateStream {
         schema: SchemaRef,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
+        baseline_metrics: BaselineMetrics,
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
 
         let schema_clone = schema.clone();
+        let elapsed_compute = baseline_metrics.elapsed_compute().clone();
         tokio::spawn(async move {
-            let result =
-                compute_hash_aggregate(mode, schema_clone, aggr_expr, input).await;
+            let result = compute_hash_aggregate(
+                mode,
+                schema_clone,
+                aggr_expr,
+                input,
+                elapsed_compute,
+            )
+            .await
+            .record_output(&baseline_metrics);
+
             tx.send(result)
         });
 
