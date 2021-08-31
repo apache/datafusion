@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
 
 use crate::datasource::object_store::{
-    FileMeta, FileMetaStream, ObjectReader, ObjectStore,
+    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
 use crate::error::DataFusionError;
 use crate::error::Result;
@@ -35,12 +35,16 @@ pub struct LocalFileSystem;
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn list(
-        &self,
-        prefix: &str,
-        _delimiter: Option<String>,
-    ) -> Result<FileMetaStream> {
+    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
         list_all(prefix.to_owned()).await
+    }
+
+    async fn list_dir(
+        &self,
+        _prefix: &str,
+        _delimiter: Option<String>,
+    ) -> Result<ListEntryStream> {
+        todo!()
     }
 
     fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {

@@ -43,6 +43,15 @@ pub trait ObjectReader {
     fn length(&self) -> u64;
 }
 
+/// Represents a file or a prefix that may require further resolution
+#[derive(Debug)]
+pub enum ListEntry {
+    /// File metadata
+    FileMeta(FileMeta),
+    /// Prefix to be further resolved during partition discovery
+    Prefix(String),
+}
+
 /// File meta we got from object store
 #[derive(Debug)]
 pub struct FileMeta {
@@ -58,17 +67,24 @@ pub struct FileMeta {
 pub type FileMetaStream =
     Pin<Box<dyn Stream<Item = Result<FileMeta>> + Send + Sync + 'static>>;
 
+/// Stream of list entries get from object store
+pub type ListEntryStream =
+    Pin<Box<dyn Stream<Item = Result<ListEntry>> + Send + Sync + 'static>>;
+
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
 #[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
-    /// Returns all the files in path `prefix`, or all paths between
-    /// the `prefix` and the first occurrence of the delimiter if it is provided.
-    async fn list(
+    /// Returns all the files in path `prefix`
+    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream>;
+
+    /// Returns all the files in `prefix` if the `prefix` is already a leaf dir,
+    /// or all paths between the `prefix` and the first occurrence of the `delimiter` if it is provided.
+    async fn list_dir(
         &self,
         prefix: &str,
         delimiter: Option<String>,
-    ) -> Result<FileMetaStream>;
+    ) -> Result<ListEntryStream>;
 
     /// Get object reader for one file
     fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
