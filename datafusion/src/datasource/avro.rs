@@ -180,6 +180,7 @@ impl TableProvider for AvroFile {
 }
 
 #[cfg(test)]
+#[cfg(feature = "avro")]
 mod tests {
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
