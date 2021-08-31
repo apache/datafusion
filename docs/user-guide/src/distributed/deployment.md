@@ -19,8 +19,10 @@
 
 # Deployment
 
-Ballista is packaged as Docker images. Refer to the following guides to create a Ballista cluster:
+There are multiple ways that a Ballista cluster can be deployed.
 
-- [Create a cluster using Docker](standalone.md)
+- [Create a cluster using Cargo install](cargo-install.md)
+- [Create a cluster using Docker](docker.md)
 - [Create a cluster using Docker Compose](docker-compose.md)
 - [Create a cluster using Kubernetes](kubernetes.md)
+- [Create a cluster on Raspberry Pi](raspberrypi.md)

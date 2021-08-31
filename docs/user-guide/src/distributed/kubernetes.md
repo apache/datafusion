@@ -20,15 +20,24 @@
 # Deploying Ballista with Kubernetes
 
 Ballista can be deployed to any Kubernetes cluster using the following instructions. These instructions assume that
-you are already comfortable with managing Kubernetes deployments.
+you are already comfortable managing Kubernetes deployments.
 
-The k8s deployment consists of:
+The Ballista deployment consists of:
 
 - k8s deployment for one or more scheduler processes
 - k8s deployment for one or more executor processes
 - k8s service to route traffic to the schedulers
 - k8s persistent volume and persistent volume claims to make local data accessible to Ballista
 - _(optional)_ a [keda](http://keda.sh) instance for autoscaling the number of executors
+
+## Testing locally
+
+[Microk8s](https://microk8s.io/) is recommended for installing a local k8s cluster. Once Microk8s is installed, DNS
+must be enabled using the following command.
+
+```bash
+microk8s enable dns
+```
 
 ## Limitations
 
@@ -39,13 +48,28 @@ Ballista is at an early stage of development and therefore has some significant 
 - Only a single scheduler instance is currently supported unless the scheduler is configured to use `etcd` as a
   backing store.
 
+## Build Docker image
+
+There is no officially published Docker image so it is currently necessary to build the image from source instead.
+
+Run the following commands to clone the source repository and build the Docker image.
+
+```bash
+git clone git@github.com:apache/arrow-datafusion.git -b 5.1.0
+cd arrow-datafusion
+./dev/build-ballista-docker.sh
+```
+
+This will create an image with the tag `ballista:0.6.0`.
+
 ## Publishing your images
 
-Currently there are no official Ballista images that work with the instructions in this guide. For the time being,
-you will need to build and publish your own images. You can do that by invoking the `dev/build-ballista-docker.sh`.
+Once the images have been built, you can retag them and can push them to your favourite docker registry.
 
-Once the images have been built, you can retag them with `docker tag ballista:0.5.0-SNAPSHOT <new-image-name>` so you
-can push them to your favourite docker registry.
+```bash
+docker tag ballista:0.6.0 <your-repo>/ballista:0.6.0
+docker push <your-repo>/ballista:0.6.0
+```
 
 ## Create Persistent Volume and Persistent Volume Claim
 
@@ -130,7 +154,7 @@ spec:
     spec:
       containers:
         - name: ballista-scheduler
-          image: <your-image>
+          image: <your-repo>/ballista:0.6.0
           command: ["/scheduler"]
           args: ["--bind-port=50050"]
           ports:
@@ -161,7 +185,7 @@ spec:
     spec:
       containers:
         - name: ballista-executor
-          image: <your-image>
+          image: <your-repo>/ballista:0.6.0
           command: ["/executor"]
           args:
             - "--bind-port=50051"
@@ -205,9 +229,29 @@ You can view the scheduler logs with `kubectl logs ballista-scheduler-0`:
 
 ```
 $ kubectl logs ballista-scheduler-0
-[2021-02-19T00:24:01Z INFO  scheduler] Ballista v0.4.2-SNAPSHOT Scheduler listening on 0.0.0.0:50050
+[2021-02-19T00:24:01Z INFO  scheduler] Ballista v0.6.0 Scheduler listening on 0.0.0.0:50050
 [2021-02-19T00:24:16Z INFO  ballista::scheduler] Received register_executor request for ExecutorMetadata { id: "b5e81711-1c5c-46ec-8522-d8b359793188", host: "10.1.23.149", port: 50051 }
 [2021-02-19T00:24:17Z INFO  ballista::scheduler] Received register_executor request for ExecutorMetadata { id: "816e4502-a876-4ed8-b33f-86d243dcf63f", host: "10.1.23.150", port: 50051 }
+```
+
+## Port Forwarding
+
+If you want to run applications outside of the cluster and have them connect to the scheduler then it is necessary to
+set up port forwarding.
+
+First, check that the `ballista-scheduler` service is running.
+
+```bash
+$ kubectl get services
+NAME                 TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)     AGE
+kubernetes           ClusterIP   10.152.183.1    <none>        443/TCP     26h
+ballista-scheduler   ClusterIP   10.152.183.21   <none>        50050/TCP   24m
+```
+
+Use the following command to set up port-forwarding.
+
+```bash
+kubectl port-forward service/ballista-scheduler 50050:50050
 ```
 
 ## Deleting the Ballista cluster
