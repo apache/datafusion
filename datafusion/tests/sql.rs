@@ -2247,7 +2247,14 @@ async fn explain_analyze_baseline_metrics() {
     let mut ctx = ExecutionContext::with_config(config);
     register_aggregate_csv_by_sql(&mut ctx).await;
     // a query with as many operators as we have metrics for
-    let sql = "EXPLAIN ANALYZE select count(*) from (SELECT count(*), c1 FROM aggregate_test_100 group by c1 ORDER BY c1)";
+    let sql = "EXPLAIN ANALYZE \
+               select count(*) from \
+               (SELECT count(*), c1 \
+               FROM aggregate_test_100 \
+               WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434' \
+               GROUP BY c1 \
+               ORDER BY c1)";
+    println!("running query: {}", sql);
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
@@ -2274,6 +2281,11 @@ async fn explain_analyze_baseline_metrics() {
         &formatted,
         "SortExec: [c1@0 ASC]",
         "metrics=[output_rows=5, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
+        "metrics=[output_rows=99, elapsed_compute="
     );
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
