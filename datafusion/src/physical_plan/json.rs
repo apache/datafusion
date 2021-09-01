@@ -19,6 +19,7 @@
 use async_trait::async_trait;
 use futures::Stream;
 
+use super::DisplayFormatType;
 use super::{common, source::Source, ExecutionPlan, Partitioning, RecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
@@ -308,6 +309,18 @@ impl ExecutionPlan for NdJsonExec {
                             .to_string(),
                     ))
                 }
+            }
+        }
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "NdJsonExec: source={:?}", self.source)
             }
         }
     }

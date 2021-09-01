@@ -195,10 +195,39 @@ pub fn from_plan(
             schema: schema.clone(),
             alias: alias.clone(),
         }),
+        LogicalPlan::Analyze {
+            verbose, schema, ..
+        } => {
+            assert!(expr.is_empty());
+            assert_eq!(inputs.len(), 1);
+            Ok(LogicalPlan::Analyze {
+                verbose: *verbose,
+                schema: schema.clone(),
+                input: Arc::new(inputs[0].clone()),
+            })
+        }
+        LogicalPlan::Explain { .. } => {
+            // Explain should be handled specially in the optimizers;
+            // If this assert fails it means some optimizer pass is
+            // trying to optimize Explain directly
+            assert!(
+                expr.is_empty(),
+                "Explain can not be created from utils::from_expr"
+            );
+            assert!(
+                inputs.is_empty(),
+                "Explain can not be created from utils::from_expr"
+            );
+            Ok(plan.clone())
+        }
         LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::TableScan { .. }
-        | LogicalPlan::CreateExternalTable { .. }
-        | LogicalPlan::Explain { .. } => Ok(plan.clone()),
+        | LogicalPlan::CreateExternalTable { .. } => {
+            // All of these plan types have no inputs / exprs so should not be called
+            assert!(expr.is_empty(), "{:?} should have no exprs", plan);
+            assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
+            Ok(plan.clone())
+        }
     }
 }
 

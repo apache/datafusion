@@ -23,13 +23,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ballista_core::config::BallistaConfig;
-use ballista_core::{datasource::DfTableAdapter, utils::create_datafusion_context};
+use ballista_core::{
+    datasource::DfTableAdapter, utils::create_df_ctx_with_ballista_query_planner,
+};
 
 use datafusion::catalog::TableReference;
 use datafusion::dataframe::DataFrame;
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::dataframe_impl::DataFrameImpl;
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::csv::CsvReadOptions;
+use datafusion::sql::parser::FileType;
 
 struct BallistaContextState {
     /// Ballista configuration
@@ -129,12 +133,14 @@ impl BallistaContext {
         let path = fs::canonicalize(&path)?;
 
         // use local DataFusion context for now but later this might call the scheduler
-        let guard = self.state.lock().unwrap();
-        let mut ctx = create_datafusion_context(
-            &guard.scheduler_host,
-            guard.scheduler_port,
-            guard.config(),
-        );
+        let mut ctx = {
+            let guard = self.state.lock().unwrap();
+            create_df_ctx_with_ballista_query_planner(
+                &guard.scheduler_host,
+                guard.scheduler_port,
+                guard.config(),
+            )
+        };
         let df = ctx.read_parquet(path.to_str().unwrap())?;
         Ok(df)
     }
@@ -151,12 +157,14 @@ impl BallistaContext {
         let path = fs::canonicalize(&path)?;
 
         // use local DataFusion context for now but later this might call the scheduler
-        let guard = self.state.lock().unwrap();
-        let mut ctx = create_datafusion_context(
-            &guard.scheduler_host,
-            guard.scheduler_port,
-            guard.config(),
-        );
+        let mut ctx = {
+            let guard = self.state.lock().unwrap();
+            create_df_ctx_with_ballista_query_planner(
+                &guard.scheduler_host,
+                guard.scheduler_port,
+                guard.config(),
+            )
+        };
         let df = ctx.read_csv(path.to_str().unwrap(), options)?;
         Ok(df)
     }
@@ -187,23 +195,59 @@ impl BallistaContext {
 
     /// Create a DataFrame from a SQL statement
     pub fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
-        // use local DataFusion context for now but later this might call the scheduler
-        // register tables
-        let state = self.state.lock().unwrap();
-        let mut ctx = create_datafusion_context(
-            &state.scheduler_host,
-            state.scheduler_port,
-            state.config(),
-        );
-        for (name, plan) in &state.tables {
-            let plan = ctx.optimize(plan)?;
-            let execution_plan = ctx.create_physical_plan(&plan)?;
-            ctx.register_table(
-                TableReference::Bare { table: name },
-                Arc::new(DfTableAdapter::new(plan, execution_plan)),
-            )?;
+        let mut ctx = {
+            let state = self.state.lock().unwrap();
+            create_df_ctx_with_ballista_query_planner(
+                &state.scheduler_host,
+                state.scheduler_port,
+                state.config(),
+            )
+        };
+
+        // register tables with DataFusion context
+        {
+            let state = self.state.lock().unwrap();
+            for (name, plan) in &state.tables {
+                let plan = ctx.optimize(plan)?;
+                let execution_plan = ctx.create_physical_plan(&plan)?;
+                ctx.register_table(
+                    TableReference::Bare { table: name },
+                    Arc::new(DfTableAdapter::new(plan, execution_plan)),
+                )?;
+            }
         }
-        ctx.sql(sql)
+
+        let plan = ctx.create_logical_plan(sql)?;
+        match plan {
+            LogicalPlan::CreateExternalTable {
+                ref schema,
+                ref name,
+                ref location,
+                ref file_type,
+                ref has_header,
+            } => match file_type {
+                FileType::CSV => {
+                    self.register_csv(
+                        name,
+                        location,
+                        CsvReadOptions::new()
+                            .schema(&schema.as_ref().to_owned().into())
+                            .has_header(*has_header),
+                    )?;
+                    Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
+                }
+                FileType::Parquet => {
+                    self.register_parquet(name, location)?;
+                    Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
+                }
+                _ => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported file type {:?}.",
+                    file_type
+                ))),
+            },
+
+            _ => ctx.sql(sql),
+        }
     }
 }
 

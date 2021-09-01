@@ -22,8 +22,11 @@
 use super::super::proto_error;
 use crate::datasource::DfTableAdapter;
 use crate::serde::{protobuf, BallistaError};
-use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-use datafusion::datasource::CsvFile;
+use datafusion::arrow::datatypes::{
+    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit,
+};
+use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
+use datafusion::datasource::{CsvFile, PartitionedFile, TableDescriptor};
 use datafusion::logical_plan::{
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
     Column, Expr, JoinConstraint, JoinType, LogicalPlan,
@@ -249,6 +252,58 @@ impl TryInto<DataType> for &protobuf::ArrowType {
                     Box::new(pb_value.as_ref().try_into()?),
                 )
             }
+        })
+    }
+}
+
+impl From<&ColumnStatistics> for protobuf::ColumnStats {
+    fn from(cs: &ColumnStatistics) -> protobuf::ColumnStats {
+        protobuf::ColumnStats {
+            min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
+            max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
+            null_count: cs.null_count.map(|n| n as u32).unwrap_or(0),
+            distinct_count: cs.distinct_count.map(|n| n as u32).unwrap_or(0),
+        }
+    }
+}
+
+impl From<&Statistics> for protobuf::Statistics {
+    fn from(s: &Statistics) -> protobuf::Statistics {
+        let none_value = -1_i64;
+        let column_stats = match &s.column_statistics {
+            None => vec![],
+            Some(column_stats) => column_stats.iter().map(|s| s.into()).collect(),
+        };
+        protobuf::Statistics {
+            num_rows: s.num_rows.map(|n| n as i64).unwrap_or(none_value),
+            total_byte_size: s.total_byte_size.map(|n| n as i64).unwrap_or(none_value),
+            column_stats,
+        }
+    }
+}
+
+impl From<&PartitionedFile> for protobuf::PartitionedFile {
+    fn from(pf: &PartitionedFile) -> protobuf::PartitionedFile {
+        protobuf::PartitionedFile {
+            path: pf.path.clone(),
+            statistics: Some((&pf.statistics).into()),
+        }
+    }
+}
+
+impl TryFrom<TableDescriptor> for protobuf::TableDescriptor {
+    type Error = BallistaError;
+
+    fn try_from(desc: TableDescriptor) -> Result<protobuf::TableDescriptor, Self::Error> {
+        let partition_files: Vec<protobuf::PartitionedFile> =
+            desc.partition_files.iter().map(|pf| pf.into()).collect();
+
+        let schema: protobuf::Schema = desc.schema.into();
+
+        Ok(protobuf::TableDescriptor {
+            path: desc.path,
+            partition_files,
+            schema: Some(schema),
         })
     }
 }
@@ -706,13 +761,14 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     .collect::<Result<Vec<_>, _>>()?;
 
                 if let Some(parquet) = source.downcast_ref::<ParquetTable>() {
+                    let table_desc: protobuf::TableDescriptor =
+                        parquet.desc.descriptor.clone().try_into()?;
                     Ok(protobuf::LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ParquetScan(
                             protobuf::ParquetTableScanNode {
                                 table_name: table_name.to_owned(),
-                                path: parquet.path().to_owned(),
+                                table_desc: Some(table_desc),
                                 projection,
-                                schema: Some(schema),
                                 filters,
                             },
                         )),
@@ -931,6 +987,17 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )),
                 })
             }
+            LogicalPlan::Analyze { verbose, input, .. } => {
+                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Analyze(Box::new(
+                        protobuf::AnalyzeNode {
+                            input: Some(Box::new(input)),
+                            verbose: *verbose,
+                        },
+                    ))),
+                })
+            }
             LogicalPlan::Explain { verbose, plan, .. } => {
                 let input: protobuf::LogicalPlanNode = plan.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
@@ -944,7 +1011,18 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
             }
             LogicalPlan::Extension { .. } => unimplemented!(),
             LogicalPlan::Union { .. } => unimplemented!(),
-            LogicalPlan::CrossJoin { .. } => unimplemented!(),
+            LogicalPlan::CrossJoin { left, right, .. } => {
+                let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
+                let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::CrossJoin(Box::new(
+                        protobuf::CrossJoinNode {
+                            left: Some(Box::new(left)),
+                            right: Some(Box::new(right)),
+                        },
+                    ))),
+                })
+            }
         }
     }
 }
@@ -1065,7 +1143,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
             Expr::ScalarVariable(_) => unimplemented!(),
             Expr::ScalarFunction { ref fun, ref args } => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
-                let expr: Vec<protobuf::LogicalExprNode> = args
+                let args: Vec<protobuf::LogicalExprNode> = args
                     .iter()
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<protobuf::LogicalExprNode>, BallistaError>>()?;
@@ -1074,7 +1152,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                         protobuf::logical_expr_node::ExprType::ScalarFunction(
                             protobuf::ScalarFunctionNode {
                                 fun: fun.into(),
-                                expr,
+                                args,
                             },
                         ),
                     ),
@@ -1240,6 +1318,19 @@ impl Into<protobuf::Schema> for &Schema {
     }
 }
 
+#[allow(clippy::from_over_into)]
+impl Into<protobuf::Schema> for SchemaRef {
+    fn into(self) -> protobuf::Schema {
+        protobuf::Schema {
+            columns: self
+                .fields()
+                .iter()
+                .map(protobuf::Field::from)
+                .collect::<Vec<_>>(),
+        }
+    }
+}
+
 impl From<&datafusion::logical_plan::DFField> for protobuf::DfField {
     fn from(f: &datafusion::logical_plan::DFField) -> protobuf::DfField {
         protobuf::DfField {
@@ -1374,6 +1465,7 @@ impl TryInto<protobuf::ScalarFunction> for &BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Array => Ok(protobuf::ScalarFunction::Array),
             BuiltinScalarFunction::NullIf => Ok(protobuf::ScalarFunction::Nullif),
+            BuiltinScalarFunction::DatePart => Ok(protobuf::ScalarFunction::Datepart),
             BuiltinScalarFunction::DateTrunc => Ok(protobuf::ScalarFunction::Datetrunc),
             BuiltinScalarFunction::MD5 => Ok(protobuf::ScalarFunction::Md5),
             BuiltinScalarFunction::SHA224 => Ok(protobuf::ScalarFunction::Sha224),

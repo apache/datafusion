@@ -31,6 +31,7 @@ use crate::{
     physical_plan::{collect, collect_partitioned},
 };
 
+use crate::arrow::util::pretty;
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
 };
@@ -156,6 +157,18 @@ impl DataFrame for DataFrameImpl {
         Ok(collect(plan).await?)
     }
 
+    /// Print results.
+    async fn show(&self) -> Result<()> {
+        let results = self.collect().await?;
+        Ok(pretty::print_batches(&results)?)
+    }
+
+    /// Print results and limit rows.
+    async fn show_limit(&self, num: usize) -> Result<()> {
+        let results = self.limit(num)?.collect().await?;
+        Ok(pretty::print_batches(&results)?)
+    }
+
     /// Convert the logical plan represented by this DataFrame into a physical plan and
     /// execute it, returning a stream over a single partition
     async fn execute_stream(&self) -> Result<SendableRecordBatchStream> {
@@ -183,9 +196,9 @@ impl DataFrame for DataFrameImpl {
         self.plan.schema()
     }
 
-    fn explain(&self, verbose: bool) -> Result<Arc<dyn DataFrame>> {
+    fn explain(&self, verbose: bool, analyze: bool) -> Result<Arc<dyn DataFrame>> {
         let plan = LogicalPlanBuilder::from(self.to_logical_plan())
-            .explain(verbose)?
+            .explain(verbose, analyze)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
     }
@@ -264,15 +277,15 @@ mod tests {
 
         assert_batches_sorted_eq!(
             vec![
-            "+----+----------------------+--------------------+---------------------+--------------------+------------+---------------------+",
-            "| c1 | MIN(c12)             | MAX(c12)           | AVG(c12)            | SUM(c12)           | COUNT(c12) | COUNT(DISTINCT c12) |",
-            "+----+----------------------+--------------------+---------------------+--------------------+------------+---------------------+",
-            "| a  | 0.02182578039211991  | 0.9800193410444061 | 0.48754517466109415 | 10.238448667882977 | 21         | 21                  |",
-            "| b  | 0.04893135681998029  | 0.9185813970744787 | 0.41040709263815384 | 7.797734760124923  | 19         | 19                  |",
-            "| c  | 0.0494924465469434   | 0.991517828651004  | 0.6600456536439784  | 13.860958726523545 | 21         | 21                  |",
-            "| d  | 0.061029375346466685 | 0.9748360509016578 | 0.48855379387549824 | 8.793968289758968  | 18         | 18                  |",
-            "| e  | 0.01479305307777301  | 0.9965400387585364 | 0.48600669271341534 | 10.206140546981722 | 21         | 21                  |",
-            "+----+----------------------+--------------------+---------------------+--------------------+------------+---------------------+",
+                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
+                "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) | AVG(aggregate_test_100.c12) | SUM(aggregate_test_100.c12) | COUNT(aggregate_test_100.c12) | COUNT(DISTINCT aggregate_test_100.c12) |",
+                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
+                "| a  | 0.02182578039211991         | 0.9800193410444061          | 0.48754517466109415         | 10.238448667882977          | 21                            | 21                                     |",
+                "| b  | 0.04893135681998029         | 0.9185813970744787          | 0.41040709263815384         | 7.797734760124923           | 19                            | 19                                     |",
+                "| c  | 0.0494924465469434          | 0.991517828651004           | 0.6600456536439784          | 13.860958726523545          | 21                            | 21                                     |",
+                "| d  | 0.061029375346466685        | 0.9748360509016578          | 0.48855379387549824         | 8.793968289758968           | 18                            | 18                                     |",
+                "| e  | 0.01479305307777301         | 0.9965400387585364          | 0.48600669271341534         | 10.206140546981722          | 21                            | 21                                     |",
+                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
             ],
             &df
         );
@@ -318,7 +331,7 @@ mod tests {
         let df = df
             .select_columns(&["c1", "c2", "c11"])?
             .limit(10)?
-            .explain(false)?;
+            .explain(false, false)?;
         let plan = df.to_logical_plan();
 
         // build query using SQL

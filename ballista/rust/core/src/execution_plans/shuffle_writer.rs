@@ -45,10 +45,13 @@ use datafusion::arrow::ipc::writer::FileWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::hash_utils::create_hashes;
+use datafusion::physical_plan::metrics::{
+    self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::Partitioning::RoundRobinBatch;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream, SQLMetric,
+    DisplayFormatType, ExecutionPlan, Metric, Partitioning, RecordBatchStream,
 };
 use futures::StreamExt;
 use hashbrown::HashMap;
@@ -71,24 +74,30 @@ pub struct ShuffleWriterExec {
     work_dir: String,
     /// Optional shuffle output partitioning
     shuffle_output_partitioning: Option<Partitioning>,
-    /// Shuffle write metrics
-    metrics: ShuffleWriteMetrics,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 #[derive(Debug, Clone)]
 struct ShuffleWriteMetrics {
     /// Time spend writing batches to shuffle files
-    write_time: Arc<SQLMetric>,
-    input_rows: Arc<SQLMetric>,
-    output_rows: Arc<SQLMetric>,
+    write_time: metrics::Time,
+    input_rows: metrics::Count,
+    output_rows: metrics::Count,
 }
 
 impl ShuffleWriteMetrics {
-    fn new() -> Self {
+    fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        let write_time = MetricBuilder::new(metrics).subset_time("write_time", partition);
+
+        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+
+        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
+
         Self {
-            write_time: SQLMetric::time_nanos(),
-            input_rows: SQLMetric::counter(),
-            output_rows: SQLMetric::counter(),
+            write_time,
+            input_rows,
+            output_rows,
         }
     }
 }
@@ -108,7 +117,7 @@ impl ShuffleWriterExec {
             plan,
             work_dir,
             shuffle_output_partitioning,
-            metrics: ShuffleWriteMetrics::new(),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -139,9 +148,11 @@ impl ShuffleWriterExec {
         path.push(&self.job_id);
         path.push(&format!("{}", self.stage_id));
 
+        let write_metrics = ShuffleWriteMetrics::new(input_partition, &self.metrics);
+
         match &self.shuffle_output_partitioning {
             None => {
-                let start = Instant::now();
+                let timer = write_metrics.write_time.timer();
                 path.push(&format!("{}", input_partition));
                 std::fs::create_dir_all(&path)?;
                 path.push("data.arrow");
@@ -152,18 +163,18 @@ impl ShuffleWriterExec {
                 let stats = utils::write_stream_to_disk(
                     &mut stream,
                     path,
-                    self.metrics.write_time.clone(),
+                    &write_metrics.write_time,
                 )
                 .await
                 .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
 
-                self.metrics
+                write_metrics
                     .input_rows
                     .add(stats.num_rows.unwrap_or(0) as usize);
-                self.metrics
+                write_metrics
                     .output_rows
                     .add(stats.num_rows.unwrap_or(0) as usize);
-                self.metrics.write_time.add_elapsed(start);
+                timer.done();
 
                 info!(
                     "Executed partition {} in {} seconds. Statistics: {}",
@@ -197,7 +208,7 @@ impl ShuffleWriterExec {
                 while let Some(result) = stream.next().await {
                     let input_batch = result?;
 
-                    self.metrics.input_rows.add(input_batch.num_rows());
+                    write_metrics.input_rows.add(input_batch.num_rows());
 
                     let arrays = exprs
                         .iter()
@@ -239,7 +250,7 @@ impl ShuffleWriterExec {
 
                         //TODO optimize so we don't write or fetch empty partitions
                         //if output_batch.num_rows() > 0 {
-                        let start = Instant::now();
+                        let timer = write_metrics.write_time.timer();
                         match &mut writers[output_partition] {
                             Some(w) => {
                                 w.write(&output_batch)?;
@@ -260,9 +271,8 @@ impl ShuffleWriterExec {
                                 writers[output_partition] = Some(writer);
                             }
                         }
-                        self.metrics.output_rows.add(output_batch.num_rows());
-                        self.metrics.write_time.add_elapsed(start);
-                        //}
+                        write_metrics.output_rows.add(output_batch.num_rows());
+                        timer.done();
                     }
                 }
 
@@ -388,12 +398,8 @@ impl ExecutionPlan for ShuffleWriterExec {
         Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
     }
 
-    fn metrics(&self) -> HashMap<String, SQLMetric> {
-        let mut metrics = HashMap::new();
-        metrics.insert("inputRows".to_owned(), (*self.metrics.input_rows).clone());
-        metrics.insert("outputRows".to_owned(), (*self.metrics.output_rows).clone());
-        metrics.insert("writeTime".to_owned(), (*self.metrics.write_time).clone());
-        metrics
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn fmt_as(

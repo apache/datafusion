@@ -81,8 +81,8 @@ struct BallistaBenchmarkOpt {
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
 
-    /// Number of partitions to create when using MemTable as input
-    #[structopt(short = "n", long = "partitions", default_value = "8")]
+    /// Number of partitions to process in parallel
+    #[structopt(short = "p", long = "partitions", default_value = "2")]
     partitions: usize,
 
     /// Ballista executor host
@@ -92,10 +92,6 @@ struct BallistaBenchmarkOpt {
     /// Ballista executor port
     #[structopt(long = "port")]
     port: Option<u16>,
-
-    /// Number of shuffle partitions
-    #[structopt(short, long, default_value = "2")]
-    shuffle_partitions: usize,
 }
 
 #[derive(Debug, StructOpt, Clone)]
@@ -112,9 +108,9 @@ struct DataFusionBenchmarkOpt {
     #[structopt(short = "i", long = "iterations", default_value = "3")]
     iterations: usize,
 
-    /// Number of threads to use for parallel execution
-    #[structopt(short = "c", long = "concurrency", default_value = "2")]
-    concurrency: usize,
+    /// Number of partitions to process in parallel
+    #[structopt(short = "p", long = "partitions", default_value = "2")]
+    partitions: usize,
 
     /// Batch size when reading CSV or Parquet files
     #[structopt(short = "s", long = "batch-size", default_value = "8192")]
@@ -131,10 +127,6 @@ struct DataFusionBenchmarkOpt {
     /// Load the data into a MemTable before executing the query
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
-
-    /// Number of partitions to create when using MemTable as input
-    #[structopt(short = "n", long = "partitions", default_value = "8")]
-    partitions: usize,
 }
 
 #[derive(Debug, StructOpt)]
@@ -152,7 +144,7 @@ struct ConvertOpt {
     file_format: String,
 
     /// Compression to use when writing Parquet files
-    #[structopt(short = "c", long = "compression", default_value = "snappy")]
+    #[structopt(short = "c", long = "compression", default_value = "zstd")]
     compression: String,
 
     /// Number of partitions to produce
@@ -203,7 +195,7 @@ async fn main() -> Result<()> {
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let config = ExecutionConfig::new()
-        .with_concurrency(opt.concurrency)
+        .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size);
     let mut ctx = ExecutionContext::with_config(config);
 
@@ -213,7 +205,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
             opt.path.to_str().unwrap(),
             table,
             opt.file_format.as_str(),
-            opt.concurrency,
+            opt.partitions,
         )?;
         if opt.mem_table {
             println!("Loading table '{}' into memory", table);
@@ -257,7 +249,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     let config = BallistaConfig::builder()
         .set(
             BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
-            &format!("{}", opt.shuffle_partitions),
+            &format!("{}", opt.partitions),
         )
         .build()
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
@@ -451,7 +443,7 @@ fn get_table(
     path: &str,
     table: &str,
     table_format: &str,
-    max_concurrency: usize,
+    max_partitions: usize,
 ) -> Result<Arc<dyn TableProvider>> {
     match table_format {
         // dbgen creates .tbl ('|' delimited) files without header
@@ -475,7 +467,13 @@ fn get_table(
         }
         "parquet" => {
             let path = format!("{}/{}", path, table);
-            Ok(Arc::new(ParquetTable::try_new(&path, max_concurrency)?))
+            let schema = get_schema(table);
+            Ok(Arc::new(ParquetTable::try_new_with_schema(
+                &path,
+                schema,
+                max_partitions,
+                false,
+            )?))
         }
         other => {
             unimplemented!("Invalid file format '{}'", other);
@@ -490,7 +488,7 @@ fn get_schema(table: &str) -> Schema {
 
     match table {
         "part" => Schema::new(vec![
-            Field::new("p_partkey", DataType::Int32, false),
+            Field::new("p_partkey", DataType::Int64, false),
             Field::new("p_name", DataType::Utf8, false),
             Field::new("p_mfgr", DataType::Utf8, false),
             Field::new("p_brand", DataType::Utf8, false),
@@ -502,28 +500,28 @@ fn get_schema(table: &str) -> Schema {
         ]),
 
         "supplier" => Schema::new(vec![
-            Field::new("s_suppkey", DataType::Int32, false),
+            Field::new("s_suppkey", DataType::Int64, false),
             Field::new("s_name", DataType::Utf8, false),
             Field::new("s_address", DataType::Utf8, false),
-            Field::new("s_nationkey", DataType::Int32, false),
+            Field::new("s_nationkey", DataType::Int64, false),
             Field::new("s_phone", DataType::Utf8, false),
             Field::new("s_acctbal", DataType::Float64, false),
             Field::new("s_comment", DataType::Utf8, false),
         ]),
 
         "partsupp" => Schema::new(vec![
-            Field::new("ps_partkey", DataType::Int32, false),
-            Field::new("ps_suppkey", DataType::Int32, false),
+            Field::new("ps_partkey", DataType::Int64, false),
+            Field::new("ps_suppkey", DataType::Int64, false),
             Field::new("ps_availqty", DataType::Int32, false),
             Field::new("ps_supplycost", DataType::Float64, false),
             Field::new("ps_comment", DataType::Utf8, false),
         ]),
 
         "customer" => Schema::new(vec![
-            Field::new("c_custkey", DataType::Int32, false),
+            Field::new("c_custkey", DataType::Int64, false),
             Field::new("c_name", DataType::Utf8, false),
             Field::new("c_address", DataType::Utf8, false),
-            Field::new("c_nationkey", DataType::Int32, false),
+            Field::new("c_nationkey", DataType::Int64, false),
             Field::new("c_phone", DataType::Utf8, false),
             Field::new("c_acctbal", DataType::Float64, false),
             Field::new("c_mktsegment", DataType::Utf8, false),
@@ -531,8 +529,8 @@ fn get_schema(table: &str) -> Schema {
         ]),
 
         "orders" => Schema::new(vec![
-            Field::new("o_orderkey", DataType::Int32, false),
-            Field::new("o_custkey", DataType::Int32, false),
+            Field::new("o_orderkey", DataType::Int64, false),
+            Field::new("o_custkey", DataType::Int64, false),
             Field::new("o_orderstatus", DataType::Utf8, false),
             Field::new("o_totalprice", DataType::Float64, false),
             Field::new("o_orderdate", DataType::Date32, false),
@@ -543,9 +541,9 @@ fn get_schema(table: &str) -> Schema {
         ]),
 
         "lineitem" => Schema::new(vec![
-            Field::new("l_orderkey", DataType::Int32, false),
-            Field::new("l_partkey", DataType::Int32, false),
-            Field::new("l_suppkey", DataType::Int32, false),
+            Field::new("l_orderkey", DataType::Int64, false),
+            Field::new("l_partkey", DataType::Int64, false),
+            Field::new("l_suppkey", DataType::Int64, false),
             Field::new("l_linenumber", DataType::Int32, false),
             Field::new("l_quantity", DataType::Float64, false),
             Field::new("l_extendedprice", DataType::Float64, false),
@@ -562,14 +560,14 @@ fn get_schema(table: &str) -> Schema {
         ]),
 
         "nation" => Schema::new(vec![
-            Field::new("n_nationkey", DataType::Int32, false),
+            Field::new("n_nationkey", DataType::Int64, false),
             Field::new("n_name", DataType::Utf8, false),
-            Field::new("n_regionkey", DataType::Int32, false),
+            Field::new("n_regionkey", DataType::Int64, false),
             Field::new("n_comment", DataType::Utf8, false),
         ]),
 
         "region" => Schema::new(vec![
-            Field::new("r_regionkey", DataType::Int32, false),
+            Field::new("r_regionkey", DataType::Int64, false),
             Field::new("r_name", DataType::Utf8, false),
             Field::new("r_comment", DataType::Utf8, false),
         ]),
@@ -974,7 +972,7 @@ mod tests {
         // Tests running query with empty tables, to see whether they run succesfully.
 
         let config = ExecutionConfig::new()
-            .with_concurrency(1)
+            .with_target_partitions(1)
             .with_batch_size(10);
         let mut ctx = ExecutionContext::with_config(config);
 
@@ -1027,12 +1025,11 @@ mod tests {
                 query: n,
                 debug: false,
                 iterations: 1,
-                concurrency: 2,
+                partitions: 2,
                 batch_size: 8192,
                 path: PathBuf::from(path.to_string()),
                 file_format: "tbl".to_string(),
                 mem_table: false,
-                partitions: 16,
             };
             let actual = benchmark_datafusion(opt).await?;
 
@@ -1068,7 +1065,7 @@ mod tests {
 
         fn round_trip_query(n: usize) -> Result<()> {
             let config = ExecutionConfig::new()
-                .with_concurrency(1)
+                .with_target_partitions(1)
                 .with_batch_size(10);
             let mut ctx = ExecutionContext::with_config(config);
 
@@ -1140,7 +1137,11 @@ mod tests {
         test_round_trip!(q3, 3);
         test_round_trip!(q5, 5);
         test_round_trip!(q6, 6);
+        test_round_trip!(q7, 7);
+        test_round_trip!(q8, 8);
+        test_round_trip!(q9, 9);
         test_round_trip!(q10, 10);
         test_round_trip!(q12, 12);
+        test_round_trip!(q13, 13);
     }
 }

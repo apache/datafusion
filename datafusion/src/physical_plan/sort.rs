@@ -17,11 +17,14 @@
 
 //! Defines the SORT plan
 
+use super::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
+};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
-    common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning, SQLMetric,
+    common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
 pub use arrow::compute::SortOptions;
 use arrow::compute::{lexsort_to_indices, take, SortColumn, TakeOptions};
@@ -32,13 +35,11 @@ use arrow::{array::ArrayRef, error::ArrowError};
 use async_trait::async_trait;
 use futures::stream::Stream;
 use futures::Future;
-use hashbrown::HashMap;
 use pin_project_lite::pin_project;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
 
 /// Sort execution plan
 #[derive(Debug)]
@@ -47,10 +48,8 @@ pub struct SortExec {
     input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
-    /// Output rows
-    output_rows: Arc<SQLMetric>,
-    /// Time to sort batches
-    sort_time_nanos: Arc<SQLMetric>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
     /// Preserve partitions of input plan
     preserve_partitioning: bool,
 }
@@ -74,9 +73,8 @@ impl SortExec {
         Self {
             expr,
             input,
+            metrics: ExecutionPlanMetricsSet::new(),
             preserve_partitioning,
-            output_rows: SQLMetric::counter(),
-            sort_time_nanos: SQLMetric::time_nanos(),
         }
     }
 
@@ -155,13 +153,13 @@ impl ExecutionPlan for SortExec {
             }
         }
 
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let input = self.input.execute(partition).await?;
 
         Ok(Box::pin(SortStream::new(
             input,
             self.expr.clone(),
-            self.output_rows.clone(),
-            self.sort_time_nanos.clone(),
+            baseline_metrics,
         )))
     }
 
@@ -178,11 +176,8 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    fn metrics(&self) -> HashMap<String, SQLMetric> {
-        let mut metrics = HashMap::new();
-        metrics.insert("outputRows".to_owned(), (*self.output_rows).clone());
-        metrics.insert("sortTime".to_owned(), (*self.sort_time_nanos).clone());
-        metrics
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
 
@@ -229,7 +224,6 @@ pin_project! {
         output: futures::channel::oneshot::Receiver<ArrowResult<Option<RecordBatch>>>,
         finished: bool,
         schema: SchemaRef,
-        output_rows: Arc<SQLMetric>,
     }
 }
 
@@ -237,8 +231,7 @@ impl SortStream {
     fn new(
         input: SendableRecordBatchStream,
         expr: Vec<PhysicalSortExpr>,
-        output_rows: Arc<SQLMetric>,
-        sort_time: Arc<SQLMetric>,
+        baseline_metrics: BaselineMetrics,
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
         let schema = input.schema();
@@ -248,14 +241,15 @@ impl SortStream {
                 .await
                 .map_err(DataFusionError::into_arrow_external_error)
                 .and_then(move |batches| {
-                    let now = Instant::now();
+                    let timer = baseline_metrics.elapsed_compute().timer();
                     // combine all record batches into one for each column
                     let combined = common::combine_batches(&batches, schema.clone())?;
                     // sort combined record batch
                     let result = combined
                         .map(|batch| sort_batch(batch, schema, &expr))
-                        .transpose()?;
-                    sort_time.add(now.elapsed().as_nanos() as usize);
+                        .transpose()?
+                        .record_output(&baseline_metrics);
+                    timer.done();
                     Ok(result)
                 });
 
@@ -266,7 +260,6 @@ impl SortStream {
             output: rx,
             finished: false,
             schema,
-            output_rows,
         }
     }
 }
@@ -275,8 +268,6 @@ impl Stream for SortStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let output_rows = self.output_rows.clone();
-
         if self.finished {
             return Poll::Ready(None);
         }
@@ -294,10 +285,6 @@ impl Stream for SortStream {
                     Err(e) => Some(Err(ArrowError::ExternalError(Box::new(e)))), // error receiving
                     Ok(result) => result.transpose(),
                 };
-
-                if let Some(Ok(batch)) = &result {
-                    output_rows.add(batch.num_rows());
-                }
 
                 Poll::Ready(result)
             }
@@ -438,8 +425,9 @@ mod tests {
         assert_eq!(DataType::Float64, *sort_exec.schema().field(1).data_type());
 
         let result: Vec<RecordBatch> = collect(sort_exec.clone()).await?;
-        assert!(sort_exec.metrics().get("sortTime").unwrap().value() > 0);
-        assert_eq!(sort_exec.metrics().get("outputRows").unwrap().value(), 8);
+        let metrics = sort_exec.metrics().unwrap();
+        assert!(metrics.elapsed_compute().unwrap() > 0);
+        assert_eq!(metrics.output_rows().unwrap(), 8);
         assert_eq!(result.len(), 1);
 
         let columns = result[0].columns();

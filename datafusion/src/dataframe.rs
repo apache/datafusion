@@ -223,6 +223,36 @@ pub trait DataFrame: Send + Sync {
     /// ```
     async fn collect(&self) -> Result<Vec<RecordBatch>>;
 
+    /// Print results.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let mut ctx = ExecutionContext::new();
+    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
+    /// df.show().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn show(&self) -> Result<()>;
+
+    /// Print results and limit rows.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let mut ctx = ExecutionContext::new();
+    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
+    /// df.show_limit(10).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn show_limit(&self, n: usize) -> Result<()>;
+
     /// Executes this DataFrame and returns a stream over a single partition
     ///
     /// ```
@@ -289,6 +319,8 @@ pub trait DataFrame: Send + Sync {
 
     /// Return a DataFrame with the explanation of its plan so far.
     ///
+    /// if `analyze` is specified, runs the plan and reports metrics
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -296,11 +328,11 @@ pub trait DataFrame: Send + Sync {
     /// # async fn main() -> Result<()> {
     /// let mut ctx = ExecutionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
-    /// let batches = df.limit(100)?.explain(false)?.collect().await?;
+    /// let batches = df.limit(100)?.explain(false, false)?.collect().await?;
     /// # Ok(())
     /// # }
     /// ```
-    fn explain(&self, verbose: bool) -> Result<Arc<dyn DataFrame>>;
+    fn explain(&self, verbose: bool, analyze: bool) -> Result<Arc<dyn DataFrame>>;
 
     /// Return a `FunctionRegistry` used to plan udf's calls
     ///

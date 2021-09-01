@@ -26,7 +26,9 @@ use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::common::SizedRecordBatchStream;
-use datafusion::physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use datafusion::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+};
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
@@ -83,6 +85,18 @@ impl ExecutionPlan for CustomPlan {
             self.schema(),
             self.batches.clone(),
         )))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "CustomPlan: batch_size={}", self.batches.len(),)
+            }
+        }
     }
 }
 

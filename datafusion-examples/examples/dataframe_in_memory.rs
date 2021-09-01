@@ -20,7 +20,6 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Int32Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::arrow::util::pretty;
 
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
@@ -57,11 +56,8 @@ async fn main() -> Result<()> {
 
     let df = df.select_columns(&["a", "b"])?.filter(filter)?;
 
-    // execute
-    let results = df.collect().await?;
-
     // print the results
-    pretty::print_batches(&results)?;
+    df.show().await?;
 
     Ok(())
 }

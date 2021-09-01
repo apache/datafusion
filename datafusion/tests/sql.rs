@@ -41,6 +41,9 @@ use arrow::{
 use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::logical_plan::LogicalPlan;
+use datafusion::physical_plan::metrics::MetricValue;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::ExecutionPlanVisitor;
 use datafusion::prelude::*;
 use datafusion::{
     datasource::{csv::CsvReadOptions, MemTable},
@@ -51,6 +54,50 @@ use datafusion::{
     physical_plan::ColumnarValue,
 };
 use datafusion::{execution::context::ExecutionContext, physical_plan::displayable};
+
+/// A macro to assert that one string is contained within another with
+/// a nice error message if they are not.
+///
+/// Usage: `assert_contains!(actual, expected)`
+///
+/// Is a macro so test error
+/// messages are on the same line as the failure;
+///
+/// Both arguments must be convertable into Strings (Into<String>)
+macro_rules! assert_contains {
+    ($ACTUAL: expr, $EXPECTED: expr) => {
+        let actual_value: String = $ACTUAL.into();
+        let expected_value: String = $EXPECTED.into();
+        assert!(
+            actual_value.contains(&expected_value),
+            "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
+            expected_value,
+            actual_value
+        );
+    };
+}
+
+/// A macro to assert that one string is NOT contained within another with
+/// a nice error message if they are are.
+///
+/// Usage: `assert_not_contains!(actual, unexpected)`
+///
+/// Is a macro so test error
+/// messages are on the same line as the failure;
+///
+/// Both arguments must be convertable into Strings (Into<String>)
+macro_rules! assert_not_contains {
+    ($ACTUAL: expr, $UNEXPECTED: expr) => {
+        let actual_value: String = $ACTUAL.into();
+        let unexpected_value: String = $UNEXPECTED.into();
+        assert!(
+            !actual_value.contains(&unexpected_value),
+            "Found unexpected in actual.\n\nUnexpected:\n{}\n\nActual:\n{}",
+            unexpected_value,
+            actual_value
+        );
+    };
+}
 
 #[tokio::test]
 async fn nyc() -> Result<()> {
@@ -119,18 +166,18 @@ async fn parquet_query() {
     let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----+--------------------------+",
-        "| id | CAST(string_col AS Utf8) |",
-        "+----+--------------------------+",
-        "| 4  | 0                        |",
-        "| 5  | 1                        |",
-        "| 6  | 0                        |",
-        "| 7  | 1                        |",
-        "| 2  | 0                        |",
-        "| 3  | 1                        |",
-        "| 0  | 0                        |",
-        "| 1  | 1                        |",
-        "+----+--------------------------+",
+        "+----+-----------------------------------------+",
+        "| id | CAST(alltypes_plain.string_col AS Utf8) |",
+        "+----+-----------------------------------------+",
+        "| 4  | 0                                       |",
+        "| 5  | 1                                       |",
+        "| 6  | 0                                       |",
+        "| 7  | 1                                       |",
+        "| 2  | 0                                       |",
+        "| 3  | 1                                       |",
+        "| 0  | 0                                       |",
+        "| 1  | 1                                       |",
+        "+----+-----------------------------------------+",
     ];
 
     assert_batches_eq!(expected, &actual);
@@ -291,11 +338,11 @@ async fn csv_count_star() -> Result<()> {
     let sql = "SELECT COUNT(*), COUNT(1) AS c, COUNT(c1) FROM aggregate_test_100";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+-----------------+-----+-----------+",
-        "| COUNT(UInt8(1)) | c   | COUNT(c1) |",
-        "+-----------------+-----+-----------+",
-        "| 100             | 100 | 100       |",
-        "+-----------------+-----+-----------+",
+        "+-----------------+-----+------------------------------+",
+        "| COUNT(UInt8(1)) | c   | COUNT(aggregate_test_100.c1) |",
+        "+-----------------+-----+------------------------------+",
+        "| 100             | 100 | 100                          |",
+        "+-----------------+-----+------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -395,15 +442,15 @@ async fn csv_query_group_by_int_min_max() -> Result<()> {
     let sql = "SELECT c2, MIN(c12), MAX(c12) FROM aggregate_test_100 GROUP BY c2";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----+----------------------+--------------------+",
-        "| c2 | MIN(c12)             | MAX(c12)           |",
-        "+----+----------------------+--------------------+",
-        "| 1  | 0.05636955101974106  | 0.9965400387585364 |",
-        "| 2  | 0.16301110515739792  | 0.991517828651004  |",
-        "| 3  | 0.047343434291126085 | 0.9293883502480845 |",
-        "| 4  | 0.02182578039211991  | 0.9237877978193884 |",
-        "| 5  | 0.01479305307777301  | 0.9723580396501548 |",
-        "+----+----------------------+--------------------+",
+        "+----+-----------------------------+-----------------------------+",
+        "| c2 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) |",
+        "+----+-----------------------------+-----------------------------+",
+        "| 1  | 0.05636955101974106         | 0.9965400387585364          |",
+        "| 2  | 0.16301110515739792         | 0.991517828651004           |",
+        "| 3  | 0.047343434291126085        | 0.9293883502480845          |",
+        "| 4  | 0.02182578039211991         | 0.9237877978193884          |",
+        "| 5  | 0.01479305307777301         | 0.9723580396501548          |",
+        "+----+-----------------------------+-----------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
@@ -619,35 +666,35 @@ async fn csv_query_group_by_two_columns() -> Result<()> {
     let sql = "SELECT c1, c2, MIN(c3) FROM aggregate_test_100 GROUP BY c1, c2";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----+----+---------+",
-        "| c1 | c2 | MIN(c3) |",
-        "+----+----+---------+",
-        "| a  | 1  | -85     |",
-        "| a  | 2  | -48     |",
-        "| a  | 3  | -72     |",
-        "| a  | 4  | -101    |",
-        "| a  | 5  | -101    |",
-        "| b  | 1  | 12      |",
-        "| b  | 2  | -60     |",
-        "| b  | 3  | -101    |",
-        "| b  | 4  | -117    |",
-        "| b  | 5  | -82     |",
-        "| c  | 1  | -24     |",
-        "| c  | 2  | -117    |",
-        "| c  | 3  | -2      |",
-        "| c  | 4  | -90     |",
-        "| c  | 5  | -94     |",
-        "| d  | 1  | -99     |",
-        "| d  | 2  | 93      |",
-        "| d  | 3  | -76     |",
-        "| d  | 4  | 5       |",
-        "| d  | 5  | -59     |",
-        "| e  | 1  | 36      |",
-        "| e  | 2  | -61     |",
-        "| e  | 3  | -95     |",
-        "| e  | 4  | -56     |",
-        "| e  | 5  | -86     |",
-        "+----+----+---------+",
+        "+----+----+----------------------------+",
+        "| c1 | c2 | MIN(aggregate_test_100.c3) |",
+        "+----+----+----------------------------+",
+        "| a  | 1  | -85                        |",
+        "| a  | 2  | -48                        |",
+        "| a  | 3  | -72                        |",
+        "| a  | 4  | -101                       |",
+        "| a  | 5  | -101                       |",
+        "| b  | 1  | 12                         |",
+        "| b  | 2  | -60                        |",
+        "| b  | 3  | -101                       |",
+        "| b  | 4  | -117                       |",
+        "| b  | 5  | -82                        |",
+        "| c  | 1  | -24                        |",
+        "| c  | 2  | -117                       |",
+        "| c  | 3  | -2                         |",
+        "| c  | 4  | -90                        |",
+        "| c  | 5  | -94                        |",
+        "| d  | 1  | -99                        |",
+        "| d  | 2  | 93                         |",
+        "| d  | 3  | -76                        |",
+        "| d  | 4  | 5                          |",
+        "| d  | 5  | -59                        |",
+        "| e  | 1  | 36                         |",
+        "| e  | 2  | -61                        |",
+        "| e  | 3  | -95                        |",
+        "| e  | 4  | -56                        |",
+        "| e  | 5  | -86                        |",
+        "+----+----+----------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
@@ -843,15 +890,15 @@ async fn csv_query_group_by_avg() -> Result<()> {
     let sql = "SELECT c1, avg(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----+---------------------+",
-        "| c1 | AVG(c12)            |",
-        "+----+---------------------+",
-        "| a  | 0.48754517466109415 |",
-        "| b  | 0.41040709263815384 |",
-        "| c  | 0.6600456536439784  |",
-        "| d  | 0.48855379387549824 |",
-        "| e  | 0.48600669271341534 |",
-        "+----+---------------------+",
+        "+----+-----------------------------+",
+        "| c1 | AVG(aggregate_test_100.c12) |",
+        "+----+-----------------------------+",
+        "| a  | 0.48754517466109415         |",
+        "| b  | 0.41040709263815384         |",
+        "| c  | 0.6600456536439784          |",
+        "| d  | 0.48855379387549824         |",
+        "| e  | 0.48600669271341534         |",
+        "+----+-----------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
@@ -864,15 +911,15 @@ async fn csv_query_group_by_avg_with_projection() -> Result<()> {
     let sql = "SELECT avg(c12), c1 FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+---------------------+----+",
-        "| AVG(c12)            | c1 |",
-        "+---------------------+----+",
-        "| 0.41040709263815384 | b  |",
-        "| 0.48600669271341534 | e  |",
-        "| 0.48754517466109415 | a  |",
-        "| 0.48855379387549824 | d  |",
-        "| 0.6600456536439784  | c  |",
-        "+---------------------+----+",
+        "+-----------------------------+----+",
+        "| AVG(aggregate_test_100.c12) | c1 |",
+        "+-----------------------------+----+",
+        "| 0.41040709263815384         | b  |",
+        "| 0.48600669271341534         | e  |",
+        "| 0.48754517466109415         | a  |",
+        "| 0.48855379387549824         | d  |",
+        "| 0.6600456536439784          | c  |",
+        "+-----------------------------+----+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
@@ -928,11 +975,11 @@ async fn csv_query_count() -> Result<()> {
     let sql = "SELECT count(c12) FROM aggregate_test_100";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+------------+",
-        "| COUNT(c12) |",
-        "+------------+",
-        "| 100        |",
-        "+------------+",
+        "+-------------------------------+",
+        "| COUNT(aggregate_test_100.c12) |",
+        "+-------------------------------+",
+        "| 100                           |",
+        "+-------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -955,15 +1002,15 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
                limit 5";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+-----------+-----------+------------+-------------+-----------------+----------------+------------------------+",
-        "| c9        | COUNT(c5) | MAX(c5)    | MIN(c5)     | FIRST_VALUE(c5) | LAST_VALUE(c5) | NTH_VALUE(c5,Int64(2)) |",
-        "+-----------+-----------+------------+-------------+-----------------+----------------+------------------------+",
-        "| 28774375  | 100       | 2143473091 | -2141999138 | 2033001162      | 61035129       | 706441268              |",
-        "| 63044568  | 100       | 2143473091 | -2141999138 | 2033001162      | 61035129       | 706441268              |",
-        "| 141047417 | 100       | 2143473091 | -2141999138 | 2033001162      | 61035129       | 706441268              |",
-        "| 141680161 | 100       | 2143473091 | -2141999138 | 2033001162      | 61035129       | 706441268              |",
-        "| 145294611 | 100       | 2143473091 | -2141999138 | 2033001162      | 61035129       | 706441268              |",
-        "+-----------+-----------+------------+-------------+-----------------+----------------+------------------------+",
+        "+-----------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
+        "| c9        | COUNT(aggregate_test_100.c5) | MAX(aggregate_test_100.c5) | MIN(aggregate_test_100.c5) | FIRST_VALUE(aggregate_test_100.c5) | LAST_VALUE(aggregate_test_100.c5) | NTH_VALUE(aggregate_test_100.c5,Int64(2)) |",
+        "+-----------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
+        "| 28774375  | 100                          | 2143473091                 | -2141999138                | 2033001162                         | 61035129                          | 706441268                                 |",
+        "| 63044568  | 100                          | 2143473091                 | -2141999138                | 2033001162                         | 61035129                          | 706441268                                 |",
+        "| 141047417 | 100                          | 2143473091                 | -2141999138                | 2033001162                         | 61035129                          | 706441268                                 |",
+        "| 141680161 | 100                          | 2143473091                 | -2141999138                | 2033001162                         | 61035129                          | 706441268                                 |",
+        "| 145294611 | 100                          | 2143473091                 | -2141999138                | 2033001162                         | 61035129                          | 706441268                                 |",
+        "+-----------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -988,15 +1035,15 @@ async fn csv_query_window_with_partition_by() -> Result<()> {
                limit 5";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+-----------+------------------------+------------------------+--------------------------+------------------------+------------------------+--------------------------------+-------------------------------+---------------------------------------+",
-        "| c9        | SUM(CAST(c4 AS Int32)) | AVG(CAST(c4 AS Int32)) | COUNT(CAST(c4 AS Int32)) | MAX(CAST(c4 AS Int32)) | MIN(CAST(c4 AS Int32)) | FIRST_VALUE(CAST(c4 AS Int32)) | LAST_VALUE(CAST(c4 AS Int32)) | NTH_VALUE(CAST(c4 AS Int32),Int64(2)) |",
-        "+-----------+------------------------+------------------------+--------------------------+------------------------+------------------------+--------------------------------+-------------------------------+---------------------------------------+",
-        "| 28774375  | -16110                 | -16110                 | 1                        | -16110                 | -16110                 | -16110                         | -16110                        |                                       |",
-        "| 63044568  | 3917                   | 3917                   | 1                        | 3917                   | 3917                   | 3917                           | 3917                          |                                       |",
-        "| 141047417 | -38455                 | -19227.5               | 2                        | -16974                 | -21481                 | -16974                         | -21481                        |                                       |",
-        "| 141680161 | -1114                  | -1114                  | 1                        | -1114                  | -1114                  | -1114                          | -1114                         |                                       |",
-        "| 145294611 | 15673                  | 15673                  | 1                        | 15673                  | 15673                  | 15673                          | 15673                         |                                       |",
-        "+-----------+------------------------+------------------------+--------------------------+------------------------+------------------------+--------------------------------+-------------------------------+---------------------------------------+",
+        "+-----------+-------------------------------------------+-------------------------------------------+---------------------------------------------+-------------------------------------------+-------------------------------------------+---------------------------------------------------+--------------------------------------------------+----------------------------------------------------------+",
+        "| c9        | SUM(CAST(aggregate_test_100.c4 AS Int32)) | AVG(CAST(aggregate_test_100.c4 AS Int32)) | COUNT(CAST(aggregate_test_100.c4 AS Int32)) | MAX(CAST(aggregate_test_100.c4 AS Int32)) | MIN(CAST(aggregate_test_100.c4 AS Int32)) | FIRST_VALUE(CAST(aggregate_test_100.c4 AS Int32)) | LAST_VALUE(CAST(aggregate_test_100.c4 AS Int32)) | NTH_VALUE(CAST(aggregate_test_100.c4 AS Int32),Int64(2)) |",
+        "+-----------+-------------------------------------------+-------------------------------------------+---------------------------------------------+-------------------------------------------+-------------------------------------------+---------------------------------------------------+--------------------------------------------------+----------------------------------------------------------+",
+        "| 28774375  | -16110                                    | -16110                                    | 1                                           | -16110                                    | -16110                                    | -16110                                            | -16110                                           |                                                          |",
+        "| 63044568  | 3917                                      | 3917                                      | 1                                           | 3917                                      | 3917                                      | 3917                                              | 3917                                             |                                                          |",
+        "| 141047417 | -38455                                    | -19227.5                                  | 2                                           | -16974                                    | -21481                                    | -16974                                            | -21481                                           |                                                          |",
+        "| 141680161 | -1114                                     | -1114                                     | 1                                           | -1114                                     | -1114                                     | -1114                                             | -1114                                            |                                                          |",
+        "| 145294611 | 15673                                     | 15673                                     | 1                                           | 15673                                     | 15673                                     | 15673                                             | 15673                                            |                                                          |",
+        "+-----------+-------------------------------------------+-------------------------------------------+---------------------------------------------+-------------------------------------------+-------------------------------------------+---------------------------------------------------+--------------------------------------------------+----------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1021,15 +1068,15 @@ async fn csv_query_window_with_order_by() -> Result<()> {
                limit 5";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+-----------+-------------+--------------------+-----------+-----------+-------------+-----------------+----------------+------------------------+",
-        "| c9        | SUM(c5)     | AVG(c5)            | COUNT(c5) | MAX(c5)   | MIN(c5)     | FIRST_VALUE(c5) | LAST_VALUE(c5) | NTH_VALUE(c5,Int64(2)) |",
-        "+-----------+-------------+--------------------+-----------+-----------+-------------+-----------------+----------------+------------------------+",
-        "| 28774375  | 61035129    | 61035129           | 1         | 61035129  | 61035129    | 61035129        | 61035129       |                        |",
-        "| 63044568  | -47938237   | -23969118.5        | 2         | 61035129  | -108973366  | 61035129        | -108973366     | -108973366             |",
-        "| 141047417 | 575165281   | 191721760.33333334 | 3         | 623103518 | -108973366  | 61035129        | 623103518      | -108973366             |",
-        "| 141680161 | -1352462829 | -338115707.25      | 4         | 623103518 | -1927628110 | 61035129        | -1927628110    | -108973366             |",
-        "| 145294611 | -3251637940 | -650327588         | 5         | 623103518 | -1927628110 | 61035129        | -1899175111    | -108973366             |",
-        "+-----------+-------------+--------------------+-----------+-----------+-------------+-----------------+----------------+------------------------+",
+        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
+        "| c9        | SUM(aggregate_test_100.c5) | AVG(aggregate_test_100.c5) | COUNT(aggregate_test_100.c5) | MAX(aggregate_test_100.c5) | MIN(aggregate_test_100.c5) | FIRST_VALUE(aggregate_test_100.c5) | LAST_VALUE(aggregate_test_100.c5) | NTH_VALUE(aggregate_test_100.c5,Int64(2)) |",
+        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
+        "| 28774375  | 61035129                   | 61035129                   | 1                            | 61035129                   | 61035129                   | 61035129                           | 61035129                          |                                           |",
+        "| 63044568  | -47938237                  | -23969118.5                | 2                            | 61035129                   | -108973366                 | 61035129                           | -108973366                        | -108973366                                |",
+        "| 141047417 | 575165281                  | 191721760.33333334         | 3                            | 623103518                  | -108973366                 | 61035129                           | 623103518                         | -108973366                                |",
+        "| 141680161 | -1352462829                | -338115707.25              | 4                            | 623103518                  | -1927628110                | 61035129                           | -1927628110                       | -108973366                                |",
+        "| 145294611 | -3251637940                | -650327588                 | 5                            | 623103518                  | -1927628110                | 61035129                           | -1899175111                       | -108973366                                |",
+        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1042,15 +1089,15 @@ async fn csv_query_group_by_int_count() -> Result<()> {
     let sql = "SELECT c1, count(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----+------------+",
-        "| c1 | COUNT(c12) |",
-        "+----+------------+",
-        "| a  | 21         |",
-        "| b  | 19         |",
-        "| c  | 21         |",
-        "| d  | 18         |",
-        "| e  | 21         |",
-        "+----+------------+",
+        "+----+-------------------------------+",
+        "| c1 | COUNT(aggregate_test_100.c12) |",
+        "+----+-------------------------------+",
+        "| a  | 21                            |",
+        "| b  | 19                            |",
+        "| c  | 21                            |",
+        "| d  | 18                            |",
+        "| e  | 21                            |",
+        "+----+-------------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
@@ -1084,15 +1131,15 @@ async fn csv_query_group_by_string_min_max() -> Result<()> {
     let sql = "SELECT c1, MIN(c12), MAX(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----+----------------------+--------------------+",
-        "| c1 | MIN(c12)             | MAX(c12)           |",
-        "+----+----------------------+--------------------+",
-        "| a  | 0.02182578039211991  | 0.9800193410444061 |",
-        "| b  | 0.04893135681998029  | 0.9185813970744787 |",
-        "| c  | 0.0494924465469434   | 0.991517828651004  |",
-        "| d  | 0.061029375346466685 | 0.9748360509016578 |",
-        "| e  | 0.01479305307777301  | 0.9965400387585364 |",
-        "+----+----------------------+--------------------+",
+        "+----+-----------------------------+-----------------------------+",
+        "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) |",
+        "+----+-----------------------------+-----------------------------+",
+        "| a  | 0.02182578039211991         | 0.9800193410444061          |",
+        "| b  | 0.04893135681998029         | 0.9185813970744787          |",
+        "| c  | 0.0494924465469434          | 0.991517828651004           |",
+        "| d  | 0.061029375346466685        | 0.9748360509016578          |",
+        "| e  | 0.01479305307777301         | 0.9965400387585364          |",
+        "+----+-----------------------------+-----------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
@@ -1730,6 +1777,17 @@ async fn equijoin() -> Result<()> {
         let actual = execute(&mut ctx, sql).await;
         assert_eq!(expected, actual);
     }
+
+    let mut ctx = create_join_context_qualified()?;
+    let equivalent_sql = [
+        "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t1.a = t2.a ORDER BY t1.a",
+        "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t2.a = t1.a ORDER BY t1.a",
+    ];
+    let expected = vec![vec!["1", "100"], vec!["2", "200"], vec!["4", "400"]];
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
     Ok(())
 }
 
@@ -2130,6 +2188,147 @@ async fn csv_explain() {
 }
 
 #[tokio::test]
+async fn csv_explain_analyze() {
+    // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = normalize_for_explain(&formatted);
+
+    // Only test basic plumbing and try to avoid having to change too
+    // many things
+    let needle =
+        "CoalescePartitionsExec, metrics=[output_rows=5, elapsed_compute=NOT RECORDED";
+    assert_contains!(&formatted, needle);
+
+    let verbose_needle = "Output Rows";
+    assert_not_contains!(formatted, verbose_needle);
+}
+
+#[tokio::test]
+async fn csv_explain_analyze_verbose() {
+    // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql =
+        "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = normalize_for_explain(&formatted);
+
+    let verbose_needle = "Output Rows";
+    assert_contains!(formatted, verbose_needle);
+}
+
+/// A macro to assert that some particular line contains two substrings
+///
+/// Usage: `assert_metrics!(actual, operator_name, metrics)`
+///
+macro_rules! assert_metrics {
+    ($ACTUAL: expr, $OPERATOR_NAME: expr, $METRICS: expr) => {
+        let found = $ACTUAL
+            .lines()
+            .any(|line| line.contains($OPERATOR_NAME) && line.contains($METRICS));
+        assert!(
+            found,
+            "Can not find a line with both '{}' and '{}' in\n\n{}",
+            $OPERATOR_NAME, $METRICS, $ACTUAL
+        );
+    };
+}
+
+#[tokio::test]
+async fn explain_analyze_baseline_metrics() {
+    // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
+    // and then validate the presence of baseline metrics for supported operators
+    let config = ExecutionConfig::new().with_target_partitions(3);
+    let mut ctx = ExecutionContext::with_config(config);
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    // a query with as many operators as we have metrics for
+    let sql = "EXPLAIN ANALYZE select count(*) from (SELECT count(*), c1 FROM aggregate_test_100 group by c1 ORDER BY c1)";
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
+    let physical_plan = ctx.create_physical_plan(&plan).unwrap();
+    let results = collect(physical_plan.clone()).await.unwrap();
+    let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
+    let formatted = normalize_for_explain(&formatted);
+
+    assert_metrics!(
+        &formatted,
+        "CoalescePartitionsExec",
+        "metrics=[output_rows=5, elapsed_compute=NOT RECORDED"
+    );
+    assert_metrics!(
+        &formatted,
+        "HashAggregateExec: mode=Partial, gby=[]",
+        "metrics=[output_rows=3, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
+        "metrics=[output_rows=5, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "SortExec: [c1@0 ASC]",
+        "metrics=[output_rows=5, elapsed_compute="
+    );
+
+    fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
+        use datafusion::physical_plan::{
+            hash_aggregate::HashAggregateExec, sort::SortExec,
+        };
+
+        plan.as_any().downcast_ref::<SortExec>().is_some()
+            || plan.as_any().downcast_ref::<HashAggregateExec>().is_some()
+    }
+
+    // Validate that the recorded elapsed compute time was more than
+    // zero for all operators as well as the start/end timestamp are set
+    struct TimeValidator {}
+    impl ExecutionPlanVisitor for TimeValidator {
+        type Error = std::convert::Infallible;
+
+        fn pre_visit(
+            &mut self,
+            plan: &dyn ExecutionPlan,
+        ) -> std::result::Result<bool, Self::Error> {
+            if !expected_to_have_metrics(plan) {
+                return Ok(true);
+            }
+            let metrics = plan.metrics().unwrap().aggregate_by_partition();
+
+            assert!(metrics.output_rows().unwrap() > 0);
+            assert!(metrics.elapsed_compute().unwrap() > 0);
+
+            let mut saw_start = false;
+            let mut saw_end = false;
+            metrics.iter().for_each(|m| match m.value() {
+                MetricValue::StartTimestamp(ts) => {
+                    saw_start = true;
+                    assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                }
+                MetricValue::EndTimestamp(ts) => {
+                    saw_end = true;
+                    assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                }
+                _ => {}
+            });
+
+            assert!(saw_start);
+            assert!(saw_end);
+
+            Ok(true)
+        }
+    }
+
+    datafusion::physical_plan::accept(physical_plan.as_ref(), &mut TimeValidator {})
+        .unwrap();
+}
+
+#[tokio::test]
 async fn csv_explain_plans() {
     // This test verify the look of each plan in its full cycle plan creation
 
@@ -2299,17 +2498,9 @@ async fn csv_explain_plans() {
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
     // Since the plan contains path that are environmentally dependant (e.g. full path of the test file), only verify important content
-    assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
-    assert!(
-        actual.contains("Projection: #aggregate_test_100.c1"),
-        "Actual: '{}'",
-        actual
-    );
-    assert!(
-        actual.contains("Filter: #aggregate_test_100.c2 Gt Int64(10)"),
-        "Actual: '{}'",
-        actual
-    );
+    assert_contains!(&actual, "logical_plan");
+    assert_contains!(&actual, "Projection: #aggregate_test_100.c1");
+    assert_contains!(actual, "Filter: #aggregate_test_100.c2 Gt Int64(10)");
 }
 
 #[tokio::test]
@@ -2325,20 +2516,12 @@ async fn csv_explain_verbose() {
     // Don't actually test the contents of the debuging output (as
     // that may change and keeping this test updated will be a
     // pain). Instead just check for a few key pieces.
-    assert!(actual.contains("logical_plan"), "Actual: '{}'", actual);
-    assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
-    assert!(
-        actual.contains("#aggregate_test_100.c2 Gt Int64(10)"),
-        "Actual: '{}'",
-        actual
-    );
+    assert_contains!(&actual, "logical_plan");
+    assert_contains!(&actual, "physical_plan");
+    assert_contains!(&actual, "#aggregate_test_100.c2 Gt Int64(10)");
 
     // ensure the "same text as above" optimization is working
-    assert!(
-        actual.contains("SAME TEXT AS ABOVE"),
-        "Actual 2: '{}'",
-        actual
-    );
+    assert_contains!(actual, "SAME TEXT AS ABOVE");
 }
 
 #[tokio::test]
@@ -2511,23 +2694,36 @@ async fn csv_explain_verbose_plans() {
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
-    // Since the plan contains path that are environmentally dependant(e.g. full path of the test file), only verify important content
-    assert!(
-        actual.contains("logical_plan after projection_push_down"),
-        "Actual: '{}'",
-        actual
-    );
-    assert!(actual.contains("physical_plan"), "Actual: '{}'", actual);
-    assert!(
-        actual.contains("FilterExec: CAST(c2@1 AS Int64) > 10"),
-        "Actual: '{}'",
-        actual
-    );
-    assert!(
-        actual.contains("ProjectionExec: expr=[c1@0 as c1]"),
-        "Actual: '{}'",
-        actual
-    );
+    // Since the plan contains path that are environmentally
+    // dependant(e.g. full path of the test file), only verify
+    // important content
+    assert_contains!(&actual, "logical_plan after projection_push_down");
+    assert_contains!(&actual, "physical_plan");
+    assert_contains!(&actual, "FilterExec: CAST(c2@1 AS Int64) > 10");
+    assert_contains!(actual, "ProjectionExec: expr=[c1@0 as c1]");
+}
+
+#[tokio::test]
+async fn explain_analyze_runs_optimizers() {
+    // repro for https://github.com/apache/arrow-datafusion/issues/917
+    // where EXPLAIN ANALYZE was not correctly running optiimizer
+    let mut ctx = ExecutionContext::new();
+    register_alltypes_parquet(&mut ctx);
+
+    // This happens as an optimization pass where count(*) can be
+    // answered using statistics only.
+    let expected = "EmptyExec: produce_one_row=true";
+
+    let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    assert_contains!(actual, expected);
+
+    // EXPLAIN ANALYZE should work the same
+    let sql = "EXPLAIN  ANALYZE SELECT count(*) from alltypes_plain";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    assert_contains!(actual, expected);
 }
 
 fn aggr_test_schema() -> SchemaRef {
@@ -3152,7 +3348,7 @@ async fn query_group_on_null_multi_col() -> Result<()> {
     ];
     assert_batches_sorted_eq!(expected, &actual);
 
-    // Also run query with group columns reversed (results shoudl be the same)
+    // Also run query with group columns reversed (results should be the same)
     let sql = "SELECT COUNT(*), c1, c2 FROM test GROUP BY c2, c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     assert_batches_sorted_eq!(expected, &actual);
@@ -3163,22 +3359,14 @@ async fn query_group_on_null_multi_col() -> Result<()> {
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
-    let field_type =
-        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-    let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
+    let array = vec![Some("one"), None, Some("three")]
+        .into_iter()
+        .collect::<DictionaryArray<Int32Type>>();
 
-    let keys_builder = PrimitiveBuilder::<Int32Type>::new(10);
-    let values_builder = StringBuilder::new(10);
-    let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+    let batch =
+        RecordBatch::try_from_iter(vec![("d1", Arc::new(array) as ArrayRef)]).unwrap();
 
-    builder.append("one")?;
-    builder.append_null()?;
-    builder.append("three")?;
-    let array = Arc::new(builder.finish());
-
-    let data = RecordBatch::try_new(schema.clone(), vec![array])?;
-
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
@@ -3214,6 +3402,13 @@ async fn query_on_string_dictionary() -> Result<()> {
 
     // grouping
     let sql = "SELECT d1, COUNT(*) FROM test group by d1";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["NULL", "1"], vec!["one", "1"], vec!["three", "1"]];
+    assert_eq!(expected, actual);
+
+    // window functions
+    let sql = "SELECT d1, row_number() OVER (partition by d1) FROM test";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["NULL", "1"], vec!["one", "1"], vec!["three", "1"]];
@@ -3706,6 +3901,15 @@ async fn test_string_expressions() -> Result<()> {
     test_expression!("to_hex(9223372036854775807)", "7fffffffffffffff");
     test_expression!("to_hex(CAST(NULL AS int))", "NULL");
     test_expression!("trim(' tom ')", "tom");
+    test_expression!("trim(LEADING ' ' FROM ' tom ')", "tom ");
+    test_expression!("trim(TRAILING ' ' FROM ' tom ')", " tom");
+    test_expression!("trim(BOTH ' ' FROM ' tom ')", "tom");
+    test_expression!("trim(LEADING 'x' FROM 'xxxtomxxx')", "tomxxx");
+    test_expression!("trim(TRAILING 'x' FROM 'xxxtomxxx')", "xxxtom");
+    test_expression!("trim(BOTH 'x' FROM 'xxxtomxx')", "tom");
+    test_expression!("trim(LEADING 'xy' FROM 'xyxabcxyzdefxyx')", "abcxyzdefxyx");
+    test_expression!("trim(TRAILING 'xy' FROM 'xyxabcxyzdefxyx')", "xyxabcxyzdef");
+    test_expression!("trim(BOTH 'xy' FROM 'xyxabcxyzdefxyx')", "abcxyzdef");
     test_expression!("trim(' tom')", "tom");
     test_expression!("trim('')", "");
     test_expression!("trim('tom ')", "tom");
@@ -4071,9 +4275,9 @@ async fn test_cast_expressions_error() -> Result<()> {
     match result {
         Ok(_) => panic!("expected error"),
         Err(e) => {
-            assert!(e.to_string().contains(
-                "Cast error: Cannot cast string 'c' to value of arrow::datatypes::types::Int32Type type"
-            ))
+            assert_contains!(e.to_string(),
+                             "Cast error: Cannot cast string 'c' to value of arrow::datatypes::types::Int32Type type"
+            );
         }
     }
 
@@ -4082,8 +4286,8 @@ async fn test_cast_expressions_error() -> Result<()> {
 
 #[tokio::test]
 async fn test_physical_plan_display_indent() {
-    // Hard code concurrency as it appears in the RepartitionExec output
-    let config = ExecutionConfig::new().with_concurrency(3);
+    // Hard code target_partitions as it appears in the RepartitionExec output
+    let config = ExecutionConfig::new().with_target_partitions(3);
     let mut ctx = ExecutionContext::with_config(config);
     register_aggregate_csv(&mut ctx).unwrap();
     let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
@@ -4100,11 +4304,11 @@ async fn test_physical_plan_display_indent() {
         "GlobalLimitExec: limit=10",
         "  SortExec: [the_min@2 DESC]",
         "    CoalescePartitionsExec",
-        "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(c12), MIN(aggregate_test_100.c12)@2 as the_min]",
-        "        HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(c12), MIN(c12)]",
+        "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
+        "        HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",
         "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 3)",
-        "              HashAggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(c12), MIN(c12)]",
+        "              HashAggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < CAST(10 AS Float64)",
         "                    RepartitionExec: partitioning=RoundRobinBatch(3)",
@@ -4128,8 +4332,8 @@ async fn test_physical_plan_display_indent() {
 
 #[tokio::test]
 async fn test_physical_plan_display_indent_multi_children() {
-    // Hard code concurrency as it appears in the RepartitionExec output
-    let config = ExecutionConfig::new().with_concurrency(3);
+    // Hard code target_partitions as it appears in the RepartitionExec output
+    let config = ExecutionConfig::new().with_target_partitions(3);
     let mut ctx = ExecutionContext::with_config(config);
     // ensure indenting works for nodes with multiple children
     register_aggregate_csv(&mut ctx).unwrap();
@@ -4209,4 +4413,73 @@ fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>> {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>()
+}
+
+#[tokio::test]
+async fn test_partial_qualified_name() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let sql = "SELECT t1.t1_id, t1_name FROM public.t1";
+    let expected = vec![
+        vec!["11", "a"],
+        vec!["22", "b"],
+        vec!["33", "c"],
+        vec!["44", "d"],
+    ];
+    let actual = execute(&mut ctx, sql).await;
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn like_on_strings() -> Result<()> {
+    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
+        .into_iter()
+        .collect::<StringArray>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| bar   |",
+        "| fazzz |",
+        "+-------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn like_on_string_dictionaries() -> Result<()> {
+    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
+        .into_iter()
+        .collect::<DictionaryArray<Int32Type>>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| bar   |",
+        "| fazzz |",
+        "+-------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+    Ok(())
 }

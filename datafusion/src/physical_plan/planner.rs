@@ -17,9 +17,10 @@
 
 //! Physical query planner
 
+use super::analyze::AnalyzeExec;
 use super::{
-    aggregates, cross_join::CrossJoinExec, empty::EmptyExec, expressions::binary,
-    functions, hash_join::PartitionMode, udaf, union::UnionExec, windows,
+    aggregates, empty::EmptyExec, expressions::binary, functions,
+    hash_join::PartitionMode, udaf, union::UnionExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::{
@@ -28,6 +29,7 @@ use crate::logical_plan::{
     UserDefinedLogicalNode,
 };
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
+use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions;
 use crate::physical_plan::expressions::{CaseExpr, Column, Literal, PhysicalSortExpr};
@@ -60,11 +62,10 @@ fn create_function_physical_name(
     fun: &str,
     distinct: bool,
     args: &[Expr],
-    input_schema: &DFSchema,
 ) -> Result<String> {
     let names: Vec<String> = args
         .iter()
-        .map(|e| physical_name(e, input_schema))
+        .map(|e| create_physical_name(e, false))
         .collect::<Result<_>>()?;
 
     let distinct_str = match distinct {
@@ -74,15 +75,25 @@ fn create_function_physical_name(
     Ok(format!("{}({}{})", fun, distinct_str, names.join(",")))
 }
 
-fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
+fn physical_name(e: &Expr) -> Result<String> {
+    create_physical_name(e, true)
+}
+
+fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
     match e {
-        Expr::Column(c) => Ok(c.name.clone()),
+        Expr::Column(c) => {
+            if is_first_expr {
+                Ok(c.name.clone())
+            } else {
+                Ok(c.flat_name())
+            }
+        }
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::ScalarVariable(variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
         Expr::BinaryExpr { left, op, right } => {
-            let left = physical_name(left, input_schema)?;
-            let right = physical_name(right, input_schema)?;
+            let left = create_physical_name(left, false)?;
+            let right = create_physical_name(right, false)?;
             Ok(format!("{} {:?} {}", left, op, right))
         }
         Expr::Case {
@@ -104,50 +115,48 @@ fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             Ok(name)
         }
         Expr::Cast { expr, data_type } => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("CAST({} AS {:?})", expr, data_type))
         }
         Expr::TryCast { expr, data_type } => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("TRY_CAST({} AS {:?})", expr, data_type))
         }
         Expr::Not(expr) => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("NOT {}", expr))
         }
         Expr::Negative(expr) => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("(- {})", expr))
         }
         Expr::IsNull(expr) => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NULL", expr))
         }
         Expr::IsNotNull(expr) => {
-            let expr = physical_name(expr, input_schema)?;
+            let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NOT NULL", expr))
         }
         Expr::ScalarFunction { fun, args, .. } => {
-            create_function_physical_name(&fun.to_string(), false, args, input_schema)
+            create_function_physical_name(&fun.to_string(), false, args)
         }
         Expr::ScalarUDF { fun, args, .. } => {
-            create_function_physical_name(&fun.name, false, args, input_schema)
+            create_function_physical_name(&fun.name, false, args)
         }
         Expr::WindowFunction { fun, args, .. } => {
-            create_function_physical_name(&fun.to_string(), false, args, input_schema)
+            create_function_physical_name(&fun.to_string(), false, args)
         }
         Expr::AggregateFunction {
             fun,
             distinct,
             args,
             ..
-        } => {
-            create_function_physical_name(&fun.to_string(), *distinct, args, input_schema)
-        }
+        } => create_function_physical_name(&fun.to_string(), *distinct, args),
         Expr::AggregateUDF { fun, args } => {
             let mut names = Vec::with_capacity(args.len());
             for e in args {
-                names.push(physical_name(e, input_schema)?);
+                names.push(create_physical_name(e, false)?);
             }
             Ok(format!("{}({})", fun.name, names.join(",")))
         }
@@ -156,8 +165,8 @@ fn physical_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             list,
             negated,
         } => {
-            let expr = physical_name(expr, input_schema)?;
-            let list = list.iter().map(|expr| physical_name(expr, input_schema));
+            let expr = create_physical_name(expr, false)?;
+            let list = list.iter().map(|expr| create_physical_name(expr, false));
             if *negated {
                 Ok(format!("{} NOT IN ({:?})", expr, list))
             } else {
@@ -324,7 +333,7 @@ impl DefaultPhysicalPlanner {
                 let partition_keys = window_expr_common_partition_keys(window_expr)?;
 
                 let can_repartition = !partition_keys.is_empty()
-                    && ctx_state.config.concurrency > 1
+                    && ctx_state.config.target_partitions > 1
                     && ctx_state.config.repartition_windows;
 
                 let input_exec = if can_repartition {
@@ -341,7 +350,10 @@ impl DefaultPhysicalPlanner {
                         .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
                     Arc::new(RepartitionExec::try_new(
                         input_exec,
-                        Partitioning::Hash(partition_keys, ctx_state.config.concurrency),
+                        Partitioning::Hash(
+                            partition_keys,
+                            ctx_state.config.target_partitions,
+                        ),
                     )?)
                 } else {
                     input_exec
@@ -439,7 +451,7 @@ impl DefaultPhysicalPlanner {
                                 &physical_input_schema,
                                 ctx_state,
                             ),
-                            physical_name(e, logical_input_schema),
+                            physical_name(e),
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -475,7 +487,7 @@ impl DefaultPhysicalPlanner {
                     .any(|x| matches!(x, DataType::Dictionary(_, _)));
 
                 let can_repartition = !groups.is_empty()
-                    && ctx_state.config.concurrency > 1
+                    && ctx_state.config.target_partitions > 1
                     && ctx_state.config.repartition_aggregations
                     && !contains_dict;
 
@@ -488,7 +500,7 @@ impl DefaultPhysicalPlanner {
                         initial_aggr,
                         Partitioning::Hash(
                             final_group.clone(),
-                            ctx_state.config.concurrency,
+                            ctx_state.config.target_partitions,
                         ),
                     )?);
                     // Combine hash aggregates within the partition
@@ -540,10 +552,10 @@ impl DefaultPhysicalPlanner {
                                 }
                                 // logical column is not a derived column, safe to pass along to
                                 // physical_name
-                                Err(_) => physical_name(e, input_schema),
+                                Err(_) => physical_name(e),
                             }
                         } else {
-                            physical_name(e, input_schema)
+                            physical_name(e)
                         };
 
                         tuple_err((
@@ -666,7 +678,8 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<hash_utils::JoinOn>>()?;
 
-                if ctx_state.config.concurrency > 1 && ctx_state.config.repartition_joins
+                if ctx_state.config.target_partitions > 1
+                    && ctx_state.config.repartition_joins
                 {
                     let (left_expr, right_expr) = join_on
                         .iter()
@@ -682,11 +695,17 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(HashJoinExec::try_new(
                         Arc::new(RepartitionExec::try_new(
                             physical_left,
-                            Partitioning::Hash(left_expr, ctx_state.config.concurrency),
+                            Partitioning::Hash(
+                                left_expr,
+                                ctx_state.config.target_partitions,
+                            ),
                         )?),
                         Arc::new(RepartitionExec::try_new(
                             physical_right,
-                            Partitioning::Hash(right_expr, ctx_state.config.concurrency),
+                            Partitioning::Hash(
+                                right_expr,
+                                ctx_state.config.target_partitions,
+                            ),
                         )?),
                         join_on,
                         join_type,
@@ -741,6 +760,15 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
                 "Unsupported logical plan: Explain must be root of the plan".to_string(),
             )),
+            LogicalPlan::Analyze {
+                verbose,
+                input,
+                schema,
+            } => {
+                let input = self.create_initial_plan(input, ctx_state)?;
+                let schema = SchemaRef::new(schema.as_ref().to_owned().into());
+                Ok(Arc::new(AnalyzeExec::new(*verbose, input, schema)))
+            }
             LogicalPlan::Extension { node } => {
                 let physical_inputs = node
                     .inputs()
@@ -1171,7 +1199,7 @@ impl DefaultPhysicalPlanner {
         // unpack aliased logical expressions, e.g. "sum(col) over () as total"
         let (name, e) = match e {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-            _ => (physical_name(e, logical_input_schema)?, e),
+            _ => (physical_name(e)?, e),
         };
         self.create_window_expr_with_name(
             e,
@@ -1250,7 +1278,7 @@ impl DefaultPhysicalPlanner {
         // unpack aliased logical expressions, e.g. "sum(col) as total"
         let (name, e) = match e {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-            _ => (physical_name(e, logical_input_schema)?, e),
+            _ => (physical_name(e)?, e),
         };
 
         self.create_aggregate_expr_with_name(
@@ -1365,6 +1393,7 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 mod tests {
     use super::*;
     use crate::logical_plan::{DFField, DFSchema, DFSchemaRef};
+    use crate::physical_plan::DisplayFormatType;
     use crate::physical_plan::{csv::CsvReadOptions, expressions, Partitioning};
     use crate::scalar::ScalarValue;
     use crate::{
@@ -1383,7 +1412,7 @@ mod tests {
 
     fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
         let mut ctx_state = make_ctx_state();
-        ctx_state.config.concurrency = 4;
+        ctx_state.config.target_partitions = 4;
         let planner = DefaultPhysicalPlanner::default();
         planner.create_physical_plan(logical_plan, &ctx_state)
     }
@@ -1607,16 +1636,24 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
-            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_csv_with_name(
+            path,
+            options,
+            None,
+            "aggregate_test_100",
+        )?
+        .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+        .build()?;
 
         let execution_plan = plan(&logical_plan)?;
         let final_hash_agg = execution_plan
             .as_any()
             .downcast_ref::<HashAggregateExec>()
             .expect("hash aggregate");
-        assert_eq!("SUM(c2)", final_hash_agg.schema().field(1).name());
+        assert_eq!(
+            "SUM(aggregate_test_100.c2)",
+            final_hash_agg.schema().field(1).name()
+        );
         // we need access to the input to the partial aggregate so that other projects can
         // implement serde
         assert_eq!("c2", final_hash_agg.input_schema().field(1).name());
@@ -1651,7 +1688,7 @@ mod tests {
         let logical_plan =
             LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
                 .unwrap()
-                .explain(true)
+                .explain(true, false)
                 .unwrap()
                 .build()
                 .unwrap();
@@ -1765,6 +1802,18 @@ mod tests {
 
         async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
+        }
+
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default => {
+                    write!(f, "NoOpExecutionPlan")
+                }
+            }
         }
     }
 

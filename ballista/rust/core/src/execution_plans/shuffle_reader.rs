@@ -28,9 +28,10 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SQLMetric,
+use datafusion::physical_plan::metrics::{
+    ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
+use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Metric, Partitioning};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,
@@ -47,8 +48,8 @@ pub struct ShuffleReaderExec {
     /// Each partition of a shuffle can read data from multiple locations
     pub(crate) partition: Vec<Vec<PartitionLocation>>,
     pub(crate) schema: SchemaRef,
-    /// Time to fetch data from executor
-    fetch_time: Arc<SQLMetric>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl ShuffleReaderExec {
@@ -60,7 +61,7 @@ impl ShuffleReaderExec {
         Ok(Self {
             partition,
             schema,
-            fetch_time: SQLMetric::time_nanos(),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 }
@@ -100,13 +101,16 @@ impl ExecutionPlan for ShuffleReaderExec {
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
         info!("ShuffleReaderExec::execute({})", partition);
 
-        let start = Instant::now();
+        let fetch_time =
+            MetricBuilder::new(&self.metrics).subset_time("fetch_time", partition);
+        let timer = fetch_time.timer();
+
         let partition_locations = &self.partition[partition];
         let result = future::join_all(partition_locations.iter().map(fetch_partition))
             .await
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
-        self.fetch_time.add_elapsed(start);
+        timer.done();
 
         let result = WrappedStream::new(
             Box::pin(futures::stream::iter(result).flatten()),
@@ -149,10 +153,8 @@ impl ExecutionPlan for ShuffleReaderExec {
         }
     }
 
-    fn metrics(&self) -> HashMap<String, SQLMetric> {
-        let mut metrics = HashMap::new();
-        metrics.insert("fetchTime".to_owned(), (*self.fetch_time).clone());
-        metrics
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
 

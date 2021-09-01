@@ -17,10 +17,10 @@
 
 [package]
 name = "datafusion-cli"
-version = "4.0.0-SNAPSHOT"
+version = "5.1.0-SNAPSHOT"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2018"
-keywords = [ "arrow", "query", "sql", "cli", "repl" ]
+keywords = [ "arrow", "datafusion", "ballista", "query", "sql", "cli", "repl" ]
 license = "Apache-2.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
@@ -30,5 +30,6 @@ repository = "https://github.com/apache/arrow-datafusion"
 clap = "2.33"
 rustyline = "8.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
-datafusion = { path = "../datafusion" }
-arrow = { version = "5.0"  }
+datafusion = { path = "../datafusion", version = "5.1.0" }
+arrow = { version = "^5.2"  }
+ballista = { path = "../ballista/rust/client", version = "0.6.0" }

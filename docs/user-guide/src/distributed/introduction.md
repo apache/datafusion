@@ -28,25 +28,23 @@ The foundational technologies in Ballista are:
 - [Apache Arrow](https://arrow.apache.org/) memory model and compute kernels for efficient processing of data.
 - [Apache Arrow Flight Protocol](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for efficient data transfer between processes.
 - [Google Protocol Buffers](https://developers.google.com/protocol-buffers) for serializing query plans.
-- [Docker](https://www.docker.com/) for packaging up executors along with user-defined code.
-
-## Architecture
-
-The following diagram highlights some of the integrations that will be possible with this unique architecture. Note that not all components shown here are available yet.
-
-![Ballista Architecture Diagram](img/ballista-architecture.png)
+- [DataFusion](https://github.com/apache/arrow-datafusion/) for query execution.
 
 ## How does this compare to Apache Spark?
 
 Although Ballista is largely inspired by Apache Spark, there are some key differences.
 
-- The choice of Rust as the main execution language means that memory usage is deterministic and avoids the overhead of GC pauses.
+- The choice of Rust as the main execution language means that memory usage is deterministic and avoids the overhead
+  of GC pauses.
 - Ballista is designed from the ground up to use columnar data, enabling a number of efficiencies such as vectorized
   processing (SIMD and GPU) and efficient compression. Although Spark does have some columnar support, it is still
   largely row-based today.
-- The combination of Rust and Arrow provides excellent memory efficiency and memory usage can be 5x - 10x lower than Apache Spark in some cases, which means that more processing can fit on a single node, reducing the overhead of distributed compute.
-- The use of Apache Arrow as the memory model and network protocol means that data can be exchanged between executors in any programming language with minimal serialization overhead.
+- The combination of Rust and Arrow provides excellent memory efficiency and memory usage can be 5x - 10x lower than
+  Apache Spark in some cases, which means that more processing can fit on a single node, reducing the overhead of
+  distributed compute.
+- The use of Apache Arrow as the memory model and network protocol means that data can be exchanged between executors
+  in any programming language with minimal serialization overhead.
 
 ## Status
 
-Ballista is at the proof-of-concept phase currently but is under active development by a growing community.
+Ballista is still in the early stages of development but is capable of executing complex analytical queries at scale.

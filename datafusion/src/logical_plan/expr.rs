@@ -32,6 +32,7 @@ use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fmt;
+use std::ops::Not;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -580,13 +581,13 @@ impl Expr {
     /// Return `!self`
     #[allow(clippy::should_implement_trait)]
     pub fn not(self) -> Expr {
-        Expr::Not(Box::new(self))
+        !self
     }
 
     /// Calculate the modulus of two expressions.
     /// Return `self % other`
     pub fn modulus(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::Modulus, other)
+        binary_expr(self, Operator::Modulo, other)
     }
 
     /// Return `self LIKE other`
@@ -929,6 +930,14 @@ impl Expr {
         } else {
             Ok(expr)
         }
+    }
+}
+
+impl Not for Expr {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Expr::Not(Box::new(self))
     }
 }
 
@@ -1440,7 +1449,20 @@ macro_rules! unary_scalar_expr {
     };
 }
 
-// generate methods for creating the supported unary expressions
+/// Create an convenience function representing a /binaryunary scalar function
+macro_rules! binary_scalar_expr {
+    ($ENUM:ident, $FUNC:ident) => {
+        #[doc = "this scalar function is not documented yet"]
+        pub fn $FUNC(arg1: Expr, arg2: Expr) -> Expr {
+            Expr::ScalarFunction {
+                fun: functions::BuiltinScalarFunction::$ENUM,
+                args: vec![arg1, arg2],
+            }
+        }
+    };
+}
+
+// generate methods for creating the supported unary/binary expressions
 
 // math functions
 unary_scalar_expr!(Sqrt, sqrt);
@@ -1496,6 +1518,10 @@ unary_scalar_expr!(ToHex, to_hex);
 unary_scalar_expr!(Translate, translate);
 unary_scalar_expr!(Trim, trim);
 unary_scalar_expr!(Upper, upper);
+
+// date functions
+binary_scalar_expr!(DatePart, date_part);
+binary_scalar_expr!(DateTrunc, date_trunc);
 
 /// returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {
@@ -1998,6 +2024,11 @@ mod tests {
 
     fn make_field(relation: &str, column: &str) -> DFField {
         DFField::new(Some(relation), column, DataType::Int8, false)
+    }
+
+    #[test]
+    fn test_not() {
+        assert_eq!(lit(1).not(), !lit(1));
     }
 
     macro_rules! test_unary_scalar_expr {

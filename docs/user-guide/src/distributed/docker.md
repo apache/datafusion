@@ -17,7 +17,21 @@
   under the License.
 -->
 
-## Deploying a standalone Ballista cluster
+## Starting a Ballista cluster using Docker
+
+## Build Docker image
+
+There is no officially published Docker image so it is currently necessary to build the image from source instead.
+
+Run the following commands to clone the source repository and build the Docker image.
+
+```bash
+git clone git@github.com:apache/arrow-datafusion.git -b 5.1.0
+cd arrow-datafusion
+./dev/build-ballista-docker.sh
+```
+
+This will create an image with the tag `ballista:0.6.0`.
 
 ### Start a Scheduler
 
@@ -25,7 +39,7 @@ Start a scheduler using the following syntax:
 
 ```bash
 docker run --network=host \
-  -d ballistacompute/ballista-rust:0.4.2-SNAPSHOT \
+  -d ballista:0.6.0 \
   /scheduler --bind-port 50050
 ```
 
@@ -33,15 +47,15 @@ Run `docker ps` to check that the process is running:
 
 ```
 $ docker ps
-CONTAINER ID   IMAGE                                         COMMAND                  CREATED         STATUS         PORTS     NAMES
-59452ce72138   ballistacompute/ballista-rust:0.4.2-SNAPSHOT   "/scheduler --bind-p…"   6 seconds ago   Up 5 seconds             affectionate_hofstadter
+CONTAINER ID   IMAGE            COMMAND                  CREATED         STATUS        PORTS     NAMES
+1f3f8b5ed93a   ballista:0.6.0   "/scheduler --bind-p…"   2 seconds ago   Up 1 second             tender_archimedes
 ```
 
 Run `docker logs CONTAINER_ID` to check the output from the process:
 
 ```
-$ docker logs 59452ce72138
-[2021-02-14T18:32:20Z INFO  scheduler] Ballista v0.4.2-SNAPSHOT Scheduler listening on 0.0.0.0:50050
+$ docker logs 1f3f8b5ed93a
+[2021-08-28T15:45:11Z INFO  ballista_scheduler] Ballista v0.6.0 Scheduler listening on 0.0.0.0:50050
 ```
 
 ### Start executors
@@ -50,7 +64,7 @@ Start one or more executor processes. Each executor process will need to listen 
 
 ```bash
 docker run --network=host \
-  -d ballistacompute/ballista-rust:0.4.2-SNAPSHOT \
+  -d ballista:0.6.0 \
   /executor --external-host localhost --bind-port 50051
 ```
 
@@ -58,32 +72,31 @@ Use `docker ps` to check that both the scheduer and executor(s) are now running:
 
 ```
 $ docker ps
-CONTAINER ID   IMAGE                                         COMMAND                  CREATED         STATUS         PORTS     NAMES
-0746ce262a19   ballistacompute/ballista-rust:0.4.2-SNAPSHOT   "/executor --externa…"   2 seconds ago   Up 1 second              naughty_mclean
-59452ce72138   ballistacompute/ballista-rust:0.4.2-SNAPSHOT   "/scheduler --bind-p…"   4 minutes ago   Up 4 minutes             affectionate_hofstadter
+CONTAINER ID   IMAGE            COMMAND                  CREATED          STATUS          PORTS     NAMES
+7c6941bb8dc0   ballista:0.6.0   "/executor --externa…"   3 seconds ago    Up 2 seconds              tender_goldberg
+1f3f8b5ed93a   ballista:0.6.0   "/scheduler --bind-p…"   50 seconds ago   Up 49 seconds             tender_archimedes
 ```
 
 Use `docker logs CONTAINER_ID` to check the output from the executor(s):
 
 ```
-$ docker logs 0746ce262a19
-[2021-02-14T18:36:25Z INFO  executor] Running with config: ExecutorConfig { host: "localhost", bind_port: 50051, work_dir: "/tmp/.tmpVRFSvn", concurrent_tasks: 4 }
-[2021-02-14T18:36:25Z INFO  executor] Ballista v0.4.2-SNAPSHOT Rust Executor listening on 0.0.0.0:50051
-[2021-02-14T18:36:25Z INFO  executor] Starting registration with scheduler
+$ docker logs 7c6941bb8dc0
+[2021-08-28T15:45:58Z INFO  ballista_executor] Running with config:
+[2021-08-28T15:45:58Z INFO  ballista_executor] work_dir: /tmp/.tmpeyEM76
+[2021-08-28T15:45:58Z INFO  ballista_executor] concurrent_tasks: 4
+[2021-08-28T15:45:58Z INFO  ballista_executor] Ballista v0.6.0 Rust Executor listening on 0.0.0.0:50051
 ```
-
-The external host and port will be registered with the scheduler. The executors will discover other executors by
-requesting a list of executors from the scheduler.
 
 ### Using etcd as backing store
 
 _NOTE: This functionality is currently experimental_
 
-Ballista can optionally use [etcd](https://etcd.io/) as a backing store for the scheduler.
+Ballista can optionally use [etcd](https://etcd.io/) as a backing store for the scheduler. Use the following commands
+to launch the scheduler with this option enabled.
 
 ```bash
 docker run --network=host \
-  -d ballistacompute/ballista-rust:0.4.2-SNAPSHOT \
+  -d ballista:0.6.0 \
   /scheduler --bind-port 50050 \
   --config-backend etcd \
   --etcd-urls etcd:2379

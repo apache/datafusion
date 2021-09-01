@@ -137,20 +137,20 @@ impl LogicalPlanBuilder {
     pub fn scan_parquet(
         path: impl Into<String>,
         projection: Option<Vec<usize>>,
-        max_concurrency: usize,
+        max_partitions: usize,
     ) -> Result<Self> {
         let path = path.into();
-        Self::scan_parquet_with_name(path.clone(), projection, max_concurrency, path)
+        Self::scan_parquet_with_name(path.clone(), projection, max_partitions, path)
     }
 
     /// Scan a Parquet data source and register it with a given table name
     pub fn scan_parquet_with_name(
         path: impl Into<String>,
         projection: Option<Vec<usize>>,
-        max_concurrency: usize,
+        max_partitions: usize,
         table_name: impl Into<String>,
     ) -> Result<Self> {
-        let provider = Arc::new(ParquetTable::try_new(path, max_concurrency)?);
+        let provider = Arc::new(ParquetTable::try_new(path, max_partitions)?);
         Self::scan(table_name, provider, projection)
     }
 
@@ -287,16 +287,63 @@ impl LogicalPlanBuilder {
                 .into_iter()
                 .zip(join_keys.1.into_iter())
                 .map(|(l, r)| {
-                    let mut swap = false;
                     let l = l.into();
-                    let left_key = l.clone().normalize(&self.plan).or_else(|_| {
-                        swap = true;
-                        l.normalize(right)
-                    });
-                    if swap {
-                        (r.into().normalize(&self.plan), left_key)
-                    } else {
-                        (left_key, r.into().normalize(right))
+                    let r = r.into();
+
+                    match (&l.relation, &r.relation) {
+                        (Some(lr), Some(rr)) => {
+                            let l_is_left =
+                                self.plan.schema().field_with_qualified_name(lr, &l.name);
+                            let l_is_right =
+                                right.schema().field_with_qualified_name(lr, &l.name);
+                            let r_is_left =
+                                self.plan.schema().field_with_qualified_name(rr, &r.name);
+                            let r_is_right =
+                                right.schema().field_with_qualified_name(rr, &r.name);
+
+                            match (l_is_left, l_is_right, r_is_left, r_is_right) {
+                                (_, Ok(_), Ok(_), _) => (Ok(r), Ok(l)),
+                                (Ok(_), _, _, Ok(_)) => (Ok(l), Ok(r)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                            }
+                        }
+                        (Some(lr), None) => {
+                            let l_is_left =
+                                self.plan.schema().field_with_qualified_name(lr, &l.name);
+                            let l_is_right =
+                                right.schema().field_with_qualified_name(lr, &l.name);
+
+                            match (l_is_left, l_is_right) {
+                                (Ok(_), _) => (Ok(l), r.normalize(right)),
+                                (_, Ok(_)) => (r.normalize(&self.plan), Ok(l)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                            }
+                        }
+                        (None, Some(rr)) => {
+                            let r_is_left =
+                                self.plan.schema().field_with_qualified_name(rr, &r.name);
+                            let r_is_right =
+                                right.schema().field_with_qualified_name(rr, &r.name);
+
+                            match (r_is_left, r_is_right) {
+                                (Ok(_), _) => (Ok(r), l.normalize(right)),
+                                (_, Ok(_)) => (l.normalize(&self.plan), Ok(r)),
+                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                            }
+                        }
+                        (None, None) => {
+                            let mut swap = false;
+                            let left_key =
+                                l.clone().normalize(&self.plan).or_else(|_| {
+                                    swap = true;
+                                    l.normalize(right)
+                                });
+                            if swap {
+                                (r.normalize(&self.plan), left_key)
+                            } else {
+                                (left_key, r.normalize(right))
+                            }
+                        }
                     }
                 })
                 .unzip();
@@ -408,18 +455,32 @@ impl LogicalPlanBuilder {
     }
 
     /// Create an expression to represent the explanation of the plan
-    pub fn explain(&self, verbose: bool) -> Result<Self> {
-        let stringified_plans =
-            vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
-
+    ///
+    /// if `analyze` is true, runs the actual plan and produces
+    /// information about metrics during run.
+    ///
+    /// if `verbose` is true, prints out additional details.
+    pub fn explain(&self, verbose: bool, analyze: bool) -> Result<Self> {
         let schema = LogicalPlan::explain_schema();
+        let schema = schema.to_dfschema_ref()?;
 
-        Ok(Self::from(LogicalPlan::Explain {
-            verbose,
-            plan: Arc::new(self.plan.clone()),
-            stringified_plans,
-            schema: schema.to_dfschema_ref()?,
-        }))
+        if analyze {
+            Ok(Self::from(LogicalPlan::Analyze {
+                verbose,
+                input: Arc::new(self.plan.clone()),
+                schema,
+            }))
+        } else {
+            let stringified_plans =
+                vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
+
+            Ok(Self::from(LogicalPlan::Explain {
+                verbose,
+                plan: Arc::new(self.plan.clone()),
+                stringified_plans,
+                schema,
+            }))
+        }
     }
 
     /// Build the plan

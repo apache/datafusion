@@ -28,6 +28,7 @@ use std::{
 
 use datafusion::logical_plan::JoinType;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion::physical_plan::cross_join::CrossJoinExec;
 use datafusion::physical_plan::csv::CsvExec;
 use datafusion::physical_plan::expressions::{
     CaseExpr, InListExpr, IsNotNullExpr, IsNullExpr, NegativeExpr, NotExpr,
@@ -37,7 +38,7 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::AggregateMode;
 use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::parquet::ParquetExec;
+use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sort::SortExec;
 use datafusion::{
@@ -47,7 +48,7 @@ use datafusion::{
 
 use datafusion::physical_plan::{
     empty::EmptyExec,
-    expressions::{Avg, BinaryExpr, Column, Sum},
+    expressions::{Avg, BinaryExpr, Column, Max, Min, Sum},
     Partitioning,
 };
 use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
@@ -155,6 +156,17 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                     },
                 ))),
             })
+        } else if let Some(exec) = plan.downcast_ref::<CrossJoinExec>() {
+            let left: protobuf::PhysicalPlanNode = exec.left().to_owned().try_into()?;
+            let right: protobuf::PhysicalPlanNode = exec.right().to_owned().try_into()?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::CrossJoin(Box::new(
+                    protobuf::CrossJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                    },
+                ))),
+            })
         } else if let Some(exec) = plan.downcast_ref::<HashAggregateExec>() {
             let groups = exec
                 .group_expr()
@@ -256,22 +268,19 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
-            let filenames = exec
-                .partitions()
-                .iter()
-                .flat_map(|part| part.filenames().to_owned())
-                .collect();
+            let partitions = exec.partitions().iter().map(|p| p.into()).collect();
+
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
-                        filename: filenames,
+                        partitions,
+                        schema: Some(exec.schema.as_ref().into()),
                         projection: exec
                             .projection()
                             .as_ref()
                             .iter()
                             .map(|n| *n as u32)
                             .collect(),
-                        num_partitions: exec.partitions().len() as u32,
                         batch_size: exec.batch_size() as u32,
                     },
                 )),
@@ -421,6 +430,10 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
             Ok(protobuf::AggregateFunction::Sum.into())
         } else if self.as_any().downcast_ref::<Count>().is_some() {
             Ok(protobuf::AggregateFunction::Count.into())
+        } else if self.as_any().downcast_ref::<Min>().is_some() {
+            Ok(protobuf::AggregateFunction::Min.into())
+        } else if self.as_any().downcast_ref::<Max>().is_some() {
+            Ok(protobuf::AggregateFunction::Max.into())
         } else {
             Err(BallistaError::NotImplemented(format!(
                 "Aggregate function not supported: {:?}",
@@ -601,6 +614,16 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                 "physical_plan::to_proto() unsupported expression {:?}",
                 value
             )))
+        }
+    }
+}
+
+impl From<&ParquetPartition> for protobuf::ParquetPartition {
+    fn from(p: &ParquetPartition) -> protobuf::ParquetPartition {
+        let files = p.file_partition.files.iter().map(|f| f.into()).collect();
+        protobuf::ParquetPartition {
+            index: p.file_partition.index as u32,
+            files,
         }
     }
 }

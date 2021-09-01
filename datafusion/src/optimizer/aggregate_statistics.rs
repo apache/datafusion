@@ -16,6 +16,7 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
+use std::collections::HashMap;
 use std::{sync::Arc, vec};
 
 use crate::{
@@ -55,12 +56,40 @@ impl OptimizerRule for AggregateStatistics {
                 // aggregations that can not be replaced
                 // using statistics
                 let mut agg = vec![];
+                let mut max_values = HashMap::new();
+                let mut min_values = HashMap::new();
+
                 // expressions that can be replaced by constants
                 let mut projections = vec![];
                 if let Some(num_rows) = match input.as_ref() {
-                    LogicalPlan::TableScan { source, .. }
-                        if source.has_exact_statistics() =>
-                    {
+                    LogicalPlan::TableScan {
+                        table_name, source, ..
+                    } if source.has_exact_statistics() => {
+                        let schema = source.schema();
+                        let fields = schema.fields();
+                        if let Some(column_statistics) =
+                            source.statistics().column_statistics
+                        {
+                            if fields.len() == column_statistics.len() {
+                                for (i, field) in fields.iter().enumerate() {
+                                    if let Some(max_value) =
+                                        column_statistics[i].max_value.clone()
+                                    {
+                                        let max_key =
+                                            format!("{}.{}", table_name, field.name());
+                                        max_values.insert(max_key, max_value);
+                                    }
+                                    if let Some(min_value) =
+                                        column_statistics[i].min_value.clone()
+                                    {
+                                        let min_key =
+                                            format!("{}.{}", table_name, field.name());
+                                        min_values.insert(min_key, min_value);
+                                    }
+                                }
+                            }
+                        }
+
                         source.statistics().num_rows
                     }
                     _ => None,
@@ -81,6 +110,60 @@ impl OptimizerRule for AggregateStatistics {
                                     "COUNT(Uint8(1))".to_string(),
                                 ));
                             }
+                            Expr::AggregateFunction {
+                                fun: AggregateFunction::Max,
+                                args,
+                                ..
+                            } => match &args[0] {
+                                Expr::Column(c) => match max_values.get(&c.flat_name()) {
+                                    Some(max_value) => {
+                                        if !max_value.is_null() {
+                                            let name = format!("MAX({})", c.name);
+                                            projections.push(Expr::Alias(
+                                                Box::new(Expr::Literal(
+                                                    max_value.clone(),
+                                                )),
+                                                name,
+                                            ));
+                                        } else {
+                                            agg.push(expr.clone());
+                                        }
+                                    }
+                                    None => {
+                                        agg.push(expr.clone());
+                                    }
+                                },
+                                _ => {
+                                    agg.push(expr.clone());
+                                }
+                            },
+                            Expr::AggregateFunction {
+                                fun: AggregateFunction::Min,
+                                args,
+                                ..
+                            } => match &args[0] {
+                                Expr::Column(c) => match min_values.get(&c.flat_name()) {
+                                    Some(min_value) => {
+                                        if !min_value.is_null() {
+                                            let name = format!("MIN({})", c.name);
+                                            projections.push(Expr::Alias(
+                                                Box::new(Expr::Literal(
+                                                    min_value.clone(),
+                                                )),
+                                                name,
+                                            ));
+                                        } else {
+                                            agg.push(expr.clone());
+                                        }
+                                    }
+                                    None => {
+                                        agg.push(expr.clone());
+                                    }
+                                },
+                                _ => {
+                                    agg.push(expr.clone());
+                                }
+                            },
                             _ => {
                                 agg.push(expr.clone());
                             }
@@ -159,13 +242,18 @@ mod tests {
     use crate::logical_plan::LogicalPlan;
     use crate::optimizer::aggregate_statistics::AggregateStatistics;
     use crate::optimizer::optimizer::OptimizerRule;
+    use crate::scalar::ScalarValue;
     use crate::{
-        datasource::{datasource::Statistics, TableProvider},
+        datasource::{
+            datasource::{ColumnStatistics, Statistics},
+            TableProvider,
+        },
         logical_plan::Expr,
     };
 
     struct TestTableProvider {
         num_rows: usize,
+        column_statistics: Vec<ColumnStatistics>,
         is_exact: bool,
     }
 
@@ -186,11 +274,11 @@ mod tests {
         ) -> Result<std::sync::Arc<dyn crate::physical_plan::ExecutionPlan>> {
             unimplemented!()
         }
-        fn statistics(&self) -> crate::datasource::datasource::Statistics {
+        fn statistics(&self) -> Statistics {
             Statistics {
                 num_rows: Some(self.num_rows),
                 total_byte_size: None,
-                column_statistics: None,
+                column_statistics: Some(self.column_statistics.clone()),
             }
         }
         fn has_exact_statistics(&self) -> bool {
@@ -206,6 +294,7 @@ mod tests {
             "test",
             Arc::new(TestTableProvider {
                 num_rows: 100,
+                column_statistics: Vec::new(),
                 is_exact: true,
             }),
         )
@@ -231,6 +320,7 @@ mod tests {
             "test",
             Arc::new(TestTableProvider {
                 num_rows: 100,
+                column_statistics: Vec::new(),
                 is_exact: false,
             }),
         )
@@ -256,6 +346,7 @@ mod tests {
             "test",
             Arc::new(TestTableProvider {
                 num_rows: 100,
+                column_statistics: Vec::new(),
                 is_exact: true,
             }),
         )
@@ -282,6 +373,7 @@ mod tests {
             "test",
             Arc::new(TestTableProvider {
                 num_rows: 100,
+                column_statistics: Vec::new(),
                 is_exact: true,
             }),
         )
@@ -307,6 +399,7 @@ mod tests {
             "test",
             Arc::new(TestTableProvider {
                 num_rows: 100,
+                column_statistics: Vec::new(),
                 is_exact: true,
             }),
         )
@@ -320,6 +413,67 @@ mod tests {
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
             \n    Filter: #test.a Lt Int64(5)\
             \n      TableScan: test projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn optimize_max_min_using_statistics() -> Result<()> {
+        use crate::execution::context::ExecutionContext;
+        let mut ctx = ExecutionContext::new();
+
+        let column_statistic = ColumnStatistics {
+            null_count: None,
+            max_value: Some(ScalarValue::from(100_i64)),
+            min_value: Some(ScalarValue::from(1_i64)),
+            distinct_count: None,
+        };
+        let column_statistics = vec![column_statistic];
+
+        ctx.register_table(
+            "test",
+            Arc::new(TestTableProvider {
+                num_rows: 100,
+                column_statistics,
+                is_exact: true,
+            }),
+        )
+        .unwrap();
+
+        let plan = ctx
+            .create_logical_plan("select max(a), min(a) from test")
+            .unwrap();
+        let expected = "\
+            Projection: #MAX(test.a), #MIN(test.a)\
+            \n  Projection: Int64(100) AS MAX(a), Int64(1) AS MIN(a)\
+            \n    EmptyRelation";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn optimize_max_min_not_using_statistics() -> Result<()> {
+        use crate::execution::context::ExecutionContext;
+        let mut ctx = ExecutionContext::new();
+        ctx.register_table(
+            "test",
+            Arc::new(TestTableProvider {
+                num_rows: 100,
+                column_statistics: Vec::new(),
+                is_exact: true,
+            }),
+        )
+        .unwrap();
+
+        let plan = ctx
+            .create_logical_plan("select max(a), min(a) from test")
+            .unwrap();
+        let expected = "\
+            Projection: #MAX(test.a), #MIN(test.a)\
+            \n  Aggregate: groupBy=[[]], aggr=[[MAX(#test.a), MIN(#test.a)]]\
+            \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())

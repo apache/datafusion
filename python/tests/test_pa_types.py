@@ -19,8 +19,8 @@ import pyarrow as pa
 
 
 def test_type_ids():
-    """having this fixed is very important because internally we rely on this id to parse from
-    python"""
+    # Having this fixed is very important because internally we rely on this id
+    # to parse from python
     for idx, arrow_type in [
         (0, pa.null()),
         (1, pa.bool_()),
@@ -47,5 +47,4 @@ def test_type_ids():
         (34, pa.large_utf8()),
         (35, pa.large_binary()),
     ]:
-
         assert idx == arrow_type.id

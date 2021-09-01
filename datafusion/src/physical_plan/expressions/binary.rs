@@ -44,7 +44,7 @@ use crate::physical_plan::expressions::try_cast;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
-use super::coercion::{eq_coercion, numerical_coercion, order_coercion, string_coercion};
+use super::coercion::{eq_coercion, like_coercion, numerical_coercion, order_coercion};
 
 /// Binary expression
 #[derive(Debug)]
@@ -356,7 +356,7 @@ fn common_binary_type(
         // logical equality operators have their own rules, and always return a boolean
         Operator::Eq | Operator::NotEq => eq_coercion(lhs_type, rhs_type),
         // "like" operators operate on strings and always return a boolean
-        Operator::Like | Operator::NotLike => string_coercion(lhs_type, rhs_type),
+        Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
         // order-comparison operators have their own rules
         Operator::Lt | Operator::Gt | Operator::GtEq | Operator::LtEq => {
             order_coercion(lhs_type, rhs_type)
@@ -365,7 +365,7 @@ fn common_binary_type(
         // because coercion favours higher information types
         Operator::Plus
         | Operator::Minus
-        | Operator::Modulus
+        | Operator::Modulo
         | Operator::Divide
         | Operator::Multiply => numerical_coercion(lhs_type, rhs_type),
     };
@@ -412,7 +412,7 @@ pub fn binary_operator_data_type(
         | Operator::Minus
         | Operator::Divide
         | Operator::Multiply
-        | Operator::Modulus => Ok(common_type),
+        | Operator::Modulo => Ok(common_type),
     }
 }
 
@@ -472,7 +472,7 @@ impl PhysicalExpr for BinaryExpr {
                     Operator::Divide => {
                         binary_primitive_array_op_scalar!(array, scalar.clone(), divide)
                     }
-                    Operator::Modulus => {
+                    Operator::Modulo => {
                         binary_primitive_array_op_scalar!(array, scalar.clone(), modulus)
                     }
                     // if scalar operation is not supported - fallback to array implementation
@@ -524,7 +524,7 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Minus => binary_primitive_array_op!(left, right, subtract),
             Operator::Multiply => binary_primitive_array_op!(left, right, multiply),
             Operator::Divide => binary_primitive_array_op!(left, right, divide),
-            Operator::Modulus => binary_primitive_array_op!(left, right, modulus),
+            Operator::Modulo => binary_primitive_array_op!(left, right, modulus),
             Operator::And => {
                 if left_data_type == DataType::Boolean {
                     boolean_op!(left, right, and_kleene)
@@ -1008,7 +1008,7 @@ mod tests {
         apply_arithmetic::<Int32Type>(
             schema,
             vec![a, b],
-            Operator::Modulus,
+            Operator::Modulo,
             Int32Array::from(vec![0, 0, 2, 8, 0]),
         )?;
 

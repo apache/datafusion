@@ -30,6 +30,7 @@ use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
+use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
     array::{
@@ -51,6 +52,7 @@ use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::csv::CsvExec;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{BinaryExpr, Column, Literal};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
@@ -59,7 +61,7 @@ use datafusion::physical_plan::parquet::ParquetExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sort::SortExec;
 use datafusion::physical_plan::{
-    AggregateExpr, ExecutionPlan, PhysicalExpr, RecordBatchStream, SQLMetric,
+    metrics, AggregateExpr, ExecutionPlan, Metric, PhysicalExpr, RecordBatchStream,
 };
 use futures::{future, Stream, StreamExt};
 use std::time::Instant;
@@ -69,7 +71,7 @@ use std::time::Instant;
 pub async fn write_stream_to_disk(
     stream: &mut Pin<Box<dyn RecordBatchStream + Send + Sync>>,
     path: &str,
-    disk_write_metric: Arc<SQLMetric>,
+    disk_write_metric: &metrics::Time,
 ) -> Result<PartitionStats> {
     let file = File::create(&path).map_err(|e| {
         BallistaError::General(format!(
@@ -95,13 +97,13 @@ pub async fn write_stream_to_disk(
         num_rows += batch.num_rows();
         num_bytes += batch_size_bytes;
 
-        let start = Instant::now();
+        let timer = disk_write_metric.timer();
         writer.write(&batch)?;
-        disk_write_metric.add_elapsed(start);
+        timer.done();
     }
-    let start = Instant::now();
+    let timer = disk_write_metric.timer();
     writer.finish()?;
-    disk_write_metric.add_elapsed(start);
+    timer.done();
     Ok(PartitionStats::new(
         Some(num_rows as u64),
         Some(num_batches),
@@ -236,8 +238,9 @@ fn build_exec_plan_diagram(
     Ok(node_id)
 }
 
-/// Create a DataFusion context that is compatible with Ballista
-pub fn create_datafusion_context(
+/// Create a DataFusion context that uses the BallistaQueryPlanner to send logical plans
+/// to a Ballista scheduler
+pub fn create_df_ctx_with_ballista_query_planner(
     scheduler_host: &str,
     scheduler_port: u16,
     config: &BallistaConfig,
@@ -248,7 +251,7 @@ pub fn create_datafusion_context(
             scheduler_url,
             config.clone(),
         )))
-        .with_concurrency(config.default_shuffle_partitions());
+        .with_target_partitions(config.default_shuffle_partitions());
     ExecutionContext::with_config(config)
 }
 
@@ -272,11 +275,17 @@ impl QueryPlanner for BallistaQueryPlanner {
         logical_plan: &LogicalPlan,
         _ctx_state: &ExecutionContextState,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        Ok(Arc::new(DistributedQueryExec::new(
-            self.scheduler_url.clone(),
-            self.config.clone(),
-            logical_plan.clone(),
-        )))
+        match logical_plan {
+            LogicalPlan::CreateExternalTable { .. } => {
+                // table state is managed locally in the BallistaContext, not in the scheduler
+                Ok(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))))
+            }
+            _ => Ok(Arc::new(DistributedQueryExec::new(
+                self.scheduler_url.clone(),
+                self.config.clone(),
+                logical_plan.clone(),
+            ))),
+        }
     }
 }
 

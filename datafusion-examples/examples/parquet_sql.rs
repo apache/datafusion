@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::util::pretty;
-
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
@@ -41,10 +39,9 @@ async fn main() -> Result<()> {
         FROM alltypes_plain \
         WHERE id > 1 AND tinyint_col < double_col",
     )?;
-    let results = df.collect().await?;
 
     // print the results
-    pretty::print_batches(&results)?;
+    df.show().await?;
 
     Ok(())
 }

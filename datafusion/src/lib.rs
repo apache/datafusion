@@ -60,11 +60,11 @@
 //! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
 //!
 //! let expected = vec![
-//!     "+---+--------+",
-//!     "| a | MIN(b) |",
-//!     "+---+--------+",
-//!     "| 1 | 2      |",
-//!     "+---+--------+"
+//!     "+---+--------------------------+",
+//!     "| a | MIN(tests/example.csv.b) |",
+//!     "+---+--------------------------+",
+//!     "| 1 | 2                        |",
+//!     "+---+--------------------------+"
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -95,11 +95,11 @@
 //! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
 //!
 //! let expected = vec![
-//!     "+---+--------+",
-//!     "| a | MIN(b) |",
-//!     "+---+--------+",
-//!     "| 1 | 2      |",
-//!     "+---+--------+"
+//!     "+---+----------------+",
+//!     "| a | MIN(example.b) |",
+//!     "+---+----------------+",
+//!     "| 1 | 2              |",
+//!     "+---+----------------+"
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -132,7 +132,7 @@
 //! Logical planning yields [`logical plans`](logical_plan::LogicalPlan) and [`logical expressions`](logical_plan::Expr).
 //! These are [`Schema`](arrow::datatypes::Schema)-aware traits that represent statements whose result is independent of how it should physically be executed.
 //!
-//! A [`LogicalPlan`](logical_plan::LogicalPlan) is a Direct Asyclic graph of other [`LogicalPlan`s](logical_plan::LogicalPlan) and each node contains logical expressions ([`Expr`s](logical_plan::Expr)).
+//! A [`LogicalPlan`](logical_plan::LogicalPlan) is a Directed Acyclic Graph (DAG) of other [`LogicalPlan`s](logical_plan::LogicalPlan) and each node contains logical expressions ([`Expr`s](logical_plan::Expr)).
 //! All of these are located in [`logical_plan`](logical_plan).
 //!
 //! ### Physical plan
