@@ -23,7 +23,9 @@ use crate::serde::scheduler::PartitionLocation;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
+use datafusion::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, Statistics,
+};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,
@@ -116,5 +118,13 @@ impl ExecutionPlan for UnresolvedShuffleExec {
                 write!(f, "UnresolvedShuffleExec")
             }
         }
+    }
+
+    async fn statistics(&self) -> Statistics {
+        // We could try to fetch the statistics here from the shuffle writer,
+        // but it is much more valuable to optimize the plan once this
+        // nodes has been replaced by the actual ShuffleReaderExec which will
+        // have more accurate statistics from its input partitions.
+        Statistics::default()
     }
 }

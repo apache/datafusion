@@ -29,6 +29,7 @@ use futures::{Stream, TryStreamExt};
 
 use super::{
     coalesce_partitions::CoalescePartitionsExec, hash_utils::check_join_is_valid,
+    ColumnStatistics, Statistics,
 };
 use crate::{
     error::{DataFusionError, Result},
@@ -206,6 +207,39 @@ impl ExecutionPlan for CrossJoinExec {
                 write!(f, "CrossJoinExec")
             }
         }
+    }
+
+    async fn statistics(&self) -> Statistics {
+        let mut left = self.left.statistics().await;
+        let right = self.right.statistics().await;
+        left.is_exact = left.is_exact && right.is_exact;
+        left.num_rows = left.num_rows.zip(right.num_rows).map(|(a, b)| a * b);
+        // the result size is two times a*b because you have the columns of both left and right
+        left.total_byte_size = left
+            .total_byte_size
+            .zip(right.total_byte_size)
+            .map(|(a, b)| 2 * a * b);
+
+        left.column_statistics =
+            match (left.column_statistics, right.column_statistics) {
+                (None, None) => None,
+                (None, Some(right_col_stat)) => Some((
+                    vec![ColumnStatistics::default(); self.left.schema().fields().len()],
+                    right_col_stat,
+                )),
+                (Some(left_col_stat), None) => Some((
+                    left_col_stat,
+                    vec![ColumnStatistics::default(); self.right.schema().fields().len()],
+                )),
+                (Some(left_col_stat), Some(right_col_stat)) => {
+                    Some((left_col_stat, right_col_stat))
+                }
+            }
+            .map(|(mut left_col_stats, mut right_col_stats)| {
+                left_col_stats.append(&mut right_col_stats);
+                left_col_stats
+            });
+        left
     }
 }
 

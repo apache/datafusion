@@ -31,7 +31,9 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Metric, Partitioning};
+use datafusion::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Metric, Partitioning, Statistics,
+};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,
@@ -155,6 +157,30 @@ impl ExecutionPlan for ShuffleReaderExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    async fn statistics(&self) -> Statistics {
+        // TODO stats: add column statistics to PartitionStats
+        self.partition.iter().flatten().fold(
+            Statistics {
+                is_exact: true,
+                num_rows: Some(0),
+                total_byte_size: Some(0),
+                column_statistics: None,
+            },
+            |mut acc, new| {
+                // if any statistic is unkown it makes the entire statistic unkown
+                acc.num_rows = acc
+                    .num_rows
+                    .zip(new.partition_stats.num_rows)
+                    .map(|(a, b)| a + b as usize);
+                acc.total_byte_size = acc
+                    .total_byte_size
+                    .zip(new.partition_stats.num_bytes)
+                    .map(|(a, b)| a + b as usize);
+                acc
+            },
+        )
     }
 }
 

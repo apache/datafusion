@@ -18,11 +18,9 @@
 //! This module contains a query optimizer that operates against a logical plan and applies
 //! some simple rules to a logical plan, such as "Projection Push Down" and "Type Coercion".
 
-pub mod aggregate_statistics;
 pub mod constant_folding;
 pub mod eliminate_limit;
 pub mod filter_push_down;
-pub mod hash_build_probe_order;
 pub mod limit_push_down;
 pub mod optimizer;
 pub mod projection_push_down;

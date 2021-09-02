@@ -22,8 +22,10 @@ use std::{any::Any, time::Instant};
 
 use crate::{
     error::{DataFusionError, Result},
-    physical_plan::{display::DisplayableExecutionPlan, Partitioning},
-    physical_plan::{DisplayFormatType, ExecutionPlan},
+    physical_plan::{
+        display::DisplayableExecutionPlan, DisplayFormatType, ExecutionPlan,
+        Partitioning, Statistics,
+    },
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
@@ -205,5 +207,10 @@ impl ExecutionPlan for AnalyzeExec {
                 write!(f, "AnalyzeExec verbose={}", self.verbose)
             }
         }
+    }
+
+    async fn statistics(&self) -> Statistics {
+        // TODO stats: validate that we don't need to provide statistics on an EXPLAIN plan
+        Statistics::default()
     }
 }

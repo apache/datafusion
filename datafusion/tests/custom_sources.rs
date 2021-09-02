@@ -20,10 +20,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use datafusion::{
-    datasource::{datasource::Statistics, TableProvider},
-    physical_plan::collect,
-};
+use datafusion::{datasource::TableProvider, physical_plan::collect};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::DisplayFormatType,
@@ -34,7 +31,7 @@ use datafusion::logical_plan::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use datafusion::physical_plan::{
-    ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+    ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use futures::stream::Stream;
@@ -145,6 +142,10 @@ impl ExecutionPlan for CustomExecutionPlan {
             }
         }
     }
+
+    async fn statistics(&self) -> Statistics {
+        Statistics::default()
+    }
 }
 
 impl TableProvider for CustomTableProvider {
@@ -166,10 +167,6 @@ impl TableProvider for CustomTableProvider {
         Ok(Arc::new(CustomExecutionPlan {
             projection: projection.clone(),
         }))
-    }
-
-    fn statistics(&self) -> Statistics {
-        Statistics::default()
     }
 }
 

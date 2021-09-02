@@ -27,13 +27,14 @@ use std::task::{Context, Poll};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
+    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use super::{RecordBatchStream, SendableRecordBatchStream};
+use super::expressions::Column;
+use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use async_trait::async_trait;
 
 use futures::stream::Stream;
@@ -155,6 +156,34 @@ impl ExecutionPlan for ProjectionExec {
 
                 write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
             }
+        }
+    }
+
+    async fn statistics(&self) -> Statistics {
+        let input_stat = self.input.statistics().await;
+        let column_statistics =
+            if let Some(input_col_stats) = input_stat.column_statistics {
+                let mut column_stat = Vec::with_capacity(self.expr.len());
+                for (expr, _) in &self.expr {
+                    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                        column_stat.push(input_col_stats[col.index()].clone());
+                    } else {
+                        // TODO stats: estimate more statistics from expressions
+                        // (expressions should compute their statistics themselves)
+                        column_stat.push(ColumnStatistics::default());
+                    }
+                }
+                Some(column_stat)
+            } else {
+                None
+            };
+
+        Statistics {
+            is_exact: input_stat.is_exact,
+            num_rows: input_stat.num_rows,
+            column_statistics,
+            // TODO stats: knowing the type of the new columns we can guess the output size
+            total_byte_size: None,
         }
     }
 }

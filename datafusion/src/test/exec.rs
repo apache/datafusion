@@ -33,8 +33,8 @@ use arrow::{
 use futures::Stream;
 
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::{
     error::{DataFusionError, Result},
@@ -203,6 +203,22 @@ impl ExecutionPlan for MockExec {
             }
         }
     }
+
+    // Panics if one of the batches is an error
+    async fn statistics(&self) -> Statistics {
+        let data: ArrowResult<Vec<_>> = self
+            .data
+            .iter()
+            .map(|r| match r {
+                Ok(batch) => Ok(batch.clone()),
+                Err(e) => Err(clone_error(e)),
+            })
+            .collect();
+
+        let data = data.unwrap();
+
+        common::compute_record_batch_statistics(&[data], None)
+    }
 }
 
 fn clone_error(e: &ArrowError) -> ArrowError {
@@ -306,6 +322,10 @@ impl ExecutionPlan for BarrierExec {
             }
         }
     }
+
+    async fn statistics(&self) -> Statistics {
+        common::compute_record_batch_statistics(&self.data, None)
+    }
 }
 
 /// A mock execution plan that errors on a call to execute
@@ -367,5 +387,9 @@ impl ExecutionPlan for ErrorExec {
                 write!(f, "ErrorExec")
             }
         }
+    }
+
+    async fn statistics(&self) -> Statistics {
+        Statistics::default()
     }
 }

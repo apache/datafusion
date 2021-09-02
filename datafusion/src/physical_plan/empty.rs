@@ -28,7 +28,7 @@ use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
-use super::SendableRecordBatchStream;
+use super::{common, SendableRecordBatchStream, Statistics};
 
 use async_trait::async_trait;
 
@@ -132,6 +132,18 @@ impl ExecutionPlan for EmptyExec {
                 write!(f, "EmptyExec: produce_one_row={}", self.produce_one_row)
             }
         }
+    }
+
+    async fn statistics(&self) -> Statistics {
+        // TODO stats: to simplify this the output RecordBatch could be created upon construction of the plan
+        let stream = self
+            .execute(0)
+            .await
+            .expect("Empty record batch execution should not fail");
+        let batches = common::collect(stream)
+            .await
+            .expect("Empty record batch execution should not fail");
+        common::compute_record_batch_statistics(&[batches], None)
     }
 }
 

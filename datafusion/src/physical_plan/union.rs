@@ -25,9 +25,14 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 
-use super::{DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use super::{
+    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning,
+    SendableRecordBatchStream, Statistics,
+};
 use crate::error::Result;
 use async_trait::async_trait;
+use futures::stream::futures_unordered::FuturesUnordered;
+use futures::stream::StreamExt;
 
 /// UNION ALL execution plan
 #[derive(Debug)]
@@ -106,6 +111,70 @@ impl ExecutionPlan for UnionExec {
             }
         }
     }
+
+    async fn statistics(&self) -> Statistics {
+        self.inputs
+            .iter()
+            .map(|ep| ep.statistics())
+            .collect::<FuturesUnordered<_>>()
+            .fold(Statistics::default(), |acc, new| async {
+                stats_union(acc, new)
+            })
+            .await
+    }
+}
+
+fn col_stats_union(
+    mut left: ColumnStatistics,
+    right: ColumnStatistics,
+) -> ColumnStatistics {
+    use super::expressions::{MaxAccumulator, MinAccumulator};
+    use super::Accumulator;
+    left.distinct_count = None;
+    left.min_value = left
+        .min_value
+        .zip(right.min_value)
+        .map(|(a, b)| {
+            let mut acc = MinAccumulator::try_new(&a.get_datatype())?;
+            acc.update(&[a])?;
+            acc.update(&[b])?;
+            acc.evaluate()
+        })
+        .map_or(Ok(None), |r| r.map(Some))
+        .expect("Accumulator should work for stats datatype");
+    left.max_value = left
+        .max_value
+        .zip(right.max_value)
+        .map(|(a, b)| {
+            let mut acc = MaxAccumulator::try_new(&a.get_datatype())?;
+            acc.update(&[a])?;
+            acc.update(&[b])?;
+            acc.evaluate()
+        })
+        .map_or(Ok(None), |r| r.map(Some))
+        .expect("Accumulator should work for stats datatype");
+    left.null_count = left.null_count.zip(right.null_count).map(|(a, b)| a + b);
+
+    left
+}
+
+fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
+    left.is_exact = left.is_exact && right.is_exact;
+    left.num_rows = left.num_rows.zip(right.num_rows).map(|(a, b)| a + b);
+    left.total_byte_size = left
+        .total_byte_size
+        .zip(right.total_byte_size)
+        .map(|(a, b)| a + b);
+    left.column_statistics =
+        left.column_statistics
+            .zip(right.column_statistics)
+            .map(|(a, b)| {
+                a.into_iter()
+                    .zip(b)
+                    .map(|(ca, cb)| col_stats_union(ca, cb))
+                    .collect()
+            });
+    left
 }
 
 #[cfg(test)]

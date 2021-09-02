@@ -19,7 +19,7 @@
 
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::compute::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
@@ -167,6 +167,47 @@ pub(crate) fn spawn_execution(
             output.send(item).await.ok();
         }
     })
+}
+
+/// Computes the statistics for on in-memory RecordBatch
+///
+/// Only computes statistics that are in arrows metadata and does not
+/// apply any kernel on the actual data.
+pub fn compute_record_batch_statistics(
+    batches: &[Vec<RecordBatch>],
+    projection: Option<Vec<usize>>,
+) -> Statistics {
+    let nb_rows = batches.iter().flatten().map(RecordBatch::num_rows).sum();
+
+    let total_byte_size = batches
+        .iter()
+        .flatten()
+        .flat_map(RecordBatch::columns)
+        .map(|a| a.get_array_memory_size())
+        .sum();
+
+    let projection = match projection {
+        Some(p) => p,
+        None => (0..batches[0][0].num_columns()).collect(),
+    };
+
+    let mut column_statistics = vec![ColumnStatistics::default(); projection.len()];
+
+    for partition in batches.iter() {
+        for batch in partition {
+            for (stat_index, col_index) in projection.iter().enumerate() {
+                *column_statistics[stat_index].null_count.get_or_insert(0) +=
+                    batch.column(*col_index).null_count();
+            }
+        }
+    }
+
+    Statistics {
+        num_rows: Some(nb_rows),
+        total_byte_size: Some(total_byte_size),
+        column_statistics: Some(column_statistics),
+        is_exact: true,
+    }
 }
 
 #[cfg(test)]

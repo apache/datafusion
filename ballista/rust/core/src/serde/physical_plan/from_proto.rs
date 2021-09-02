@@ -34,7 +34,6 @@ use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
     CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
 };
-use datafusion::datasource::datasource::Statistics;
 use datafusion::datasource::object_store::ObjectStoreRegistry;
 use datafusion::datasource::FilePartition;
 use datafusion::execution::context::{
@@ -74,7 +73,9 @@ use datafusion::physical_plan::{
     sort::{SortExec, SortOptions},
     Partitioning,
 };
-use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
+use datafusion::physical_plan::{
+    AggregateExpr, ExecutionPlan, PhysicalExpr, Statistics, WindowExpr,
+};
 use datafusion::prelude::CsvReadOptions;
 use log::debug;
 use protobuf::physical_expr_node::ExprType;
