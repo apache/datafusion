@@ -50,7 +50,7 @@ fn schema_to_field(
     name: Option<&str>,
     nullable: bool,
 ) -> Result<Field> {
-    schema_to_field_with_props(schema, name, nullable, Some(&Default::default()))
+    schema_to_field_with_props(schema, name, nullable, None)
 }
 
 fn schema_to_field_with_props(
