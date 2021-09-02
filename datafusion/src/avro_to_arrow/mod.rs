@@ -31,17 +31,17 @@ pub use reader::{Reader, ReaderBuilder};
 use std::io::{Read, Seek};
 
 #[cfg(feature = "avro")]
-/// Infer Avro schema given a reader
-pub fn infer_avro_schema_from_reader<R: Read + Seek>(reader: &mut R) -> Result<Schema> {
+/// Read Avro schema given a reader
+pub fn read_avro_schema_from_reader<R: Read + Seek>(reader: &mut R) -> Result<Schema> {
     let avro_reader = avro_rs::Reader::new(reader)?;
     let schema = avro_reader.writer_schema();
     schema::to_arrow_schema(schema)
 }
 
 #[cfg(not(feature = "avro"))]
-/// Infer Avro schema given a reader (requires the avro feature)
-pub fn infer_avro_schema_from_reader<R: Read + Seek>(_: &mut R) -> Result<Schema> {
+/// Read Avro schema given a reader (requires the avro feature)
+pub fn read_avro_schema_from_reader<R: Read + Seek>(_: &mut R) -> Result<Schema> {
     Err(crate::error::DataFusionError::NotImplemented(
-        "cannot infer avro schema without the 'avro' feature enabled".to_string(),
+        "cannot read avro schema without the 'avro' feature enabled".to_string(),
     ))
 }

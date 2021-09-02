@@ -50,14 +50,14 @@ pub struct AvroFile {
 }
 
 impl AvroFile {
-    /// Attempt to initialize a `AvroFile` from a path. The schema can be inferred automatically.
+    /// Attempt to initialize a `AvroFile` from a path. The schema can be read automatically.
     pub fn try_new(path: &str, options: AvroReadOptions) -> Result<Self> {
         let schema = if let Some(schema) = options.schema {
             schema
         } else {
             let filenames =
                 common::build_checked_file_list(path, options.file_extension)?;
-            Arc::new(AvroExec::try_infer_schema(&filenames)?)
+            Arc::new(AvroExec::try_read_schema(&filenames)?)
         };
 
         Ok(Self {
@@ -89,8 +89,8 @@ impl AvroFile {
         })
     }
 
-    /// Attempt to initialize an AvroFile from a reader impls Seek. The schema can be inferred automatically.
-    pub fn try_new_from_reader_infer_schema<R: Read + Seek + Send + Sync + 'static>(
+    /// Attempt to initialize an AvroFile from a reader impls Seek. The schema can be read automatically.
+    pub fn try_new_from_reader_schema<R: Read + Seek + Send + Sync + 'static>(
         mut reader: R,
         options: AvroReadOptions,
     ) -> Result<Self> {
@@ -98,7 +98,7 @@ impl AvroFile {
             if let Some(schema) = options.schema {
                 schema
             } else {
-                Arc::new(crate::avro_to_arrow::infer_avro_schema_from_reader(
+                Arc::new(crate::avro_to_arrow::read_avro_schema_from_reader(
                     &mut reader,
                 )?)
             }

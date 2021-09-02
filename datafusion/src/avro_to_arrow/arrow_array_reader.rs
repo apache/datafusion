@@ -979,7 +979,7 @@ mod test {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/{}", testdata, name);
         let builder = ReaderBuilder::new()
-            .infer_schema()
+            .read_schema()
             .with_batch_size(batch_size);
         builder.build(File::open(filename).unwrap()).unwrap()
     }

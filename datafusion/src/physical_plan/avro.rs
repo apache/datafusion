@@ -19,7 +19,7 @@
 #[cfg(feature = "avro")]
 use super::RecordBatchStream;
 use super::{common, source::Source, ExecutionPlan, Partitioning};
-use crate::avro_to_arrow::infer_avro_schema_from_reader;
+use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::DisplayFormatType;
 use arrow::datatypes::{Schema, SchemaRef};
@@ -98,7 +98,7 @@ impl AvroExec {
 
         let schema = match options.schema {
             Some(s) => s,
-            None => Arc::new(AvroExec::try_infer_schema(filenames.as_slice())?),
+            None => Arc::new(AvroExec::try_read_schema(filenames.as_slice())?),
         };
 
         let projected_schema = match &projection {
@@ -192,12 +192,12 @@ impl AvroExec {
         self.limit
     }
 
-    /// Infer schema for given Avro dataset
-    pub fn try_infer_schema(filenames: &[String]) -> Result<Schema> {
+    /// Read schema for given Avro dataset
+    pub fn try_read_schema(filenames: &[String]) -> Result<Schema> {
         let mut schemas = Vec::new();
         for filename in filenames {
             let mut file = File::open(filename)?;
-            let schema = infer_avro_schema_from_reader(&mut file)?;
+            let schema = read_avro_schema_from_reader(&mut file)?;
             schemas.push(schema);
         }
 

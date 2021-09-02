@@ -28,8 +28,7 @@ use std::sync::Arc;
 pub struct ReaderBuilder {
     /// Optional schema for the Avro file
     ///
-    /// If the schema is not supplied, the reader will try to infer the schema
-    /// based on the Avro structure.
+    /// If the schema is not supplied, the reader will try to read the schema.
     schema: Option<SchemaRef>,
     /// Batch size (number of records to load each time)
     ///
@@ -65,7 +64,7 @@ impl ReaderBuilder {
     ///     let file = File::open("test/data/basic.avro").unwrap();
     ///
     ///     // create a builder, inferring the schema with the first 100 records
-    ///     let builder = crate::datafusion::avro_to_arrow::ReaderBuilder::new().infer_schema().with_batch_size(100);
+    ///     let builder = crate::datafusion::avro_to_arrow::ReaderBuilder::new().read_schema().with_batch_size(100);
     ///
     ///     let reader = builder.build::<File>(file).unwrap();
     ///
@@ -83,7 +82,7 @@ impl ReaderBuilder {
     }
 
     /// Set the Avro reader to infer the schema of the file
-    pub fn infer_schema(mut self) -> Self {
+    pub fn read_schema(mut self) -> Self {
         // remove any schema that is set
         self.schema = None;
         self
@@ -111,7 +110,7 @@ impl ReaderBuilder {
         // check if schema should be inferred
         let schema = match self.schema {
             Some(schema) => schema,
-            None => Arc::new(super::infer_avro_schema_from_reader(&mut source)?),
+            None => Arc::new(super::read_avro_schema_from_reader(&mut source)?),
         };
         source.seek(SeekFrom::Start(0))?;
         Reader::try_new(source, schema, self.batch_size, self.projection)
@@ -180,7 +179,7 @@ mod tests {
     fn build_reader(name: &str) -> Reader<File> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/{}", testdata, name);
-        let builder = ReaderBuilder::new().infer_schema().with_batch_size(64);
+        let builder = ReaderBuilder::new().read_schema().with_batch_size(64);
         builder.build(File::open(filename).unwrap()).unwrap()
     }
 
