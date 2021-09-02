@@ -140,7 +140,7 @@ fn schema_to_field_with_props(
         AvroSchema::Decimal {
             precision, scale, ..
         } => DataType::Decimal(*precision, *scale),
-        AvroSchema::Uuid => DataType::Utf8,
+        AvroSchema::Uuid => DataType::FixedSizeBinary(16),
         AvroSchema::Date => DataType::Date32,
         AvroSchema::TimeMillis => DataType::Time32(TimeUnit::Millisecond),
         AvroSchema::TimeMicros => DataType::Time64(TimeUnit::Microsecond),
