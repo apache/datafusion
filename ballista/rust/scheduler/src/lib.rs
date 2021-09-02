@@ -40,10 +40,9 @@ use std::{fmt, net::IpAddr};
 use ballista_core::serde::protobuf::{
     execute_query_params::Query, executor_registration::OptionalHost, job_status,
     scheduler_grpc_server::SchedulerGrpc, task_status, ExecuteQueryParams,
-    ExecuteQueryResult, FailedJob, FilePartitionMetadata, FileType,
-    GetFileMetadataParams, GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult,
-    JobStatus, PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob,
-    TaskDefinition, TaskStatus,
+    ExecuteQueryResult, FailedJob, GetJobStatusParams, GetJobStatusResult, JobStatus,
+    PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob, TaskDefinition,
+    TaskStatus,
 };
 use ballista_core::serde::scheduler::ExecutorMeta;
 
@@ -82,7 +81,6 @@ use self::state::{ConfigBackendClient, SchedulerState};
 use ballista_core::config::BallistaConfig;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use datafusion::datasource::parquet::ParquetTableDescriptor;
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -265,48 +263,6 @@ impl SchedulerGrpc for SchedulerServer {
             Err(tonic::Status::invalid_argument(
                 "Missing metadata in request",
             ))
-        }
-    }
-
-    async fn get_file_metadata(
-        &self,
-        request: Request<GetFileMetadataParams>,
-    ) -> std::result::Result<Response<GetFileMetadataResult>, tonic::Status> {
-        let GetFileMetadataParams { path, file_type } = request.into_inner();
-
-        let file_type: FileType = file_type.try_into().map_err(|e| {
-            let msg = format!("Error reading request: {}", e);
-            error!("{}", msg);
-            tonic::Status::internal(msg)
-        })?;
-
-        match file_type {
-            FileType::Parquet => {
-                let parquet_desc = ParquetTableDescriptor::new(&path).map_err(|e| {
-                    let msg = format!("Error opening parquet files: {}", e);
-                    error!("{}", msg);
-                    tonic::Status::internal(msg)
-                })?;
-
-                let partitions = parquet_desc
-                    .descriptor
-                    .partition_files
-                    .iter()
-                    .map(|pf| FilePartitionMetadata {
-                        filename: vec![pf.path.clone()],
-                    })
-                    .collect();
-
-                //TODO include statistics and any other info needed to reconstruct ParquetExec
-                Ok(Response::new(GetFileMetadataResult {
-                    schema: Some(parquet_desc.schema().as_ref().into()),
-                    partitions,
-                }))
-            }
-            //TODO implement for CSV
-            _ => Err(tonic::Status::unimplemented(
-                "get_file_metadata unsupported file type",
-            )),
         }
     }
 

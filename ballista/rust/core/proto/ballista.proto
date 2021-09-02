@@ -913,25 +913,9 @@ message GetJobStatusResult {
   JobStatus status = 1;
 }
 
-message GetFileMetadataParams {
-  string path = 1;
-  FileType file_type = 2;
-}
-
-message GetFileMetadataResult {
-  Schema schema = 1;
-  repeated FilePartitionMetadata partitions = 2;
-}
-
-message FilePartitionMetadata {
-  repeated string filename = 1;
-}
-
 service SchedulerGrpc {
   // Executors must poll the scheduler for heartbeat and to receive tasks
   rpc PollWork (PollWorkParams) returns (PollWorkResult) {}
-
-  rpc GetFileMetadata (GetFileMetadataParams) returns (GetFileMetadataResult) {}
 
   rpc ExecuteQuery (ExecuteQueryParams) returns (ExecuteQueryResult) {}
 

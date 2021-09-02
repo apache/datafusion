@@ -50,7 +50,6 @@ The scheduler process implements a gRPC interface (defined in
 | -------------------- | -------------------------------------------------------------------- |
 | ExecuteQuery         | Submit a logical query plan or SQL query for execution               |
 | GetExecutorsMetadata | Retrieves a list of executors that have registered with a scheduler  |
-| GetFileMetadata      | Retrieve metadata about files available in the cluster file system   |
 | GetJobStatus         | Get the status of a submitted query                                  |
 | RegisterExecutor     | Executors call this method to register themselves with the scheduler |
 
