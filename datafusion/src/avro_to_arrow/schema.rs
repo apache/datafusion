@@ -112,7 +112,7 @@ fn schema_to_field_with_props(
                 .map(|field| {
                     let mut props = BTreeMap::new();
                     if let Some(doc) = &field.doc {
-                        props.insert("doc".to_string(), doc.clone());
+                        props.insert("avro::doc".to_string(), doc.clone());
                     }
                     /*if let Some(aliases) = fields.aliases {
                         props.insert("aliases", aliases);
@@ -238,7 +238,7 @@ fn external_props(schema: &AvroSchema) -> BTreeMap<String, String> {
         | AvroSchema::Enum {
             doc: Some(ref doc), ..
         } => {
-            props.insert("doc".to_string(), doc.clone());
+            props.insert("avro::doc".to_string(), doc.clone());
         }
         _ => {}
     }
@@ -274,7 +274,10 @@ fn external_props(schema: &AvroSchema) -> BTreeMap<String, String> {
                 .iter()
                 .map(|alias| aliased(alias, namespace.as_deref(), None))
                 .collect();
-            props.insert("aliases".to_string(), format!("[{}]", aliases.join(",")));
+            props.insert(
+                "avro::aliases".to_string(),
+                format!("[{}]", aliases.join(",")),
+            );
         }
         _ => {}
     }
