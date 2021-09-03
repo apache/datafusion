@@ -366,7 +366,7 @@ impl ExecutionPlan for CsvExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         // TODO stats: handle statistics
         Statistics::default()
     }

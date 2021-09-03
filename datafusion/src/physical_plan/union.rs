@@ -31,8 +31,6 @@ use super::{
 };
 use crate::error::Result;
 use async_trait::async_trait;
-use futures::stream::futures_unordered::FuturesUnordered;
-use futures::stream::StreamExt;
 
 /// UNION ALL execution plan
 #[derive(Debug)]
@@ -112,15 +110,12 @@ impl ExecutionPlan for UnionExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         self.inputs
             .iter()
             .map(|ep| ep.statistics())
-            .collect::<FuturesUnordered<_>>()
-            .fold(Statistics::default(), |acc, new| async {
-                stats_union(acc, new)
-            })
-            .await
+            .reduce(|acc, new| stats_union(acc, new))
+            .unwrap_or_default()
     }
 }
 

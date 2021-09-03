@@ -188,8 +188,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Some(self.metrics.clone_inner())
     }
 
-    async fn statistics(&self) -> Statistics {
-        self.input.statistics().await
+    fn statistics(&self) -> Statistics {
+        self.input.statistics()
     }
 }
 

@@ -209,7 +209,7 @@ impl ExecutionPlan for AnalyzeExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         // TODO stats: validate that we don't need to provide statistics on an EXPLAIN plan
         Statistics::default()
     }

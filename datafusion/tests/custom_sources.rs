@@ -143,7 +143,7 @@ impl ExecutionPlan for CustomExecutionPlan {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         Statistics::default()
     }
 }

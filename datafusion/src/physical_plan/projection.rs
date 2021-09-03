@@ -159,8 +159,8 @@ impl ExecutionPlan for ProjectionExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
-        let input_stat = self.input.statistics().await;
+    fn statistics(&self) -> Statistics {
+        let input_stat = self.input.statistics();
         let column_statistics =
             if let Some(input_col_stats) = input_stat.column_statistics {
                 let mut column_stat = Vec::with_capacity(self.expr.len());

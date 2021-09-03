@@ -180,7 +180,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     }
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
-    async fn statistics(&self) -> Statistics;
+    fn statistics(&self) -> Statistics;
 }
 
 /// Return a [wrapper](DisplayableExecutionPlan) around an

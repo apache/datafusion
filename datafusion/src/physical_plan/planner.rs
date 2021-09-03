@@ -1817,7 +1817,7 @@ mod tests {
             }
         }
 
-        async fn statistics(&self) -> Statistics {
+        fn statistics(&self) -> Statistics {
             unimplemented!("NoOpExecutionPlan::statistics");
         }
     }

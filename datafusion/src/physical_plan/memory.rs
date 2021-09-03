@@ -112,7 +112,7 @@ impl ExecutionPlan for MemoryExec {
     }
 
     /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         common::compute_record_batch_statistics(&self.partitions, self.projection.clone())
     }
 }
@@ -248,7 +248,7 @@ mod tests {
         let (schema, batch) = mock_data()?;
 
         let executor = MemoryExec::try_new(&vec![vec![batch]], schema, Some(vec![2, 1]))?;
-        let statistics = executor.statistics().await;
+        let statistics = executor.statistics();
 
         assert_eq!(statistics.num_rows, Some(3));
         assert_eq!(
@@ -285,7 +285,7 @@ mod tests {
         let (schema, batch) = mock_data()?;
 
         let executor = MemoryExec::try_new(&vec![vec![batch]], schema, None)?;
-        let statistics = executor.statistics().await;
+        let statistics = executor.statistics();
 
         assert_eq!(statistics.num_rows, Some(3));
         assert_eq!(

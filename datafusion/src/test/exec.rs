@@ -205,7 +205,7 @@ impl ExecutionPlan for MockExec {
     }
 
     // Panics if one of the batches is an error
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         let data: ArrowResult<Vec<_>> = self
             .data
             .iter()
@@ -323,7 +323,7 @@ impl ExecutionPlan for BarrierExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         common::compute_record_batch_statistics(&self.data, None)
     }
 }
@@ -389,7 +389,7 @@ impl ExecutionPlan for ErrorExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         Statistics::default()
     }
 }

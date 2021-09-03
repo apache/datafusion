@@ -159,7 +159,7 @@ impl ExecutionPlan for ShuffleReaderExec {
         Some(self.metrics.clone_inner())
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         // TODO stats: add column statistics to PartitionStats
         self.partition.iter().flatten().fold(
             Statistics {

@@ -287,7 +287,7 @@ impl ExecutionPlan for HashAggregateExec {
         Ok(())
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
@@ -1164,7 +1164,7 @@ mod tests {
             Ok(Box::pin(stream))
         }
 
-        async fn statistics(&self) -> Statistics {
+        fn statistics(&self) -> Statistics {
             let (_, batches) = some_data();
             common::compute_record_batch_statistics(&[batches], None)
         }

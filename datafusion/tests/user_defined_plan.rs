@@ -424,7 +424,7 @@ impl ExecutionPlan for TopKExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         // to improve the optimizability of this plan
         // better statistics inference could be provided
         Statistics::default()

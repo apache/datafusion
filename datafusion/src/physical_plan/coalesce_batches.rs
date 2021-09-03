@@ -134,8 +134,8 @@ impl ExecutionPlan for CoalesceBatchesExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
-        self.input.statistics().await
+    fn statistics(&self) -> Statistics {
+        self.input.statistics()
     }
 }
 

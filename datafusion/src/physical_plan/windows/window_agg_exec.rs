@@ -163,8 +163,8 @@ impl ExecutionPlan for WindowAggExec {
         Ok(())
     }
 
-    async fn statistics(&self) -> Statistics {
-        let input_stat = self.input.statistics().await;
+    fn statistics(&self) -> Statistics {
+        let input_stat = self.input.statistics();
         let win_cols = self.window_expr.len();
         let input_cols = self.input_schema.fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...

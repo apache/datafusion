@@ -418,8 +418,8 @@ impl ExecutionPlan for ShuffleWriterExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
-        self.plan.statistics().await
+    fn statistics(&self) -> Statistics {
+        self.plan.statistics()
     }
 }
 

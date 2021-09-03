@@ -388,7 +388,7 @@ impl ExecutionPlan for ParquetExec {
         Some(self.metrics.clone_inner())
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         self.statistics.clone()
     }
 }

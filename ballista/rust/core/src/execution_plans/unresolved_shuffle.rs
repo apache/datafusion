@@ -120,7 +120,7 @@ impl ExecutionPlan for UnresolvedShuffleExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         // We could try to fetch the statistics here from the shuffle writer,
         // but it is much more valuable to optimize the plan once this
         // nodes has been replaced by the actual ShuffleReaderExec which will

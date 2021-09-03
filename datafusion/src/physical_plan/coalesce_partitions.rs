@@ -154,8 +154,8 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Some(self.metrics.clone_inner())
     }
 
-    async fn statistics(&self) -> Statistics {
-        self.input.statistics().await
+    fn statistics(&self) -> Statistics {
+        self.input.statistics()
     }
 }
 

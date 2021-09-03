@@ -209,9 +209,9 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
-        let mut left = self.left.statistics().await;
-        let right = self.right.statistics().await;
+    fn statistics(&self) -> Statistics {
+        let mut left = self.left.statistics();
+        let right = self.right.statistics();
         left.is_exact = left.is_exact && right.is_exact;
         left.num_rows = left.num_rows.zip(right.num_rows).map(|(a, b)| a * b);
         // the result size is two times a*b because you have the columns of both left and right

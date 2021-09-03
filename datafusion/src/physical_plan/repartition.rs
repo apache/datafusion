@@ -229,8 +229,8 @@ impl ExecutionPlan for RepartitionExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
-        self.input.statistics().await
+    fn statistics(&self) -> Statistics {
+        self.input.statistics()
     }
 }
 

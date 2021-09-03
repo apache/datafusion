@@ -136,8 +136,8 @@ impl ExecutionPlan for GlobalLimitExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
-        let input_stats = self.input.statistics().await;
+    fn statistics(&self) -> Statistics {
+        let input_stats = self.input.statistics();
         match input_stats {
             // if the input does not reach the limit globally, return input stats
             Statistics {
@@ -235,8 +235,8 @@ impl ExecutionPlan for LocalLimitExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
-        let input_stats = self.input.statistics().await;
+    fn statistics(&self) -> Statistics {
+        let input_stats = self.input.statistics();
         match input_stats {
             // if the input does not reach the limit globally, return input stats
             Statistics {

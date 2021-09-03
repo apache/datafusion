@@ -146,7 +146,7 @@ impl ExecutionPlan for FilterExec {
     }
 
     /// The output statistics of a filtering operation are unknown
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         Statistics::default()
     }
 }

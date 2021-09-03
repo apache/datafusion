@@ -54,6 +54,23 @@ impl EmptyExec {
     pub fn produce_one_row(&self) -> bool {
         self.produce_one_row
     }
+
+    fn data(&self) -> Result<Vec<RecordBatch>> {
+        let batch = if self.produce_one_row {
+            vec![RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new(
+                    "placeholder",
+                    DataType::Null,
+                    true,
+                )])),
+                vec![Arc::new(NullArray::new(1))],
+            )?]
+        } else {
+            vec![]
+        };
+
+        Ok(batch)
+    }
 }
 
 #[async_trait]
@@ -101,22 +118,8 @@ impl ExecutionPlan for EmptyExec {
             )));
         }
 
-        // Makes a stream only contains one null element if needed
-        let data = if self.produce_one_row {
-            vec![RecordBatch::try_new(
-                Arc::new(Schema::new(vec![Field::new(
-                    "placeholder",
-                    DataType::Null,
-                    true,
-                )])),
-                vec![Arc::new(NullArray::new(1))],
-            )?]
-        } else {
-            vec![]
-        };
-
         Ok(Box::pin(MemoryStream::try_new(
-            data,
+            self.data()?,
             self.schema.clone(),
             None,
         )?))
@@ -134,16 +137,11 @@ impl ExecutionPlan for EmptyExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
-        // TODO stats: to simplify this the output RecordBatch could be created upon construction of the plan
-        let stream = self
-            .execute(0)
-            .await
-            .expect("Empty record batch execution should not fail");
-        let batches = common::collect(stream)
-            .await
-            .expect("Empty record batch execution should not fail");
-        common::compute_record_batch_statistics(&[batches], None)
+    fn statistics(&self) -> Statistics {
+        let batch = self
+            .data()
+            .expect("Create empty RecordBatch should not fail");
+        common::compute_record_batch_statistics(&[batch], None)
     }
 }
 

@@ -204,7 +204,7 @@ impl ExecutionPlan for DistributedQueryExec {
         }
     }
 
-    async fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Statistics {
         // We cannot infer the statistics until the logical plan
         // is converted to a physical plan.
         Statistics::default()
