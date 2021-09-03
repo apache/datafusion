@@ -68,5 +68,4 @@ impl TableProvider for EmptyTable {
         );
         Ok(Arc::new(EmptyExec::new(false, Arc::new(projected_schema))))
     }
-
 }
