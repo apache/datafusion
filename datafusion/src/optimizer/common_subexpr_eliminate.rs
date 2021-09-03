@@ -45,6 +45,7 @@ type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
 /// is small or "copy". otherwise some kinds of reference count is needed. String description
 /// here is not such a good choose.
 type Identifier = String;
+
 /// Perform Common Sub-expression Elimination optimization.
 ///
 /// Currently only common sub-expressions within one logical plan will
@@ -625,7 +626,9 @@ fn replace_common_expr(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::logical_plan::{binary_expr, col, lit, sum, LogicalPlanBuilder, Operator};
+    use crate::logical_plan::{
+        avg, binary_expr, col, lit, sum, LogicalPlanBuilder, Operator,
+    };
     use crate::test::*;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
@@ -635,6 +638,39 @@ mod test {
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
+    }
+
+    #[test]
+    fn id_array_visitor() -> Result<()> {
+        let expr = binary_expr(
+            binary_expr(
+                sum(binary_expr(col("a"), Operator::Plus, lit("1"))),
+                Operator::Minus,
+                avg(col("c")),
+            ),
+            Operator::Multiply,
+            lit(2),
+        );
+
+        let mut id_array = vec![];
+        expr_to_identifier(&expr, &mut HashMap::new(), &mut id_array, DataType::Int64)?;
+
+        let expected = vec![
+            (9, "BinaryExpr-*Literal2BinaryExpr--AggregateFunction-AVGfalseColumn-cAggregateFunction-SUMfalseBinaryExpr-+Literal1Column-a"),
+            (7, "BinaryExpr--AggregateFunction-AVGfalseColumn-cAggregateFunction-SUMfalseBinaryExpr-+Literal1Column-a"),
+            (4, "AggregateFunction-SUMfalseBinaryExpr-+Literal1Column-a"), (3, "BinaryExpr-+Literal1Column-a"),
+            (1, ""),
+            (2, ""),
+            (6, "AggregateFunction-AVGfalseColumn-c"),
+            (5, ""),
+            (8, ""),
+        ]
+        .into_iter()
+        .map(|(number, id)| (number, id.into()))
+        .collect::<Vec<_>>();
+        assert_eq!(id_array, expected);
+
+        Ok(())
     }
 
     #[test]
@@ -673,6 +709,86 @@ mod test {
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a Multiply Int32(1) Minus test.b), SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a Multiply Int32(1) Minus test.b Multiply Int32(1) Plus #test.c)]]\
         \n  Projection: #test.a Multiply Int32(1) Minus #test.b AS BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a, #test.a, #test.b, #test.c\
+        \n    TableScan: test projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![],
+                vec![
+                    binary_expr(lit(1), Operator::Plus, avg(col("a"))),
+                    binary_expr(lit(1), Operator::Minus, avg(col("a"))),
+                ],
+            )?
+            .build()?;
+
+        let expected = "Aggregate: groupBy=[[]], aggr=[[Int32(1) Plus #AggregateFunction-AVGfalseColumn-test.a AS AVG(test.a), Int32(1) Minus #AggregateFunction-AVGfalseColumn-test.a AS AVG(test.a)]]\
+        \n  Projection: AVG(#test.a) AS AggregateFunction-AVGfalseColumn-test.a, #test.a, #test.b, #test.c\
+        \n    TableScan: test projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn subexpr_in_same_order() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                binary_expr(lit(1), Operator::Plus, col("a")).alias("first"),
+                binary_expr(lit(1), Operator::Plus, col("a")).alias("second"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: #BinaryExpr-+Column-test.aLiteral1 AS Int32(1) Plus test.a AS first, #BinaryExpr-+Column-test.aLiteral1 AS Int32(1) Plus test.a AS second\
+        \n  Projection: Int32(1) Plus #test.a AS BinaryExpr-+Column-test.aLiteral1, #test.a, #test.b, #test.c\
+        \n    TableScan: test projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn subexpr_in_different_order() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                binary_expr(lit(1), Operator::Plus, col("a")),
+                binary_expr(col("a"), Operator::Plus, lit(1)),
+            ])?
+            .build()?;
+
+        let expected = "Projection: Int32(1) Plus #test.a, #test.a Plus Int32(1)\
+        \n  TableScan: test projection=None";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cross_plans_subexpr() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
+            .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
+            .build()?;
+
+        let expected = "Projection: #Int32(1) Plus test.a\
+        \n  Projection: Int32(1) Plus #test.a\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);

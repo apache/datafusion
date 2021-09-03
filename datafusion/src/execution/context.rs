@@ -1941,6 +1941,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_avg_add() -> Result<()> {
+        let results = execute(
+            "SELECT AVG(c1), AVG(c1) + 1, AVG(c1) + 2, 1 + AVG(c1) FROM test",
+            4,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+--------------+----------------------------+----------------------------+----------------------------+",
+            "| AVG(test.c1) | AVG(test.c1) Plus Int64(1) | AVG(test.c1) Plus Int64(2) | Int64(1) Plus AVG(test.c1) |",
+            "+--------------+----------------------------+----------------------------+----------------------------+",
+            "| 1.5          | 2.5                        | 3.5                        | 2.5                        |",
+            "+--------------+----------------------------+----------------------------+----------------------------+",
+        ];
+        assert_batches_sorted_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn join_partitioned() -> Result<()> {
         // self join on partition id (workaround for duplicate column name)
         let results = execute(
