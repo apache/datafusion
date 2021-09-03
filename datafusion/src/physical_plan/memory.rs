@@ -38,8 +38,10 @@ use futures::Stream;
 pub struct MemoryExec {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
-    /// Schema representing the data after the optional projection is applied
+    /// Schema representing the data before projection
     schema: SchemaRef,
+    /// Schema representing the data after the optional projection is applied
+    projected_schema: SchemaRef,
     /// Optional projection
     projection: Option<Vec<usize>>,
 }
@@ -47,7 +49,7 @@ pub struct MemoryExec {
 impl fmt::Debug for MemoryExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "partitions: [...]")?;
-        write!(f, "schema: {:?}", self.schema)?;
+        write!(f, "schema: {:?}", self.projected_schema)?;
         write!(f, "projection: {:?}", self.projection)
     }
 }
@@ -61,7 +63,7 @@ impl ExecutionPlan for MemoryExec {
 
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.projected_schema.clone()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -87,7 +89,7 @@ impl ExecutionPlan for MemoryExec {
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(MemoryStream::try_new(
             self.partitions[partition].clone(),
-            self.schema.clone(),
+            self.projected_schema.clone(),
             self.projection.clone(),
         )?))
     }
@@ -113,7 +115,11 @@ impl ExecutionPlan for MemoryExec {
 
     /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
     fn statistics(&self) -> Statistics {
-        common::compute_record_batch_statistics(&self.partitions, self.projection.clone())
+        common::compute_record_batch_statistics(
+            &self.partitions,
+            &self.schema,
+            self.projection.clone(),
+        )
     }
 }
 
@@ -141,11 +147,12 @@ impl MemoryExec {
                     .collect();
                 Arc::new(Schema::new(fields?))
             }
-            None => schema,
+            None => Arc::clone(&schema),
         };
         Ok(Self {
             partitions: partitions.to_vec(),
-            schema: projected_schema,
+            schema,
+            projected_schema,
             projection,
         })
     }

@@ -23,7 +23,9 @@ use crate::{
     },
     logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::eliminate_limit::EliminateLimit,
-    physical_optimizer::optimizer::PhysicalOptimizerRule,
+    physical_optimizer::{
+        aggregate_statistics::AggregateStatistics, optimizer::PhysicalOptimizerRule,
+    },
 };
 use log::debug;
 use std::fs;
@@ -716,6 +718,7 @@ impl Default for ExecutionConfig {
                 Arc::new(CoalesceBatches::new()),
                 Arc::new(Repartition::new()),
                 Arc::new(AddCoalescePartitionsExec::new()),
+                Arc::new(AggregateStatistics::new()),
             ],
             query_planner: Arc::new(DefaultQueryPlanner {}),
             default_catalog: "datafusion".to_owned(),

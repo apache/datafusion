@@ -21,7 +21,7 @@ use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::compute::concat;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -175,6 +175,7 @@ pub(crate) fn spawn_execution(
 /// apply any kernel on the actual data.
 pub fn compute_record_batch_statistics(
     batches: &[Vec<RecordBatch>],
+    schema: &Schema,
     projection: Option<Vec<usize>>,
 ) -> Statistics {
     let nb_rows = batches.iter().flatten().map(RecordBatch::num_rows).sum();
@@ -188,7 +189,7 @@ pub fn compute_record_batch_statistics(
 
     let projection = match projection {
         Some(p) => p,
-        None => (0..batches[0][0].num_columns()).collect(),
+        None => (0..schema.fields().len()).collect(),
     };
 
     let mut column_statistics = vec![ColumnStatistics::default(); projection.len()];

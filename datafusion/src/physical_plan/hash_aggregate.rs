@@ -293,14 +293,17 @@ impl ExecutionPlan for HashAggregateExec {
         // - case where we group by on a column for which with have the `distinct` stat
         // TODO stats: aggr expression:
         // - aggregations somtimes also preserve invariants such as min, max...
-        if self.group_expr.is_empty() {
-            Statistics {
-                num_rows: Some(1),
-                is_exact: true,
-                ..Default::default()
+        match self.mode {
+            AggregateMode::Final | AggregateMode::FinalPartitioned
+                if self.group_expr.is_empty() =>
+            {
+                Statistics {
+                    num_rows: Some(1),
+                    is_exact: true,
+                    ..Default::default()
+                }
             }
-        } else {
-            Statistics::default()
+            _ => Statistics::default(),
         }
     }
 }
@@ -1166,7 +1169,7 @@ mod tests {
 
         fn statistics(&self) -> Statistics {
             let (_, batches) = some_data();
-            common::compute_record_batch_statistics(&[batches], None)
+            common::compute_record_batch_statistics(&[batches], &self.schema(), None)
         }
     }
 

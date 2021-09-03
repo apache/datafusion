@@ -114,7 +114,7 @@ impl ExecutionPlan for UnionExec {
         self.inputs
             .iter()
             .map(|ep| ep.statistics())
-            .reduce(|acc, new| stats_union(acc, new))
+            .reduce(stats_union)
             .unwrap_or_default()
     }
 }

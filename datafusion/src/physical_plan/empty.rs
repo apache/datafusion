@@ -141,7 +141,7 @@ impl ExecutionPlan for EmptyExec {
         let batch = self
             .data()
             .expect("Create empty RecordBatch should not fail");
-        common::compute_record_batch_statistics(&[batch], None)
+        common::compute_record_batch_statistics(&[batch], &self.schema, None)
     }
 }
 
