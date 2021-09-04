@@ -24,7 +24,7 @@ use crate::physical_plan::{
     common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning, SQLMetric,
 };
 pub use arrow::compute::sort::SortOptions;
-use arrow::compute::{sort::lexsort_to_indices, sort::SortColumn, take};
+use arrow::compute::{sort::lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -196,13 +196,7 @@ fn sort_batch(
         .map(|e| e.evaluate_to_sort_column(&batch))
         .collect::<Result<Vec<_>>>()
         .map_err(DataFusionError::into_arrow_external_error)?;
-    let columns = columns
-        .iter()
-        .map(|x| SortColumn {
-            values: x.values.as_ref(),
-            options: x.options,
-        })
-        .collect::<Vec<_>>();
+    let columns = columns.iter().map(|x| x.into()).collect::<Vec<_>>();
 
     // sort combined record batch
     // TODO: pushup the limit expression to sort

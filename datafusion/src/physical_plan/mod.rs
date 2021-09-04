@@ -34,7 +34,7 @@ use crate::{error::Result, scalar::ScalarValue};
 
 use arrow::array::ArrayRef;
 use arrow::compute::merge_sort::SortOptions;
-//use arrow::compute::partition::lexicographical_partition_ranges;
+use arrow::compute::partition::lexicographical_partition_ranges;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -500,9 +500,14 @@ pub trait WindowExpr: Send + Sync + Debug {
                 end: num_rows,
             }])
         } else {
-            todo!()
-            //lexicographical_partition_ranges(partition_columns)
-            //    .map_err(DataFusionError::ArrowError)
+            Ok(lexicographical_partition_ranges(
+                &partition_columns
+                    .iter()
+                    .map(|x| x.into())
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(DataFusionError::ArrowError)?
+            .collect())
         }
     }
 

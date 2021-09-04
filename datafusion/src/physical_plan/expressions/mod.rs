@@ -23,7 +23,7 @@ use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
 use arrow::array::*;
-use arrow::compute::sort::SortOptions;
+use arrow::compute::sort::{SortColumn as ArrowSortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 
 /// One column to be used in lexicographical sort
@@ -33,6 +33,15 @@ pub struct SortColumn {
     pub values: ArrayRef,
     /// The options to sort the array
     pub options: Option<SortOptions>,
+}
+
+impl<'a> From<&'a SortColumn> for ArrowSortColumn<'a> {
+    fn from(c: &'a SortColumn) -> Self {
+        Self {
+            values: c.values.as_ref(),
+            options: c.options,
+        }
+    }
 }
 
 mod average;
