@@ -302,6 +302,7 @@ fn producer_task(
         Some(projection.to_vec()),
         Some(limit),
         Arc::new(|_, _| true),
+        None,
     )?;
 
     for batch in reader {

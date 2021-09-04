@@ -106,7 +106,7 @@ impl PrintFormat {
         match self {
             Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
             Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
-            Self::Table => print::print(batches)?,
+            Self::Table => print::print(batches),
             Self::Json => {
                 println!("{}", print_batches_to_json::<JsonArray>(batches)?)
             }

@@ -291,7 +291,7 @@ macro_rules! assert_batches_eq {
         let expected_lines: Vec<String> =
             $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
 
-        let formatted = arrow::io::print::write($CHUNKS).unwrap();
+        let formatted = arrow::io::print::write($CHUNKS);
 
         let actual_lines: Vec<&str> = formatted.trim().lines().collect();
 
@@ -325,7 +325,7 @@ macro_rules! assert_batches_sorted_eq {
             expected_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
         }
 
-        let formatted = arrow::io::print::write($CHUNKS).unwrap();
+        let formatted = arrow::io::print::write($CHUNKS);
         // fix for windows: \r\n -->
 
         let mut actual_lines: Vec<&str> = formatted.trim().lines().collect();

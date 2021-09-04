@@ -129,7 +129,7 @@ impl Accumulator for CountAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let delta = &compute::aggregate::sum(counts);
+        let delta = &compute::aggregate::sum_primitive(counts);
         if let Some(d) = delta {
             self.count += *d;
         }
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn count_empty() -> Result<()> {
-        let a: ArrayRef = Arc::new(BooleanArray::new_empty());
+        let a: ArrayRef = Arc::new(BooleanArray::new_empty(DataType::Boolean));
         generic_test_op!(
             a,
             DataType::Boolean,

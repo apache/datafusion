@@ -40,8 +40,8 @@ use futures::{StreamExt, TryStreamExt};
 use tokio::task::{self, JoinHandle};
 
 use arrow::error::{ArrowError, Result as ArrowResult};
-use arrow::io::csv::write as csv_write;
-use arrow::io::parquet::write;
+use arrow::io::csv;
+use arrow::io::parquet;
 use arrow::record_batch::RecordBatch;
 
 use crate::catalog::{
@@ -487,19 +487,19 @@ impl ExecutionContext {
                     let filename = format!("part-{}.csv", i);
                     let path = fs_path.join(&filename);
 
-                    let mut writer = csv_write::WriterBuilder::new()
+                    let mut writer = csv::write::WriterBuilder::new()
                         .from_path(path)
                         .map_err(ArrowError::from)?;
 
-                    csv_write::write_header(&mut writer, plan.schema().as_ref())?;
+                    csv::write::write_header(&mut writer, plan.schema().as_ref())?;
 
-                    let options = csv_write::SerializeOptions::default();
+                    let options = csv::write::SerializeOptions::default();
 
                     let stream = plan.execute(i).await?;
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
                         stream
                             .map(|batch| {
-                                csv_write::write_batch(&mut writer, &batch?, &options)
+                                csv::write::write_batch(&mut writer, &batch?, &options)
                             })
                             .try_collect()
                             .await
@@ -522,7 +522,7 @@ impl ExecutionContext {
         &self,
         plan: Arc<dyn ExecutionPlan>,
         path: String,
-        options: write::WriteOptions,
+        options: parquet::write::WriteOptions,
     ) -> Result<()> {
         // create directory to contain the Parquet files (one per partition)
         let fs_path = Path::new(&path);
@@ -538,31 +538,31 @@ impl ExecutionContext {
                     let mut file = fs::File::create(path)?;
                     let stream = plan.execute(i).await?;
 
-                    let handle: JoinHandle<Result<()>> = task::spawn(async move {
-                        let parquet_schema = write::to_parquet_schema(&schema)?;
-
+                    let handle: JoinHandle<Result<u64>> = task::spawn(async move {
+                        let parquet_schema = parquet::write::to_parquet_schema(&schema)?;
                         let a = parquet_schema.clone();
                         let stream = stream.map(|batch: ArrowResult<RecordBatch>| {
                             batch.map(|batch| {
                                 let columns = batch.columns().to_vec();
-                                write::DynIter::new(
-                                    columns
-                                        .into_iter()
-                                        .zip(a.columns().to_vec().into_iter())
-                                        .map(|(array, type_)| {
-                                            Ok(write::DynIter::new(std::iter::once(
-                                                write::array_to_page(
-                                                    array.as_ref(),
-                                                    type_,
-                                                    options,
-                                                ),
-                                            )))
-                                        }),
-                                )
+                                let pages = columns
+                                    .into_iter()
+                                    .zip(a.columns().to_vec().into_iter())
+                                    .map(move |(array, type_)| {
+                                        let page = parquet::write::array_to_page(
+                                            array.as_ref(),
+                                            type_,
+                                            options,
+                                            parquet::write::Encoding::Plain,
+                                        );
+                                        Ok(parquet::write::DynIter::new(std::iter::once(
+                                            page,
+                                        )))
+                                    });
+                                parquet::write::DynIter::new(pages)
                             })
                         });
 
-                        Ok(write::stream::write_stream(
+                        Ok(parquet::write::stream::write_stream(
                             &mut file,
                             stream,
                             schema.as_ref(),
@@ -3442,10 +3442,10 @@ mod tests {
         let logical_plan = ctx.optimize(&logical_plan)?;
         let physical_plan = ctx.create_physical_plan(&logical_plan)?;
 
-        let options = write::WriteOptions {
-            compression: write::CompressionCodec::Uncompressed,
+        let options = parquet::write::WriteOptions {
+            compression: parquet::write::Compression::Uncompressed,
             write_statistics: false,
-            version: write::Version::V1,
+            version: parquet::write::Version::V1,
         };
 
         ctx.write_parquet(physical_plan, out_dir.to_string(), options)

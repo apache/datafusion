@@ -206,7 +206,7 @@ fn sort_batch(
 
     // sort combined record batch
     // TODO: pushup the limit expression to sort
-    let indices = lexsort_to_indices(&columns)?;
+    let indices = lexsort_to_indices::<i32>(&columns, None)?;
 
     // reorder all rows based on sorted indices
     RecordBatch::try_new(

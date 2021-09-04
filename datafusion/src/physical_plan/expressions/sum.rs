@@ -124,7 +124,7 @@ impl SumAccumulator {
 macro_rules! typed_sum_delta_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident) => {{
         let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
-        let delta = compute::aggregate::sum(array);
+        let delta = compute::aggregate::sum_primitive(array);
         ScalarValue::$SCALAR(delta)
     }};
 }

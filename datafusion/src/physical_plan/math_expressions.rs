@@ -115,11 +115,17 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 mod tests {
 
     use super::*;
-    use arrow::array::{Array, Float64Array, NullArray};
+    use arrow::{
+        array::{Array, Float64Array, NullArray},
+        datatypes::DataType,
+    };
 
     #[test]
     fn test_random_expression() {
-        let args = vec![ColumnarValue::Array(Arc::new(NullArray::from_data(1)))];
+        let args = vec![ColumnarValue::Array(Arc::new(NullArray::from_data(
+            DataType::Null,
+            1,
+        )))];
         let array = random(&args).expect("fail").into_array(1);
         let floats = array.as_any().downcast_ref::<Float64Array>().expect("fail");
 

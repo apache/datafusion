@@ -687,8 +687,8 @@ mod tests {
         let basic = basic_sort(csv.clone(), sort.clone()).await;
         let partition = partition_sort(csv, sort).await;
 
-        let basic = print::write(&[basic]).unwrap();
-        let partition = print::write(&[partition]).unwrap();
+        let basic = print::write(&[basic]);
+        let partition = print::write(&[partition]);
 
         assert_eq!(basic, partition);
     }
@@ -776,8 +776,8 @@ mod tests {
         assert_eq!(basic.num_rows(), 300);
         assert_eq!(partition.num_rows(), 300);
 
-        let basic = print::write(&[basic]).unwrap();
-        let partition = print::write(&[partition]).unwrap();
+        let basic = print::write(&[basic]);
+        let partition = print::write(&[partition]);
 
         assert_eq!(basic, partition);
     }
@@ -810,8 +810,8 @@ mod tests {
         assert_eq!(basic.num_rows(), 300);
         assert_eq!(merged.iter().map(|x| x.num_rows()).sum::<usize>(), 300);
 
-        let basic = print::write(&[basic]).unwrap();
-        let partition = print::write(merged.as_slice()).unwrap();
+        let basic = print::write(&[basic]);
+        let partition = print::write(merged.as_slice());
 
         assert_eq!(basic, partition);
     }
@@ -936,8 +936,8 @@ mod tests {
         let merged = merged.remove(0);
         let basic = basic_sort(batches, sort.clone()).await;
 
-        let basic = print::write(&[basic]).unwrap();
-        let partition = print::write(&[merged]).unwrap();
+        let basic = print::write(&[basic]);
+        let partition = print::write(&[merged]);
 
         assert_eq!(basic, partition);
     }

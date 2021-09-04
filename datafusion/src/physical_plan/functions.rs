@@ -1340,7 +1340,7 @@ type NullColumnarValue = ColumnarValue;
 impl From<&RecordBatch> for NullColumnarValue {
     fn from(batch: &RecordBatch) -> Self {
         let num_rows = batch.num_rows();
-        ColumnarValue::Array(Arc::new(NullArray::from_data(num_rows)))
+        ColumnarValue::Array(Arc::new(NullArray::from_data(DataType::Null, num_rows)))
     }
 }
 

@@ -169,7 +169,7 @@ impl Accumulator for AvgAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         // counts are summed
-        self.count += compute::aggregate::sum(counts).unwrap_or(0);
+        self.count += compute::aggregate::sum_primitive(counts).unwrap_or(0);
 
         // sums are summed
         self.sum = sum::sum(&self.sum, &sum::sum_batch(&states[1])?)?;

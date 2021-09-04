@@ -29,19 +29,10 @@ use crate::serde::scheduler::PartitionStats;
 
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
-<<<<<<< HEAD
-    array::{
-        ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
-    },
-    datatypes::{DataType, Field, SchemaRef},
-    ipc::reader::FileReader,
-    ipc::writer::FileWriter,
-=======
     array::*,
     datatypes::{DataType, Field},
     io::ipc::read::FileReader,
     io::ipc::write::FileWriter,
->>>>>>> Wip.
     record_batch::RecordBatch,
 };
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};

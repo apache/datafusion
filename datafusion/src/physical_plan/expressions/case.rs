@@ -144,7 +144,11 @@ impl CaseExpr {
             )?;
             let when_match = if let Some(validity) = when_match.validity() {
                 // null values are never matched and should thus be "else".
-                BooleanArray::from_data(when_match.values() & validity, None)
+                BooleanArray::from_data(
+                    DataType::Boolean,
+                    when_match.values() & validity,
+                    None,
+                )
             } else {
                 when_match
             };
@@ -191,7 +195,11 @@ impl CaseExpr {
                 .clone();
             let when_value = if let Some(validity) = when_value.validity() {
                 // null values are never matched and should thus be "else".
-                BooleanArray::from_data(when_value.values() & validity, None)
+                BooleanArray::from_data(
+                    DataType::Boolean,
+                    when_value.values() & validity,
+                    None,
+                )
             } else {
                 when_value
             };

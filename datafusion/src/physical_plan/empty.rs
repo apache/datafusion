@@ -110,7 +110,7 @@ impl ExecutionPlan for EmptyExec {
                     DataType::Null,
                     true,
                 )])),
-                vec![Arc::new(NullArray::from_data(1))],
+                vec![Arc::new(NullArray::from_data(DataType::Null, 1))],
             )?]
         } else {
             vec![]
