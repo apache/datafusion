@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::TimeUnit;
 use pyo3::{FromPyObject, PyAny, PyResult};
 
 use crate::errors;
@@ -28,13 +29,14 @@ pub struct PyDataType {
 
 impl<'source> FromPyObject<'source> for PyDataType {
     fn extract(ob: &'source PyAny) -> PyResult<Self> {
+        let str_ob = ob.to_string();
         let id = ob.getattr("id")?.extract::<i32>()?;
-        let data_type = data_type_id(&id)?;
+        let data_type = data_type_id(&id, &str_ob)?;
         Ok(PyDataType { data_type })
     }
 }
 
-fn data_type_id(id: &i32) -> Result<DataType, errors::DataFusionError> {
+fn data_type_id(id: &i32, str_ob: &str) -> Result<DataType, errors::DataFusionError> {
     // see https://github.com/apache/arrow/blob/3694794bdfd0677b95b8c95681e392512f1c9237/python/pyarrow/includes/libarrow.pxd
     // this is not ideal as it does not generalize for non-basic types
     // Find a way to get a unique name from the pyarrow.DataType
@@ -53,12 +55,93 @@ fn data_type_id(id: &i32) -> Result<DataType, errors::DataFusionError> {
         12 => DataType::Float64,
         13 => DataType::Utf8,
         14 => DataType::Binary,
+        16 => data_type_date(str_ob)?,
+        18 => data_type_timestamp(str_ob)?,
         34 => DataType::LargeUtf8,
         35 => DataType::LargeBinary,
         other => {
             return Err(errors::DataFusionError::Common(format!(
                 "The type {} is not valid",
                 other
+            )))
+        }
+    })
+}
+
+fn data_type_timestamp(str_ob: &str) -> Result<DataType, errors::DataFusionError> {
+    // maps to usage from apache/arrow/pyarrow/types.pxi
+    Ok(match str_ob.as_ref() {
+        "time32[s]" => DataType::Time32(TimeUnit::Second),
+        "time32[ms]" => DataType::Time32(TimeUnit::Millisecond),
+        "time64[us]" => DataType::Time64(TimeUnit::Microsecond),
+        "time64[ns]" => DataType::Time64(TimeUnit::Nanosecond),
+        "timestamp[s]" => DataType::Timestamp(TimeUnit::Second, None),
+        "timestamp[ms]" => DataType::Timestamp(TimeUnit::Millisecond, None),
+        "timestamp[us]" => DataType::Timestamp(TimeUnit::Microsecond, None),
+        "timestamp[ns]" => DataType::Timestamp(TimeUnit::Nanosecond, None),
+        _ => data_type_timestamp_infer(str_ob)?,
+    })
+}
+
+fn data_type_date(str_ob: &str) -> Result<DataType, errors::DataFusionError> {
+    // maps to usage from apache/arrow/pyarrow/types.pxi
+    Ok(match str_ob.as_ref() {
+        "date32" => DataType::Date32,
+        "date64" => DataType::Date64,
+        "date32[day]" => DataType::Date32,
+        "date64[ms]" => DataType::Date64,
+        _ => {
+            return Err(errors::DataFusionError::Common(format!(
+                "invalid date {} provided",
+                str_ob
+            )))
+        }
+    })
+}
+
+fn time_unit_str(unit: &str) -> Result<TimeUnit, errors::DataFusionError> {
+    Ok(match unit {
+        "s" => TimeUnit::Second,
+        "ms" => TimeUnit::Millisecond,
+        "us" => TimeUnit::Microsecond,
+        "ns" => TimeUnit::Nanosecond,
+        _ => {
+            return Err(errors::DataFusionError::Common(format!(
+                "invalid timestamp unit {} provided",
+                unit
+            )))
+        }
+    })
+}
+
+fn data_type_timestamp_infer(str_ob: &str) -> Result<DataType, errors::DataFusionError> {
+    // parse the timestamp string object - this approach is less than idea, as it requires maintaining
+    // this and more direct access methods are better
+    let chunks: Vec<_> = str_ob.split("[").collect();
+    let timestamp_str: String = chunks[0].to_string();
+    let mut unit_tz: String = chunks[1].to_string().replace(",", "").replace("]", "");
+
+    let mut tz: Option<String> = None;
+    let mut unit: TimeUnit;
+
+    if unit_tz.len() < 3 {
+        unit = time_unit_str(&unit_tz)?;
+    } else {
+        // manage timezones
+        let chunks: Vec<_> = unit_tz.split(" ").collect();
+        let tz_part: Vec<_> = unit_tz.split("=").collect();
+        unit = time_unit_str(&chunks[0])?;
+        tz = Some(tz_part[1].to_string());
+    }
+
+    Ok(match timestamp_str.as_ref() {
+        "time32" => DataType::Time32(unit),
+        "time64" => DataType::Time64(unit),
+        "timestamp" => DataType::Timestamp(unit, tz),
+        _ => {
+            return Err(errors::DataFusionError::Common(format!(
+                "invalid timestamp string {} provided",
+                str_ob
             )))
         }
     })
