@@ -19,7 +19,7 @@
 name = "ballista-executor"
 description = "Ballista Distributed Compute - Executor"
 license = "Apache-2.0"
-version = "0.5.0-SNAPSHOT"
+version = "0.6.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -29,10 +29,13 @@ edition = "2018"
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
+arrow = { version = "^5.2"  }
+arrow-flight = { version = "^5.2"  }
 anyhow = "1"
 async-trait = "0.1.36"
-ballista-core = { path = "../core" }
+ballista-core = { path = "../core", version = "0.6.0" }
 configure_me = "0.4.0"
+datafusion = { path = "../../../datafusion", version = "5.1.0" }
 env_logger = "0.8"
 futures = "0.3"
 log = "0.4"
@@ -40,13 +43,8 @@ snmalloc-rs = {version = "0.2", features= ["cache-friendly"], optional = true}
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
 tokio-stream = { version = "0.1", features = ["net"] }
-tonic = "0.4"
+tonic = "0.5"
 uuid = { version = "0.8", features = ["v4"] }
-
-arrow = { version = "4.0"  }
-arrow-flight = { version = "4.0"  }
-
-datafusion = { path = "../../../datafusion" }
 
 [dev-dependencies]
 

@@ -28,7 +28,7 @@ use crate::physical_plan::expressions::try_cast;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
-use super::coercion::{eq_coercion, numerical_coercion, order_coercion, string_coercion};
+use super::coercion::{eq_coercion, like_coercion, numerical_coercion, order_coercion};
 
 /// Binary expression
 #[derive(Debug)]
@@ -102,6 +102,9 @@ macro_rules! binary_array_op_scalar {
             DataType::Date32 => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array)
             }
+            DataType::Date64 => {
+                compute_op_scalar!($LEFT, $RIGHT, $OP, Date64Array)
+            }
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for scalar operation on dyn array",
                 other
@@ -173,13 +176,14 @@ fn to_arrow_arithmetics(op: &Operator) -> compute::arithmetics::Operator {
         Operator::Minus => compute::arithmetics::Operator::Subtract,
         Operator::Multiply => compute::arithmetics::Operator::Multiply,
         Operator::Divide => compute::arithmetics::Operator::Divide,
+        Operator::Modulo => compute::arithmetics::Operator::Remainder,
         _ => unreachable!(),
     }
 }
 
 fn evaluate(lhs: &dyn Array, op: &Operator, rhs: &dyn Array) -> Result<Arc<dyn Array>> {
     use Operator::*;
-    if matches!(op, Plus | Minus | Divide | Multiply) {
+    if matches!(op, Plus | Minus | Divide | Multiply | Modulo) {
         let op = to_arrow_arithmetics(op);
         Ok(compute::arithmetics::arithmetic(lhs, op, rhs).map(|x| x.into())?)
     } else if matches!(op, Eq | NotEq | Lt | LtEq | Gt | GtEq) {
@@ -303,7 +307,7 @@ fn common_binary_type(
         // logical equality operators have their own rules, and always return a boolean
         Operator::Eq | Operator::NotEq => eq_coercion(lhs_type, rhs_type),
         // "like" operators operate on strings and always return a boolean
-        Operator::Like | Operator::NotLike => string_coercion(lhs_type, rhs_type),
+        Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
         // order-comparison operators have their own rules
         Operator::Lt | Operator::Gt | Operator::GtEq | Operator::LtEq => {
             order_coercion(lhs_type, rhs_type)
@@ -312,7 +316,7 @@ fn common_binary_type(
         // because coercion favours higher information types
         Operator::Plus
         | Operator::Minus
-        | Operator::Modulus
+        | Operator::Modulo
         | Operator::Divide
         | Operator::Multiply => numerical_coercion(lhs_type, rhs_type),
     };
@@ -359,7 +363,7 @@ pub fn binary_operator_data_type(
         | Operator::Minus
         | Operator::Divide
         | Operator::Multiply
-        | Operator::Modulus => Ok(common_type),
+        | Operator::Modulo => Ok(common_type),
     }
 }
 
@@ -767,6 +771,25 @@ mod tests {
             vec![a, b],
             Operator::Divide,
             Int32Array::from_slice(&[4, 8, 16, 32, 64]),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn modulus_op() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let a = Arc::new(Int32Array::from(vec![8, 32, 128, 512, 2048]));
+        let b = Arc::new(Int32Array::from(vec![2, 4, 7, 14, 32]));
+
+        apply_arithmetic::<Int32Type>(
+            schema,
+            vec![a, b],
+            Operator::Modulo,
+            Int32Array::from(vec![0, 0, 2, 8, 0]),
         )?;
 
         Ok(())

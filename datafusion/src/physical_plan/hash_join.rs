@@ -18,17 +18,15 @@
 //! Defines the join plan for executing partitions in parallel and then joining the results
 //! into a set of partitions.
 
-use ahash::CallHasher;
 use ahash::RandomState;
 
 use smallvec::{smallvec, SmallVec};
+use std::sync::Arc;
 use std::{any::Any, usize};
-use std::{hash::Hasher, sync::Arc};
 use std::{time::Instant, vec};
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
-use hashbrown::HashMap;
 use tokio::sync::Mutex;
 
 use arrow::datatypes::*;
@@ -38,12 +36,19 @@ use arrow::{array::*, buffer::MutableBuffer};
 
 use arrow::compute::take;
 
-use super::expressions::Column;
+use hashbrown::raw::RawTable;
+
+use super::hash_utils::create_hashes;
 use super::{
-    hash_utils::{build_join_schema, check_join_is_valid, JoinOn, JoinType},
-    merge::MergeExec,
+    coalesce_partitions::CoalescePartitionsExec,
+    hash_utils::{build_join_schema, check_join_is_valid, JoinOn},
+};
+use super::{
+    expressions::Column,
+    metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
 };
 use crate::error::{DataFusionError, Result};
+use crate::logical_plan::JoinType;
 
 use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -52,6 +57,7 @@ use super::{
 use crate::physical_plan::coalesce_batches::concat_batches;
 use crate::physical_plan::PhysicalExpr;
 use log::debug;
+use std::fmt;
 
 type StringArray = Utf8Array<i32>;
 type LargeStringArray = Utf8Array<i64>;
@@ -68,7 +74,14 @@ type LargeStringArray = Utf8Array<i64>;
 // but the values don't match. Those are checked in the [equal_rows] macro
 // TODO: speed up collission check and move away from using a hashbrown HashMap
 // https://github.com/apache/arrow-datafusion/issues/50
-type JoinHashMap = HashMap<(), SmallVec<[u64; 1]>, IdHashBuilder>;
+struct JoinHashMap(RawTable<(u64, SmallVec<[u64; 1]>)>);
+
+impl fmt::Debug for JoinHashMap {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
+}
+
 type JoinLeftData = Arc<(JoinHashMap, RecordBatch)>;
 
 /// join execution plan executes partitions in parallel and combines them into a set of
@@ -91,6 +104,47 @@ pub struct HashJoinExec {
     random_state: RandomState,
     /// Partitioning mode to use
     mode: PartitionMode,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
+}
+
+/// Metrics for HashJoinExec
+#[derive(Debug)]
+struct HashJoinMetrics {
+    /// Total time for joining probe-side batches to the build-side batches
+    join_time: metrics::Time,
+    /// Number of batches consumed by this operator
+    input_batches: metrics::Count,
+    /// Number of rows consumed by this operator
+    input_rows: metrics::Count,
+    /// Number of batches produced by this operator
+    output_batches: metrics::Count,
+    /// Number of rows produced by this operator
+    output_rows: metrics::Count,
+}
+
+impl HashJoinMetrics {
+    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
+
+        let input_batches =
+            MetricBuilder::new(metrics).counter("input_batches", partition);
+
+        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+
+        let output_batches =
+            MetricBuilder::new(metrics).counter("output_batches", partition);
+
+        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
+
+        Self {
+            join_time,
+            input_batches,
+            input_rows,
+            output_batches,
+            output_rows,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -125,12 +179,7 @@ impl HashJoinExec {
         let right_schema = right.schema();
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
-        let schema = Arc::new(build_join_schema(
-            &left_schema,
-            &right_schema,
-            &on,
-            join_type,
-        ));
+        let schema = Arc::new(build_join_schema(&left_schema, &right_schema, join_type));
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
@@ -143,6 +192,7 @@ impl HashJoinExec {
             build_side: Arc::new(Mutex::new(None)),
             random_state,
             mode: partition_mode,
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -164,6 +214,11 @@ impl HashJoinExec {
     /// How the join is performed
     pub fn join_type(&self) -> &JoinType {
         &self.join_type
+    }
+
+    /// The partitioning mode of this hash join
+    pub fn partition_mode(&self) -> &PartitionMode {
+        &self.mode
     }
 
     /// Calculates column indices and left/right placement on input / output schemas and jointype
@@ -249,7 +304,7 @@ impl ExecutionPlan for HashJoinExec {
                             let start = Instant::now();
 
                             // merge all left parts into a single stream
-                            let merge = MergeExec::new(self.left.clone());
+                            let merge = CoalescePartitionsExec::new(self.left.clone());
                             let stream = merge.execute(0).await?;
 
                             // This operation performs 2 steps at once:
@@ -263,10 +318,8 @@ impl ExecutionPlan for HashJoinExec {
                                     Ok(acc)
                                 })
                                 .await?;
-                            let mut hashmap = JoinHashMap::with_capacity_and_hasher(
-                                num_rows,
-                                IdHashBuilder {},
-                            );
+                            let mut hashmap =
+                                JoinHashMap(RawTable::with_capacity(num_rows));
                             let mut hashes_buffer = Vec::new();
                             let mut offset = 0;
                             for batch in batches.iter() {
@@ -318,8 +371,7 @@ impl ExecutionPlan for HashJoinExec {
                             Ok(acc)
                         })
                         .await?;
-                    let mut hashmap =
-                        JoinHashMap::with_capacity_and_hasher(num_rows, IdHashBuilder {});
+                    let mut hashmap = JoinHashMap(RawTable::with_capacity(num_rows));
                     let mut hashes_buffer = Vec::new();
                     let mut offset = 0;
                     for batch in batches.iter() {
@@ -378,6 +430,7 @@ impl ExecutionPlan for HashJoinExec {
             column_indices,
             self.random_state.clone(),
             visited_left_side,
+            HashJoinMetrics::new(partition, &self.metrics),
         )))
     }
 
@@ -396,6 +449,10 @@ impl ExecutionPlan for HashJoinExec {
             }
         }
     }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
 }
 
 /// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
@@ -403,7 +460,7 @@ impl ExecutionPlan for HashJoinExec {
 fn update_hash(
     on: &[Column],
     batch: &RecordBatch,
-    hash: &mut JoinHashMap,
+    hash_map: &mut JoinHashMap,
     offset: usize,
     random_state: &RandomState,
     hashes_buffer: &mut Vec<u64>,
@@ -419,18 +476,18 @@ fn update_hash(
 
     // insert hashes to key of the hashmap
     for (row, hash_value) in hash_values.iter().enumerate() {
-        match hash.raw_entry_mut().from_hash(*hash_value, |_| true) {
-            hashbrown::hash_map::RawEntryMut::Occupied(mut entry) => {
-                entry.get_mut().push((row + offset) as u64);
-            }
-            hashbrown::hash_map::RawEntryMut::Vacant(entry) => {
-                entry.insert_hashed_nocheck(
-                    *hash_value,
-                    (),
-                    smallvec![(row + offset) as u64],
-                );
-            }
-        };
+        let item = hash_map
+            .0
+            .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
+        if let Some((_, indices)) = item {
+            indices.push((row + offset) as u64);
+        } else {
+            hash_map.0.insert(
+                *hash_value,
+                (*hash_value, smallvec![(row + offset) as u64]),
+                |(hash, _)| *hash,
+            );
+        }
     }
     Ok(())
 }
@@ -451,22 +508,14 @@ struct HashJoinStream {
     right: SendableRecordBatchStream,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    /// number of input batches
-    num_input_batches: usize,
-    /// number of input rows
-    num_input_rows: usize,
-    /// number of batches produced
-    num_output_batches: usize,
-    /// number of rows produced
-    num_output_rows: usize,
-    /// total time for joining probe-side batches to the build-side batches
-    join_time: usize,
     /// Random state used for hashing initialization
     random_state: RandomState,
     /// Keeps track of the left side rows whether they are visited
     visited_left_side: Vec<bool>, // TODO: use a more memory efficient data structure, https://github.com/apache/arrow-datafusion/issues/240
     /// There is nothing to process anymore and left side is processed in case of left join
     is_exhausted: bool,
+    /// Metrics
+    join_metrics: HashJoinMetrics,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -481,6 +530,7 @@ impl HashJoinStream {
         column_indices: Vec<ColumnIndex>,
         random_state: RandomState,
         visited_left_side: Vec<bool>,
+        join_metrics: HashJoinMetrics,
     ) -> Self {
         HashJoinStream {
             schema,
@@ -490,14 +540,10 @@ impl HashJoinStream {
             left_data,
             right,
             column_indices,
-            num_input_batches: 0,
-            num_input_rows: 0,
-            num_output_batches: 0,
-            num_output_rows: 0,
-            join_time: 0,
             random_state,
             visited_left_side,
             is_exhausted: false,
+            join_metrics,
         }
     }
 }
@@ -632,7 +678,7 @@ fn build_join_indexes(
                 // This possibly contains rows with hash collisions,
                 // So we have to check here whether rows are equal or not
                 if let Some((_, indices)) =
-                    left.raw_entry().from_hash(*hash_value, |_| true)
+                    left.0.get(*hash_value, |(hash, _)| *hash_value == *hash)
                 {
                     for &i in indices {
                         // Check hash collisions
@@ -664,7 +710,7 @@ fn build_join_indexes(
             // First visit all of the rows
             for (row, hash_value) in hash_values.iter().enumerate() {
                 if let Some((_, indices)) =
-                    left.raw_entry().from_hash(*hash_value, |_| true)
+                    left.0.get(*hash_value, |(hash, _)| *hash_value == *hash)
                 {
                     for &i in indices {
                         // Collision check
@@ -693,8 +739,9 @@ fn build_join_indexes(
             let mut right_indices = MutablePrimitiveArray::<u32>::new();
 
             for (row, hash_value) in hash_values.iter().enumerate() {
-                match left.raw_entry().from_hash(*hash_value, |_| true) {
+                match left.0.get(*hash_value, |(hash, _)| *hash_value == *hash) {
                     Some((_, indices)) => {
+                        let mut no_match = true;
                         for &i in indices {
                             if equal_rows(
                                 i as usize,
@@ -703,10 +750,15 @@ fn build_join_indexes(
                                 &keys_values,
                             )? {
                                 left_indices.push(Some(i as u64));
-                            } else {
-                                left_indices.push(None);
+                                right_indices.push(Some(row as u32));
+                                no_match = false;
                             }
-                            right_indices.push(Some(row as u32));
+                        }
+                        // If no rows matched left, still must keep the right
+                        // with all nulls for left
+                        if no_match {
+                            left_indices.push(None)?;
+                            right_indices.push(Some(row as u32))?;
                         }
                     }
                     None => {
@@ -720,52 +772,13 @@ fn build_join_indexes(
         }
     }
 }
-use core::hash::BuildHasher;
-
-/// `Hasher` that returns the same `u64` value as a hash, to avoid re-hashing
-/// it when inserting/indexing or regrowing the `HashMap`
-pub(crate) struct IdHasher {
-    hash: u64,
-}
-
-impl Hasher for IdHasher {
-    fn finish(&self) -> u64 {
-        self.hash
-    }
-
-    fn write_u64(&mut self, i: u64) {
-        self.hash = i;
-    }
-
-    fn write(&mut self, _bytes: &[u8]) {
-        unreachable!("IdHasher should only be used for u64 keys")
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct IdHashBuilder {}
-
-impl BuildHasher for IdHashBuilder {
-    type Hasher = IdHasher;
-
-    fn build_hasher(&self) -> Self::Hasher {
-        IdHasher { hash: 0 }
-    }
-}
-
-// Combines two hashes into one hash
-#[inline]
-pub(crate) fn combine_hashes(l: u64, r: u64) -> u64 {
-    let hash = (17 * 37u64).wrapping_add(l);
-    hash.wrapping_mul(37).wrapping_add(r)
-}
 
 macro_rules! equal_rows_elem {
     ($array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident) => {{
         let left_array = $l.as_any().downcast_ref::<$array_type>().unwrap();
         let right_array = $r.as_any().downcast_ref::<$array_type>().unwrap();
 
-        match (left_array.is_null($left), left_array.is_null($right)) {
+        match (left_array.is_null($left), right_array.is_null($right)) {
             (false, false) => left_array.value($left) == right_array.value($right),
             _ => false,
         }
@@ -809,276 +822,6 @@ fn equal_rows(
         });
 
     err.unwrap_or(Ok(res))
-}
-
-macro_rules! hash_array {
-    ($array_type:ident, $column: ident, $ty: ident, $hashes: ident, $random_state: ident, $multi_col: ident) => {
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-        if array.null_count() == 0 {
-            if $multi_col {
-                for (i, hash) in $hashes.iter_mut().enumerate() {
-                    *hash = combine_hashes(
-                        $ty::get_hash(&array.value(i), $random_state),
-                        *hash,
-                    );
-                }
-            } else {
-                for (i, hash) in $hashes.iter_mut().enumerate() {
-                    *hash = $ty::get_hash(&array.value(i), $random_state);
-                }
-            }
-        } else {
-            if $multi_col {
-                for (i, hash) in $hashes.iter_mut().enumerate() {
-                    if !array.is_null(i) {
-                        *hash = combine_hashes(
-                            $ty::get_hash(&array.value(i), $random_state),
-                            *hash,
-                        );
-                    }
-                }
-            } else {
-                for (i, hash) in $hashes.iter_mut().enumerate() {
-                    if !array.is_null(i) {
-                        *hash = $ty::get_hash(&array.value(i), $random_state);
-                    }
-                }
-            }
-        }
-    };
-}
-
-macro_rules! hash_array_primitive {
-    ($array_type:ident, $column: ident, $ty: ident, $hashes: ident, $random_state: ident, $multi_col: ident) => {
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-        let values = array.values();
-
-        if array.null_count() == 0 {
-            if $multi_col {
-                for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = combine_hashes($ty::get_hash(value, $random_state), *hash);
-                }
-            } else {
-                for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = $ty::get_hash(value, $random_state)
-                }
-            }
-        } else {
-            if $multi_col {
-                for (i, (hash, value)) in
-                    $hashes.iter_mut().zip(values.iter()).enumerate()
-                {
-                    if !array.is_null(i) {
-                        *hash =
-                            combine_hashes($ty::get_hash(value, $random_state), *hash);
-                    }
-                }
-            } else {
-                for (i, (hash, value)) in
-                    $hashes.iter_mut().zip(values.iter()).enumerate()
-                {
-                    if !array.is_null(i) {
-                        *hash = $ty::get_hash(value, $random_state);
-                    }
-                }
-            }
-        }
-    };
-}
-
-macro_rules! hash_array_float {
-    ($array_type:ident, $column: ident, $ty: ident, $hashes: ident, $random_state: ident, $multi_col: ident) => {
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-        let values = array.values();
-
-        if array.null_count() == 0 {
-            if $multi_col {
-                for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = combine_hashes(
-                        $ty::get_hash(&value.to_le_bytes(), $random_state),
-                        *hash,
-                    );
-                }
-            } else {
-                for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = $ty::get_hash(&value.to_le_bytes(), $random_state)
-                }
-            }
-        } else {
-            if $multi_col {
-                for (i, (hash, value)) in
-                    $hashes.iter_mut().zip(values.iter()).enumerate()
-                {
-                    if !array.is_null(i) {
-                        *hash = combine_hashes(
-                            $ty::get_hash(&value.to_le_bytes(), $random_state),
-                            *hash,
-                        );
-                    }
-                }
-            } else {
-                for (i, (hash, value)) in
-                    $hashes.iter_mut().zip(values.iter()).enumerate()
-                {
-                    if !array.is_null(i) {
-                        *hash = $ty::get_hash(&value.to_le_bytes(), $random_state);
-                    }
-                }
-            }
-        }
-    };
-}
-
-/// Creates hash values for every element in the row based on the values in the columns
-pub fn create_hashes<'a>(
-    arrays: &[ArrayRef],
-    random_state: &RandomState,
-    hashes_buffer: &'a mut Vec<u64>,
-) -> Result<&'a mut Vec<u64>> {
-    // combine hashes with `combine_hashes` if we have more than 1 column
-    let multi_col = arrays.len() > 1;
-
-    for col in arrays {
-        match col.data_type() {
-            DataType::UInt8 => {
-                hash_array_primitive!(
-                    UInt8Array,
-                    col,
-                    u8,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::UInt16 => {
-                hash_array_primitive!(
-                    UInt16Array,
-                    col,
-                    u16,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::UInt32 => {
-                hash_array_primitive!(
-                    UInt32Array,
-                    col,
-                    u32,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::UInt64 => {
-                hash_array_primitive!(
-                    UInt64Array,
-                    col,
-                    u64,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Int8 => {
-                hash_array_primitive!(
-                    Int8Array,
-                    col,
-                    i8,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Int16 => {
-                hash_array_primitive!(
-                    Int16Array,
-                    col,
-                    i16,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Int32 | DataType::Date32 => {
-                hash_array_primitive!(
-                    Int32Array,
-                    col,
-                    i32,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Int64 | DataType::Timestamp(_, None) | DataType::Date64 => {
-                hash_array_primitive!(
-                    Int64Array,
-                    col,
-                    i64,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Boolean => {
-                hash_array!(
-                    BooleanArray,
-                    col,
-                    u8,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Float32 => {
-                hash_array_float!(
-                    Float32Array,
-                    col,
-                    u8,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Float64 => {
-                hash_array_float!(
-                    Float64Array,
-                    col,
-                    u8,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::Utf8 => {
-                hash_array!(
-                    StringArray,
-                    col,
-                    str,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            DataType::LargeUtf8 => {
-                hash_array!(
-                    LargeStringArray,
-                    col,
-                    str,
-                    hashes_buffer,
-                    random_state,
-                    multi_col
-                );
-            }
-            _ => {
-                // This is internal because we should have caught this before.
-                return Err(DataFusionError::Internal(
-                    "Unsupported data type in hasher".to_string(),
-                ));
-            }
-        }
-    }
-    Ok(hashes_buffer)
 }
 
 // Produces a batch for left-side rows that have/have not been matched during the whole join
@@ -1137,7 +880,7 @@ impl Stream for HashJoinStream {
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(batch)) => {
-                    let start = Instant::now();
+                    let timer = self.join_metrics.join_time.timer();
                     let result = build_batch(
                         &batch,
                         &self.left_data,
@@ -1148,12 +891,12 @@ impl Stream for HashJoinStream {
                         &self.column_indices,
                         &self.random_state,
                     );
-                    self.num_input_batches += 1;
-                    self.num_input_rows += batch.num_rows();
+                    self.join_metrics.input_batches.add(1);
+                    self.join_metrics.input_rows.add(batch.num_rows());
                     if let Ok((ref batch, ref left_side)) = result {
-                        self.join_time += start.elapsed().as_millis() as usize;
-                        self.num_output_batches += 1;
-                        self.num_output_rows += batch.num_rows();
+                        timer.done();
+                        self.join_metrics.output_batches.add(1);
+                        self.join_metrics.output_rows.add(batch.num_rows());
 
                         match self.join_type {
                             JoinType::Left
@@ -1170,7 +913,7 @@ impl Stream for HashJoinStream {
                     Some(result.map(|x| x.0))
                 }
                 other => {
-                    let start = Instant::now();
+                    let timer = self.join_metrics.join_time.timer();
                     // For the left join, produce rows for unmatched rows
                     match self.join_type {
                         JoinType::Left
@@ -1187,15 +930,14 @@ impl Stream for HashJoinStream {
                                 self.join_type != JoinType::Semi,
                             );
                             if let Ok(ref batch) = result {
-                                self.num_input_batches += 1;
-                                self.num_input_rows += batch.num_rows();
+                                self.join_metrics.input_batches.add(1);
+                                self.join_metrics.input_rows.add(batch.num_rows());
                                 if let Ok(ref batch) = result {
-                                    self.join_time +=
-                                        start.elapsed().as_millis() as usize;
-                                    self.num_output_batches += 1;
-                                    self.num_output_rows += batch.num_rows();
+                                    self.join_metrics.output_batches.add(1);
+                                    self.join_metrics.output_rows.add(batch.num_rows());
                                 }
                             }
+                            timer.done();
                             self.is_exhausted = true;
                             return Some(result);
                         }
@@ -1207,16 +949,6 @@ impl Stream for HashJoinStream {
                         | JoinType::Right => {}
                     }
 
-                    // End of right batch, print stats in debug mode
-                    debug!(
-                        "Processed {} probe-side input batches containing {} rows and \
-                        produced {} output batches containing {} rows in {} ms",
-                        self.num_input_batches,
-                        self.num_input_rows,
-                        self.num_output_batches,
-                        self.num_output_rows,
-                        self.join_time
-                    );
                     other
                 }
             })
@@ -1341,16 +1073,16 @@ mod tests {
             join_collect(left.clone(), right.clone(), on.clone(), &JoinType::Inner)
                 .await?;
 
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 5  | 9  | 20 | 80 |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 5  | 9  | 20 | 5  | 80 |",
+            "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1382,16 +1114,16 @@ mod tests {
         )
         .await?;
 
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 5  | 9  | 20 | 80 |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 5  | 9  | 20 | 5  | 80 |",
+            "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1459,18 +1191,18 @@ mod tests {
 
         let (columns, batches) = join_collect(left, right, on, &JoinType::Inner).await?;
 
-        assert_eq!(columns, vec!["a1", "b2", "c1", "c2"]);
+        assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
         assert_eq!(batches.len(), 1);
 
         let expected = vec![
-            "+----+----+----+----+",
-            "| a1 | b2 | c1 | c2 |",
-            "+----+----+----+----+",
-            "| 1  | 1  | 7  | 70 |",
-            "| 2  | 2  | 8  | 80 |",
-            "| 2  | 2  | 9  | 80 |",
-            "+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b2 | c1 | a1 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 1  | 7  | 1  | 1  | 70 |",
+            "| 2  | 2  | 8  | 2  | 2  | 80 |",
+            "| 2  | 2  | 9  | 2  | 2  | 80 |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1511,18 +1243,18 @@ mod tests {
 
         let (columns, batches) = join_collect(left, right, on, &JoinType::Inner).await?;
 
-        assert_eq!(columns, vec!["a1", "b2", "c1", "c2"]);
+        assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
         assert_eq!(batches.len(), 1);
 
         let expected = vec![
-            "+----+----+----+----+",
-            "| a1 | b2 | c1 | c2 |",
-            "+----+----+----+----+",
-            "| 1  | 1  | 7  | 70 |",
-            "| 2  | 2  | 8  | 80 |",
-            "| 2  | 2  | 9  | 80 |",
-            "+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b2 | c1 | a1 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 1  | 7  | 1  | 1  | 70 |",
+            "| 2  | 2  | 8  | 2  | 2  | 80 |",
+            "| 2  | 2  | 9  | 2  | 2  | 80 |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1559,7 +1291,7 @@ mod tests {
         let join = join(left, right, on, &JoinType::Inner)?;
 
         let columns = columns(&join.schema());
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         // first part
         let stream = join.execute(0).await?;
@@ -1567,11 +1299,11 @@ mod tests {
         assert_eq!(batches.len(), 1);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1580,12 +1312,12 @@ mod tests {
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 2  | 5  | 8  | 30 | 90 |",
-            "| 3  | 5  | 9  | 30 | 90 |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 2  | 5  | 8  | 30 | 5  | 90 |",
+            "| 3  | 5  | 9  | 30 | 5  | 90 |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1625,21 +1357,21 @@ mod tests {
         let join = join(left, right, on, &JoinType::Left).unwrap();
 
         let columns = columns(&join.schema());
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let stream = join.execute(0).await.unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 7  | 9  |    |    |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 7  | 9  |    | 7  |    |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1705,19 +1437,19 @@ mod tests {
         let join = join(left, right, on, &JoinType::Left).unwrap();
 
         let columns = columns(&join.schema());
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let stream = join.execute(0).await.unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  |    |    |",
-            "| 2  | 5  | 8  |    |    |",
-            "| 3  | 7  | 9  |    |    |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  |    | 4  |    |",
+            "| 2  | 5  | 8  |    | 5  |    |",
+            "| 3  | 7  | 9  |    | 7  |    |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1778,16 +1510,16 @@ mod tests {
         let (columns, batches) =
             join_collect(left.clone(), right.clone(), on.clone(), &JoinType::Left)
                 .await?;
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 7  | 9  |    |    |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 7  | 9  |    | 7  |    |",
+            "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1818,16 +1550,16 @@ mod tests {
             &JoinType::Left,
         )
         .await?;
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | c2 |",
-            "+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 70 |",
-            "| 2  | 5  | 8  | 20 | 80 |",
-            "| 3  | 7  | 9  |    |    |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 7  | 9  |    | 7  |    |",
+            "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1929,16 +1661,16 @@ mod tests {
 
         let (columns, batches) = join_collect(left, right, on, &JoinType::Right).await?;
 
-        assert_eq!(columns, vec!["a1", "c1", "a2", "b1", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+",
-            "|    |    | 30 | 6  | 90 |",
-            "| 1  | 7  | 10 | 4  | 70 |",
-            "| 2  | 8  | 20 | 5  | 80 |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "|    | 6  |    | 30 | 6  | 90 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -1966,16 +1698,16 @@ mod tests {
         let (columns, batches) =
             partitioned_join_collect(left, right, on, &JoinType::Right).await?;
 
-        assert_eq!(columns, vec!["a1", "c1", "a2", "b1", "c2"]);
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
-            "+----+----+----+----+----+",
-            "| a1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+",
-            "|    |    | 30 | 6  | 90 |",
-            "| 1  | 7  | 10 | 4  | 70 |",
-            "| 2  | 8  | 20 | 5  | 80 |",
-            "+----+----+----+----+----+",
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+----+",
+            "|    | 6  |    | 30 | 6  | 90 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "+----+----+----+----+----+----+",
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
@@ -2024,24 +1756,8 @@ mod tests {
     }
 
     #[test]
-    fn create_hashes_for_float_arrays() -> Result<()> {
-        let f32_arr = Arc::new(Float32Array::from_slice(&[0.12, 0.5, 1f32, 444.7]));
-        let f64_arr = Arc::new(Float64Array::from_slice(&[0.12, 0.5, 1f64, 444.7]));
-
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        let hashes_buff = &mut vec![0; f32_arr.len()];
-        let hashes = create_hashes(&[f32_arr], &random_state, hashes_buff)?;
-        assert_eq!(hashes.len(), 4,);
-
-        let hashes = create_hashes(&[f64_arr], &random_state, hashes_buff)?;
-        assert_eq!(hashes.len(), 4,);
-
-        Ok(())
-    }
-
-    #[test]
     fn join_with_hash_collision() -> Result<()> {
-        let mut hashmap_left = HashMap::with_capacity_and_hasher(2, IdHashBuilder {});
+        let mut hashmap_left = RawTable::with_capacity(2);
         let left = build_table_i32(
             ("a", &vec![10, 20]),
             ("x", &vec![100, 200]),
@@ -2053,19 +1769,9 @@ mod tests {
         let hashes =
             create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
 
-        // Create hash collisions
-        match hashmap_left.raw_entry_mut().from_hash(hashes[0], |_| true) {
-            hashbrown::hash_map::RawEntryMut::Vacant(entry) => {
-                entry.insert_hashed_nocheck(hashes[0], (), smallvec![0, 1])
-            }
-            _ => unreachable!("Hash should not be vacant"),
-        };
-        match hashmap_left.raw_entry_mut().from_hash(hashes[1], |_| true) {
-            hashbrown::hash_map::RawEntryMut::Vacant(entry) => {
-                entry.insert_hashed_nocheck(hashes[1], (), smallvec![0, 1])
-            }
-            _ => unreachable!("Hash should not be vacant"),
-        };
+        // Create hash collisions (same hashes)
+        hashmap_left.insert(hashes[0], (hashes[0], smallvec![0, 1]), |(h, _)| *h);
+        hashmap_left.insert(hashes[1], (hashes[1], smallvec![0, 1]), |(h, _)| *h);
 
         let right = build_table_i32(
             ("a", &vec![10, 20]),
@@ -2073,7 +1779,7 @@ mod tests {
             ("c", &vec![30, 40]),
         );
 
-        let left_data = JoinLeftData::new((hashmap_left, left));
+        let left_data = JoinLeftData::new((JoinHashMap(hashmap_left), left));
         let (l, r) = build_join_indexes(
             &left_data,
             &right,

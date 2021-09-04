@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Core executor logic for executing queries and storing results in memory.
+#![doc = include_str!("../README.md")]
 
 pub mod collect;
 pub mod execution_loop;

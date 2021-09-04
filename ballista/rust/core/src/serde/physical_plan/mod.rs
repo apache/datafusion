@@ -27,7 +27,7 @@ mod roundtrip_tests {
             compute::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
-        logical_plan::Operator,
+        logical_plan::{JoinType, Operator},
         physical_plan::{
             empty::EmptyExec,
             expressions::{binary, col, lit, InListExpr, NotExpr},
@@ -35,7 +35,6 @@ mod roundtrip_tests {
             filter::FilterExec,
             hash_aggregate::{AggregateMode, HashAggregateExec},
             hash_join::{HashJoinExec, PartitionMode},
-            hash_utils::JoinType,
             limit::{GlobalLimitExec, LocalLimitExec},
             sort::SortExec,
             AggregateExpr, ColumnarValue, Distribution, ExecutionPlan, Partitioning,
@@ -46,6 +45,7 @@ mod roundtrip_tests {
 
     use super::super::super::error::Result;
     use super::super::protobuf;
+    use crate::execution_plans::ShuffleWriterExec;
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let proto: protobuf::PhysicalPlanNode = exec_plan.clone().try_into()?;
@@ -88,13 +88,29 @@ mod roundtrip_tests {
             Column::new("col", schema_right.index_of("col")?),
         )];
 
-        roundtrip_test(Arc::new(HashJoinExec::try_new(
-            Arc::new(EmptyExec::new(false, Arc::new(schema_left))),
-            Arc::new(EmptyExec::new(false, Arc::new(schema_right))),
-            on,
-            &JoinType::Inner,
-            PartitionMode::CollectLeft,
-        )?))
+        let schema_left = Arc::new(schema_left);
+        let schema_right = Arc::new(schema_right);
+        for join_type in &[
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::Anti,
+            JoinType::Semi,
+        ] {
+            for partition_mode in
+                &[PartitionMode::Partitioned, PartitionMode::CollectLeft]
+            {
+                roundtrip_test(Arc::new(HashJoinExec::try_new(
+                    Arc::new(EmptyExec::new(false, schema_left.clone())),
+                    Arc::new(EmptyExec::new(false, schema_right.clone())),
+                    on.clone(),
+                    join_type,
+                    *partition_mode,
+                )?))?;
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -167,6 +183,21 @@ mod roundtrip_tests {
         roundtrip_test(Arc::new(SortExec::try_new(
             sort_exprs,
             Arc::new(EmptyExec::new(false, schema)),
+        )?))
+    }
+
+    #[test]
+    fn roundtrip_shuffle_writer() -> Result<()> {
+        let field_a = Field::new("a", DataType::Int64, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+        roundtrip_test(Arc::new(ShuffleWriterExec::try_new(
+            "job123".to_string(),
+            123,
+            Arc::new(EmptyExec::new(false, schema)),
+            "".to_string(),
+            Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 4)),
         )?))
     }
 }

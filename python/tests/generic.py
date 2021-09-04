@@ -19,6 +19,7 @@ import datetime
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.csv
 import pyarrow.parquet as pq
 
 # used to write parquet files

@@ -280,8 +280,8 @@ impl FromStr for BuiltinScalarFunction {
             "concat" => BuiltinScalarFunction::Concat,
             "concat_ws" => BuiltinScalarFunction::ConcatWithSeparator,
             "chr" => BuiltinScalarFunction::Chr,
-            "date_part" => BuiltinScalarFunction::DatePart,
-            "date_trunc" => BuiltinScalarFunction::DateTrunc,
+            "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
+            "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
             "initcap" => BuiltinScalarFunction::InitCap,
             "left" => BuiltinScalarFunction::Left,
             "length" => BuiltinScalarFunction::CharacterLength,
@@ -471,7 +471,18 @@ pub fn return_type(
         | BuiltinScalarFunction::Sin
         | BuiltinScalarFunction::Sqrt
         | BuiltinScalarFunction::Tan
-        | BuiltinScalarFunction::Trunc => Ok(DataType::Float64),
+        | BuiltinScalarFunction::Trunc => {
+            if arg_types.is_empty() {
+                return Err(DataFusionError::Internal(format!(
+                    "builtin scalar function {} does not support empty arguments",
+                    fun
+                )));
+            }
+            match arg_types[0] {
+                DataType::Float32 => Ok(DataType::Float32),
+                _ => Ok(DataType::Float64),
+            }
+        }
     }
 }
 
@@ -1851,10 +1862,10 @@ mod tests {
         test_function!(
             Exp,
             &[lit(ScalarValue::Float32(Some(1.0)))],
-            Ok(Some((1.0_f32).exp() as f64)),
-            f64,
-            Float64,
-            Float64Array
+            Ok(Some((1.0_f32).exp())),
+            f32,
+            Float32,
+            Float32Array
         );
         test_function!(
             InitCap,
@@ -3736,7 +3747,6 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let ctx_state = ExecutionContextState::new();
 
-        // concat(value, value)
         let col_value = lit(ScalarValue::Utf8(Some("aaa-555".to_string())));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
         let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];

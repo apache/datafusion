@@ -31,6 +31,10 @@ use crate::{
     physical_plan::{collect, collect_partitioned},
 };
 
+use crate::arrow::util::pretty;
+use crate::physical_plan::{
+    execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
+};
 use async_trait::async_trait;
 
 /// Implementation of DataFrame API
@@ -46,6 +50,14 @@ impl DataFrameImpl {
             ctx_state,
             plan: plan.clone(),
         }
+    }
+
+    /// Create a physical plan
+    async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        let state = self.ctx_state.lock().unwrap().clone();
+        let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
+        let plan = ctx.optimize(&self.plan)?;
+        ctx.create_physical_plan(&plan)
     }
 }
 
@@ -63,7 +75,7 @@ impl DataFrame for DataFrameImpl {
 
     /// Create a projection based on arbitrary expressions
     fn select(&self, expr_list: Vec<Expr>) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .project(expr_list)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -71,7 +83,7 @@ impl DataFrame for DataFrameImpl {
 
     /// Create a filter based on a predicate expression
     fn filter(&self, predicate: Expr) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .filter(predicate)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -83,7 +95,7 @@ impl DataFrame for DataFrameImpl {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .aggregate(group_expr, aggr_expr)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -91,13 +103,17 @@ impl DataFrame for DataFrameImpl {
 
     /// Limit the number of rows
     fn limit(&self, n: usize) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan).limit(n)?.build()?;
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
+            .limit(n)?
+            .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
     }
 
     /// Sort by specified sorting expressions
     fn sort(&self, expr: Vec<Expr>) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan).sort(expr)?.build()?;
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
+            .sort(expr)?
+            .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
     }
 
@@ -109,12 +125,11 @@ impl DataFrame for DataFrameImpl {
         left_cols: &[&str],
         right_cols: &[&str],
     ) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .join(
                 &right.to_logical_plan(),
                 join_type,
-                left_cols.to_vec(),
-                right_cols.to_vec(),
+                (left_cols.to_vec(), right_cols.to_vec()),
             )?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -124,7 +139,7 @@ impl DataFrame for DataFrameImpl {
         &self,
         partitioning_scheme: Partitioning,
     ) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .repartition(partitioning_scheme)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -135,24 +150,45 @@ impl DataFrame for DataFrameImpl {
         self.plan.clone()
     }
 
-    // Convert the logical plan represented by this DataFrame into a physical plan and
-    // execute it
+    /// Convert the logical plan represented by this DataFrame into a physical plan and
+    /// execute it, collecting all resulting batches into memory
     async fn collect(&self) -> Result<Vec<RecordBatch>> {
-        let state = self.ctx_state.lock().unwrap().clone();
-        let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
-        let plan = ctx.optimize(&self.plan)?;
-        let plan = ctx.create_physical_plan(&plan)?;
+        let plan = self.create_physical_plan().await?;
         Ok(collect(plan).await?)
     }
 
-    // Convert the logical plan represented by this DataFrame into a physical plan and
-    // execute it
+    /// Print results.
+    async fn show(&self) -> Result<()> {
+        let results = self.collect().await?;
+        Ok(pretty::print_batches(&results)?)
+    }
+
+    /// Print results and limit rows.
+    async fn show_limit(&self, num: usize) -> Result<()> {
+        let results = self.limit(num)?.collect().await?;
+        Ok(pretty::print_batches(&results)?)
+    }
+
+    /// Convert the logical plan represented by this DataFrame into a physical plan and
+    /// execute it, returning a stream over a single partition
+    async fn execute_stream(&self) -> Result<SendableRecordBatchStream> {
+        let plan = self.create_physical_plan().await?;
+        execute_stream(plan).await
+    }
+
+    /// Convert the logical plan represented by this DataFrame into a physical plan and
+    /// execute it, collecting all resulting batches into memory while maintaining
+    /// partitioning
     async fn collect_partitioned(&self) -> Result<Vec<Vec<RecordBatch>>> {
-        let state = self.ctx_state.lock().unwrap().clone();
-        let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
-        let plan = ctx.optimize(&self.plan)?;
-        let plan = ctx.create_physical_plan(&plan)?;
+        let plan = self.create_physical_plan().await?;
         Ok(collect_partitioned(plan).await?)
+    }
+
+    /// Convert the logical plan represented by this DataFrame into a physical plan and
+    /// execute it, returning a stream for each partition
+    async fn execute_stream_partitioned(&self) -> Result<Vec<SendableRecordBatchStream>> {
+        let plan = self.create_physical_plan().await?;
+        Ok(execute_stream_partitioned(plan).await?)
     }
 
     /// Returns the schema from the logical plan
@@ -160,9 +196,9 @@ impl DataFrame for DataFrameImpl {
         self.plan.schema()
     }
 
-    fn explain(&self, verbose: bool) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
-            .explain(verbose)?
+    fn explain(&self, verbose: bool, analyze: bool) -> Result<Arc<dyn DataFrame>> {
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
+            .explain(verbose, analyze)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
     }
@@ -173,7 +209,7 @@ impl DataFrame for DataFrameImpl {
     }
 
     fn union(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(&self.plan)
+        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .union(dataframe.to_logical_plan())?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
@@ -241,15 +277,15 @@ mod tests {
 
         assert_batches_sorted_eq!(
             vec![
-            "+----+----------------------+--------------------+---------------------+--------------------+------------+---------------------+",
-            "| c1 | MIN(c12)             | MAX(c12)           | AVG(c12)            | SUM(c12)           | COUNT(c12) | COUNT(DISTINCT c12) |",
-            "+----+----------------------+--------------------+---------------------+--------------------+------------+---------------------+",
-            "| a  | 0.02182578039211991  | 0.9800193410444061 | 0.48754517466109415 | 10.238448667882977 | 21         | 21                  |",
-            "| b  | 0.04893135681998029  | 0.9185813970744787 | 0.41040709263815384 | 7.797734760124923  | 19         | 19                  |",
-            "| c  | 0.0494924465469434   | 0.991517828651004  | 0.6600456536439785  | 13.860958726523547 | 21         | 21                  |",
-            "| d  | 0.061029375346466685 | 0.9748360509016578 | 0.48855379387549835 | 8.79396828975897   | 18         | 18                  |",
-            "| e  | 0.01479305307777301  | 0.9965400387585364 | 0.48600669271341557 | 10.206140546981727 | 21         | 21                  |",
-            "+----+----------------------+--------------------+---------------------+--------------------+------------+---------------------+",
+                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
+                "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) | AVG(aggregate_test_100.c12) | SUM(aggregate_test_100.c12) | COUNT(aggregate_test_100.c12) | COUNT(DISTINCT aggregate_test_100.c12) |",
+                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
+                "| a  | 0.02182578039211991         | 0.9800193410444061          | 0.48754517466109415         | 10.238448667882977          | 21                            | 21                                     |",
+                "| b  | 0.04893135681998029         | 0.9185813970744787          | 0.41040709263815384         | 7.797734760124923           | 19                            | 19                                     |",
+                "| c  | 0.0494924465469434          | 0.991517828651004           | 0.6600456536439784          | 13.860958726523545          | 21                            | 21                                     |",
+                "| d  | 0.061029375346466685        | 0.9748360509016578          | 0.48855379387549824         | 8.793968289758968           | 18                            | 18                                     |",
+                "| e  | 0.01479305307777301         | 0.9965400387585364          | 0.48600669271341534         | 10.206140546981722          | 21                            | 21                                     |",
+                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
             ],
             &df
         );
@@ -260,7 +296,7 @@ mod tests {
     #[tokio::test]
     async fn join() -> Result<()> {
         let left = test_table()?.select_columns(&["c1", "c2"])?;
-        let right = test_table()?.select_columns(&["c1", "c3"])?;
+        let right = test_table_with_name("c2")?.select_columns(&["c1", "c3"])?;
         let left_rows = left.collect().await?;
         let right_rows = right.collect().await?;
         let join = left.join(right, JoinType::Inner, &["c1"], &["c1"])?;
@@ -295,7 +331,7 @@ mod tests {
         let df = df
             .select_columns(&["c1", "c2", "c11"])?
             .limit(10)?
-            .explain(false)?;
+            .explain(false, false)?;
         let plan = df.to_logical_plan();
 
         // build query using SQL
@@ -311,7 +347,7 @@ mod tests {
     #[test]
     fn registry() -> Result<()> {
         let mut ctx = ExecutionContext::new();
-        register_aggregate_csv(&mut ctx)?;
+        register_aggregate_csv(&mut ctx, "aggregate_test_100")?;
 
         // declare the udf
         let my_fn: ScalarFunctionImplementation =
@@ -362,21 +398,28 @@ mod tests {
     /// Create a logical plan from a SQL query
     fn create_plan(sql: &str) -> Result<LogicalPlan> {
         let mut ctx = ExecutionContext::new();
-        register_aggregate_csv(&mut ctx)?;
+        register_aggregate_csv(&mut ctx, "aggregate_test_100")?;
         ctx.create_logical_plan(sql)
     }
 
-    fn test_table() -> Result<Arc<dyn DataFrame + 'static>> {
+    fn test_table_with_name(name: &str) -> Result<Arc<dyn DataFrame + 'static>> {
         let mut ctx = ExecutionContext::new();
-        register_aggregate_csv(&mut ctx)?;
-        ctx.table("aggregate_test_100")
+        register_aggregate_csv(&mut ctx, name)?;
+        ctx.table(name)
     }
 
-    fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
+    fn test_table() -> Result<Arc<dyn DataFrame + 'static>> {
+        test_table_with_name("aggregate_test_100")
+    }
+
+    fn register_aggregate_csv(
+        ctx: &mut ExecutionContext,
+        table_name: &str,
+    ) -> Result<()> {
         let schema = test::aggr_test_schema();
         let testdata = crate::test_util::arrow_test_data();
         ctx.register_csv(
-            "aggregate_test_100",
+            table_name,
             &format!("{}/csv/aggregate_test_100.csv", testdata),
             CsvReadOptions::new().schema(schema.as_ref()),
         )?;

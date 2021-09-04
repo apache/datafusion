@@ -17,7 +17,16 @@
 //! This module contains the  `LogicalPlan` enum that describes queries
 //! via a logical query plan.
 
+use super::display::{GraphvizVisitor, IndentVisitor};
+use super::expr::{Column, Expr};
+use super::extension::UserDefinedLogicalNode;
+use crate::datasource::TableProvider;
+use crate::error::DataFusionError;
+use crate::logical_plan::dfschema::DFSchemaRef;
+use crate::sql::parser::FileType;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use std::{
+    collections::HashSet,
     fmt::{self, Display},
     sync::Arc,
 };
@@ -217,6 +226,16 @@ pub enum LogicalPlan {
         /// The output schema of the explain (2 columns of text)
         schema: DFSchemaRef,
     },
+    /// Runs the actual plan, and then prints the physical plan with
+    /// with execution metrics.
+    Analyze {
+        /// Should extra detail be included?
+        verbose: bool,
+        /// The logical plan that is being EXPLAIN ANALYZE'd
+        input: Arc<LogicalPlan>,
+        /// The output schema of the explain (2 columns of text)
+        schema: DFSchemaRef,
+    },
     /// Extension operator defined outside of DataFusion
     Extension {
         /// The runtime extension operator
@@ -243,6 +262,7 @@ impl LogicalPlan {
             LogicalPlan::Limit { input, .. } => input.schema(),
             LogicalPlan::CreateExternalTable { schema, .. } => schema,
             LogicalPlan::Explain { schema, .. } => schema,
+            LogicalPlan::Analyze { schema, .. } => schema,
             LogicalPlan::Extension { node } => node.schema(),
             LogicalPlan::Union { schema, .. } => schema,
         }
@@ -282,6 +302,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Extension { node } => vec![node.schema()],
             LogicalPlan::Explain { schema, .. }
+            | LogicalPlan::Analyze { schema, .. }
             | LogicalPlan::EmptyRelation { schema, .. }
             | LogicalPlan::CreateExternalTable { schema, .. } => vec![schema],
             LogicalPlan::Limit { input, .. }
@@ -331,6 +352,7 @@ impl LogicalPlan {
             | LogicalPlan::Limit { .. }
             | LogicalPlan::CreateExternalTable { .. }
             | LogicalPlan::CrossJoin { .. }
+            | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
             | LogicalPlan::Union { .. } => {
                 vec![]
@@ -354,11 +376,47 @@ impl LogicalPlan {
             LogicalPlan::Extension { node } => node.inputs(),
             LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
             LogicalPlan::Explain { plan, .. } => vec![plan],
+            LogicalPlan::Analyze { input: plan, .. } => vec![plan],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::CreateExternalTable { .. } => vec![],
         }
+    }
+
+    /// returns all `Using` join columns in a logical plan
+    pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
+        struct UsingJoinColumnVisitor {
+            using_columns: Vec<HashSet<Column>>,
+        }
+
+        impl PlanVisitor for UsingJoinColumnVisitor {
+            type Error = DataFusionError;
+
+            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+                if let LogicalPlan::Join {
+                    join_constraint: JoinConstraint::Using,
+                    on,
+                    ..
+                } = plan
+                {
+                    self.using_columns.push(
+                        on.iter()
+                            .map(|entry| [&entry.0, &entry.1])
+                            .flatten()
+                            .cloned()
+                            .collect::<HashSet<Column>>(),
+                    );
+                }
+                Ok(true)
+            }
+        }
+
+        let mut visitor = UsingJoinColumnVisitor {
+            using_columns: vec![],
+        };
+        self.accept(&mut visitor)?;
+        Ok(visitor.using_columns)
     }
 }
 
@@ -464,6 +522,7 @@ impl LogicalPlan {
                 true
             }
             LogicalPlan::Explain { plan, .. } => plan.accept(visitor)?,
+            LogicalPlan::Analyze { input: plan, .. } => plan.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -715,10 +774,21 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
-                    LogicalPlan::Join { on: ref keys, .. } => {
+                    LogicalPlan::Join {
+                        on: ref keys,
+                        join_constraint,
+                        ..
+                    } => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
-                        write!(f, "Join: {}", join_expr.join(", "))
+                        match join_constraint {
+                            JoinConstraint::On => {
+                                write!(f, "Join: {}", join_expr.join(", "))
+                            }
+                            JoinConstraint::Using => {
+                                write!(f, "Join: Using {}", join_expr.join(", "))
+                            }
+                        }
                     }
                     LogicalPlan::CrossJoin { .. } => {
                         write!(f, "CrossJoin:")
@@ -748,6 +818,7 @@ impl LogicalPlan {
                         write!(f, "CreateExternalTable: {:?}", name)
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
+                    LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union { .. } => write!(f, "Union"),
                     LogicalPlan::Extension { ref node } => node.fmt_for_explain(f),
                 }
@@ -763,28 +834,43 @@ impl fmt::Debug for LogicalPlan {
     }
 }
 
-/// Represents which type of plan
+/// Represents which type of plan, when storing multiple
+/// for use in EXPLAIN plans
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
-    LogicalPlan,
+    InitialLogicalPlan,
     /// The LogicalPlan which results from applying an optimizer pass
     OptimizedLogicalPlan {
         /// The name of the optimizer which produced this plan
         optimizer_name: String,
     },
-    /// The physical plan, prepared for execution
-    PhysicalPlan,
+    /// The final, fully optimized LogicalPlan that was converted to a physical plan
+    FinalLogicalPlan,
+    /// The initial physical plan, prepared for execution
+    InitialPhysicalPlan,
+    /// The ExecutionPlan which results from applying an optimizer pass
+    OptimizedPhysicalPlan {
+        /// The name of the optimizer which produced this plan
+        optimizer_name: String,
+    },
+    /// The final, fully optimized physical which would be executed
+    FinalPhysicalPlan,
 }
 
-impl From<&PlanType> for String {
-    fn from(t: &PlanType) -> Self {
-        match t {
-            PlanType::LogicalPlan => "logical_plan".into(),
+impl fmt::Display for PlanType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {
-                format!("logical_plan after {}", optimizer_name)
+                write!(f, "logical_plan after {}", optimizer_name)
             }
-            PlanType::PhysicalPlan => "physical_plan".into(),
+            PlanType::FinalLogicalPlan => write!(f, "logical_plan"),
+            PlanType::InitialPhysicalPlan => write!(f, "initial_physical_plan"),
+            PlanType::OptimizedPhysicalPlan { optimizer_name } => {
+                write!(f, "physical_plan after {}", optimizer_name)
+            }
+            PlanType::FinalPhysicalPlan => write!(f, "physical_plan"),
         }
     }
 }
@@ -812,7 +898,22 @@ impl StringifiedPlan {
     /// returns true if this plan should be displayed. Generally
     /// `verbose_mode = true` will display all available plans
     pub fn should_display(&self, verbose_mode: bool) -> bool {
-        self.plan_type == PlanType::LogicalPlan || verbose_mode
+        match self.plan_type {
+            PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan => true,
+            _ => verbose_mode,
+        }
+    }
+}
+
+/// Trait for something that can be formatted as a stringified plan
+pub trait ToStringifiedPlan {
+    /// Create a stringified plan with the specified type
+    fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
+}
+
+impl ToStringifiedPlan for LogicalPlan {
+    fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan {
+        StringifiedPlan::new(plan_type, self.display_indent().to_string())
     }
 }
 

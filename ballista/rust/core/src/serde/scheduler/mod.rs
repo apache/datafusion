@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::Partitioning;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -32,12 +33,14 @@ pub mod to_proto;
 
 /// Action that can be sent to an executor
 #[derive(Debug, Clone)]
-
 pub enum Action {
-    /// Execute a query and store the results in memory
-    ExecutePartition(ExecutePartition),
     /// Collect a shuffle partition
-    FetchPartition(PartitionId),
+    FetchPartition {
+        job_id: String,
+        stage_id: usize,
+        partition_id: usize,
+        path: String,
+    },
 }
 
 /// Unique identifier for the output partition of an operator.
@@ -63,6 +66,7 @@ pub struct PartitionLocation {
     pub partition_id: PartitionId,
     pub executor_meta: ExecutorMeta,
     pub partition_stats: PartitionStats,
+    pub path: String,
 }
 
 /// Meta-data for an executor, used when fetching shuffle partitions from other executors
@@ -97,9 +101,9 @@ impl From<protobuf::ExecutorMetadata> for ExecutorMeta {
 /// Summary of executed partition
 #[derive(Debug, Copy, Clone)]
 pub struct PartitionStats {
-    num_rows: Option<u64>,
-    num_batches: Option<u64>,
-    num_bytes: Option<u64>,
+    pub(crate) num_rows: Option<u64>,
+    pub(crate) num_batches: Option<u64>,
+    pub(crate) num_bytes: Option<u64>,
 }
 
 impl Default for PartitionStats {
@@ -109,6 +113,16 @@ impl Default for PartitionStats {
             num_batches: None,
             num_bytes: None,
         }
+    }
+}
+
+impl fmt::Display for PartitionStats {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "numBatches={:?}, numRows={:?}, numBytes={:?}",
+            self.num_batches, self.num_rows, self.num_bytes
+        )
     }
 }
 
@@ -132,7 +146,8 @@ impl PartitionStats {
             false,
         )
     }
-    fn arrow_struct_fields(self) -> Vec<Field> {
+
+    pub fn arrow_struct_fields(self) -> Vec<Field> {
         vec![
             Field::new("num_rows", DataType::UInt64, false),
             Field::new("num_batches", DataType::UInt64, false),
@@ -189,6 +204,8 @@ pub struct ExecutePartition {
     pub plan: Arc<dyn ExecutionPlan>,
     /// Location of shuffle partitions that this query stage may depend on
     pub shuffle_locations: HashMap<PartitionId, ExecutorMeta>,
+    /// Output partitioning for shuffle writes
+    pub output_partitioning: Option<Partitioning>,
 }
 
 impl ExecutePartition {
@@ -198,6 +215,7 @@ impl ExecutePartition {
         partition_id: Vec<usize>,
         plan: Arc<dyn ExecutionPlan>,
         shuffle_locations: HashMap<PartitionId, ExecutorMeta>,
+        output_partitioning: Option<Partitioning>,
     ) -> Self {
         Self {
             job_id,
@@ -205,6 +223,7 @@ impl ExecutePartition {
             partition_id,
             plan,
             shuffle_locations,
+            output_partitioning,
         }
     }
 

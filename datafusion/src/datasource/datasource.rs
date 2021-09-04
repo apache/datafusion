@@ -27,7 +27,7 @@ use crate::{arrow::datatypes::SchemaRef, scalar::ScalarValue};
 
 /// This table statistics are estimates.
 /// It can not be used directly in the precise compute
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Statistics {
     /// The number of table rows
     pub num_rows: Option<usize>,
@@ -51,7 +51,7 @@ pub struct ColumnStatistics {
 
 /// Indicates whether and how a filter expression can be handled by a
 /// TableProvider for table scans.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TableProviderFilterPushDown {
     /// The expression cannot be used by the provider.
     Unsupported,
@@ -67,7 +67,7 @@ pub enum TableProviderFilterPushDown {
 }
 
 /// Indicates the type of this table for metadata/catalog purposes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TableType {
     /// An ordinary physical table.
     Base,
@@ -107,6 +107,11 @@ pub trait TableProvider: Sync + Send {
     /// Returns the table Statistics
     /// Statistics should be optional because not all data sources can provide statistics.
     fn statistics(&self) -> Statistics;
+
+    /// Returns whether statistics provided are exact values or estimates
+    fn has_exact_statistics(&self) -> bool {
+        false
+    }
 
     /// Tests whether the table provider can make use of a filter expression
     /// to optimise data retrieval.

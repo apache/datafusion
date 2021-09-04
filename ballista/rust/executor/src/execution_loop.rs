@@ -27,11 +27,14 @@ use tonic::transport::Channel;
 use ballista_core::serde::protobuf::ExecutorRegistration;
 use ballista_core::serde::protobuf::{
     self, scheduler_grpc_client::SchedulerGrpcClient, task_status, FailedTask,
-    PartitionId, PollWorkParams, PollWorkResult, TaskDefinition, TaskStatus,
+    PartitionId, PollWorkParams, PollWorkResult, ShuffleWritePartition, TaskDefinition,
+    TaskStatus,
 };
 use protobuf::CompletedTask;
 
 use crate::executor::Executor;
+use ballista_core::error::BallistaError;
+use ballista_core::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
 
 pub async fn poll_loop(
     mut scheduler: SchedulerGrpcClient<Channel>,
@@ -49,6 +52,10 @@ pub async fn poll_loop(
         let task_status: Vec<TaskStatus> =
             sample_tasks_status(&mut task_status_receiver).await;
 
+        // Keeps track of whether we received task in last iteration
+        // to avoid going in sleep mode between polling
+        let mut active_job = false;
+
         let poll_work_result: anyhow::Result<
             tonic::Response<PollWorkResult>,
             tonic::Status,
@@ -65,22 +72,34 @@ pub async fn poll_loop(
         match poll_work_result {
             Ok(result) => {
                 if let Some(task) = result.into_inner().task {
-                    run_received_tasks(
+                    match run_received_tasks(
                         executor.clone(),
                         executor_meta.id.clone(),
                         available_tasks_slots.clone(),
                         task_status_sender,
                         task,
                     )
-                    .await;
+                    .await
+                    {
+                        Ok(_) => {
+                            active_job = true;
+                        }
+                        Err(e) => {
+                            warn!("Failed to run task: {:?}", e);
+                            active_job = false;
+                        }
+                    }
+                } else {
+                    active_job = false;
                 }
             }
             Err(error) => {
                 warn!("Executor registration failed. If this continues to happen the executor might be marked as dead by the scheduler. Error: {}", error);
             }
         }
-
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        if !active_job {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 
@@ -90,44 +109,55 @@ async fn run_received_tasks(
     available_tasks_slots: Arc<AtomicUsize>,
     task_status_sender: Sender<TaskStatus>,
     task: TaskDefinition,
-) {
-    info!("Received task {:?}", task.task_id.as_ref().unwrap());
+) -> Result<(), BallistaError> {
+    let task_id = task.task_id.unwrap();
+    let task_id_log = format!(
+        "{}/{}/{}",
+        task_id.job_id, task_id.stage_id, task_id.partition_id
+    );
+    info!("Received task {}", task_id_log);
     available_tasks_slots.fetch_sub(1, Ordering::SeqCst);
     let plan: Arc<dyn ExecutionPlan> = (&task.plan.unwrap()).try_into().unwrap();
-    let task_id = task.task_id.unwrap();
+    let shuffle_output_partitioning =
+        parse_protobuf_hash_partitioning(task.output_partitioning.as_ref())?;
 
     tokio::spawn(async move {
         let execution_result = executor
-            .execute_partition(
+            .execute_shuffle_write(
                 task_id.job_id.clone(),
                 task_id.stage_id as usize,
                 task_id.partition_id as usize,
                 plan,
+                shuffle_output_partitioning,
             )
             .await;
-        info!("DONE WITH TASK: {:?}", execution_result);
+        info!("Done with task {}", task_id_log);
+        debug!("Statistics: {:?}", execution_result);
         available_tasks_slots.fetch_add(1, Ordering::SeqCst);
         let _ = task_status_sender.send(as_task_status(
-            execution_result.map(|_| ()),
+            execution_result,
             executor_id,
             task_id,
         ));
     });
+
+    Ok(())
 }
 
 fn as_task_status(
-    execution_result: ballista_core::error::Result<()>,
+    execution_result: ballista_core::error::Result<Vec<ShuffleWritePartition>>,
     executor_id: String,
     task_id: PartitionId,
 ) -> TaskStatus {
     match execution_result {
-        Ok(_) => {
+        Ok(partitions) => {
             info!("Task {:?} finished", task_id);
 
             TaskStatus {
                 partition_id: Some(task_id),
                 status: Some(task_status::Status::Completed(CompletedTask {
                     executor_id,
+                    partitions,
                 })),
             }
         }

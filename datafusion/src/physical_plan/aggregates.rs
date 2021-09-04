@@ -110,9 +110,9 @@ pub fn create_aggregate_expr(
     distinct: bool,
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
-    name: String,
+    name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
-    // coerce
+    let name = name.into();
     let arg = coerce(args, input_schema, &signature(fun))?;
     if arg.is_empty() {
         return Err(DataFusionError::Plan(format!(
@@ -188,6 +188,8 @@ static TIMESTAMPS: &[DataType] = &[
     DataType::Timestamp(TimeUnit::Nanosecond, None),
 ];
 
+static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
+
 /// the signatures supported by the function `fun`.
 pub fn signature(fun: &AggregateFunction) -> Signature {
     // note: the physical expression must accept the type returned by this function or the execution panics.
@@ -198,6 +200,7 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .iter()
                 .chain(NUMERICS.iter())
                 .chain(TIMESTAMPS.iter())
+                .chain(DATES.iter())
                 .cloned()
                 .collect::<Vec<_>>();
             Signature::Uniform(1, valid)

@@ -144,18 +144,19 @@ enum ScalarFunction {
   TOTIMESTAMP = 24;
   ARRAY = 25;
   NULLIF = 26;
-  DATETRUNC = 27;
-  MD5 = 28;
-  SHA224 = 29;
-  SHA256 = 30;
-  SHA384 = 31;
-  SHA512 = 32;
-  LN = 33;
+  DATEPART = 27;
+  DATETRUNC = 28;
+  MD5 = 29;
+  SHA224 = 30;
+  SHA256 = 31;
+  SHA384 = 32;
+  SHA512 = 33;
+  LN = 34;
 }
 
 message ScalarFunctionNode {
   ScalarFunction fun = 1;
-  repeated LogicalExprNode expr = 2;
+  repeated LogicalExprNode args = 2;
 }
 
 enum AggregateFunction {
@@ -250,6 +251,8 @@ message LogicalPlanNode {
     CreateExternalTableNode create_external_table = 11;
     ExplainNode explain = 12;
     WindowNode window = 13;
+    AnalyzeNode analyze = 14;
+    CrossJoinNode cross_join = 15;
   }
 }
 
@@ -268,12 +271,28 @@ message CsvTableScanNode {
   repeated LogicalExprNode filters = 8;
 }
 
+message Statistics {
+  int64 num_rows = 1;
+  int64 total_byte_size = 2;
+  repeated ColumnStats column_stats = 3;
+}
+
+message PartitionedFile {
+  string path = 1;
+  Statistics statistics = 2;
+}
+
+message TableDescriptor {
+  string path = 1;
+  repeated PartitionedFile partition_files = 2;
+  Schema schema = 3;
+}
+
 message ParquetTableScanNode {
   string table_name = 1;
-  string path = 2;
+  TableDescriptor table_desc = 2;
   ProjectionColumns projection = 3;
-  Schema schema = 4;
-  repeated LogicalExprNode filters = 5;
+  repeated LogicalExprNode filters = 4;
 }
 
 message ProjectionNode {
@@ -322,6 +341,11 @@ enum FileType{
   CSV = 2;
 }
 
+message AnalyzeNode {
+  LogicalPlanNode input = 1;
+  bool verbose = 2;
+}
+
 message ExplainNode{
   LogicalPlanNode input = 1;
   bool verbose = 2;
@@ -347,7 +371,7 @@ enum WindowFrameUnits {
 message WindowFrame {
   WindowFrameUnits window_frame_units = 1;
   WindowFrameBound start_bound = 2;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
   // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
   oneof end_bound {
     WindowFrameBound bound = 3;
@@ -362,7 +386,7 @@ enum WindowFrameBoundType {
 
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
   // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
   oneof bound_value {
     uint64 value = 2;
@@ -378,12 +402,23 @@ enum JoinType {
   ANTI = 5;
 }
 
+enum JoinConstraint {
+  ON = 0;
+  USING = 1;
+}
+
 message JoinNode {
   LogicalPlanNode left = 1;
   LogicalPlanNode right = 2;
   JoinType join_type = 3;
-  repeated Column left_join_column = 4;
-  repeated Column right_join_column = 5;
+  JoinConstraint join_constraint = 4;
+  repeated Column left_join_column = 5;
+  repeated Column right_join_column = 6;
+}
+
+message CrossJoinNode {
+  LogicalPlanNode left = 1;
+  LogicalPlanNode right = 2;
 }
 
 message LimitNode {
@@ -414,10 +449,12 @@ message PhysicalPlanNode {
     SortExecNode sort = 11;
     CoalesceBatchesExecNode coalesce_batches = 12;
     FilterExecNode filter = 13;
-    MergeExecNode merge = 14;
+    CoalescePartitionsExecNode merge = 14;
     UnresolvedShuffleExecNode unresolved = 15;
     RepartitionExecNode repartition = 16;
     WindowAggExecNode window = 17;
+    ShuffleWriterExecNode shuffle_writer = 18;
+    CrossJoinExecNode cross_join = 19;
   }
 }
 
@@ -535,9 +572,10 @@ message PhysicalNegativeNode {
 }
 
 message UnresolvedShuffleExecNode {
-  repeated uint32 query_stage_ids = 1;
+  uint32 stage_id = 1;
   Schema schema = 2;
-  uint32 partition_count = 3;
+  uint32 input_partition_count = 3;
+  uint32 output_partition_count = 4;
 }
 
 message FilterExecNode {
@@ -545,10 +583,15 @@ message FilterExecNode {
   PhysicalExprNode expr = 2;
 }
 
+message ParquetPartition {
+  uint32 index = 1;
+  repeated PartitionedFile files = 2;
+}
+
 message ParquetScanExecNode {
-  repeated string filename = 1;
-  repeated uint32 projection = 2;
-  uint32 num_partitions = 3;
+  repeated ParquetPartition partitions = 1;
+  Schema schema = 2;
+  repeated uint32 projection = 3;
   uint32 batch_size = 4;
 }
 
@@ -565,12 +608,22 @@ message CsvScanExecNode {
   repeated string filename = 8;
 }
 
+enum PartitionMode {
+  COLLECT_LEFT = 0;
+  PARTITIONED = 1;
+}
+
 message HashJoinExecNode {
   PhysicalPlanNode left = 1;
   PhysicalPlanNode right = 2;
   repeated JoinOn on = 3;
   JoinType join_type = 4;
+  PartitionMode partition_mode = 6;
+}
 
+message CrossJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
 }
 
 message PhysicalColumn {
@@ -618,6 +671,15 @@ message HashAggregateExecNode {
   Schema input_schema = 7;
 }
 
+message ShuffleWriterExecNode {
+  //TODO it seems redundant to provide job and stage id here since we also have them
+  // in the TaskDefinition that wraps this plan
+  string job_id = 1;
+  uint32 stage_id = 2;
+  PhysicalPlanNode input = 3;
+  PhysicalHashRepartition output_partitioning = 4;
+}
+
 message ShuffleReaderExecNode {
   repeated ShuffleReaderPartition partition = 1;
   Schema schema = 2;
@@ -648,7 +710,7 @@ message CoalesceBatchesExecNode {
   uint32 target_batch_size = 2;
 }
 
-message MergeExecNode {
+message CoalescePartitionsExecNode {
   PhysicalPlanNode input = 1;
 }
 
@@ -678,14 +740,8 @@ message KeyValuePair {
 message Action {
 
   oneof ActionType {
-    // Execute a logical query plan
-    LogicalPlanNode query = 1;
-
-    // Execute one partition of a physical query plan
-    ExecutePartition execute_partition = 2;
-
     // Fetch a partition from an executor
-    PartitionId fetch_partition = 3;
+    FetchPartition fetch_partition = 3;
   }
 
   // configuration settings
@@ -699,6 +755,15 @@ message ExecutePartition {
   PhysicalPlanNode plan = 4;
   // The task could need to read partitions from other executors
   repeated PartitionLocation partition_location = 5;
+  // Output partition for shuffle writer
+  PhysicalHashRepartition output_partitioning = 6;
+}
+
+message FetchPartition {
+  string job_id = 1;
+  uint32 stage_id = 2;
+  uint32 partition_id = 3;
+  string path = 4;
 }
 
 // Mapping from partition id to executor id
@@ -706,6 +771,7 @@ message PartitionLocation {
   PartitionId partition_id = 1;
   ExecutorMetadata executor_meta = 2;
   PartitionStats partition_stats = 3;
+  string path = 4;
 }
 
 // Unique identifier for a materialized partition of data
@@ -737,7 +803,7 @@ message ExecutorMetadata {
 
 message ExecutorRegistration {
   string id = 1;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/danburkert/prost/issues/430)
+  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
   // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
   oneof optional_host {
     string host = 2;
@@ -745,10 +811,10 @@ message ExecutorRegistration {
   uint32 port = 3;
 }
 
-message GetExecutorMetadataParams {}
-
-message GetExecutorMetadataResult {
-  repeated ExecutorMetadata metadata = 1;
+message ExecutorHeartbeat {
+  ExecutorMetadata meta = 1;
+  // Unix epoch-based timestamp in seconds
+  uint64 timestamp = 2;
 }
 
 message RunningTask {
@@ -761,6 +827,17 @@ message FailedTask {
 
 message CompletedTask {
   string executor_id = 1;
+  // TODO tasks are currently always shuffle writes but this will not always be the case
+  // so we might want to think about some refactoring of the task definitions
+  repeated ShuffleWritePartition partitions = 2;
+}
+
+message ShuffleWritePartition {
+  uint64 partition_id = 1;
+  string path = 2;
+  uint64 num_batches = 3;
+  uint64 num_rows = 4;
+  uint64 num_bytes = 5;
 }
 
 message TaskStatus {
@@ -782,6 +859,8 @@ message PollWorkParams {
 message TaskDefinition {
   PartitionId task_id = 1;
   PhysicalPlanNode plan = 2;
+  // Output partition for shuffle writer
+  PhysicalHashRepartition output_partitioning = 3;
 }
 
 message PollWorkResult {
@@ -792,7 +871,9 @@ message ExecuteQueryParams {
   oneof query {
     LogicalPlanNode logical_plan = 1;
     string sql = 2;
-  }}
+  }
+  repeated KeyValuePair settings = 3;
+}
 
 message ExecuteSqlParams {
   string sql = 1;
@@ -847,8 +928,6 @@ message FilePartitionMetadata {
 }
 
 service SchedulerGrpc {
-  rpc GetExecutorsMetadata (GetExecutorMetadataParams) returns (GetExecutorMetadataResult) {}
-
   // Executors must poll the scheduler for heartbeat and to receive tasks
   rpc PollWork (PollWorkParams) returns (PollWorkResult) {}
 

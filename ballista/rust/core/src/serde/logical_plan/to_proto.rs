@@ -22,11 +22,14 @@
 use super::super::proto_error;
 use crate::datasource::DfTableAdapter;
 use crate::serde::{protobuf, BallistaError};
-use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-use datafusion::datasource::CsvFile;
+use datafusion::arrow::datatypes::{
+    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit,
+};
+use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
+use datafusion::datasource::{CsvFile, PartitionedFile, TableDescriptor};
 use datafusion::logical_plan::{
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, Expr, JoinType, LogicalPlan,
+    Column, Expr, JoinConstraint, JoinType, LogicalPlan,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -249,6 +252,58 @@ impl TryInto<DataType> for &protobuf::ArrowType {
                     Box::new(pb_value.as_ref().try_into()?),
                 )
             }
+        })
+    }
+}
+
+impl From<&ColumnStatistics> for protobuf::ColumnStats {
+    fn from(cs: &ColumnStatistics) -> protobuf::ColumnStats {
+        protobuf::ColumnStats {
+            min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
+            max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
+            null_count: cs.null_count.map(|n| n as u32).unwrap_or(0),
+            distinct_count: cs.distinct_count.map(|n| n as u32).unwrap_or(0),
+        }
+    }
+}
+
+impl From<&Statistics> for protobuf::Statistics {
+    fn from(s: &Statistics) -> protobuf::Statistics {
+        let none_value = -1_i64;
+        let column_stats = match &s.column_statistics {
+            None => vec![],
+            Some(column_stats) => column_stats.iter().map(|s| s.into()).collect(),
+        };
+        protobuf::Statistics {
+            num_rows: s.num_rows.map(|n| n as i64).unwrap_or(none_value),
+            total_byte_size: s.total_byte_size.map(|n| n as i64).unwrap_or(none_value),
+            column_stats,
+        }
+    }
+}
+
+impl From<&PartitionedFile> for protobuf::PartitionedFile {
+    fn from(pf: &PartitionedFile) -> protobuf::PartitionedFile {
+        protobuf::PartitionedFile {
+            path: pf.path.clone(),
+            statistics: Some((&pf.statistics).into()),
+        }
+    }
+}
+
+impl TryFrom<TableDescriptor> for protobuf::TableDescriptor {
+    type Error = BallistaError;
+
+    fn try_from(desc: TableDescriptor) -> Result<protobuf::TableDescriptor, Self::Error> {
+        let partition_files: Vec<protobuf::PartitionedFile> =
+            desc.partition_files.iter().map(|pf| pf.into()).collect();
+
+        let schema: protobuf::Schema = desc.schema.into();
+
+        Ok(protobuf::TableDescriptor {
+            path: desc.path,
+            partition_files,
+            schema: Some(schema),
         })
     }
 }
@@ -565,13 +620,13 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                             protobuf::ScalarValue {
                                 value: Some(protobuf::scalar_value::Value::ListValue(
                                     protobuf::ScalarListValue {
-                                        datatype: Some(datatype.try_into()?),
+                                        datatype: Some(datatype.as_ref().try_into()?),
                                         values: Vec::new(),
                                     },
                                 )),
                             }
                         } else {
-                            let scalar_type = match datatype {
+                            let scalar_type = match datatype.as_ref() {
                                 DataType::List(field) => field.as_ref().data_type(),
                                 _ => todo!("Proper error handling"),
                             };
@@ -579,16 +634,23 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                             let type_checked_values: Vec<protobuf::ScalarValue> = values
                                 .iter()
                                 .map(|scalar| match (scalar, scalar_type) {
-                                    (scalar::ScalarValue::List(_, DataType::List(list_field)), DataType::List(field)) => {
-                                        let scalar_datatype = field.data_type();
-                                        let list_datatype = list_field.data_type();
-                                        if std::mem::discriminant(list_datatype) != std::mem::discriminant(scalar_datatype) {
-                                            return Err(proto_error(format!(
-                                                "Protobuf serialization error: Lists with inconsistent typing {:?} and {:?} found within list",
-                                                list_datatype, scalar_datatype
-                                            )));
+                                    (scalar::ScalarValue::List(_, list_type), DataType::List(field)) => {
+                                        if let DataType::List(list_field) = list_type.as_ref() {
+                                            let scalar_datatype = field.data_type();
+                                            let list_datatype = list_field.data_type();
+                                            if std::mem::discriminant(list_datatype) != std::mem::discriminant(scalar_datatype) {
+                                                return Err(proto_error(format!(
+                                                    "Protobuf serialization error: Lists with inconsistent typing {:?} and {:?} found within list",
+                                                    list_datatype, scalar_datatype
+                                                )));
+                                            }
+                                            scalar.try_into()
+                                        } else {
+                                            Err(proto_error(format!(
+                                                "Protobuf serialization error, {:?} was inconsistent with designated type {:?}",
+                                                scalar, datatype
+                                            )))
                                         }
-                                        scalar.try_into()
                                     }
                                     (scalar::ScalarValue::Boolean(_), DataType::Boolean) => scalar.try_into(),
                                     (scalar::ScalarValue::Float32(_), DataType::Float32) => scalar.try_into(),
@@ -612,7 +674,7 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                             protobuf::ScalarValue {
                                 value: Some(protobuf::scalar_value::Value::ListValue(
                                     protobuf::ScalarListValue {
-                                        datatype: Some(datatype.try_into()?),
+                                        datatype: Some(datatype.as_ref().try_into()?),
                                         values: type_checked_values,
                                     },
                                 )),
@@ -621,7 +683,7 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                     }
                     None => protobuf::ScalarValue {
                         value: Some(protobuf::scalar_value::Value::NullListValue(
-                            datatype.try_into()?,
+                            datatype.as_ref().try_into()?,
                         )),
                     },
                 }
@@ -699,13 +761,14 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     .collect::<Result<Vec<_>, _>>()?;
 
                 if let Some(parquet) = source.downcast_ref::<ParquetTable>() {
+                    let table_desc: protobuf::TableDescriptor =
+                        parquet.desc.descriptor.clone().try_into()?;
                     Ok(protobuf::LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ParquetScan(
                             protobuf::ParquetTableScanNode {
                                 table_name: table_name.to_owned(),
-                                path: parquet.path().to_owned(),
+                                table_desc: Some(table_desc),
                                 projection,
-                                schema: Some(schema),
                                 filters,
                             },
                         )),
@@ -804,26 +867,23 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 right,
                 on,
                 join_type,
+                join_constraint,
                 ..
             } => {
                 let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
                 let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
-                let join_type = match join_type {
-                    JoinType::Inner => protobuf::JoinType::Inner,
-                    JoinType::Left => protobuf::JoinType::Left,
-                    JoinType::Right => protobuf::JoinType::Right,
-                    JoinType::Full => protobuf::JoinType::Full,
-                    JoinType::Semi => protobuf::JoinType::Semi,
-                    JoinType::Anti => protobuf::JoinType::Anti,
-                };
                 let (left_join_column, right_join_column) =
                     on.iter().map(|(l, r)| (l.into(), r.into())).unzip();
+                let join_type: protobuf::JoinType = join_type.to_owned().into();
+                let join_constraint: protobuf::JoinConstraint =
+                    join_constraint.to_owned().into();
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Join(Box::new(
                         protobuf::JoinNode {
                             left: Some(Box::new(left)),
                             right: Some(Box::new(right)),
                             join_type: join_type.into(),
+                            join_constraint: join_constraint.into(),
                             left_join_column,
                             right_join_column,
                         },
@@ -927,6 +987,17 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )),
                 })
             }
+            LogicalPlan::Analyze { verbose, input, .. } => {
+                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Analyze(Box::new(
+                        protobuf::AnalyzeNode {
+                            input: Some(Box::new(input)),
+                            verbose: *verbose,
+                        },
+                    ))),
+                })
+            }
             LogicalPlan::Explain { verbose, plan, .. } => {
                 let input: protobuf::LogicalPlanNode = plan.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
@@ -940,7 +1011,18 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
             }
             LogicalPlan::Extension { .. } => unimplemented!(),
             LogicalPlan::Union { .. } => unimplemented!(),
-            LogicalPlan::CrossJoin { .. } => unimplemented!(),
+            LogicalPlan::CrossJoin { left, right, .. } => {
+                let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
+                let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::CrossJoin(Box::new(
+                        protobuf::CrossJoinNode {
+                            left: Some(Box::new(left)),
+                            right: Some(Box::new(right)),
+                        },
+                    ))),
+                })
+            }
         }
     }
 }
@@ -1061,7 +1143,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
             Expr::ScalarVariable(_) => unimplemented!(),
             Expr::ScalarFunction { ref fun, ref args } => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
-                let expr: Vec<protobuf::LogicalExprNode> = args
+                let args: Vec<protobuf::LogicalExprNode> = args
                     .iter()
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<protobuf::LogicalExprNode>, BallistaError>>()?;
@@ -1070,7 +1152,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                         protobuf::logical_expr_node::ExprType::ScalarFunction(
                             protobuf::ScalarFunctionNode {
                                 fun: fun.into(),
-                                expr,
+                                args,
                             },
                         ),
                     ),
@@ -1236,6 +1318,19 @@ impl Into<protobuf::Schema> for &Schema {
     }
 }
 
+#[allow(clippy::from_over_into)]
+impl Into<protobuf::Schema> for SchemaRef {
+    fn into(self) -> protobuf::Schema {
+        protobuf::Schema {
+            columns: self
+                .fields()
+                .iter()
+                .map(protobuf::Field::from)
+                .collect::<Vec<_>>(),
+        }
+    }
+}
+
 impl From<&datafusion::logical_plan::DFField> for protobuf::DfField {
     fn from(f: &datafusion::logical_plan::DFField) -> protobuf::DfField {
         protobuf::DfField {
@@ -1370,6 +1465,7 @@ impl TryInto<protobuf::ScalarFunction> for &BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Array => Ok(protobuf::ScalarFunction::Array),
             BuiltinScalarFunction::NullIf => Ok(protobuf::ScalarFunction::Nullif),
+            BuiltinScalarFunction::DatePart => Ok(protobuf::ScalarFunction::Datepart),
             BuiltinScalarFunction::DateTrunc => Ok(protobuf::ScalarFunction::Datetrunc),
             BuiltinScalarFunction::MD5 => Ok(protobuf::ScalarFunction::Md5),
             BuiltinScalarFunction::SHA224 => Ok(protobuf::ScalarFunction::Sha224),

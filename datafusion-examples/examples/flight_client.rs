@@ -19,12 +19,12 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::util::pretty;
 
 use arrow_flight::flight_descriptor;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::utils::flight_data_to_arrow_batch;
 use arrow_flight::{FlightDescriptor, Ticket};
+use datafusion::arrow::util::pretty;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
 /// Parquet files and executing SQL queries against them on a remote server.

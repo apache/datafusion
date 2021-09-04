@@ -17,25 +17,13 @@
 
 //! SQL Utility Functions
 
-use crate::logical_plan::{DFSchema, Expr, LogicalPlan};
+use crate::logical_plan::{Expr, LogicalPlan};
 use crate::scalar::ScalarValue;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
 };
 use std::collections::HashMap;
-
-/// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
-pub(crate) fn expand_wildcard(expr: &Expr, schema: &DFSchema) -> Vec<Expr> {
-    match expr {
-        Expr::Wildcard => schema
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
-            .collect::<Vec<Expr>>(),
-        _ => vec![expr.clone()],
-    }
-}
 
 /// Collect all deeply nested `Expr::AggregateFunction` and
 /// `Expr::AggregateUDF`. They are returned in order of occurrence (depth
@@ -460,6 +448,30 @@ pub(crate) fn generate_sort_key(
         }
     });
     sort_key
+}
+
+/// given a slice of window expressions sharing the same sort key, find their common partition
+/// keys.
+pub(crate) fn window_expr_common_partition_keys(
+    window_exprs: &[Expr],
+) -> Result<&[Expr]> {
+    let all_partition_keys = window_exprs
+        .iter()
+        .map(|expr| match expr {
+            Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+            expr => Err(DataFusionError::Execution(format!(
+                "Impossibly got non-window expr {:?}",
+                expr
+            ))),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let result = all_partition_keys
+        .iter()
+        .min_by_key(|s| s.len())
+        .ok_or_else(|| {
+            DataFusionError::Execution("No window expressions found".to_owned())
+        })?;
+    Ok(result)
 }
 
 /// group a slice of window expression expr by their order by expressions

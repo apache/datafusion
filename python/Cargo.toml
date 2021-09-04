@@ -17,7 +17,7 @@
 
 [package]
 name = "datafusion"
-version = "0.2.1"
+version = "0.3.0"
 homepage = "https://github.com/apache/arrow"
 repository = "https://github.com/apache/arrow"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -30,8 +30,8 @@ edition = "2018"
 libc = "0.2"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 rand = "0.7"
-pyo3 = { version = "0.13.2", features = ["extension-module"] }
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "c92079dfb3045a9a46d12c3bc22361a44d11b8bc" }
+pyo3 = { version = "0.14.1", features = ["extension-module", "abi3", "abi3-py36"] }
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "4d61196dee8526998aee7e7bb10ea88422e5f9e1" }
 
 [lib]
 name = "datafusion"

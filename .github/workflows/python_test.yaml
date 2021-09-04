@@ -41,18 +41,21 @@ jobs:
       - uses: actions/setup-python@v2
         with:
           python-version: "3.9"
-      - name: Install Python dependencies
-        run: python -m pip install --upgrade pip setuptools wheel
-      - name: Run tests
+      - name: Create Virtualenv
         run: |
-          cd python/
-
           python -m venv venv
           source venv/bin/activate
-
-          pip install -r requirements.txt
+          pip install -r python/requirements.txt
+      - name: Run Linters
+        run: |
+          source venv/bin/activate
+          flake8 python
+          black --line-length 79 --check python
+      - name: Run tests
+        run: |
+          source venv/bin/activate
+          cd python
           maturin develop
-
           pytest -v .
         env:
           CARGO_HOME: "/home/runner/.cargo"

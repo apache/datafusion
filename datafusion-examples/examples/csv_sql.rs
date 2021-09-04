@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::io::print;
-
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
@@ -43,10 +41,9 @@ async fn main() -> Result<()> {
         WHERE c11 > 0.1 AND c11 < 0.9 \
         GROUP BY c1",
     )?;
-    let results = df.collect().await?;
 
     // print the results
-    print::print(&results)?;
+    df.show().await?;
 
     Ok(())
 }

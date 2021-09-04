@@ -108,10 +108,7 @@ impl FlightService for FlightServiceImpl {
                 // add an initial FlightData message that sends schema
                 let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
                 let schema_flight_data =
-                    arrow_flight::utils::flight_data_from_arrow_schema(
-                        &df.schema().clone().into(),
-                        &options,
-                    );
+                    SchemaAsIpc::new(&df.schema().clone().into(), &options).into();
 
                 let mut flights: Vec<Result<FlightData, Status>> =
                     vec![Ok(schema_flight_data)];

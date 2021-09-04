@@ -23,18 +23,25 @@ use crate::serde::protobuf::action::ActionType;
 use crate::serde::scheduler::{
     Action, ExecutePartition, PartitionId, PartitionLocation, PartitionStats,
 };
+use datafusion::physical_plan::Partitioning;
 
 impl TryInto<protobuf::Action> for Action {
     type Error = BallistaError;
 
     fn try_into(self) -> Result<protobuf::Action, Self::Error> {
         match self {
-            Action::ExecutePartition(partition) => Ok(protobuf::Action {
-                action_type: Some(ActionType::ExecutePartition(partition.try_into()?)),
-                settings: vec![],
-            }),
-            Action::FetchPartition(partition_id) => Ok(protobuf::Action {
-                action_type: Some(ActionType::FetchPartition(partition_id.into())),
+            Action::FetchPartition {
+                job_id,
+                stage_id,
+                partition_id,
+                path,
+            } => Ok(protobuf::Action {
+                action_type: Some(ActionType::FetchPartition(protobuf::FetchPartition {
+                    job_id,
+                    stage_id: stage_id as u32,
+                    partition_id: partition_id as u32,
+                    path,
+                })),
                 settings: vec![],
             }),
         }
@@ -51,6 +58,9 @@ impl TryInto<protobuf::ExecutePartition> for ExecutePartition {
             partition_id: self.partition_id.iter().map(|n| *n as u32).collect(),
             plan: Some(self.plan.try_into()?),
             partition_location: vec![],
+            output_partitioning: hash_partitioning_to_proto(
+                self.output_partitioning.as_ref(),
+            )?,
         })
     }
 }
@@ -74,6 +84,7 @@ impl TryInto<protobuf::PartitionLocation> for PartitionLocation {
             partition_id: Some(self.partition_id.into()),
             executor_meta: Some(self.executor_meta.into()),
             partition_stats: Some(self.partition_stats.into()),
+            path: self.path,
         })
     }
 }
@@ -87,6 +98,29 @@ impl Into<protobuf::PartitionStats> for PartitionStats {
             num_batches: self.num_batches.map(|n| n as i64).unwrap_or(none_value),
             num_bytes: self.num_bytes.map(|n| n as i64).unwrap_or(none_value),
             column_stats: vec![],
+        }
+    }
+}
+
+pub fn hash_partitioning_to_proto(
+    output_partitioning: Option<&Partitioning>,
+) -> Result<Option<protobuf::PhysicalHashRepartition>, BallistaError> {
+    match output_partitioning {
+        Some(Partitioning::Hash(exprs, partition_count)) => {
+            Ok(Some(protobuf::PhysicalHashRepartition {
+                hash_expr: exprs
+                    .iter()
+                    .map(|expr| expr.clone().try_into())
+                    .collect::<Result<Vec<_>, BallistaError>>()?,
+                partition_count: *partition_count as u64,
+            }))
+        }
+        None => Ok(None),
+        other => {
+            return Err(BallistaError::General(format!(
+                "scheduler::to_proto() invalid partitioning for ExecutePartition: {:?}",
+                other
+            )))
         }
     }
 }

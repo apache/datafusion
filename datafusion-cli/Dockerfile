@@ -21,7 +21,11 @@ COPY ./datafusion /usr/src/datafusion
 
 COPY ./datafusion-cli /usr/src/datafusion-cli
 
+COPY ./ballista /usr/src/ballista
+
 WORKDIR /usr/src/datafusion-cli
+
+RUN rustup component add rustfmt
 
 RUN cargo build --release
 

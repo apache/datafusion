@@ -163,9 +163,9 @@ async fn topk_plan() -> Result<()> {
     let mut ctx = setup_table(make_topk_context()).await?;
 
     let expected = vec![
-        "| logical_plan after topk                 | TopK: k=3                                                                            |",
-        "|                                         |   Projection: #sales.customer_id, #sales.revenue                                     |",
-        "|                                         |     TableScan: sales projection=Some([0, 1])                                         |",
+        "| logical_plan after topk                   | TopK: k=3                                                                                |",
+        "|                                           |   Projection: #sales.customer_id, #sales.revenue                                         |",
+        "|                                           |     TableScan: sales projection=Some([0, 1])                                             |",
     ].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {}", QUERY);
@@ -192,7 +192,7 @@ async fn topk_plan() -> Result<()> {
 fn make_topk_context() -> ExecutionContext {
     let config = ExecutionConfig::new()
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
-        .with_concurrency(48)
+        .with_target_partitions(48)
         .add_optimizer_rule(Arc::new(TopKOptimizerRule {}));
 
     ExecutionContext::with_config(config)
@@ -321,16 +321,19 @@ impl ExtensionPlanner for TopKPlanner {
     /// Create a physical plan for an extension node
     fn plan_extension(
         &self,
+        _planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
-        inputs: &[Arc<dyn ExecutionPlan>],
+        logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
         _ctx_state: &ExecutionContextState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(
             if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
-                assert_eq!(inputs.len(), 1, "Inconsistent number of inputs");
+                assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
+                assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
                 // figure out input name
                 Some(Arc::new(TopKExec {
-                    input: inputs[0].clone(),
+                    input: physical_inputs[0].clone(),
                     k: topk_node.k,
                 }))
             } else {

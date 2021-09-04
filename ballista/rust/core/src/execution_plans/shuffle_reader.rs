@@ -28,21 +28,28 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
+use datafusion::physical_plan::metrics::{
+    ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
+use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Metric, Partitioning};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,
 };
 use futures::{future, Stream, StreamExt};
+use hashbrown::HashMap;
 use log::info;
+use std::time::Instant;
 
-/// ShuffleReaderExec reads partitions that have already been materialized by a query stage
+/// ShuffleReaderExec reads partitions that have already been materialized by a ShuffleWriterExec
 /// being executed by an executor
 #[derive(Debug, Clone)]
 pub struct ShuffleReaderExec {
     /// Each partition of a shuffle can read data from multiple locations
     pub(crate) partition: Vec<Vec<PartitionLocation>>,
     pub(crate) schema: SchemaRef,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl ShuffleReaderExec {
@@ -51,7 +58,11 @@ impl ShuffleReaderExec {
         partition: Vec<Vec<PartitionLocation>>,
         schema: SchemaRef,
     ) -> Result<Self> {
-        Ok(Self { partition, schema })
+        Ok(Self {
+            partition,
+            schema,
+            metrics: ExecutionPlanMetricsSet::new(),
+        })
     }
 }
 
@@ -66,6 +77,8 @@ impl ExecutionPlan for ShuffleReaderExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
+        // TODO partitioning may be known and could be populated here
+        // see https://github.com/apache/arrow-datafusion/issues/758
         Partitioning::UnknownPartitioning(self.partition.len())
     }
 
@@ -88,11 +101,16 @@ impl ExecutionPlan for ShuffleReaderExec {
     ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
         info!("ShuffleReaderExec::execute({})", partition);
 
+        let fetch_time =
+            MetricBuilder::new(&self.metrics).subset_time("fetch_time", partition);
+        let timer = fetch_time.timer();
+
         let partition_locations = &self.partition[partition];
         let result = future::join_all(partition_locations.iter().map(fetch_partition))
             .await
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
+        timer.done();
 
         let result = WrappedStream::new(
             Box::pin(futures::stream::iter(result).flatten()),
@@ -111,26 +129,32 @@ impl ExecutionPlan for ShuffleReaderExec {
                 let loc_str = self
                     .partition
                     .iter()
-                    .map(|x| {
-                        x.iter()
-                            .map(|l| {
-                                format!(
-                                    "[executor={} part={}:{}:{} stats={:?}]",
-                                    l.executor_meta.id,
-                                    l.partition_id.job_id,
-                                    l.partition_id.stage_id,
-                                    l.partition_id.partition_id,
-                                    l.partition_stats
-                                )
-                            })
-                            .collect::<Vec<String>>()
-                            .join(",")
+                    .enumerate()
+                    .map(|(partition_id, locations)| {
+                        format!(
+                            "[partition={} paths={}]",
+                            partition_id,
+                            locations
+                                .iter()
+                                .map(|l| l.path.clone())
+                                .collect::<Vec<String>>()
+                                .join(",")
+                        )
                     })
                     .collect::<Vec<String>>()
-                    .join("\n");
-                write!(f, "ShuffleReaderExec: partition_locations={}", loc_str)
+                    .join(", ");
+                write!(
+                    f,
+                    "ShuffleReaderExec: partition_locations({})={}",
+                    self.partition.len(),
+                    loc_str
+                )
             }
         }
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
 
@@ -148,6 +172,7 @@ async fn fetch_partition(
             &partition_id.job_id,
             partition_id.stage_id as usize,
             partition_id.partition_id as usize,
+            &location.path,
         )
         .await
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)

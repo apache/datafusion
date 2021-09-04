@@ -39,7 +39,7 @@
 //! ```rust
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use arrow::record_batch::RecordBatch;
+//! # use datafusion::arrow::record_batch::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -60,11 +60,11 @@
 //! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
 //!
 //! let expected = vec![
-//!     "+---+--------+",
-//!     "| a | MIN(b) |",
-//!     "+---+--------+",
-//!     "| 1 | 2      |",
-//!     "+---+--------+"
+//!     "+---+--------------------------+",
+//!     "| a | MIN(tests/example.csv.b) |",
+//!     "+---+--------------------------+",
+//!     "| 1 | 2                        |",
+//!     "+---+--------------------------+"
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -77,7 +77,7 @@
 //! ```
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use arrow::record_batch::RecordBatch;
+//! # use datafusion::arrow::record_batch::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -95,11 +95,11 @@
 //! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
 //!
 //! let expected = vec![
-//!     "+---+--------+",
-//!     "| a | MIN(b) |",
-//!     "+---+--------+",
-//!     "| 1 | 2      |",
-//!     "+---+--------+"
+//!     "+---+----------------+",
+//!     "| a | MIN(example.b) |",
+//!     "+---+----------------+",
+//!     "| 1 | 2              |",
+//!     "+---+----------------+"
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -132,7 +132,7 @@
 //! Logical planning yields [`logical plans`](logical_plan::LogicalPlan) and [`logical expressions`](logical_plan::Expr).
 //! These are [`Schema`](arrow::datatypes::Schema)-aware traits that represent statements whose result is independent of how it should physically be executed.
 //!
-//! A [`LogicalPlan`](logical_plan::LogicalPlan) is a Direct Asyclic graph of other [`LogicalPlan`s](logical_plan::LogicalPlan) and each node contains logical expressions ([`Expr`s](logical_plan::Expr)).
+//! A [`LogicalPlan`](logical_plan::LogicalPlan) is a Directed Acyclic Graph (DAG) of other [`LogicalPlan`s](logical_plan::LogicalPlan) and each node contains logical expressions ([`Expr`s](logical_plan::Expr)).
 //! All of these are located in [`logical_plan`](logical_plan).
 //!
 //! ### Physical plan
@@ -167,7 +167,7 @@
 //! * Filter: [`FilterExec`](physical_plan::filter::FilterExec)
 //! * Hash and Grouped aggregations: [`HashAggregateExec`](physical_plan::hash_aggregate::HashAggregateExec)
 //! * Sort: [`SortExec`](physical_plan::sort::SortExec)
-//! * Merge (partitions): [`MergeExec`](physical_plan::merge::MergeExec)
+//! * Coalesce partitions: [`CoalescePartitionsExec`](physical_plan::coalesce_partitions::CoalescePartitionsExec)
 //! * Limit: [`LocalLimitExec`](physical_plan::limit::LocalLimitExec) and [`GlobalLimitExec`](physical_plan::limit::GlobalLimitExec)
 //! * Scan a CSV: [`CsvExec`](physical_plan::csv::CsvExec)
 //! * Scan a Parquet: [`ParquetExec`](physical_plan::parquet::ParquetExec)

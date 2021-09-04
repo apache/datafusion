@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for distributed schedulers, such as Kubernetes
+#![doc = include_str!("../README.md")]
 
 pub mod api;
 pub mod planner;
@@ -28,16 +28,22 @@ pub use standalone::new_standalone_scheduler;
 #[cfg(test)]
 pub mod test_utils;
 
+// include the generated protobuf source as a submodule
+#[allow(clippy::all)]
+pub mod externalscaler {
+    include!(concat!(env!("OUT_DIR"), "/externalscaler.rs"));
+}
+
 use std::{convert::TryInto, sync::Arc};
 use std::{fmt, net::IpAddr};
 
 use ballista_core::serde::protobuf::{
     execute_query_params::Query, executor_registration::OptionalHost, job_status,
-    scheduler_grpc_server::SchedulerGrpc, ExecuteQueryParams, ExecuteQueryResult,
-    FailedJob, FilePartitionMetadata, FileType, GetExecutorMetadataParams,
-    GetExecutorMetadataResult, GetFileMetadataParams, GetFileMetadataResult,
-    GetJobStatusParams, GetJobStatusResult, JobStatus, PartitionId, PollWorkParams,
-    PollWorkResult, QueuedJob, RunningJob, TaskDefinition, TaskStatus,
+    scheduler_grpc_server::SchedulerGrpc, task_status, ExecuteQueryParams,
+    ExecuteQueryResult, FailedJob, FilePartitionMetadata, FileType,
+    GetFileMetadataParams, GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult,
+    JobStatus, PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob,
+    TaskDefinition, TaskStatus,
 };
 use ballista_core::serde::scheduler::ExecutorMeta;
 
@@ -62,23 +68,29 @@ impl parse_arg::ParseArgFromStr for ConfigBackend {
     }
 }
 
+use crate::externalscaler::{
+    external_scaler_server::ExternalScaler, GetMetricSpecResponse, GetMetricsRequest,
+    GetMetricsResponse, IsActiveResponse, MetricSpec, MetricValue, ScaledObjectRef,
+};
 use crate::planner::DistributedPlanner;
 
 use log::{debug, error, info, warn};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
-use tonic::{Request, Response};
+use tonic::{Request, Response, Status};
 
 use self::state::{ConfigBackendClient, SchedulerState};
-use ballista_core::utils::create_datafusion_context;
-use datafusion::physical_plan::parquet::ParquetExec;
+use ballista_core::config::BallistaConfig;
+use ballista_core::execution_plans::ShuffleWriterExec;
+use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
+use datafusion::datasource::parquet::ParquetTableDescriptor;
+use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct SchedulerServer {
     caller_ip: IpAddr,
-    state: Arc<SchedulerState>,
+    pub(crate) state: Arc<SchedulerState>,
     start_time: u128,
-    version: String,
 }
 
 impl SchedulerServer {
@@ -87,7 +99,6 @@ impl SchedulerServer {
         namespace: String,
         caller_ip: IpAddr,
     ) -> Self {
-        const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
         let state = Arc::new(SchedulerState::new(config, namespace));
         let state_clone = state.clone();
 
@@ -101,35 +112,61 @@ impl SchedulerServer {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis(),
-            version: VERSION.unwrap_or("Unknown").to_string(),
         }
+    }
+}
+
+const INFLIGHT_TASKS_METRIC_NAME: &str = "inflight_tasks";
+
+#[tonic::async_trait]
+impl ExternalScaler for SchedulerServer {
+    async fn is_active(
+        &self,
+        _request: Request<ScaledObjectRef>,
+    ) -> Result<Response<IsActiveResponse>, tonic::Status> {
+        let tasks = self.state.get_all_tasks().await.map_err(|e| {
+            let msg = format!("Error reading tasks: {}", e);
+            error!("{}", msg);
+            tonic::Status::internal(msg)
+        })?;
+        let result = tasks.iter().any(|(_key, task)| {
+            !matches!(
+                task.status,
+                Some(task_status::Status::Completed(_))
+                    | Some(task_status::Status::Failed(_))
+            )
+        });
+        debug!("Are there active tasks? {}", result);
+        Ok(Response::new(IsActiveResponse { result }))
+    }
+
+    async fn get_metric_spec(
+        &self,
+        _request: Request<ScaledObjectRef>,
+    ) -> Result<Response<GetMetricSpecResponse>, tonic::Status> {
+        Ok(Response::new(GetMetricSpecResponse {
+            metric_specs: vec![MetricSpec {
+                metric_name: INFLIGHT_TASKS_METRIC_NAME.to_string(),
+                target_size: 1,
+            }],
+        }))
+    }
+
+    async fn get_metrics(
+        &self,
+        _request: Request<GetMetricsRequest>,
+    ) -> Result<Response<GetMetricsResponse>, tonic::Status> {
+        Ok(Response::new(GetMetricsResponse {
+            metric_values: vec![MetricValue {
+                metric_name: INFLIGHT_TASKS_METRIC_NAME.to_string(),
+                metric_value: 10000000, // A very high number to saturate the HPA
+            }],
+        }))
     }
 }
 
 #[tonic::async_trait]
 impl SchedulerGrpc for SchedulerServer {
-    async fn get_executors_metadata(
-        &self,
-        _request: Request<GetExecutorMetadataParams>,
-    ) -> std::result::Result<Response<GetExecutorMetadataResult>, tonic::Status> {
-        info!("Received get_executors_metadata request");
-        let result = self
-            .state
-            .get_executors_metadata()
-            .await
-            .map_err(|e| {
-                let msg = format!("Error reading executors metadata: {}", e);
-                error!("{}", msg);
-                tonic::Status::internal(msg)
-            })?
-            .into_iter()
-            .map(|meta| meta.into())
-            .collect();
-        Ok(Response::new(GetExecutorMetadataResult {
-            metadata: result,
-        }))
-    }
-
     async fn poll_work(
         &self,
         request: Request<PollWorkParams>,
@@ -174,7 +211,7 @@ impl SchedulerGrpc for SchedulerServer {
                         tonic::Status::internal(msg)
                     })?;
             }
-            let task = if can_accept_task {
+            let task: Result<Option<_>, Status> = if can_accept_task {
                 let plan = self
                     .state
                     .assign_next_schedulable_task(&metadata.id)
@@ -194,15 +231,35 @@ impl SchedulerGrpc for SchedulerServer {
                         partition_id.partition_id
                     );
                 }
-                plan.map(|(status, plan)| TaskDefinition {
-                    plan: Some(plan.try_into().unwrap()),
-                    task_id: status.partition_id,
-                })
+                match plan {
+                    Some((status, plan)) => {
+                        let plan_clone = plan.clone();
+                        let output_partitioning = if let Some(shuffle_writer) =
+                            plan_clone.as_any().downcast_ref::<ShuffleWriterExec>()
+                        {
+                            shuffle_writer.shuffle_output_partitioning()
+                        } else {
+                            return Err(Status::invalid_argument(format!(
+                                "Task root plan was not a ShuffleWriterExec: {:?}",
+                                plan_clone
+                            )));
+                        };
+                        Ok(Some(TaskDefinition {
+                            plan: Some(plan.try_into().unwrap()),
+                            task_id: status.partition_id,
+                            output_partitioning: hash_partitioning_to_proto(
+                                output_partitioning,
+                            )
+                            .map_err(|_| Status::internal("TBD".to_string()))?,
+                        }))
+                    }
+                    None => Ok(None),
+                }
             } else {
-                None
+                Ok(None)
             };
             lock.unlock().await;
-            Ok(Response::new(PollWorkResult { task }))
+            Ok(Response::new(PollWorkResult { task: task? }))
         } else {
             warn!("Received invalid executor poll_work request");
             Err(tonic::Status::invalid_argument(
@@ -225,24 +282,25 @@ impl SchedulerGrpc for SchedulerServer {
 
         match file_type {
             FileType::Parquet => {
-                let parquet_exec =
-                    ParquetExec::try_from_path(&path, None, None, 1024, 1, None)
-                        .map_err(|e| {
-                            let msg = format!("Error opening parquet files: {}", e);
-                            error!("{}", msg);
-                            tonic::Status::internal(msg)
-                        })?;
+                let parquet_desc = ParquetTableDescriptor::new(&path).map_err(|e| {
+                    let msg = format!("Error opening parquet files: {}", e);
+                    error!("{}", msg);
+                    tonic::Status::internal(msg)
+                })?;
+
+                let partitions = parquet_desc
+                    .descriptor
+                    .partition_files
+                    .iter()
+                    .map(|pf| FilePartitionMetadata {
+                        filename: vec![pf.path.clone()],
+                    })
+                    .collect();
 
                 //TODO include statistics and any other info needed to reconstruct ParquetExec
                 Ok(Response::new(GetFileMetadataResult {
-                    schema: Some(parquet_exec.schema().as_ref().into()),
-                    partitions: parquet_exec
-                        .partitions()
-                        .iter()
-                        .map(|part| FilePartitionMetadata {
-                            filename: part.filenames().to_vec(),
-                        })
-                        .collect(),
+                    schema: Some(parquet_desc.schema().as_ref().into()),
+                    partitions,
                 }))
             }
             //TODO implement for CSV
@@ -256,7 +314,22 @@ impl SchedulerGrpc for SchedulerServer {
         &self,
         request: Request<ExecuteQueryParams>,
     ) -> std::result::Result<Response<ExecuteQueryResult>, tonic::Status> {
-        if let ExecuteQueryParams { query: Some(query) } = request.into_inner() {
+        if let ExecuteQueryParams {
+            query: Some(query),
+            settings,
+        } = request.into_inner()
+        {
+            // parse config
+            let mut config_builder = BallistaConfig::builder();
+            for kv_pair in &settings {
+                config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
+            }
+            let config = config_builder.build().map_err(|e| {
+                let msg = format!("Could not parse configs: {}", e);
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?;
+
             let plan = match query {
                 Query::LogicalPlan(logical_plan) => {
                     // parse protobuf
@@ -269,7 +342,7 @@ impl SchedulerGrpc for SchedulerServer {
                 Query::Sql(sql) => {
                     //TODO we can't just create a new context because we need a context that has
                     // tables registered from previous SQL statements that have been executed
-                    let mut ctx = create_datafusion_context();
+                    let mut ctx = create_datafusion_context(&config);
                     let df = ctx.sql(&sql).map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
@@ -279,13 +352,6 @@ impl SchedulerGrpc for SchedulerServer {
                 }
             };
             debug!("Received plan for execution: {:?}", plan);
-            let executors = self.state.get_executors_metadata().await.map_err(|e| {
-                let msg = format!("Error reading executors metadata: {}", e);
-                error!("{}", msg);
-                tonic::Status::internal(msg)
-            })?;
-            debug!("Found executors: {:?}", executors);
-
             let job_id: String = {
                 let mut rng = thread_rng();
                 std::iter::repeat(())
@@ -312,7 +378,7 @@ impl SchedulerGrpc for SchedulerServer {
             let job_id_spawn = job_id.clone();
             tokio::spawn(async move {
                 // create physical plan using DataFusion
-                let datafusion_ctx = create_datafusion_context();
+                let datafusion_ctx = create_datafusion_context(&config);
                 macro_rules! fail_job {
                     ($code :expr) => {{
                         match $code {
@@ -388,12 +454,12 @@ impl SchedulerGrpc for SchedulerServer {
                     }));
 
                 // save stages into state
-                for stage in stages {
+                for shuffle_writer in stages {
                     fail_job!(state
                         .save_stage_plan(
                             &job_id_spawn,
-                            stage.stage_id(),
-                            stage.children()[0].clone()
+                            shuffle_writer.stage_id(),
+                            shuffle_writer.clone()
                         )
                         .await
                         .map_err(|e| {
@@ -401,12 +467,13 @@ impl SchedulerGrpc for SchedulerServer {
                             error!("{}", msg);
                             tonic::Status::internal(msg)
                         }));
-                    let num_partitions = stage.output_partitioning().partition_count();
+                    let num_partitions =
+                        shuffle_writer.output_partitioning().partition_count();
                     for partition_id in 0..num_partitions {
                         let pending_status = TaskStatus {
                             partition_id: Some(PartitionId {
                                 job_id: job_id_spawn.clone(),
-                                stage_id: stage.stage_id() as u32,
+                                stage_id: shuffle_writer.stage_id() as u32,
                                 partition_id: partition_id as u32,
                             }),
                             status: None,
@@ -443,6 +510,13 @@ impl SchedulerGrpc for SchedulerServer {
             status: Some(job_meta),
         }))
     }
+}
+
+/// Create a DataFusion context that is compatible with Ballista
+pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
+    let config = ExecutionConfig::new()
+        .with_target_partitions(config.default_shuffle_partitions());
+    ExecutionContext::with_config(config)
 }
 
 #[cfg(all(test, feature = "sled"))]

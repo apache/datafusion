@@ -18,7 +18,7 @@
 [package]
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
-version = "4.0.0-SNAPSHOT"
+version = "5.1.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "../README.md"
@@ -42,12 +42,15 @@ simd = ["arrow/simd"]
 crypto_expressions = ["md-5", "sha2"]
 regex_expressions = ["regex", "lazy_static"]
 unicode_expressions = ["unicode-segmentation"]
+# Used for testing ONLY: causes all values to hash to the same value (test for collisions)
+force_hash_collisions = []
+
 
 [dependencies]
 ahash = "0.7"
-hashbrown = "0.11"
+hashbrown = { version = "0.11", features = ["raw"] }
 arrow = { package = "arrow2", git = "https://github.com/jorgecarleitao/arrow2", rev = "43d8cf5c54805aa437a1c7ee48f80e90f07bc553", features = ["io_csv", "io_json", "io_parquet", "io_ipc", "io_print", "ahash", "merge_sort", "compute", "regex"] }
-sqlparser = "0.9.0"
+sqlparser = "0.10"
 paste = "^1.0"
 num_cpus = "1.13.0"
 chrono = "0.4"
@@ -93,4 +96,8 @@ harness = false
 
 [[bench]]
 name = "scalar"
+harness = false
+
+[[bench]]
+name = "physical_plan"
 harness = false

@@ -109,14 +109,19 @@ pub fn aggr_test_schema() -> Arc<Schema> {
     ]))
 }
 
-/// some tests share a common table
-pub fn test_table_scan() -> Result<LogicalPlan> {
+/// some tests share a common table with different names
+pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
     let schema = Schema::new(vec![
         Field::new("a", DataType::UInt32, false),
         Field::new("b", DataType::UInt32, false),
         Field::new("c", DataType::UInt32, false),
     ]);
-    LogicalPlanBuilder::scan_empty(Some("test"), &schema, None)?.build()
+    LogicalPlanBuilder::scan_empty(Some(name), &schema, None)?.build()
+}
+
+/// some tests share a common table
+pub fn test_table_scan() -> Result<LogicalPlan> {
+    test_table_scan_with_name("test")
 }
 
 pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
@@ -250,11 +255,11 @@ pub fn make_timestamps() -> RecordBatch {
         Int64Array::from(ts_secs).to(DataType::Timestamp(TimeUnit::Second, None));
 
     let schema = Schema::new(vec![
-        Field::new("nanos", arr_nanos.data_type().clone(), false),
-        Field::new("micros", arr_micros.data_type().clone(), false),
-        Field::new("millis", arr_millis.data_type().clone(), false),
-        Field::new("secs", arr_secs.data_type().clone(), false),
-        Field::new("name", arr_names.data_type().clone(), false),
+        Field::new("nanos", arr_nanos.data_type().clone(), true),
+        Field::new("micros", arr_micros.data_type().clone(), true),
+        Field::new("millis", arr_millis.data_type().clone(), true),
+        Field::new("secs", arr_secs.data_type().clone(), true),
+        Field::new("name", arr_names.data_type().clone(), true),
     ]);
     let schema = Arc::new(schema);
 
@@ -274,72 +279,3 @@ pub fn make_timestamps() -> RecordBatch {
 pub mod exec;
 pub mod user_defined;
 pub mod variable;
-
-/// Compares formatted output of a record batch with an expected
-/// vector of strings, with the result of pretty formatting record
-/// batches. This is a macro so errors appear on the correct line
-///
-/// Designed so that failure output can be directly copy/pasted
-/// into the test code as expected results.
-///
-/// Expects to be called about like this:
-///
-/// `assert_batch_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
-#[macro_export]
-macro_rules! assert_batches_eq {
-    ($EXPECTED_LINES: expr, $CHUNKS: expr) => {
-        let expected_lines: Vec<String> =
-            $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
-
-        let formatted = arrow::io::print::write($CHUNKS);
-
-        let actual_lines: Vec<&str> = formatted.trim().lines().collect();
-
-        assert_eq!(
-            expected_lines, actual_lines,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected_lines, actual_lines
-        );
-    };
-}
-
-/// Compares formatted output of a record batch with an expected
-/// vector of strings in a way that order does not matter.
-/// This is a macro so errors appear on the correct line
-///
-/// Designed so that failure output can be directly copy/pasted
-/// into the test code as expected results.
-///
-/// Expects to be called about like this:
-///
-/// `assert_batch_sorted_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
-#[macro_export]
-macro_rules! assert_batches_sorted_eq {
-    ($EXPECTED_LINES: expr, $CHUNKS: expr) => {
-        let mut expected_lines: Vec<String> =
-            $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
-
-        // sort except for header + footer
-        let num_lines = expected_lines.len();
-        if num_lines > 3 {
-            expected_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
-        }
-
-        let formatted = arrow::io::print::write($CHUNKS);
-        // fix for windows: \r\n -->
-
-        let mut actual_lines: Vec<&str> = formatted.trim().lines().collect();
-
-        // sort except for header + footer
-        let num_lines = actual_lines.len();
-        if num_lines > 3 {
-            actual_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
-        }
-
-        assert_eq!(
-            expected_lines, actual_lines,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected_lines, actual_lines
-        );
-    };
-}

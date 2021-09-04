@@ -16,26 +16,40 @@
 # under the License.
 
 name: Dev
-
-on:
-  # always trigger
-  push:
-  pull_request:
+on: [push, pull_request]
 
 jobs:
   lint:
-    name: Lint C++, Python, R, Rust, Docker, RAT
+    name: Lint C++, Python, R, Rust, Docker
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout Arrow
+        uses: actions/checkout@v2
+        with:
+          repository: apache/arrow
+          submodules: true
+          fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+      - name: Setup Archery
+        run: pip install -e dev/archery[lint]
+      - name: Lint
+        run: archery lint --rat
+
+  rat:
+    name: Release Audit Tool (RAT)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
       - name: Setup Python
         uses: actions/setup-python@v1
         with:
           python-version: 3.8
-      - name: Setup Archery
-        run: pip install -e dev/archery[docker]
-      - name: Lint
-        run: archery lint --rat
+      - name: Audit licenses
+        run: ./dev/release/run-rat.sh .
 
   prettier:
     name: Use prettier to check formatting of documents
@@ -49,4 +63,12 @@ jobs:
         run: |
           # if you encounter error, try rerun the command below with --write instead of --check
           # and commit the changes
-          npx prettier@2.3.0 --check {ballista,datafusion,datafusion-examples,dev,docs,python}/**/*.md README.md DEVELOPERS.md
+          #
+          # ignore subproject CHANGELOG.md because they are machine generated
+          npx prettier@2.3.2 --write \
+            '{ballista,datafusion,datafusion-examples,docs,python}/**/*.md' \
+            '!{ballista,datafusion,python}/CHANGELOG.md' \
+            README.md \
+            DEVELOPERS.md \
+            'ballista/**/*.{ts,tsx}'
+          git diff --exit-code

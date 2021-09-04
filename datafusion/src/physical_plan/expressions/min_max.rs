@@ -45,9 +45,13 @@ pub struct Max {
 
 impl Max {
     /// Create a new MAX aggregate function
-    pub fn new(expr: Arc<dyn PhysicalExpr>, name: String, data_type: DataType) -> Self {
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
         Self {
-            name,
+            name: name.into(),
             expr,
             data_type,
             nullable: true,
@@ -137,6 +141,8 @@ macro_rules! min_max_batch {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 typed_min_max_batch!($VALUES, Int64Array, TimestampNanosecond, $OP)
             }
+            DataType::Date32 => typed_min_max_batch!($VALUES, Int32Array, Date32, $OP),
+            DataType::Date64 => typed_min_max_batch!($VALUES, Int64Array, Date64, $OP),
             other => {
                 // This should have been handled before
                 return Err(DataFusionError::Internal(format!(
@@ -271,6 +277,18 @@ macro_rules! min_max {
             ) => {
                 typed_min_max!(lhs, rhs, TimestampNanosecond, $OP)
             }
+            (
+                ScalarValue::Date32(lhs),
+                ScalarValue::Date32(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Date32, $OP)
+            }
+             (
+                ScalarValue::Date64(lhs),
+                ScalarValue::Date64(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Date64, $OP)
+            }
             e => {
                 return Err(DataFusionError::Internal(format!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
@@ -291,8 +309,9 @@ fn max(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     min_max!(lhs, rhs, max)
 }
 
+/// An accumulator to compute the maximum value
 #[derive(Debug)]
-struct MaxAccumulator {
+pub(crate) struct MaxAccumulator {
     max: ScalarValue,
 }
 
@@ -347,9 +366,13 @@ pub struct Min {
 
 impl Min {
     /// Create a new MIN aggregate function
-    pub fn new(expr: Arc<dyn PhysicalExpr>, name: String, data_type: DataType) -> Self {
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
         Self {
-            name,
+            name: name.into(),
             expr,
             data_type,
             nullable: true,
@@ -392,8 +415,9 @@ impl AggregateExpr for Min {
     }
 }
 
+/// An accumulator to compute the minimum value
 #[derive(Debug)]
-struct MinAccumulator {
+pub(crate) struct MinAccumulator {
     min: ScalarValue,
 }
 
@@ -658,6 +682,54 @@ mod tests {
             Min,
             ScalarValue::from(1_f64),
             DataType::Float64
+        )
+    }
+
+    #[test]
+    fn min_date32() -> Result<()> {
+        let a: ArrayRef = Arc::new(Date32Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Date32,
+            Min,
+            ScalarValue::Date32(Some(1)),
+            DataType::Date32
+        )
+    }
+
+    #[test]
+    fn min_date64() -> Result<()> {
+        let a: ArrayRef = Arc::new(Date64Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Date64,
+            Min,
+            ScalarValue::Date64(Some(1)),
+            DataType::Date64
+        )
+    }
+
+    #[test]
+    fn max_date32() -> Result<()> {
+        let a: ArrayRef = Arc::new(Date32Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Date32,
+            Max,
+            ScalarValue::Date32(Some(5)),
+            DataType::Date32
+        )
+    }
+
+    #[test]
+    fn max_date64() -> Result<()> {
+        let a: ArrayRef = Arc::new(Date64Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Date64,
+            Max,
+            ScalarValue::Date64(Some(5)),
+            DataType::Date64
         )
     }
 }

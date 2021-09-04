@@ -22,7 +22,9 @@ use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
 use crate::error::BallistaError;
-use crate::execution_plans::{ShuffleReaderExec, UnresolvedShuffleExec};
+use crate::execution_plans::{
+    ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
+};
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::protobuf::ShuffleReaderPartition;
 use crate::serde::scheduler::PartitionLocation;
@@ -32,14 +34,20 @@ use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
     CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
 };
+use datafusion::datasource::datasource::Statistics;
+use datafusion::datasource::FilePartition;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
-use datafusion::logical_plan::{window_frames::WindowFrame, DFSchema, Expr};
+use datafusion::logical_plan::{
+    window_frames::WindowFrame, DFSchema, Expr, JoinConstraint, JoinType,
+};
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::PartitionMode;
-use datafusion::physical_plan::merge::MergeExec;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion::physical_plan::parquet::ParquetPartition;
 use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
@@ -47,6 +55,7 @@ use datafusion::physical_plan::window_functions::{
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     coalesce_batches::CoalesceBatchesExec,
+    cross_join::CrossJoinExec,
     csv::CsvExec,
     empty::EmptyExec,
     expressions::{
@@ -57,7 +66,6 @@ use datafusion::physical_plan::{
     filter::FilterExec,
     functions::{self, BuiltinScalarFunction, ScalarFunctionExpr},
     hash_join::HashJoinExec,
-    hash_utils::JoinType,
     limit::{GlobalLimitExec, LocalLimitExec},
     parquet::ParquetExec,
     projection::ProjectionExec,
@@ -125,16 +133,23 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::ParquetScan(scan) => {
+                let partitions = scan
+                    .partitions
+                    .iter()
+                    .map(|p| p.try_into())
+                    .collect::<Result<Vec<ParquetPartition>, _>>()?;
+                let schema = Arc::new(convert_required!(scan.schema)?);
                 let projection = scan.projection.iter().map(|i| *i as usize).collect();
-                let filenames: Vec<&str> =
-                    scan.filename.iter().map(|s| s.as_str()).collect();
-                Ok(Arc::new(ParquetExec::try_from_files(
-                    &filenames,
+                Ok(Arc::new(ParquetExec::new(
+                    partitions,
+                    schema,
                     Some(projection),
+                    Statistics::default(),
+                    ExecutionPlanMetricsSet::new(),
                     None,
-                    scan.num_partitions as usize,
+                    scan.batch_size as usize,
                     None,
-                )?))
+                )))
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -146,7 +161,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
             }
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> = convert_box_required!(merge.input)?;
-                Ok(Arc::new(MergeExec::new(input)))
+                Ok(Arc::new(CoalescePartitionsExec::new(input)))
             }
             PhysicalPlanType::Repartition(repart) => {
                 let input: Arc<dyn ExecutionPlan> = convert_box_required!(repart.input)?;
@@ -343,20 +358,47 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                             hashjoin.join_type
                         ))
                     })?;
-                let join_type = match join_type {
-                    protobuf::JoinType::Inner => JoinType::Inner,
-                    protobuf::JoinType::Left => JoinType::Left,
-                    protobuf::JoinType::Right => JoinType::Right,
-                    protobuf::JoinType::Full => JoinType::Full,
-                    protobuf::JoinType::Semi => JoinType::Semi,
-                    protobuf::JoinType::Anti => JoinType::Anti,
+
+                let partition_mode =
+                    protobuf::PartitionMode::from_i32(hashjoin.partition_mode)
+                        .ok_or_else(|| {
+                            proto_error(format!(
+                        "Received a HashJoinNode message with unknown PartitionMode {}",
+                        hashjoin.partition_mode
+                    ))
+                        })?;
+                let partition_mode = match partition_mode {
+                    protobuf::PartitionMode::CollectLeft => PartitionMode::CollectLeft,
+                    protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
                 };
                 Ok(Arc::new(HashJoinExec::try_new(
                     left,
                     right,
                     on,
-                    &join_type,
-                    PartitionMode::CollectLeft,
+                    &join_type.into(),
+                    partition_mode,
+                )?))
+            }
+            PhysicalPlanType::CrossJoin(crossjoin) => {
+                let left: Arc<dyn ExecutionPlan> = convert_box_required!(crossjoin.left)?;
+                let right: Arc<dyn ExecutionPlan> =
+                    convert_box_required!(crossjoin.right)?;
+                Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
+            }
+            PhysicalPlanType::ShuffleWriter(shuffle_writer) => {
+                let input: Arc<dyn ExecutionPlan> =
+                    convert_box_required!(shuffle_writer.input)?;
+
+                let output_partitioning = parse_protobuf_hash_partitioning(
+                    shuffle_writer.output_partitioning.as_ref(),
+                )?;
+
+                Ok(Arc::new(ShuffleWriterExec::try_new(
+                    shuffle_writer.job_id.clone(),
+                    shuffle_writer.stage_id as usize,
+                    input,
+                    "".to_string(), // this is intentional but hacky - the executor will fill this in
+                    output_partitioning,
                 )?))
             }
             PhysicalPlanType::ShuffleReader(shuffle_reader) => {
@@ -417,22 +459,37 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                // Update concurrency here in the future
                 Ok(Arc::new(SortExec::try_new(exprs, input)?))
             }
             PhysicalPlanType::Unresolved(unresolved_shuffle) => {
                 let schema = Arc::new(convert_required!(unresolved_shuffle.schema)?);
                 Ok(Arc::new(UnresolvedShuffleExec {
-                    query_stage_ids: unresolved_shuffle
-                        .query_stage_ids
-                        .iter()
-                        .map(|id| *id as usize)
-                        .collect(),
+                    stage_id: unresolved_shuffle.stage_id as usize,
                     schema,
-                    partition_count: unresolved_shuffle.partition_count as usize,
+                    input_partition_count: unresolved_shuffle.input_partition_count
+                        as usize,
+                    output_partition_count: unresolved_shuffle.output_partition_count
+                        as usize,
                 }))
             }
         }
+    }
+}
+
+impl TryInto<ParquetPartition> for &protobuf::ParquetPartition {
+    type Error = BallistaError;
+
+    fn try_into(self) -> Result<ParquetPartition, Self::Error> {
+        let files = self
+            .files
+            .iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ParquetPartition::new(
+            files,
+            self.index as usize,
+            ExecutionPlanMetricsSet::new(),
+        ))
     }
 }
 
@@ -473,6 +530,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Totimestamp => BuiltinScalarFunction::ToTimestamp,
             ScalarFunction::Array => BuiltinScalarFunction::Array,
             ScalarFunction::Nullif => BuiltinScalarFunction::NullIf,
+            ScalarFunction::Datepart => BuiltinScalarFunction::DatePart,
             ScalarFunction::Datetrunc => BuiltinScalarFunction::DateTrunc,
             ScalarFunction::Md5 => BuiltinScalarFunction::MD5,
             ScalarFunction::Sha224 => BuiltinScalarFunction::SHA224,
@@ -585,6 +643,7 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
 
                 let catalog_list =
                     Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+
                 let ctx_state = ExecutionContextState {
                     catalog_list,
                     scalar_functions: Default::default(),
@@ -641,5 +700,25 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                 Ok(WindowFunction::BuiltInWindowFunction(f.into()))
             }
         }
+    }
+}
+
+pub fn parse_protobuf_hash_partitioning(
+    partitioning: Option<&protobuf::PhysicalHashRepartition>,
+) -> Result<Option<Partitioning>, BallistaError> {
+    match partitioning {
+        Some(hash_part) => {
+            let expr = hash_part
+                .hash_expr
+                .iter()
+                .map(|e| e.try_into())
+                .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()?;
+
+            Ok(Some(Partitioning::Hash(
+                expr,
+                hash_part.partition_count.try_into().unwrap(),
+            )))
+        }
+        None => Ok(None),
     }
 }

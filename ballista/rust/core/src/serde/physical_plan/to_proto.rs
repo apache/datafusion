@@ -26,7 +26,9 @@ use std::{
     sync::Arc,
 };
 
+use datafusion::logical_plan::JoinType;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion::physical_plan::cross_join::CrossJoinExec;
 use datafusion::physical_plan::csv::CsvExec;
 use datafusion::physical_plan::expressions::{
     CaseExpr, InListExpr, IsNotNullExpr, IsNullExpr, NegativeExpr, NotExpr,
@@ -34,10 +36,9 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::expressions::{CastExpr, TryCastExpr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::AggregateMode;
-use datafusion::physical_plan::hash_join::HashJoinExec;
-use datafusion::physical_plan::hash_utils::JoinType;
+use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::parquet::ParquetExec;
+use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sort::SortExec;
 use datafusion::{
@@ -47,7 +48,7 @@ use datafusion::{
 
 use datafusion::physical_plan::{
     empty::EmptyExec,
-    expressions::{Avg, BinaryExpr, Column, Sum},
+    expressions::{Avg, BinaryExpr, Column, Max, Min, Sum},
     Partitioning,
 };
 use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
@@ -55,12 +56,14 @@ use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
 use protobuf::physical_plan_node::PhysicalPlanType;
 
-use crate::execution_plans::{ShuffleReaderExec, UnresolvedShuffleExec};
+use crate::execution_plans::{
+    ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
+};
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{protobuf, BallistaError};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::functions::{BuiltinScalarFunction, ScalarFunctionExpr};
-use datafusion::physical_plan::merge::MergeExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 
 impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
@@ -135,14 +138,13 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                     }),
                 })
                 .collect();
-            let join_type = match exec.join_type() {
-                JoinType::Inner => protobuf::JoinType::Inner,
-                JoinType::Left => protobuf::JoinType::Left,
-                JoinType::Right => protobuf::JoinType::Right,
-                JoinType::Full => protobuf::JoinType::Full,
-                JoinType::Semi => protobuf::JoinType::Semi,
-                JoinType::Anti => protobuf::JoinType::Anti,
+            let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+
+            let partition_mode = match exec.partition_mode() {
+                PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
+                PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
             };
+
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
                     protobuf::HashJoinExecNode {
@@ -150,6 +152,18 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                         right: Some(Box::new(right)),
                         on,
                         join_type: join_type.into(),
+                        partition_mode: partition_mode.into(),
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<CrossJoinExec>() {
+            let left: protobuf::PhysicalPlanNode = exec.left().to_owned().try_into()?;
+            let right: protobuf::PhysicalPlanNode = exec.right().to_owned().try_into()?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::CrossJoin(Box::new(
+                    protobuf::CrossJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
                     },
                 ))),
             })
@@ -254,22 +268,19 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
-            let filenames = exec
-                .partitions()
-                .iter()
-                .map(|part| part.filename.clone())
-                .collect();
+            let partitions = exec.partitions().iter().map(|p| p.into()).collect();
+
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
-                        filename: filenames,
+                        partitions,
+                        schema: Some(exec.schema.as_ref().into()),
                         projection: exec
                             .projection()
                             .as_ref()
                             .iter()
                             .map(|n| *n as u32)
                             .collect(),
-                        num_partitions: exec.partitions().len() as u32,
                         batch_size: exec.batch_size() as u32,
                     },
                 )),
@@ -292,11 +303,11 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                     },
                 )),
             })
-        } else if let Some(exec) = plan.downcast_ref::<MergeExec>() {
+        } else if let Some(exec) = plan.downcast_ref::<CoalescePartitionsExec>() {
             let input: protobuf::PhysicalPlanNode = exec.input().to_owned().try_into()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Merge(Box::new(
-                    protobuf::MergeExecNode {
+                    protobuf::CoalescePartitionsExecNode {
                         input: Some(Box::new(input)),
                     },
                 ))),
@@ -356,17 +367,47 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                     },
                 ))),
             })
+        } else if let Some(exec) = plan.downcast_ref::<ShuffleWriterExec>() {
+            let input: protobuf::PhysicalPlanNode =
+                exec.children()[0].to_owned().try_into()?;
+            // note that we use shuffle_output_partitioning() rather than output_partitioning()
+            // to get the true output partitioning
+            let output_partitioning = match exec.shuffle_output_partitioning() {
+                Some(Partitioning::Hash(exprs, partition_count)) => {
+                    Some(protobuf::PhysicalHashRepartition {
+                        hash_expr: exprs
+                            .iter()
+                            .map(|expr| expr.clone().try_into())
+                            .collect::<Result<Vec<_>, BallistaError>>()?,
+                        partition_count: *partition_count as u64,
+                    })
+                }
+                None => None,
+                other => {
+                    return Err(BallistaError::General(format!(
+                        "physical_plan::to_proto() invalid partitioning for ShuffleWriterExec: {:?}",
+                        other
+                    )))
+                }
+            };
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::ShuffleWriter(Box::new(
+                    protobuf::ShuffleWriterExecNode {
+                        job_id: exec.job_id().to_string(),
+                        stage_id: exec.stage_id() as u32,
+                        input: Some(Box::new(input)),
+                        output_partitioning,
+                    },
+                ))),
+            })
         } else if let Some(exec) = plan.downcast_ref::<UnresolvedShuffleExec>() {
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Unresolved(
                     protobuf::UnresolvedShuffleExecNode {
-                        query_stage_ids: exec
-                            .query_stage_ids
-                            .iter()
-                            .map(|id| *id as u32)
-                            .collect(),
+                        stage_id: exec.stage_id as u32,
                         schema: Some(exec.schema().as_ref().into()),
-                        partition_count: exec.partition_count as u32,
+                        input_partition_count: exec.input_partition_count as u32,
+                        output_partition_count: exec.output_partition_count as u32,
                     },
                 )),
             })
@@ -389,6 +430,10 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
             Ok(protobuf::AggregateFunction::Sum.into())
         } else if self.as_any().downcast_ref::<Count>().is_some() {
             Ok(protobuf::AggregateFunction::Count.into())
+        } else if self.as_any().downcast_ref::<Min>().is_some() {
+            Ok(protobuf::AggregateFunction::Min.into())
+        } else if self.as_any().downcast_ref::<Max>().is_some() {
+            Ok(protobuf::AggregateFunction::Max.into())
         } else {
             Err(BallistaError::NotImplemented(format!(
                 "Aggregate function not supported: {:?}",
@@ -569,6 +614,16 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                 "physical_plan::to_proto() unsupported expression {:?}",
                 value
             )))
+        }
+    }
+}
+
+impl From<&ParquetPartition> for protobuf::ParquetPartition {
+    fn from(p: &ParquetPartition) -> protobuf::ParquetPartition {
+        let files = p.file_partition.files.iter().map(|f| f.into()).collect();
+        protobuf::ParquetPartition {
+            index: p.file_partition.index as u32,
+            files,
         }
     }
 }

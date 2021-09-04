@@ -22,17 +22,29 @@ use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::{any::Any, convert::TryInto};
 
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::physical_plan::{common, DisplayFormatType, ExecutionPlan, Partitioning};
 use crate::{
     error::{DataFusionError, Result},
-    logical_plan::Expr,
+    logical_plan::{Column, Expr},
+    physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
+    physical_plan::{
+        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    },
+    scalar::ScalarValue,
 };
 
 use arrow::{
     datatypes::*, error::Result as ArrowResult, io::parquet::read,
     record_batch::RecordBatch,
+};
+use log::debug;
+use parquet::file::{
+    metadata::RowGroupMetaData,
+    reader::{FileReader, SerializedFileReader},
+    statistics::Statistics as ParquetStatistics,
 };
 
 use fmt::Debug;
@@ -40,23 +52,30 @@ use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
     task,
 };
-use tokio_stream::wrappers::ReceiverStream;
 
-use crate::datasource::datasource::{ColumnStatistics, Statistics};
+use crate::datasource::datasource::Statistics;
 use async_trait::async_trait;
-use futures::stream::{Stream, StreamExt};
+
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::stream::RecordBatchReceiverStream;
+use crate::datasource::parquet::ParquetTableDescriptor;
+use crate::datasource::{get_statistics_with_limit, FilePartition, PartitionedFile};
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
     /// Parquet partitions to read
-    partitions: Vec<ParquetPartition>,
+    pub partitions: Vec<ParquetPartition>,
     /// Schema after projection is applied
     schema: Arc<Schema>,
     /// Projection for which columns to load
     projection: Vec<usize>,
     /// Statistics for the data set (sum of statistics for all partitions)
     statistics: Statistics,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
+    /// Optional predicate builder
+    predicate_builder: Option<PruningPredicate>,
     /// Optional limit of the number of rows
     limit: usize,
 }
@@ -73,9 +92,18 @@ pub struct ParquetExec {
 #[derive(Debug, Clone)]
 pub struct ParquetPartition {
     /// The Parquet filename for this partition
-    pub filename: String,
-    /// Statistics for this partition
-    pub statistics: Statistics,
+    pub file_partition: FilePartition,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
+}
+
+/// Stores metrics about the parquet execution for a particular parquet file
+#[derive(Debug, Clone)]
+struct ParquetFileMetrics {
+    /// Number of times the predicate could not be evaluated
+    pub predicate_evaluation_errors: metrics::Count,
+    /// Number of row groups pruned using
+    pub row_groups_pruned: metrics::Count,
 }
 
 impl ParquetExec {
@@ -85,106 +113,90 @@ impl ParquetExec {
         path: &str,
         projection: Option<Vec<usize>>,
         predicate: Option<Expr>,
-        max_concurrency: usize,
+        batch_size: usize,
+        max_partitions: usize,
         limit: Option<usize>,
     ) -> Result<Self> {
         // build a list of filenames from the specified path, which could be a single file or
         // a directory containing one or more parquet files
-        let filenames = common::build_file_list(path, ".parquet")?;
-        if filenames.is_empty() {
-            Err(DataFusionError::Plan(format!(
-                "No Parquet files found at path {}",
-                path
-            )))
-        } else {
-            let filenames = filenames
-                .iter()
-                .map(|filename| filename.as_str())
-                .collect::<Vec<&str>>();
-            Self::try_from_files(
-                &filenames,
-                projection,
-                predicate,
-                max_concurrency,
-                limit,
-            )
-        }
+        let table_desc = ParquetTableDescriptor::new(path)?;
+        Self::try_new(
+            Arc::new(table_desc),
+            projection,
+            predicate,
+            batch_size,
+            max_partitions,
+            limit,
+        )
     }
 
-    /// Create a new Parquet reader execution plan based on the specified list of Parquet
-    /// files
-    pub fn try_from_files(
-        filenames: &[&str],
+    /// Create a new Parquet reader execution plan with root descriptor, provided partitions and schema
+    pub fn try_new(
+        desc: Arc<ParquetTableDescriptor>,
         projection: Option<Vec<usize>>,
         predicate: Option<Expr>,
-        max_concurrency: usize,
+        batch_size: usize,
+        max_partitions: usize,
         limit: Option<usize>,
     ) -> Result<Self> {
-        let limit = limit.unwrap_or(usize::MAX);
-        // build a list of Parquet partitions with statistics and gather all unique schemas
-        // used in this data set
-        let mut schemas: Vec<Arc<Schema>> = vec![];
-        let mut partitions = Vec::with_capacity(max_concurrency);
-        let mut num_rows = 0;
-        for filename in filenames {
-            let mut file = File::open(filename)?;
-            let file_metadata = read::read_metadata(&mut file)?;
-            let schema = read::get_schema(&file_metadata)?;
-            let schema = Arc::new(schema);
+        debug!("Creating ParquetExec, desc: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
+               desc, projection, predicate, limit);
 
-            let total_byte_size: i64 = (&file_metadata.row_groups)
-                .iter()
-                .map(|group| group.total_byte_size())
-                .sum();
-            let total_byte_size = total_byte_size as usize;
+        let metrics = ExecutionPlanMetricsSet::new();
+        let (all_files, statistics) = get_statistics_with_limit(&desc.descriptor, limit);
+        let schema = desc.schema();
 
-            let row_count: i64 = (&file_metadata.row_groups)
-                .iter()
-                .map(|group| group.num_rows())
-                .sum();
-            let row_count = row_count as usize;
-            num_rows += row_count;
-
-            if schemas.is_empty() || schema != schemas[0] {
-                schemas.push(schema);
-            }
-
-            let statistics = Statistics {
-                num_rows: Some(row_count),
-                total_byte_size: Some(total_byte_size),
-                column_statistics: None,
-            };
-            partitions.push(ParquetPartition {
-                filename: filename.to_string(),
-                statistics,
-            });
-            // remove files that are not needed in case of limit
-            if num_rows > limit {
-                break;
-            }
+        let mut partitions = Vec::with_capacity(max_partitions);
+        let chunked_files = split_files(&all_files, max_partitions);
+        for (index, group) in chunked_files.iter().enumerate() {
+            partitions.push(ParquetPartition::new(
+                Vec::from(*group),
+                index,
+                metrics.clone(),
+            ));
         }
 
-        // we currently get the schema information from the first file rather than do
-        // schema merging and this is a limitation.
-        // See https://issues.apache.org/jira/browse/ARROW-11017
-        if schemas.len() > 1 {
-            return Err(DataFusionError::Plan(format!(
-                "The Parquet files have {} different schemas and DataFusion does \
-                not yet support schema merging",
-                schemas.len()
-            )));
-        }
-        let schema = schemas[0].clone();
+        let metrics = ExecutionPlanMetricsSet::new();
+        let predicate_creation_errors =
+            MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
-        Ok(Self::new(partitions, schema, projection, limit))
+        let predicate_builder = predicate.and_then(|predicate_expr| {
+            match PruningPredicate::try_new(&predicate_expr, schema.clone()) {
+                Ok(predicate_builder) => Some(predicate_builder),
+                Err(e) => {
+                    debug!(
+                        "Could not create pruning predicate for {:?}: {}",
+                        predicate_expr, e
+                    );
+                    predicate_creation_errors.add(1);
+                    None
+                }
+            }
+        });
+
+        Ok(Self::new(
+            partitions,
+            schema,
+            projection,
+            statistics,
+            metrics,
+            predicate_builder,
+            batch_size,
+            limit,
+        ))
     }
 
     /// Create a new Parquet reader execution plan with provided partitions and schema
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         partitions: Vec<ParquetPartition>,
         schema: Arc<Schema>,
         projection: Option<Vec<usize>>,
-        limit: usize,
+        statistics: Statistics,
+        metrics: ExecutionPlanMetricsSet,
+        predicate_builder: Option<PruningPredicate>,
+        batch_size: usize,
+        limit: Option<usize>,
     ) -> Self {
         let projection = match projection {
             Some(p) => p,
@@ -198,53 +210,27 @@ impl ParquetExec {
                 .collect(),
         );
 
-        // sum the statistics
-        let mut num_rows: Option<usize> = None;
-        let mut total_byte_size: Option<usize> = None;
-        let mut null_counts: Vec<usize> = vec![0; schema.fields().len()];
-        let mut has_null_counts = false;
-        for part in &partitions {
-            if let Some(n) = part.statistics.num_rows {
-                num_rows = Some(num_rows.unwrap_or(0) + n)
+        let new_column_statistics = statistics.column_statistics.map(|stats| {
+            let mut projected_stats = Vec::with_capacity(projection.len());
+            for proj in &projection {
+                projected_stats.push(stats[*proj].clone());
             }
-            if let Some(n) = part.statistics.total_byte_size {
-                total_byte_size = Some(total_byte_size.unwrap_or(0) + n)
-            }
-            if let Some(x) = &part.statistics.column_statistics {
-                let part_nulls: Vec<Option<usize>> =
-                    x.iter().map(|c| c.null_count).collect();
-                has_null_counts = true;
-
-                for &i in projection.iter() {
-                    null_counts[i] = part_nulls[i].unwrap_or(0);
-                }
-            }
-        }
-        let column_stats = if has_null_counts {
-            Some(
-                null_counts
-                    .iter()
-                    .map(|null_count| ColumnStatistics {
-                        null_count: Some(*null_count),
-                        distinct_count: None,
-                        max_value: None,
-                        min_value: None,
-                    })
-                    .collect(),
-            )
-        } else {
-            None
-        };
+            projected_stats
+        });
 
         let statistics = Statistics {
-            num_rows,
-            total_byte_size,
-            column_statistics: column_stats,
+            num_rows: statistics.num_rows,
+            total_byte_size: statistics.total_byte_size,
+            column_statistics: new_column_statistics,
         };
+
         Self {
             partitions,
             schema: Arc::new(projected_schema),
             projection,
+            metrics,
+            predicate_builder,
+            batch_size,
             statistics,
             limit,
         }
@@ -268,21 +254,37 @@ impl ParquetExec {
 
 impl ParquetPartition {
     /// Create a new parquet partition
-    pub fn new(filename: String, statistics: Statistics) -> Self {
+    pub fn new(
+        files: Vec<PartitionedFile>,
+        index: usize,
+        metrics: ExecutionPlanMetricsSet,
+    ) -> Self {
         Self {
-            filename,
-            statistics,
+            file_partition: FilePartition { index, files },
+            metrics,
         }
     }
+}
 
-    /// The Parquet filename for this partition
-    pub fn filename(&self) -> &String {
-        &self.filename
-    }
+impl ParquetFileMetrics {
+    /// Create new metrics
+    pub fn new(
+        partition: usize,
+        filename: &str,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Self {
+        let predicate_evaluation_errors = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .counter("predicate_evaluation_errors", partition);
 
-    /// Statistics for this partition
-    pub fn statistics(&self) -> &Statistics {
-        &self.statistics
+        let row_groups_pruned = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .counter("row_groups_pruned", partition);
+
+        Self {
+            predicate_evaluation_errors,
+            row_groups_pruned,
+        }
     }
 }
 
@@ -348,24 +350,33 @@ impl ExecutionPlan for ParquetExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(&self, partition_index: usize) -> Result<SendableRecordBatchStream> {
         // because the parquet implementation is not thread-safe, it is necessary to execute
         // on a thread and communicate with channels
         let (response_tx, response_rx): (Sender<Payload>, Receiver<Payload>) = channel(2);
 
-        let path = self.partitions[partition].filename.clone();
+        let partition = self.partitions[partition_index].clone();
+        let metrics = self.metrics.clone();
         let projection = self.projection.clone();
         let limit = self.limit;
         let schema = self.schema.clone();
 
         task::spawn_blocking(move || {
-            producer_task(&path, response_tx, &projection, limit).unwrap()
+            if let Err(e) = read_partition(
+                partition_index,
+                partition,
+                metrics,
+                &projection,
+                &predicate_builder,
+                batch_size,
+                response_tx,
+                limit,
+            ) {
+                println!("Parquet reader thread terminated due to error: {:?}", e);
+            }
         });
 
-        Ok(Box::pin(ParquetStream {
-            schema: self.schema.clone(),
-            inner: ReceiverStream::new(response_rx),
-        }))
+        Ok(RecordBatchReceiverStream::create(&self.schema, response_rx))
     }
 
     fn fmt_as(
@@ -378,7 +389,7 @@ impl ExecutionPlan for ParquetExec {
                 let files: Vec<_> = self
                     .partitions
                     .iter()
-                    .map(|pp| pp.filename.as_str())
+                    .map(|pp| format!("{}", pp.file_partition))
                     .collect();
 
                 write!(
@@ -390,28 +401,210 @@ impl ExecutionPlan for ParquetExec {
             }
         }
     }
-}
 
-struct ParquetStream {
-    schema: SchemaRef,
-    inner: ReceiverStream<Payload>,
-}
-
-impl Stream for ParquetStream {
-    type Item = ArrowResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx)
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
 
-impl RecordBatchStream for ParquetStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+fn send_result(
+    response_tx: &Sender<ArrowResult<RecordBatch>>,
+    result: ArrowResult<RecordBatch>,
+) -> Result<()> {
+    // Note this function is running on its own blockng tokio thread so blocking here is ok.
+    response_tx
+        .blocking_send(result)
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    Ok(())
+}
+
+/// Wraps parquet statistics in a way
+/// that implements [`PruningStatistics`]
+struct RowGroupPruningStatistics<'a> {
+    row_group_metadata: &'a [RowGroupMetaData],
+    parquet_schema: &'a Schema,
+}
+
+/// Extract the min/max statistics from a `ParquetStatistics` object
+macro_rules! get_statistic {
+    ($column_statistics:expr, $func:ident, $bytes_func:ident) => {{
+        if !$column_statistics.has_min_max_set() {
+            return None;
+        }
+        match $column_statistics {
+            ParquetStatistics::Boolean(s) => Some(ScalarValue::Boolean(Some(*s.$func()))),
+            ParquetStatistics::Int32(s) => Some(ScalarValue::Int32(Some(*s.$func()))),
+            ParquetStatistics::Int64(s) => Some(ScalarValue::Int64(Some(*s.$func()))),
+            // 96 bit ints not supported
+            ParquetStatistics::Int96(_) => None,
+            ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
+            ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
+            ParquetStatistics::ByteArray(s) => {
+                let s = std::str::from_utf8(s.$bytes_func())
+                    .map(|s| s.to_string())
+                    .ok();
+                Some(ScalarValue::Utf8(s))
+            }
+            // type not supported yet
+            ParquetStatistics::FixedLenByteArray(_) => None,
+        }
+    }};
+}
+
+// Extract the min or max value calling `func` or `bytes_func` on the ParquetStatistics as appropriate
+macro_rules! get_min_max_values {
+    ($self:expr, $column:expr, $func:ident, $bytes_func:ident) => {{
+        let (column_index, field) = if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.name) {
+            (v, f)
+        } else {
+            // Named column was not present
+            return None
+        };
+
+        let data_type = field.data_type();
+        let null_scalar: ScalarValue = if let Ok(v) = data_type.try_into() {
+            v
+        } else {
+            // DataFusion doesn't have support for ScalarValues of the column type
+            return None
+        };
+
+        let scalar_values : Vec<ScalarValue> = $self.row_group_metadata
+            .iter()
+            .flat_map(|meta| {
+                meta.column(column_index).statistics()
+            })
+            .map(|stats| {
+                get_statistic!(stats, $func, $bytes_func)
+            })
+            .map(|maybe_scalar| {
+                // column either did't have statistics at all or didn't have min/max values
+                maybe_scalar.unwrap_or_else(|| null_scalar.clone())
+            })
+            .collect();
+
+        // ignore errors converting to arrays (e.g. different types)
+        ScalarValue::iter_to_array(scalar_values).ok()
+    }}
+}
+
+impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        get_min_max_values!(self, column, min, min_bytes)
     }
+
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        get_min_max_values!(self, column, max, max_bytes)
+    }
+
+    fn num_containers(&self) -> usize {
+        self.row_group_metadata.len()
+    }
+}
+
+fn build_row_group_predicate(
+    predicate_builder: &PruningPredicate,
+    metrics: ParquetFileMetrics,
+    row_group_metadata: &[RowGroupMetaData],
+) -> Box<dyn Fn(&RowGroupMetaData, usize) -> bool> {
+    let parquet_schema = predicate_builder.schema().as_ref();
+
+    let pruning_stats = RowGroupPruningStatistics {
+        row_group_metadata,
+        parquet_schema,
+    };
+    let predicate_values = predicate_builder.prune(&pruning_stats);
+
+    match predicate_values {
+        Ok(values) => {
+            // NB: false means don't scan row group
+            let num_pruned = values.iter().filter(|&v| !*v).count();
+            metrics.row_groups_pruned.add(num_pruned);
+            Box::new(move |_, i| values[i])
+        }
+        // stats filter array could not be built
+        // return a closure which will not filter out any row groups
+        Err(e) => {
+            debug!("Error evaluating row group predicate values {}", e);
+            metrics.predicate_evaluation_errors.add(1);
+            Box::new(|_r, _i| true)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_partition(
+    partition_index: usize,
+    partition: ParquetPartition,
+    metrics: ExecutionPlanMetricsSet,
+    projection: &[usize],
+    predicate_builder: &Option<PruningPredicate>,
+    batch_size: usize,
+    response_tx: Sender<ArrowResult<RecordBatch>>,
+    limit: Option<usize>,
+) -> Result<()> {
+    let mut total_rows = 0;
+    let all_files = partition.file_partition.files;
+    'outer: for partitioned_file in all_files {
+        let file_metrics =
+            ParquetFileMetrics::new(partition_index, &*partitioned_file.path, &metrics);
+        let file = File::open(partitioned_file.path.as_str())?;
+        let mut file_reader = SerializedFileReader::new(file)?;
+        if let Some(predicate_builder) = predicate_builder {
+            let row_group_predicate = build_row_group_predicate(
+                predicate_builder,
+                file_metrics,
+                file_reader.metadata().row_groups(),
+            );
+            file_reader.filter_row_groups(&row_group_predicate);
+        }
+        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
+        let mut batch_reader = arrow_reader
+            .get_record_reader_by_columns(projection.to_owned(), batch_size)?;
+        loop {
+            match batch_reader.next() {
+                Some(Ok(batch)) => {
+                    total_rows += batch.num_rows();
+                    send_result(&response_tx, Ok(batch))?;
+                    if limit.map(|l| total_rows >= l).unwrap_or(false) {
+                        break 'outer;
+                    }
+                }
+                None => {
+                    break;
+                }
+                Some(Err(e)) => {
+                    let err_msg = format!(
+                        "Error reading batch from {}: {}",
+                        partitioned_file,
+                        e.to_string()
+                    );
+                    // send error to operator
+                    send_result(
+                        &response_tx,
+                        Err(ArrowError::ParquetError(err_msg.clone())),
+                    )?;
+                    // terminate thread with error
+                    return Err(DataFusionError::Execution(err_msg));
+                }
+            }
+        }
+    }
+
+    // finished reading files (dropping response_tx will close
+    // channel)
+    Ok(())
+}
+
+fn split_files(
+    partitioned_files: &[PartitionedFile],
+    n: usize,
+) -> Vec<&[PartitionedFile]> {
+    let mut chunk_size = partitioned_files.len() / n;
+    if partitioned_files.len() % n > 0 {
+        chunk_size += 1;
+    }
+    partitioned_files.chunks(chunk_size).collect()
 }
 
 /*
@@ -429,24 +622,24 @@ mod tests {
 
     #[test]
     fn test_split_files() {
-        let filenames = vec![
-            "a".to_string(),
-            "b".to_string(),
-            "c".to_string(),
-            "d".to_string(),
-            "e".to_string(),
+        let files = vec![
+            PartitionedFile::from("a".to_string()),
+            PartitionedFile::from("b".to_string()),
+            PartitionedFile::from("c".to_string()),
+            PartitionedFile::from("d".to_string()),
+            PartitionedFile::from("e".to_string()),
         ];
 
-        let chunks = split_files(&filenames, 1);
+        let chunks = split_files(&files, 1);
         assert_eq!(1, chunks.len());
         assert_eq!(5, chunks[0].len());
 
-        let chunks = split_files(&filenames, 2);
+        let chunks = split_files(&files, 2);
         assert_eq!(2, chunks.len());
         assert_eq!(3, chunks[0].len());
         assert_eq!(2, chunks[1].len());
 
-        let chunks = split_files(&filenames, 5);
+        let chunks = split_files(&files, 5);
         assert_eq!(5, chunks.len());
         assert_eq!(1, chunks[0].len());
         assert_eq!(1, chunks[1].len());
@@ -454,7 +647,7 @@ mod tests {
         assert_eq!(1, chunks[3].len());
         assert_eq!(1, chunks[4].len());
 
-        let chunks = split_files(&filenames, 123);
+        let chunks = split_files(&files, 123);
         assert_eq!(5, chunks.len());
         assert_eq!(1, chunks[0].len());
         assert_eq!(1, chunks[1].len());
@@ -500,6 +693,11 @@ mod tests {
         Ok(())
     }
 
+    fn parquet_file_metrics() -> ParquetFileMetrics {
+        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
+        ParquetFileMetrics::new(0, "file.parquet", &metrics)
+    }
+
     #[test]
     fn row_group_predicate_builder_simple_expr() -> Result<()> {
         use crate::logical_plan::{col, lit};
@@ -518,8 +716,11 @@ mod tests {
             vec![ParquetStatistics::int32(Some(11), Some(20), None, 0, false)],
         );
         let row_group_metadata = vec![rgm1, rgm2];
-        let row_group_predicate =
-            build_row_group_predicate(&predicate_builder, &row_group_metadata);
+        let row_group_predicate = build_row_group_predicate(
+            &predicate_builder,
+            parquet_file_metrics(),
+            &row_group_metadata,
+        );
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -548,8 +749,11 @@ mod tests {
             vec![ParquetStatistics::int32(Some(11), Some(20), None, 0, false)],
         );
         let row_group_metadata = vec![rgm1, rgm2];
-        let row_group_predicate =
-            build_row_group_predicate(&predicate_builder, &row_group_metadata);
+        let row_group_predicate = build_row_group_predicate(
+            &predicate_builder,
+            parquet_file_metrics(),
+            &row_group_metadata,
+        );
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -593,8 +797,11 @@ mod tests {
             ],
         );
         let row_group_metadata = vec![rgm1, rgm2];
-        let row_group_predicate =
-            build_row_group_predicate(&predicate_builder, &row_group_metadata);
+        let row_group_predicate = build_row_group_predicate(
+            &predicate_builder,
+            parquet_file_metrics(),
+            &row_group_metadata,
+        );
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -608,8 +815,11 @@ mod tests {
         // this bypasses the entire predicate expression and no row groups are filtered out
         let expr = col("c1").gt(lit(15)).or(col("c2").modulus(lit(2)));
         let predicate_builder = PruningPredicate::try_new(&expr, schema)?;
-        let row_group_predicate =
-            build_row_group_predicate(&predicate_builder, &row_group_metadata);
+        let row_group_predicate = build_row_group_predicate(
+            &predicate_builder,
+            parquet_file_metrics(),
+            &row_group_metadata,
+        );
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()
@@ -652,8 +862,11 @@ mod tests {
             ],
         );
         let row_group_metadata = vec![rgm1, rgm2];
-        let row_group_predicate =
-            build_row_group_predicate(&predicate_builder, &row_group_metadata);
+        let row_group_predicate = build_row_group_predicate(
+            &predicate_builder,
+            parquet_file_metrics(),
+            &row_group_metadata,
+        );
         let row_group_filter = row_group_metadata
             .iter()
             .enumerate()

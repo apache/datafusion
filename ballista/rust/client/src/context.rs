@@ -17,34 +17,27 @@
 
 //! Distributed execution context.
 
+use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::{collections::HashMap, convert::TryInto};
-use std::{fs, time::Duration};
 
-use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
-use ballista_core::serde::protobuf::PartitionLocation;
-use ballista_core::serde::protobuf::{
-    execute_query_params::Query, job_status, ExecuteQueryParams, GetJobStatusParams,
-    GetJobStatusResult,
-};
-use ballista_core::utils::WrappedStream;
+use ballista_core::config::BallistaConfig;
 use ballista_core::{
-    client::BallistaClient, datasource::DfTableAdapter, utils::create_datafusion_context,
+    datasource::DfTableAdapter, utils::create_df_ctx_with_ballista_query_planner,
 };
 
-use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::TableReference;
+use datafusion::dataframe::DataFrame;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::dataframe_impl::DataFrameImpl;
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::csv::CsvReadOptions;
-use datafusion::{dataframe::DataFrame, physical_plan::RecordBatchStream};
-use futures::future;
-use futures::StreamExt;
-use log::{error, info};
+use datafusion::sql::parser::FileType;
 
 struct BallistaContextState {
+    /// Ballista configuration
+    config: BallistaConfig,
     /// Scheduler host
     scheduler_host: String,
     /// Scheduler port
@@ -54,8 +47,13 @@ struct BallistaContextState {
 }
 
 impl BallistaContextState {
-    pub fn new(scheduler_host: String, scheduler_port: u16) -> Self {
+    pub fn new(
+        scheduler_host: String,
+        scheduler_port: u16,
+        config: &BallistaConfig,
+    ) -> Self {
         Self {
+            config: config.clone(),
             scheduler_host,
             scheduler_port,
             tables: HashMap::new(),
@@ -64,6 +62,7 @@ impl BallistaContextState {
 
     #[cfg(feature = "standalone")]
     pub async fn new_standalone(
+        config: &BallistaConfig,
         concurrent_tasks: usize,
     ) -> ballista_core::error::Result<Self> {
         info!("Running in local mode. Scheduler will be run in-proc");
@@ -87,10 +86,15 @@ impl BallistaContextState {
 
         ballista_executor::new_standalone_executor(scheduler, concurrent_tasks).await?;
         Ok(Self {
+            config: config.clone(),
             scheduler_host: "localhost".to_string(),
             scheduler_port: addr.port(),
             tables: HashMap::new(),
         })
+    }
+
+    pub fn config(&self) -> &BallistaConfig {
+        &self.config
     }
 }
 
@@ -100,8 +104,8 @@ pub struct BallistaContext {
 
 impl BallistaContext {
     /// Create a context for executing queries against a remote Ballista scheduler instance
-    pub fn remote(host: &str, port: u16) -> Self {
-        let state = BallistaContextState::new(host.to_owned(), port);
+    pub fn remote(host: &str, port: u16, config: &BallistaConfig) -> Self {
+        let state = BallistaContextState::new(host.to_owned(), port, config);
 
         Self {
             state: Arc::new(Mutex::new(state)),
@@ -110,9 +114,11 @@ impl BallistaContext {
 
     #[cfg(feature = "standalone")]
     pub async fn standalone(
+        config: &BallistaConfig,
         concurrent_tasks: usize,
     ) -> ballista_core::error::Result<Self> {
-        let state = BallistaContextState::new_standalone(concurrent_tasks).await?;
+        let state =
+            BallistaContextState::new_standalone(config, concurrent_tasks).await?;
 
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
@@ -127,7 +133,14 @@ impl BallistaContext {
         let path = fs::canonicalize(&path)?;
 
         // use local DataFusion context for now but later this might call the scheduler
-        let mut ctx = create_datafusion_context();
+        let mut ctx = {
+            let guard = self.state.lock().unwrap();
+            create_df_ctx_with_ballista_query_planner(
+                &guard.scheduler_host,
+                guard.scheduler_port,
+                guard.config(),
+            )
+        };
         let df = ctx.read_parquet(path.to_str().unwrap())?;
         Ok(df)
     }
@@ -144,7 +157,14 @@ impl BallistaContext {
         let path = fs::canonicalize(&path)?;
 
         // use local DataFusion context for now but later this might call the scheduler
-        let mut ctx = create_datafusion_context();
+        let mut ctx = {
+            let guard = self.state.lock().unwrap();
+            create_df_ctx_with_ballista_query_planner(
+                &guard.scheduler_host,
+                guard.scheduler_port,
+                guard.config(),
+            )
+        };
         let df = ctx.read_csv(path.to_str().unwrap(), options)?;
         Ok(df)
     }
@@ -175,128 +195,58 @@ impl BallistaContext {
 
     /// Create a DataFrame from a SQL statement
     pub fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
-        // use local DataFusion context for now but later this might call the scheduler
-        let mut ctx = create_datafusion_context();
-        // register tables
-        let state = self.state.lock().unwrap();
-        for (name, plan) in &state.tables {
-            let plan = ctx.optimize(plan)?;
-            let execution_plan = ctx.create_physical_plan(&plan)?;
-            ctx.register_table(
-                TableReference::Bare { table: name },
-                Arc::new(DfTableAdapter::new(plan, execution_plan)),
-            )?;
-        }
-        ctx.sql(sql)
-    }
-
-    async fn fetch_partition(
-        location: PartitionLocation,
-    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-        let metadata = location.executor_meta.ok_or_else(|| {
-            DataFusionError::Internal("Received empty executor metadata".to_owned())
-        })?;
-        let partition_id = location.partition_id.ok_or_else(|| {
-            DataFusionError::Internal("Received empty partition id".to_owned())
-        })?;
-        let mut ballista_client =
-            BallistaClient::try_new(metadata.host.as_str(), metadata.port as u16)
-                .await
-                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-        Ok(ballista_client
-            .fetch_partition(
-                &partition_id.job_id,
-                partition_id.stage_id as usize,
-                partition_id.partition_id as usize,
-            )
-            .await
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)
-    }
-
-    pub async fn collect(
-        &self,
-        plan: &LogicalPlan,
-    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-        let scheduler_url = {
+        let mut ctx = {
             let state = self.state.lock().unwrap();
-
-            format!("http://{}:{}", state.scheduler_host, state.scheduler_port)
+            create_df_ctx_with_ballista_query_planner(
+                &state.scheduler_host,
+                state.scheduler_port,
+                state.config(),
+            )
         };
 
-        info!("Connecting to Ballista scheduler at {}", scheduler_url);
+        // register tables with DataFusion context
+        {
+            let state = self.state.lock().unwrap();
+            for (name, plan) in &state.tables {
+                let plan = ctx.optimize(plan)?;
+                let execution_plan = ctx.create_physical_plan(&plan)?;
+                ctx.register_table(
+                    TableReference::Bare { table: name },
+                    Arc::new(DfTableAdapter::new(plan, execution_plan)),
+                )?;
+            }
+        }
 
-        let mut scheduler = SchedulerGrpcClient::connect(scheduler_url)
-            .await
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-
-        let schema: Schema = plan.schema().as_ref().clone().into();
-
-        let job_id = scheduler
-            .execute_query(ExecuteQueryParams {
-                query: Some(Query::LogicalPlan(
-                    (plan)
-                        .try_into()
-                        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?,
-                )),
-            })
-            .await
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?
-            .into_inner()
-            .job_id;
-
-        let mut prev_status: Option<job_status::Status> = None;
-
-        loop {
-            let GetJobStatusResult { status } = scheduler
-                .get_job_status(GetJobStatusParams {
-                    job_id: job_id.clone(),
-                })
-                .await
-                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?
-                .into_inner();
-            let status = status.and_then(|s| s.status).ok_or_else(|| {
-                DataFusionError::Internal("Received empty status message".to_owned())
-            })?;
-            let wait_future = tokio::time::sleep(Duration::from_millis(100));
-            let has_status_change = prev_status.map(|x| x != status).unwrap_or(true);
-            match status {
-                job_status::Status::Queued(_) => {
-                    if has_status_change {
-                        info!("Job {} still queued...", job_id);
-                    }
-                    wait_future.await;
-                    prev_status = Some(status);
+        let plan = ctx.create_logical_plan(sql)?;
+        match plan {
+            LogicalPlan::CreateExternalTable {
+                ref schema,
+                ref name,
+                ref location,
+                ref file_type,
+                ref has_header,
+            } => match file_type {
+                FileType::CSV => {
+                    self.register_csv(
+                        name,
+                        location,
+                        CsvReadOptions::new()
+                            .schema(&schema.as_ref().to_owned().into())
+                            .has_header(*has_header),
+                    )?;
+                    Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
                 }
-                job_status::Status::Running(_) => {
-                    if has_status_change {
-                        info!("Job {} is running...", job_id);
-                    }
-                    wait_future.await;
-                    prev_status = Some(status);
+                FileType::Parquet => {
+                    self.register_parquet(name, location)?;
+                    Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
                 }
-                job_status::Status::Failed(err) => {
-                    let msg = format!("Job {} failed: {}", job_id, err.error);
-                    error!("{}", msg);
-                    break Err(DataFusionError::Execution(msg));
-                }
-                job_status::Status::Completed(completed) => {
-                    let result = future::join_all(
-                        completed
-                            .partition_location
-                            .into_iter()
-                            .map(BallistaContext::fetch_partition),
-                    )
-                    .await
-                    .into_iter()
-                    .collect::<Result<Vec<_>>>()?;
+                _ => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported file type {:?}.",
+                    file_type
+                ))),
+            },
 
-                    let result = WrappedStream::new(
-                        Box::pin(futures::stream::iter(result).flatten()),
-                        Arc::new(schema),
-                    );
-                    break Ok(Box::pin(result));
-                }
-            };
+            _ => ctx.sql(sql),
         }
     }
 }

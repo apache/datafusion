@@ -18,12 +18,12 @@
 //! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
 
 use std::any::Any;
-use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use ahash::RandomState;
+use std::collections::HashSet;
 
 use arrow::{
     array::*,
@@ -31,11 +31,11 @@ use arrow::{
 };
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::group_scalar::GroupByScalar;
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
-type DistinctScalarValues = Vec<GroupByScalar>;
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+struct DistinctScalarValues(Vec<ScalarValue>);
 
 fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{}[{}]", name, state_name)
@@ -134,11 +134,7 @@ impl Accumulator for DistinctCountAccumulator {
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         // If a row has a NULL, it is not included in the final count.
         if !values.iter().any(|v| v.is_null()) {
-            let values = values
-                .iter()
-                .map(GroupByScalar::try_from)
-                .collect::<Result<Vec<_>>>()?;
-            self.values.insert(values);
+            self.values.insert(DistinctScalarValues(values.to_vec()));
         }
 
         Ok(())
@@ -170,28 +166,33 @@ impl Accumulator for DistinctCountAccumulator {
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        // create a ListArray for each `state_data_type`. The `ListArray`
-        let a = self.state_data_types.iter().enumerate().map(|(i, type_)| {
-            if self.values.is_empty() {
-                return Ok((new_empty_array(type_.clone()), type_));
-            };
-            let arrays = self
-                .values
-                .iter()
-                .map(|distinct_values| ScalarValue::from(&distinct_values[i]).to_array())
-                .collect::<Vec<_>>();
-            let arrays = arrays.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
-            Ok(arrow::compute::concat::concatenate(&arrays).map(|x| (x, type_))?)
-        });
-        a.map(|values: Result<(Box<dyn Array>, &DataType)>| {
-            values.map(|(values, type_)| {
-                ScalarValue::List(
-                    Some(values.into()),
-                    ListArray::<i32>::default_datatype(type_.clone()),
-                )
+        let mut cols_out = self
+            .state_data_types
+            .iter()
+            .map(|state_data_type| {
+                let values = Box::new(Vec::new());
+                let data_type = Box::new(state_data_type.clone());
+                ScalarValue::List(Some(values), data_type)
             })
-        })
-        .collect()
+            .collect::<Vec<_>>();
+
+        let mut cols_vec = cols_out
+            .iter_mut()
+            .map(|c| match c {
+                ScalarValue::List(Some(ref mut v), _) => v,
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+
+        self.values.iter().for_each(|distinct_values| {
+            distinct_values.0.iter().enumerate().for_each(
+                |(col_index, distinct_value)| {
+                    cols_vec[col_index].push(distinct_value.clone());
+                },
+            )
+        });
+
+        Ok(cols_out)
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {

@@ -69,8 +69,8 @@ Run a SQL query against data stored in a CSV:
 
 ```rust
 use datafusion::prelude::*;
-use arrow::util::pretty::print_batches;
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::util::pretty::print_batches;
+use datafusion::arrow::record_batch::RecordBatch;
 
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
@@ -82,8 +82,7 @@ async fn main() -> datafusion::error::Result<()> {
   let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")?;
 
   // execute and print results
-  let results: Vec<RecordBatch> = df.collect().await?;
-  print_batches(&results)?;
+  df.show().await?;
   Ok(())
 }
 ```
@@ -92,8 +91,8 @@ Use the DataFrame API to process data stored in a CSV:
 
 ```rust
 use datafusion::prelude::*;
-use arrow::util::pretty::print_batches;
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::util::pretty::print_batches;
+use datafusion::arrow::record_batch::RecordBatch;
 
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
@@ -102,12 +101,10 @@ async fn main() -> datafusion::error::Result<()> {
   let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
 
   let df = df.filter(col("a").lt_eq(col("b")))?
-          .aggregate(vec![col("a")], vec![min(col("b"))])?
-          .limit(100)?;
+          .aggregate(vec![col("a")], vec![min(col("b"))])?;
 
   // execute and print results
-  let results: Vec<RecordBatch> = df.collect().await?;
-  print_batches(&results)?;
+  df.show_limit(100).await?;
   Ok(())
 }
 ```
@@ -130,7 +127,7 @@ To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-datafusion = "4.0.0-SNAPSHOT"
+datafusion = "5.0.0"
 ```
 
 ## Using DataFusion as a binary

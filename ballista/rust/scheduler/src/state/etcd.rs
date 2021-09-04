@@ -17,14 +17,12 @@
 
 //! Etcd config backend.
 
-use std::{task::Poll, time::Duration};
+use std::task::Poll;
 
 use crate::state::ConfigBackendClient;
 use ballista_core::error::{ballista_error, Result};
 
-use etcd_client::{
-    GetOptions, LockResponse, PutOptions, WatchOptions, WatchStream, Watcher,
-};
+use etcd_client::{GetOptions, LockResponse, WatchOptions, WatchStream, Watcher};
 use futures::{Stream, StreamExt};
 use log::warn;
 
@@ -70,25 +68,9 @@ impl ConfigBackendClient for EtcdClient {
             .collect())
     }
 
-    async fn put(
-        &self,
-        key: String,
-        value: Vec<u8>,
-        lease_time: Option<Duration>,
-    ) -> Result<()> {
+    async fn put(&self, key: String, value: Vec<u8>) -> Result<()> {
         let mut etcd = self.etcd.clone();
-        let put_options = if let Some(lease_time) = lease_time {
-            etcd.lease_grant(lease_time.as_secs() as i64, None)
-                .await
-                .map(|lease| Some(PutOptions::new().with_lease(lease.id())))
-                .map_err(|e| {
-                    warn!("etcd lease grant failed: {:?}", e.to_string());
-                    ballista_error("etcd lease grant failed")
-                })?
-        } else {
-            None
-        };
-        etcd.put(key.clone(), value.clone(), put_options)
+        etcd.put(key.clone(), value.clone(), None)
             .await
             .map_err(|e| {
                 warn!("etcd put failed: {}", e);
@@ -99,6 +81,7 @@ impl ConfigBackendClient for EtcdClient {
 
     async fn lock(&self) -> Result<Box<dyn Lock>> {
         let mut etcd = self.etcd.clone();
+        // TODO: make this a namespaced-lock
         let lock = etcd
             .lock("/ballista_global_lock", None)
             .await
