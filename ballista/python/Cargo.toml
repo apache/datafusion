@@ -1,0 +1,37 @@
+[package]
+name = "python"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+libc = "0.2"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+rand = "0.7"
+pyo3 = { version = "0.14.1", features = ["extension-module", "abi3", "abi3-py36"] }
+# datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "4d61196dee8526998aee7e7bb10ea88422e5f9e1" }
+ballista = {path = "../rust/client"}
+ballista-core = {path = "../rust/core"}
+
+[lib]
+# name = "ballista-python"
+crate-type = ["cdylib"]
+
+[package.metadata.maturin]
+requires-dist = ["pyarrow>=1"]
+
+classifier = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python",
+    "Programming Language :: Rust",
+]

@@ -25,6 +25,7 @@ members = [
     "ballista/rust/core",
     "ballista/rust/executor",
     "ballista/rust/scheduler",
+    "ballista/python",
     "ballista-examples",
 ]
 
