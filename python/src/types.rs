@@ -119,10 +119,10 @@ fn data_type_timestamp_infer(str_ob: &str) -> Result<DataType, errors::DataFusio
     // this and more direct access methods are better
     let chunks: Vec<_> = str_ob.split("[").collect();
     let timestamp_str: String = chunks[0].to_string();
-    let mut unit_tz: String = chunks[1].to_string().replace(",", "").replace("]", "");
+    let unit_tz: String = chunks[1].to_string().replace(",", "").replace("]", "");
 
     let mut tz: Option<String> = None;
-    let mut unit: TimeUnit;
+    let unit: TimeUnit;
 
     if unit_tz.len() < 3 {
         unit = time_unit_str(&unit_tz)?;
