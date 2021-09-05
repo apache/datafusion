@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::datatypes::DataType;
-use datafusion::arrow::datatypes::TimeUnit;
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use pyo3::{FromPyObject, PyAny, PyResult};
 
 use crate::errors;
