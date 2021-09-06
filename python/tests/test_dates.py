@@ -18,6 +18,8 @@
 from datetime import datetime
 
 import pyarrow as pa
+import numpy as np
+import pandas as pd
 import pytest
 from datafusion import ExecutionContext
 
@@ -60,17 +62,15 @@ def ctx():
             pa.timestamp("ns"),
             pa.timestamp("ns"),
         ),
-        pytest.param(
-            [datetime(1970, 1, 1), datetime(1970, 1, 2), datetime(1970, 1, 3)],
+        (
+            [0, 1, 2],
             pa.time32("s"),
             pa.time32("s"),
-            marks=pytest.mark.xfail,
         ),
-        pytest.param(
-            [datetime(1970, 1, 1), datetime(1970, 1, 2), datetime(1970, 1, 3)],
+        (
+            [0, 1, 2],
             pa.time64("us"),
             pa.time64("us"),
-            marks=pytest.mark.xfail,
         ),
     ],
 )
