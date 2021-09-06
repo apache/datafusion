@@ -941,6 +941,19 @@ impl Not for Expr {
     }
 }
 
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Expr::BinaryExpr {
+                ref left,
+                ref right,
+                ref op,
+            } => write!(f, "{} {} {}", left, op, right),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
 #[allow(clippy::boxed_local)]
 fn rewrite_boxed<R>(boxed_expr: Box<Expr>, rewriter: &mut R) -> Result<Box<Expr>>
 where
@@ -1617,7 +1630,7 @@ impl fmt::Debug for Expr {
             Expr::IsNull(expr) => write!(f, "{:?} IS NULL", expr),
             Expr::IsNotNull(expr) => write!(f, "{:?} IS NOT NULL", expr),
             Expr::BinaryExpr { left, op, right } => {
-                write!(f, "{:?} {:?} {:?}", left, op, right)
+                write!(f, "{:?} {} {:?}", left, op, right)
             }
             Expr::Sort {
                 expr,

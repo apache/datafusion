@@ -129,19 +129,19 @@ mod tests {
     fn test_operators() {
         assert_eq!(
             format!("{:?}", lit(1u32) + lit(2u32)),
-            "UInt32(1) Plus UInt32(2)"
+            "UInt32(1) + UInt32(2)"
         );
         assert_eq!(
             format!("{:?}", lit(1u32) - lit(2u32)),
-            "UInt32(1) Minus UInt32(2)"
+            "UInt32(1) - UInt32(2)"
         );
         assert_eq!(
             format!("{:?}", lit(1u32) * lit(2u32)),
-            "UInt32(1) Multiply UInt32(2)"
+            "UInt32(1) * UInt32(2)"
         );
         assert_eq!(
             format!("{:?}", lit(1u32) / lit(2u32)),
-            "UInt32(1) Divide UInt32(2)"
+            "UInt32(1) / UInt32(2)"
         );
     }
 }
