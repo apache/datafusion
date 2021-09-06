@@ -82,3 +82,4 @@ def test_datetypes(ctx, input_values, input_type, output_type):
     df = ctx.create_dataframe([[batch]])
     result = df.collect()[0]
     assert result.column(0).type == output_type
+    assert result.column(0) == batch.column(0)
