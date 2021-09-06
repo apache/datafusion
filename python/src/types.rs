@@ -59,11 +59,6 @@ fn data_type_id(id: &i32, str_ob: &str) -> Result<DataType, errors::DataFusionEr
             12 => DataType::Float64,
             13 => DataType::Utf8,
             14 => DataType::Binary,
-            16 => data_type_date(str_ob)?,
-            17 => data_type_date(str_ob)?,
-            18 => data_type_timestamp(str_ob)?,
-            19 => data_type_timestamp(str_ob)?,
-            20 => data_type_timestamp(str_ob)?,
             34 => DataType::LargeUtf8,
             35 => DataType::LargeBinary,
             other => {
