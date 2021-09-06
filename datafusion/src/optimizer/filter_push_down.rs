@@ -543,7 +543,11 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+<<<<<<< HEAD
     use crate::datasource::datasource::ScanConfigs;
+=======
+    use crate::datasource::datasource::{ScanConfigs, Statistics};
+>>>>>>> 685d4d1b (remove hard_coded max_partitions)
     use crate::datasource::TableProvider;
     use crate::logical_plan::{lit, sum, DFSchema, Expr, LogicalPlanBuilder, Operator};
     use crate::physical_plan::ExecutionPlan;

@@ -22,7 +22,11 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 
+<<<<<<< HEAD
 use crate::datasource::datasource::ScanConfigs;
+=======
+use crate::datasource::datasource::{ScanConfigs, Statistics};
+>>>>>>> 685d4d1b (remove hard_coded max_partitions)
 use crate::datasource::TableProvider;
 use crate::error::Result;
 use crate::logical_plan::Expr;

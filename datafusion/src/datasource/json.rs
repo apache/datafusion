@@ -37,6 +37,10 @@ use crate::{
 };
 use arrow::{datatypes::SchemaRef, json::reader::infer_json_schema_from_seekable};
 
+<<<<<<< HEAD
+=======
+use super::datasource::Statistics;
+>>>>>>> 685d4d1b (remove hard_coded max_partitions)
 use crate::datasource::datasource::ScanConfigs;
 
 trait SeekRead: Read + Seek {}

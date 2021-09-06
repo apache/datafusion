@@ -20,7 +20,11 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::datasource::datasource::{
+<<<<<<< HEAD
     ScanConfigs, TableProvider, TableProviderFilterPushDown,
+=======
+    ScanConfigs, Statistics, TableProvider, TableProviderFilterPushDown,
+>>>>>>> 685d4d1b (remove hard_coded max_partitions)
 };
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;

@@ -28,7 +28,11 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::datasource::TableProviderFilterPushDown;
 use crate::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+<<<<<<< HEAD
 use crate::datasource::datasource::ScanConfigs;
+=======
+use crate::datasource::datasource::{ScanConfigs, Statistics};
+>>>>>>> 685d4d1b (remove hard_coded max_partitions)
 use crate::datasource::{
     create_max_min_accs, get_col_stats, FileAndSchema, PartitionedFile, TableDescriptor,
     TableDescriptorBuilder, TableProvider,

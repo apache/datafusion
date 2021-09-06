@@ -39,7 +39,11 @@ use std::io::{Read, Seek};
 use std::string::String;
 use std::sync::{Arc, Mutex};
 
+<<<<<<< HEAD
 use crate::datasource::datasource::ScanConfigs;
+=======
+use crate::datasource::datasource::{ScanConfigs, Statistics};
+>>>>>>> 685d4d1b (remove hard_coded max_partitions)
 use crate::datasource::{Source, TableProvider};
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Expr;
