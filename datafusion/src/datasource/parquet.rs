@@ -28,6 +28,7 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::datasource::TableProviderFilterPushDown;
 use crate::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use crate::datasource::datasource::ScanConfigs;
 use crate::datasource::{
     create_max_min_accs, get_col_stats, FileAndSchema, PartitionedFile, TableDescriptor,
     TableDescriptorBuilder, TableProvider,
@@ -43,18 +44,16 @@ use crate::scalar::ScalarValue;
 pub struct ParquetTable {
     /// Descriptor of the table, including schema, files, etc.
     pub desc: Arc<ParquetTableDescriptor>,
-    max_partitions: usize,
     enable_pruning: bool,
 }
 
 impl ParquetTable {
     /// Attempt to initialize a new `ParquetTable` from a file path.
-    pub fn try_new(path: impl Into<String>, max_partitions: usize) -> Result<Self> {
+    pub fn try_new(path: impl Into<String>) -> Result<Self> {
         let path = path.into();
         let table_desc = ParquetTableDescriptor::new(path.as_str());
         Ok(Self {
             desc: Arc::new(table_desc?),
-            max_partitions,
             enable_pruning: true,
         })
     }
@@ -64,7 +63,6 @@ impl ParquetTable {
     pub fn try_new_with_schema(
         path: impl Into<String>,
         schema: Schema,
-        max_partitions: usize,
         collect_statistics: bool,
     ) -> Result<Self> {
         let path = path.into();
@@ -75,7 +73,6 @@ impl ParquetTable {
         );
         Ok(Self {
             desc: Arc::new(table_desc?),
-            max_partitions,
             enable_pruning: true,
         })
     }
@@ -83,12 +80,10 @@ impl ParquetTable {
     /// Attempt to initialize a new `ParquetTable` from a table descriptor.
     pub fn try_new_with_desc(
         desc: Arc<ParquetTableDescriptor>,
-        max_partitions: usize,
         enable_pruning: bool,
     ) -> Result<Self> {
         Ok(Self {
             desc,
-            max_partitions,
             enable_pruning,
         })
     }
@@ -132,9 +127,9 @@ impl TableProvider for ParquetTable {
     fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         filters: &[Expr],
         limit: Option<usize>,
+        scan_configs: ScanConfigs,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
@@ -149,9 +144,9 @@ impl TableProvider for ParquetTable {
             projection.clone(),
             predicate,
             limit
-                .map(|l| std::cmp::min(l, batch_size))
-                .unwrap_or(batch_size),
-            self.max_partitions,
+                .map(|l| std::cmp::min(l, scan_configs.batch_size))
+                .unwrap_or(scan_configs.batch_size),
+            scan_configs.target_partitions,
             limit,
         )?))
     }
@@ -414,7 +409,15 @@ mod tests {
     async fn read_small_batches() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
         let projection = None;
-        let exec = table.scan(&projection, 2, &[], None)?;
+        let exec = table.scan(
+            &projection,
+            &[],
+            None,
+            ScanConfigs {
+                batch_size: 2,
+                target_partitions: num_cpus::get(),
+            },
+        )?;
         let stream = exec.execute(0).await?;
 
         let _ = stream
@@ -627,7 +630,7 @@ mod tests {
     fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
-        let table = ParquetTable::try_new(&filename, 2)?;
+        let table = ParquetTable::try_new(&filename)?;
         Ok(Arc::new(table))
     }
 
@@ -635,7 +638,15 @@ mod tests {
         table: Arc<dyn TableProvider>,
         projection: &Option<Vec<usize>>,
     ) -> Result<RecordBatch> {
-        let exec = table.scan(projection, 1024, &[], None)?;
+        let exec = table.scan(
+            projection,
+            &[],
+            None,
+            ScanConfigs {
+                batch_size: 1024,
+                target_partitions: num_cpus::get(),
+            },
+        )?;
         let mut it = exec.execute(0).await?;
         it.next()
             .await

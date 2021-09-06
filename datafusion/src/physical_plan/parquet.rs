@@ -81,6 +81,8 @@ pub struct ParquetExec {
     predicate_builder: Option<PruningPredicate>,
     /// Optional limit of the number of rows
     limit: Option<usize>,
+    /// Target partitions
+    target_partitions: usize,
 }
 
 /// Represents one partition of a Parquet data set and this currently means one Parquet file.
@@ -117,7 +119,7 @@ impl ParquetExec {
         projection: Option<Vec<usize>>,
         predicate: Option<Expr>,
         batch_size: usize,
-        max_partitions: usize,
+        target_partitions: usize,
         limit: Option<usize>,
     ) -> Result<Self> {
         // build a list of filenames from the specified path, which could be a single file or
@@ -128,7 +130,7 @@ impl ParquetExec {
             projection,
             predicate,
             batch_size,
-            max_partitions,
+            target_partitions,
             limit,
         )
     }
@@ -139,7 +141,7 @@ impl ParquetExec {
         projection: Option<Vec<usize>>,
         predicate: Option<Expr>,
         batch_size: usize,
-        max_partitions: usize,
+        target_partitions: usize,
         limit: Option<usize>,
     ) -> Result<Self> {
         debug!("Creating ParquetExec, desc: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
@@ -149,8 +151,8 @@ impl ParquetExec {
         let (all_files, statistics) = get_statistics_with_limit(&desc.descriptor, limit);
         let schema = desc.schema();
 
-        let mut partitions = Vec::with_capacity(max_partitions);
-        let chunked_files = split_files(&all_files, max_partitions);
+        let mut partitions = Vec::with_capacity(target_partitions);
+        let chunked_files = split_files(&all_files, target_partitions);
         for (index, group) in chunked_files.iter().enumerate() {
             partitions.push(ParquetPartition::new(
                 Vec::from(*group),
@@ -186,6 +188,7 @@ impl ParquetExec {
             predicate_builder,
             batch_size,
             limit,
+            target_partitions,
         ))
     }
 
@@ -200,6 +203,7 @@ impl ParquetExec {
         predicate_builder: Option<PruningPredicate>,
         batch_size: usize,
         limit: Option<usize>,
+        target_partitions: usize,
     ) -> Self {
         let projection = match projection {
             Some(p) => p,
@@ -237,6 +241,7 @@ impl ParquetExec {
             batch_size,
             statistics,
             limit,
+            target_partitions,
         }
     }
 
@@ -253,6 +258,16 @@ impl ParquetExec {
     /// Batch size
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    /// Target partitions
+    pub fn target_partitions(&self) -> usize {
+        self.target_partitions
+    }
+
+    /// Statistics for the data set (sum of statistics for all partitions)
+    pub fn statistics(&self) -> &Statistics {
+        &self.statistics
     }
 }
 

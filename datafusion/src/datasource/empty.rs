@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 
+use crate::datasource::datasource::ScanConfigs;
 use crate::datasource::TableProvider;
 use crate::error::Result;
 use crate::logical_plan::Expr;
@@ -51,9 +52,9 @@ impl TableProvider for EmptyTable {
     fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        _batch_size: usize,
         _filters: &[Expr],
         _limit: Option<usize>,
+        _scan_configs: ScanConfigs,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // even though there is no data, projections apply
         let projection = match projection.clone() {

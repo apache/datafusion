@@ -33,6 +33,7 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
+use datafusion::datasource::datasource::ScanConfigs;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -71,10 +72,10 @@ impl TableProvider for StatisticsValidation {
     fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        _batch_size: usize,
         filters: &[Expr],
         // limit is ignored because it is not mandatory for a `TableProvider` to honor it
         _limit: Option<usize>,
+        _scan_configs: ScanConfigs,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Filters should not be pushed down as they are marked as unsupported by default.
         assert_eq!(

@@ -45,6 +45,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
+use datafusion::datasource::datasource::ScanConfigs;
 
 //// Custom source dataframe tests ////
 
@@ -194,9 +195,9 @@ impl TableProvider for CustomTableProvider {
     fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        _batch_size: usize,
         _filters: &[Expr],
         _limit: Option<usize>,
+        _scan_configs: ScanConfigs,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(CustomExecutionPlan {
             projection: projection.clone(),

@@ -19,7 +19,9 @@ use arrow::array::{as_primitive_array, Int32Builder, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion::datasource::datasource::{TableProvider, TableProviderFilterPushDown};
+use datafusion::datasource::datasource::{
+    ScanConfigs, TableProvider, TableProviderFilterPushDown,
+};
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
 use datafusion::logical_plan::Expr;
@@ -122,9 +124,9 @@ impl TableProvider for CustomProvider {
     fn scan(
         &self,
         _: &Option<Vec<usize>>,
-        _: usize,
         filters: &[Expr],
         _: Option<usize>,
+        _: ScanConfigs,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match &filters[0] {
             Expr::BinaryExpr { right, .. } => {

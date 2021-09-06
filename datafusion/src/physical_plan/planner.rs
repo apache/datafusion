@@ -22,6 +22,7 @@ use super::{
     aggregates, empty::EmptyExec, expressions::binary, functions,
     hash_join::PartitionMode, udaf, union::UnionExec, windows,
 };
+use crate::datasource::datasource::ScanConfigs;
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::{
     unnormalize_cols, DFSchema, Expr, LogicalPlan, Operator,
@@ -301,8 +302,6 @@ impl DefaultPhysicalPlanner {
         logical_plan: &LogicalPlan,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let batch_size = ctx_state.config.batch_size;
-
         match logical_plan {
             LogicalPlan::TableScan {
                 source,
@@ -315,7 +314,15 @@ impl DefaultPhysicalPlanner {
                 // doesn't know (nor should care) how the relation was
                 // referred to in the query
                 let filters = unnormalize_cols(filters.iter().cloned());
-                source.scan(projection, batch_size, &filters, *limit)
+                source.scan(
+                    projection,
+                    &filters,
+                    *limit,
+                    ScanConfigs {
+                        batch_size: ctx_state.config.batch_size,
+                        target_partitions: ctx_state.config.target_partitions,
+                    },
+                )
             }
             LogicalPlan::Window {
                 input, window_expr, ..

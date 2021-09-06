@@ -607,6 +607,7 @@ message ParquetScanExecNode {
   Schema schema = 2;
   repeated uint32 projection = 3;
   uint32 batch_size = 4;
+  uint32 target_partitions = 5;
 }
 
 message CsvScanExecNode {

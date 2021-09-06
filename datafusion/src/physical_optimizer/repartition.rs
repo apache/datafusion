@@ -134,6 +134,7 @@ mod tests {
                 None,
                 2048,
                 None,
+                num_cpus::get(),
             )),
         )?;
 
@@ -175,6 +176,7 @@ mod tests {
                     None,
                     2048,
                     None,
+                    num_cpus::get(),
                 )),
             )?),
         )?;

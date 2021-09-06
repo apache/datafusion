@@ -53,6 +53,15 @@ pub enum TableType {
     Temporary,
 }
 
+/// TableProvider Scan configs
+#[derive(Debug)]
+pub struct ScanConfigs {
+    /// Batch size
+    pub batch_size: usize,
+    /// Target partitions
+    pub target_partitions: usize,
+}
+
 /// Source table
 pub trait TableProvider: Sync + Send {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
@@ -71,13 +80,13 @@ pub trait TableProvider: Sync + Send {
     fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         filters: &[Expr],
         // limit can be used to reduce the amount scanned
         // from the datasource as a performance optimization.
         // If set, it contains the amount of rows needed by the `LogicalPlan`,
         // The datasource should return *at least* this number of rows if available.
         limit: Option<usize>,
+        scan_configs: ScanConfigs,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// Tests whether the table provider can make use of a filter expression

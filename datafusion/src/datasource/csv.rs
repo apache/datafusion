@@ -39,6 +39,7 @@ use std::io::{Read, Seek};
 use std::string::String;
 use std::sync::{Arc, Mutex};
 
+use crate::datasource::datasource::ScanConfigs;
 use crate::datasource::{Source, TableProvider};
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Expr;
@@ -169,9 +170,9 @@ impl TableProvider for CsvFile {
     fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         _filters: &[Expr],
         limit: Option<usize>,
+        scan_configs: ScanConfigs,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let opts = CsvReadOptions::new()
             .schema(&self.schema)
@@ -179,8 +180,8 @@ impl TableProvider for CsvFile {
             .delimiter(self.delimiter)
             .file_extension(self.file_extension.as_str());
         let batch_size = limit
-            .map(|l| std::cmp::min(l, batch_size))
-            .unwrap_or(batch_size);
+            .map(|l| std::cmp::min(l, scan_configs.batch_size))
+            .unwrap_or(scan_configs.batch_size);
 
         let exec = match &self.source {
             Source::Reader(maybe_reader) => {

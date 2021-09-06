@@ -311,12 +311,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan_parquet(
-                filename,
-                None,
-                self.state.lock().unwrap().config.target_partitions,
-            )?
-            .build()?,
+            &LogicalPlanBuilder::scan_parquet(filename, None)?.build()?,
         )))
     }
 
@@ -348,8 +343,7 @@ impl ExecutionContext {
     pub fn register_parquet(&mut self, name: &str, filename: &str) -> Result<()> {
         let table = {
             let m = self.state.lock().unwrap();
-            ParquetTable::try_new(filename, m.config.target_partitions)?
-                .with_enable_pruning(m.config.parquet_pruning)
+            ParquetTable::try_new(filename)?.with_enable_pruning(m.config.parquet_pruning)
         };
         self.register_table(name, Arc::new(table))?;
         Ok(())
@@ -1023,6 +1017,7 @@ mod tests {
 
     use super::*;
     use crate::logical_plan::{binary_expr, lit, Operator};
+    use crate::datasource::datasource::ScanConfigs;
     use crate::physical_plan::functions::make_scalar_function;
     use crate::physical_plan::{collect, collect_partitioned};
     use crate::test;
@@ -3254,9 +3249,9 @@ mod tests {
             fn scan(
                 &self,
                 _: &Option<Vec<usize>>,
-                _: usize,
                 _: &[Expr],
                 _: Option<usize>,
+                _: ScanConfigs,
             ) -> Result<Arc<dyn ExecutionPlan>> {
                 unimplemented!()
             }

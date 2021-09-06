@@ -152,6 +152,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     None,
                     scan.batch_size as usize,
                     None,
+                    scan.target_partitions as usize,
                 )))
             }
             PhysicalPlanType::AvroScan(scan) => {

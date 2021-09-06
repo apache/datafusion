@@ -543,6 +543,7 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::datasource::ScanConfigs;
     use crate::datasource::TableProvider;
     use crate::logical_plan::{lit, sum, DFSchema, Expr, LogicalPlanBuilder, Operator};
     use crate::physical_plan::ExecutionPlan;
@@ -1143,9 +1144,9 @@ mod tests {
         fn scan(
             &self,
             _: &Option<Vec<usize>>,
-            _: usize,
             _: &[Expr],
             _: Option<usize>,
+            _: ScanConfigs,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }

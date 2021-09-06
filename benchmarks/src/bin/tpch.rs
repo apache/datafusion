@@ -201,19 +201,19 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
 
     // register tables
     for table in TABLES {
-        let table_provider = get_table(
-            opt.path.to_str().unwrap(),
-            table,
-            opt.file_format.as_str(),
-            opt.partitions,
-        )?;
+        let table_provider =
+            get_table(opt.path.to_str().unwrap(), table, opt.file_format.as_str())?;
         if opt.mem_table {
             println!("Loading table '{}' into memory", table);
             let start = Instant::now();
 
-            let memtable =
-                MemTable::load(table_provider, opt.batch_size, Some(opt.partitions))
-                    .await?;
+            let memtable = MemTable::load(
+                table_provider,
+                opt.batch_size,
+                Some(opt.partitions),
+                opt.partitions,
+            )
+            .await?;
             println!(
                 "Loaded table '{}' into memory in {} ms",
                 table,
@@ -443,7 +443,6 @@ fn get_table(
     path: &str,
     table: &str,
     table_format: &str,
-    max_partitions: usize,
 ) -> Result<Arc<dyn TableProvider>> {
     match table_format {
         // dbgen creates .tbl ('|' delimited) files without header
@@ -469,10 +468,7 @@ fn get_table(
             let path = format!("{}/{}", path, table);
             let schema = get_schema(table);
             Ok(Arc::new(ParquetTable::try_new_with_schema(
-                &path,
-                schema,
-                max_partitions,
-                false,
+                &path, schema, false,
             )?))
         }
         other => {

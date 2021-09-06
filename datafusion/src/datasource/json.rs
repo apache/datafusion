@@ -37,6 +37,8 @@ use crate::{
 };
 use arrow::{datatypes::SchemaRef, json::reader::infer_json_schema_from_seekable};
 
+use crate::datasource::datasource::ScanConfigs;
+
 trait SeekRead: Read + Seek {}
 
 impl<T: Seek + Read> SeekRead for T {}
@@ -113,9 +115,9 @@ impl TableProvider for NdJsonFile {
     fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         _filters: &[crate::logical_plan::Expr],
         limit: Option<usize>,
+        scan_configs: ScanConfigs,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let opts = NdJsonReadOptions {
             schema: Some(self.schema.clone()),
@@ -123,8 +125,8 @@ impl TableProvider for NdJsonFile {
             file_extension: self.file_extension.as_str(),
         };
         let batch_size = limit
-            .map(|l| std::cmp::min(l, batch_size))
-            .unwrap_or(batch_size);
+            .map(|l| std::cmp::min(l, scan_configs.batch_size))
+            .unwrap_or(scan_configs.batch_size);
 
         let exec = match &self.source {
             Source::Reader(maybe_reader) => {

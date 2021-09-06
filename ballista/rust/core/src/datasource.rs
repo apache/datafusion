@@ -18,6 +18,7 @@
 use std::{any::Any, sync::Arc};
 
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::datasource::datasource::ScanConfigs;
 use datafusion::error::Result as DFResult;
 use datafusion::{
     datasource::TableProvider,
@@ -55,9 +56,9 @@ impl TableProvider for DfTableAdapter {
     fn scan(
         &self,
         _projection: &Option<Vec<usize>>,
-        _batch_size: usize,
         _filters: &[Expr],
         _limit: Option<usize>,
+        _scan_configs: ScanConfigs,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         Ok(self.plan.clone())
     }
