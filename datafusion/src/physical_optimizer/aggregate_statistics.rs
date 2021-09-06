@@ -22,9 +22,9 @@ use arrow::datatypes::Schema;
 
 use crate::execution::context::ExecutionConfig;
 use crate::physical_plan::empty::EmptyExec;
-use crate::physical_plan::hash_aggregate::HashAggregateExec;
+use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::{expressions, AggregateExpr, ExecutionPlan};
+use crate::physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics};
 use crate::scalar::ScalarValue;
 
 use super::optimizer::PhysicalOptimizerRule;
@@ -47,49 +47,32 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         plan: Arc<dyn ExecutionPlan>,
         execution_config: &ExecutionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(agg_exec) = plan.as_any().downcast_ref::<HashAggregateExec>() {
-            let stats = agg_exec.input().statistics();
-            // TODO currently this operates only on the AggregateMode::Partial
-            // thus shuffling is still required.
-            // Instead remove both Partial and Final agg nodes.
-            if agg_exec.group_expr().is_empty() && stats.is_exact {
-                let mut projections = vec![];
-                for expr in agg_exec.aggr_expr() {
-                    if let (Some(num_rows), Some(count_expr)) = (
-                        stats.num_rows,
-                        expr.as_any().downcast_ref::<expressions::Count>(),
-                    ) {
-                        // TODO implementing Eq on PhysicalExpr would help a lot here
-                        if count_expr.expressions().len() == 1 {
-                            if let Some(lit_expr) = count_expr.expressions()[0]
-                                .as_any()
-                                .downcast_ref::<expressions::Literal>(
-                            ) {
-                                if lit_expr.value() == &ScalarValue::UInt8(Some(1)) {
-                                    // TODO manipulating memory record batches would be more intuitive
-                                    projections.push((
-                                        expressions::lit(ScalarValue::UInt64(Some(
-                                            num_rows as u64,
-                                        ))),
-                                        "COUNT(Uint8(1))".to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    // TODO min et max
-                }
-
-                // TODO use statistics even if not all aggr_expr could be be resolved
-                if projections.len() == agg_exec.aggr_expr().len() {
-                    // input can be entirely removed
-                    Ok(Arc::new(ProjectionExec::try_new(
-                        projections,
-                        Arc::new(EmptyExec::new(true, Arc::new(Schema::empty()))),
-                    )?))
+        if let Some((partial_agg_exec, stats)) = take_optimizable(&*plan) {
+            let partial_agg_exec = partial_agg_exec
+                .as_any()
+                .downcast_ref::<HashAggregateExec>()
+                .expect("take_optimizable() ensures that this is a HashAggregateExec");
+            let mut projections = vec![];
+            for expr in partial_agg_exec.aggr_expr() {
+                if let Some((num_rows, name)) = take_optimizable_count(&**expr, &stats) {
+                    projections.push((expressions::lit(num_rows), name.to_owned()));
+                } else if let Some((min, name)) = take_optimizable_min(&**expr, &stats) {
+                    projections.push((expressions::lit(min), name.to_owned()));
+                } else if let Some((max, name)) = take_optimizable_max(&**expr, &stats) {
+                    projections.push((expressions::lit(max), name.to_owned()));
                 } else {
-                    optimize_children(self, plan, execution_config)
+                    // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
+                    break;
                 }
+            }
+
+            // TODO fullres: use statistics even if not all aggr_expr could be resolved
+            if projections.len() == partial_agg_exec.aggr_expr().len() {
+                // input can be entirely removed
+                Ok(Arc::new(ProjectionExec::try_new(
+                    projections,
+                    Arc::new(EmptyExec::new(true, Arc::new(Schema::empty()))),
+                )?))
             } else {
                 optimize_children(self, plan, execution_config)
             }
@@ -101,6 +84,90 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     fn name(&self) -> &str {
         "aggregate_statistics"
     }
+}
+
+/// assert if the node passed as argument is a final `HashAggregateExec` node that can be optimized:
+/// - its child (with posssible intermediate layers) is a partial `HashAggregateExec` node
+/// - they both have no grouping expression
+/// - the statistics are exact
+/// If this is the case, return a ref to the partial `HashAggregateExec` and the stats, else `None`.
+/// We would have prefered to return a casted ref to HashAggregateExec but the recursion requires
+/// the `ExecutionPlan.children()` method that returns an owned reference.
+fn take_optimizable(
+    node: &dyn ExecutionPlan,
+) -> Option<(Arc<dyn ExecutionPlan>, Statistics)> {
+    if let Some(final_agg_exec) = node.as_any().downcast_ref::<HashAggregateExec>() {
+        if final_agg_exec.mode() == &AggregateMode::Final
+            && final_agg_exec.group_expr().is_empty()
+        {
+            let mut child = Arc::clone(final_agg_exec.input());
+            loop {
+                if let Some(partial_agg_exec) =
+                    child.as_any().downcast_ref::<HashAggregateExec>()
+                {
+                    if partial_agg_exec.mode() == &AggregateMode::Partial
+                        && partial_agg_exec.group_expr().is_empty()
+                    {
+                        let stats = partial_agg_exec.input().statistics();
+                        if stats.is_exact {
+                            return Some((child, stats));
+                        }
+                    }
+                }
+                if let [ref childrens_child] = child.children().as_slice() {
+                    child = Arc::clone(childrens_child);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    None
+}
+
+/// If this agg_expr is a count that is defined in the statistics, return it
+fn take_optimizable_count(
+    agg_expr: &dyn AggregateExpr,
+    stats: &Statistics,
+) -> Option<(ScalarValue, &'static str)> {
+    if let (Some(num_rows), Some(count_expr)) = (
+        stats.num_rows,
+        agg_expr.as_any().downcast_ref::<expressions::Count>(),
+    ) {
+        // TODO implementing Eq on PhysicalExpr would help a lot here
+        if count_expr.expressions().len() == 1 {
+            if let Some(lit_expr) = count_expr.expressions()[0]
+                .as_any()
+                .downcast_ref::<expressions::Literal>()
+            {
+                if lit_expr.value() == &ScalarValue::UInt8(Some(1)) {
+                    return Some((
+                        ScalarValue::UInt64(Some(num_rows as u64)),
+                        "COUNT(Uint8(1))",
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// If this agg_expr is a min that is defined in the statistics, return it
+fn take_optimizable_min(
+    _agg_expr: &dyn AggregateExpr,
+    _stats: &Statistics,
+) -> Option<(ScalarValue, &'static str)> {
+    // TODO
+    None
+}
+
+/// If this agg_expr is a max that is defined in the statistics, return it
+fn take_optimizable_max(
+    _agg_expr: &dyn AggregateExpr,
+    _stats: &Statistics,
+) -> Option<(ScalarValue, &'static str)> {
+    // TODO
+    None
 }
 
 #[cfg(test)]

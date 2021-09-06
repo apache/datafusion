@@ -254,7 +254,7 @@ mod tests {
     async fn test_with_projection() -> Result<()> {
         let (schema, batch) = mock_data()?;
 
-        let executor = MemoryExec::try_new(&vec![vec![batch]], schema, Some(vec![2, 1]))?;
+        let executor = MemoryExec::try_new(&[vec![batch]], schema, Some(vec![2, 1]))?;
         let statistics = executor.statistics();
 
         assert_eq!(statistics.num_rows, Some(3));
@@ -291,7 +291,7 @@ mod tests {
     async fn test_without_projection() -> Result<()> {
         let (schema, batch) = mock_data()?;
 
-        let executor = MemoryExec::try_new(&vec![vec![batch]], schema, None)?;
+        let executor = MemoryExec::try_new(&[vec![batch]], schema, None)?;
         let statistics = executor.statistics();
 
         assert_eq!(statistics.num_rows, Some(3));
