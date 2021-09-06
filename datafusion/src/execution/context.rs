@@ -282,10 +282,7 @@ impl ExecutionContext {
     }
 
     /// Creates a DataFrame for reading a Parquet data source.
-    pub fn read_parquet(
-        &mut self,
-        filename: impl Into<String>,
-    ) -> Result<Arc<dyn DataFrame>> {
+    pub fn read_parquet(&mut self, filename: &str) -> Result<Arc<dyn DataFrame>> {
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_parquet(
@@ -673,7 +670,7 @@ pub struct ExecutionConfig {
     /// Should DataFusion repartition data using the partition keys to execute window functions in
     /// parallel using the provided `target_partitions` level
     pub repartition_windows: bool,
-    /// Should Datafusion parquet reader using the predicate to prune data
+    /// Should DataFusion parquet reader using the predicate to prune data
     parquet_pruning: bool,
 }
 

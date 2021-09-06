@@ -50,9 +50,8 @@ pub struct ParquetTable {
 
 impl ParquetTable {
     /// Attempt to initialize a new `ParquetTable` from a file path.
-    pub fn try_new(path: impl Into<String>, max_partitions: usize) -> Result<Self> {
-        let path = path.into();
-        let table_desc = ParquetTableDescriptor::new(path.as_str());
+    pub fn try_new(path: &str, max_partitions: usize) -> Result<Self> {
+        let table_desc = ParquetTableDescriptor::new(path);
         Ok(Self {
             desc: Arc::new(table_desc?),
             max_partitions,
