@@ -15,18 +15,46 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import datetime
 from datetime import datetime
 
-import pyarrow as pa
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pytest
 from datafusion import ExecutionContext
+from datafusion import functions as f
+
+from . import generic as helpers
 
 
 @pytest.fixture
 def ctx():
     return ExecutionContext()
+
+
+@pytest.fixture
+def df():
+    ctx = ExecutionContext()
+
+    # create a RecordBatch and a new DataFrame from it
+    batch = pa.RecordBatch.from_arrays(
+        [helpers.data_datetime("s"), helpers.data_date32(), helpers.data_date64()],
+        names=["ts", "dt1", "dt2"],
+    )
+
+    return ctx.create_dataframe([[batch]])
+
+
+def test_select_ts_date(df):
+    df = df.select(f.col("ts"), f.col("dt1"), f.col("dt2"))
+
+    # execute and collect the first (and only) batch
+    result = df.collect()[0]
+
+    assert result.column(0) == helpers.data_datetime("s")
+    assert result.column(1) == helpers.data_date32()
+    assert result.column(2) == helpers.data_date64()
 
 
 @pytest.mark.parametrize(
