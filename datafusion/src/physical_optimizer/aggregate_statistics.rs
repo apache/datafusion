@@ -172,257 +172,174 @@ fn take_optimizable_max(
 
 #[cfg(test)]
 mod tests {
-    // use std::sync::Arc;
+    use super::*;
+    use std::sync::Arc;
 
-    // use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{Int32Array, UInt64Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
 
-    // use crate::error::Result;
-    // use crate::execution::context::ExecutionProps;
-    // use crate::logical_plan::LogicalPlan;
-    // use crate::optimizer::aggregate_statistics::AggregateStatistics;
-    // use crate::optimizer::optimizer::OptimizerRule;
-    // use crate::scalar::ScalarValue;
-    // use crate::{
-    //     datasource::{
-    //         datasource::{ColumnStatistics, Statistics},
-    //         TableProvider,
-    //     },
-    //     logical_plan::Expr,
-    // };
+    use crate::error::Result;
+    use crate::logical_plan::Operator;
+    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use crate::physical_plan::common;
+    use crate::physical_plan::expressions::Count;
+    use crate::physical_plan::filter::FilterExec;
+    use crate::physical_plan::hash_aggregate::HashAggregateExec;
+    use crate::physical_plan::memory::MemoryExec;
 
-    // struct TestTableProvider {
-    //     num_rows: usize,
-    //     column_statistics: Vec<ColumnStatistics>,
-    //     is_exact: bool,
-    // }
+    /// Mock data using a MemoryExec which has an exact count statistic
+    fn mock_data() -> Result<Arc<MemoryExec>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
 
-    // impl TableProvider for TestTableProvider {
-    //     fn as_any(&self) -> &dyn std::any::Any {
-    //         unimplemented!()
-    //     }
-    //     fn schema(&self) -> arrow::datatypes::SchemaRef {
-    //         Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
-    //     }
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+            ],
+        )?;
 
-    //     fn scan(
-    //         &self,
-    //         _projection: &Option<Vec<usize>>,
-    //         _batch_size: usize,
-    //         _filters: &[Expr],
-    //         _limit: Option<usize>,
-    //     ) -> Result<std::sync::Arc<dyn crate::physical_plan::ExecutionPlan>> {
-    //         unimplemented!()
-    //     }
-    //     fn statistics(&self) -> Statistics {
-    //         Statistics {
-    //             num_rows: Some(self.num_rows),
-    //             total_byte_size: None,
-    //             column_statistics: Some(self.column_statistics.clone()),
-    //         }
-    //     }
-    //     fn has_exact_statistics(&self) -> bool {
-    //         self.is_exact
-    //     }
-    // }
+        Ok(Arc::new(MemoryExec::try_new(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?))
+    }
 
-    // #[test]
-    // fn optimize_count_using_statistics() -> Result<()> {
-    //     use crate::execution::context::ExecutionContext;
-    //     let mut ctx = ExecutionContext::new();
-    //     ctx.register_table(
-    //         "test",
-    //         Arc::new(TestTableProvider {
-    //             num_rows: 100,
-    //             column_statistics: Vec::new(),
-    //             is_exact: true,
-    //         }),
-    //     )
-    //     .unwrap();
+    /// Checks that the count optimization was applied and we still get the right result
+    async fn assert_count_optim_success(plan: HashAggregateExec) -> Result<()> {
+        let conf = ExecutionConfig::new();
+        let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
 
-    //     let plan = ctx
-    //         .create_logical_plan("select count(*) from test")
-    //         .unwrap();
-    //     let expected = "\
-    //         Projection: #COUNT(UInt8(1))\
-    //         \n  Projection: UInt64(100) AS COUNT(Uint8(1))\
-    //         \n    EmptyRelation";
+        assert!(optimized.as_any().is::<ProjectionExec>());
+        let result = common::collect(optimized.execute(0).await?).await?;
+        assert_eq!(
+            result[0].schema(),
+            Arc::new(Schema::new(vec![Field::new(
+                "COUNT(Uint8(1))",
+                DataType::UInt64,
+                false
+            )]))
+        );
+        assert_eq!(
+            result[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .values(),
+            &[3]
+        );
+        Ok(())
+    }
 
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
+    fn count_expr() -> Arc<dyn AggregateExpr> {
+        Arc::new(Count::new(
+            expressions::lit(ScalarValue::UInt8(Some(1))),
+            "my_count_alias",
+            DataType::UInt64,
+        ))
+    }
 
-    // #[test]
-    // fn optimize_count_not_exact() -> Result<()> {
-    //     use crate::execution::context::ExecutionContext;
-    //     let mut ctx = ExecutionContext::new();
-    //     ctx.register_table(
-    //         "test",
-    //         Arc::new(TestTableProvider {
-    //             num_rows: 100,
-    //             column_statistics: Vec::new(),
-    //             is_exact: false,
-    //         }),
-    //     )
-    //     .unwrap();
+    #[tokio::test]
+    async fn test_count_partial_direct_child() -> Result<()> {
+        // basic test case with the aggregation applied on a source with exact statistics
+        let source = mock_data()?;
+        let schema = source.schema();
 
-    //     let plan = ctx
-    //         .create_logical_plan("select count(*) from test")
-    //         .unwrap();
-    //     let expected = "\
-    //         Projection: #COUNT(UInt8(1))\
-    //         \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-    //         \n    TableScan: test projection=None";
+        let partial_agg = HashAggregateExec::try_new(
+            AggregateMode::Partial,
+            vec![],
+            vec![count_expr()],
+            source,
+            Arc::clone(&schema),
+        )?;
 
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
+        let final_agg = HashAggregateExec::try_new(
+            AggregateMode::Final,
+            vec![],
+            vec![count_expr()],
+            Arc::new(partial_agg),
+            Arc::clone(&schema),
+        )?;
 
-    // #[test]
-    // fn optimize_count_sum() -> Result<()> {
-    //     use crate::execution::context::ExecutionContext;
-    //     let mut ctx = ExecutionContext::new();
-    //     ctx.register_table(
-    //         "test",
-    //         Arc::new(TestTableProvider {
-    //             num_rows: 100,
-    //             column_statistics: Vec::new(),
-    //             is_exact: true,
-    //         }),
-    //     )
-    //     .unwrap();
+        assert_count_optim_success(final_agg).await?;
 
-    //     let plan = ctx
-    //         .create_logical_plan("select sum(a)/count(*) from test")
-    //         .unwrap();
-    //     let expected = "\
-    //         Projection: #SUM(test.a) Divide #COUNT(UInt8(1))\
-    //         \n  Projection: UInt64(100) AS COUNT(Uint8(1)), #SUM(test.a)\
-    //         \n    Aggregate: groupBy=[[]], aggr=[[SUM(#test.a)]]\
-    //         \n      TableScan: test projection=None";
+        Ok(())
+    }
 
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
+    #[tokio::test]
+    async fn test_count_partial_indirect_child() -> Result<()> {
+        let source = mock_data()?;
+        let schema = source.schema();
 
-    // #[test]
-    // fn optimize_count_group_by() -> Result<()> {
-    //     use crate::execution::context::ExecutionContext;
-    //     let mut ctx = ExecutionContext::new();
-    //     ctx.register_table(
-    //         "test",
-    //         Arc::new(TestTableProvider {
-    //             num_rows: 100,
-    //             column_statistics: Vec::new(),
-    //             is_exact: true,
-    //         }),
-    //     )
-    //     .unwrap();
+        let partial_agg = HashAggregateExec::try_new(
+            AggregateMode::Partial,
+            vec![],
+            vec![count_expr()],
+            source,
+            Arc::clone(&schema),
+        )?;
 
-    //     let plan = ctx
-    //         .create_logical_plan("SELECT count(*), a FROM test GROUP BY a")
-    //         .unwrap();
-    //     let expected = "\
-    //         Projection: #COUNT(UInt8(1)), #test.a\
-    //         \n  Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(UInt8(1))]]\
-    //         \n    TableScan: test projection=None";
+        // We introduce an intermediate optimization step between the partial and final aggregtator
+        let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg));
 
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
+        let final_agg = HashAggregateExec::try_new(
+            AggregateMode::Final,
+            vec![],
+            vec![count_expr()],
+            Arc::new(coalesce),
+            Arc::clone(&schema),
+        )?;
 
-    // #[test]
-    // fn optimize_count_filter() -> Result<()> {
-    //     use crate::execution::context::ExecutionContext;
-    //     let mut ctx = ExecutionContext::new();
-    //     ctx.register_table(
-    //         "test",
-    //         Arc::new(TestTableProvider {
-    //             num_rows: 100,
-    //             column_statistics: Vec::new(),
-    //             is_exact: true,
-    //         }),
-    //     )
-    //     .unwrap();
+        assert_count_optim_success(final_agg).await?;
 
-    //     let plan = ctx
-    //         .create_logical_plan("SELECT count(*) FROM test WHERE a < 5")
-    //         .unwrap();
-    //     let expected = "\
-    //         Projection: #COUNT(UInt8(1))\
-    //         \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-    //         \n    Filter: #test.a Lt Int64(5)\
-    //         \n      TableScan: test projection=None";
+        Ok(())
+    }
 
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
+    #[tokio::test]
+    async fn test_count_inexact_stat() -> Result<()> {
+        let source = mock_data()?;
+        let schema = source.schema();
 
-    // #[test]
-    // fn optimize_max_min_using_statistics() -> Result<()> {
-    //     use crate::execution::context::ExecutionContext;
-    //     let mut ctx = ExecutionContext::new();
+        // adding a filter makes the statistics inexact
+        let filter = Arc::new(FilterExec::try_new(
+            expressions::binary(
+                expressions::col("a", &schema)?,
+                Operator::Gt,
+                expressions::lit(ScalarValue::from(1u32)),
+                &schema,
+            )?,
+            source,
+        )?);
 
-    //     let column_statistic = ColumnStatistics {
-    //         null_count: None,
-    //         max_value: Some(ScalarValue::from(100_i64)),
-    //         min_value: Some(ScalarValue::from(1_i64)),
-    //         distinct_count: None,
-    //     };
-    //     let column_statistics = vec![column_statistic];
+        let partial_agg = HashAggregateExec::try_new(
+            AggregateMode::Partial,
+            vec![],
+            vec![count_expr()],
+            filter,
+            Arc::clone(&schema),
+        )?;
 
-    //     ctx.register_table(
-    //         "test",
-    //         Arc::new(TestTableProvider {
-    //             num_rows: 100,
-    //             column_statistics,
-    //             is_exact: true,
-    //         }),
-    //     )
-    //     .unwrap();
+        let final_agg = HashAggregateExec::try_new(
+            AggregateMode::Final,
+            vec![],
+            vec![count_expr()],
+            Arc::new(partial_agg),
+            Arc::clone(&schema),
+        )?;
 
-    //     let plan = ctx
-    //         .create_logical_plan("select max(a), min(a) from test")
-    //         .unwrap();
-    //     let expected = "\
-    //         Projection: #MAX(test.a), #MIN(test.a)\
-    //         \n  Projection: Int64(100) AS MAX(a), Int64(1) AS MIN(a)\
-    //         \n    EmptyRelation";
+        let conf = ExecutionConfig::new();
+        let optimized =
+            AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
+        // check that the original ExecutionPlan was not replaced
+        assert!(optimized.as_any().is::<HashAggregateExec>());
 
-    // #[test]
-    // fn optimize_max_min_not_using_statistics() -> Result<()> {
-    //     use crate::execution::context::ExecutionContext;
-    //     let mut ctx = ExecutionContext::new();
-    //     ctx.register_table(
-    //         "test",
-    //         Arc::new(TestTableProvider {
-    //             num_rows: 100,
-    //             column_statistics: Vec::new(),
-    //             is_exact: true,
-    //         }),
-    //     )
-    //     .unwrap();
-
-    //     let plan = ctx
-    //         .create_logical_plan("select max(a), min(a) from test")
-    //         .unwrap();
-    //     let expected = "\
-    //         Projection: #MAX(test.a), #MIN(test.a)\
-    //         \n  Aggregate: groupBy=[[]], aggr=[[MAX(#test.a), MIN(#test.a)]]\
-    //         \n    TableScan: test projection=None";
-
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
-
-    // fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-    //     let opt = AggregateStatistics::new();
-    //     let optimized_plan = opt.optimize(plan, &ExecutionProps::new()).unwrap();
-    //     let formatted_plan = format!("{:?}", optimized_plan);
-    //     assert_eq!(formatted_plan, expected);
-    //     assert_eq!(plan.schema(), plan.schema());
-    // }
+        Ok(())
+    }
 }
