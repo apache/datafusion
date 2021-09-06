@@ -93,14 +93,14 @@ impl PartitionEvaluator for RankEvaluator {
         ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
         let result = if self.dense {
-            UInt64Array::from_iter_values(ranks_in_partition.iter().zip(1u64..).flat_map(
+            UInt64Array::from_values(ranks_in_partition.iter().zip(1u64..).flat_map(
                 |(range, rank)| {
                     let len = range.end - range.start;
                     iter::repeat(rank).take(len)
                 },
             ))
         } else {
-            UInt64Array::from_iter_values(
+            UInt64Array::from_values(
                 ranks_in_partition
                     .iter()
                     .scan(1_u64, |acc, range| {
@@ -140,7 +140,7 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<u64>,
     ) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(data));
+        let arr: ArrayRef = Arc::new(Int32Array::from_values(data));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
@@ -149,8 +149,8 @@ mod tests {
             .evaluate_with_rank(vec![0..8], ranks)?;
         assert_eq!(1, result.len());
         let result = result[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let result = result.values();
-        assert_eq!(expected, result);
+        let expected = UInt64Array::from_values(expected);
+        assert_eq!(expected, *result);
         Ok(())
     }
 

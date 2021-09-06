@@ -21,9 +21,9 @@
 use std::sync::Arc;
 
 use arrow::compute::cast;
-use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow::datatypes::DataType;
 
+use crate::arrow_temporal_util::string_to_timestamp_nanos;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{DFSchemaRef, Expr, ExprRewriter, LogicalPlan, Operator};
@@ -31,7 +31,6 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
-use arrow::compute::{kernels, DEFAULT_CAST_OPTIONS};
 
 /// Optimizer that simplifies comparison expressions involving boolean literals.
 ///
@@ -228,7 +227,7 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
                 if !args.is_empty() {
                     match &args[0] {
                         Expr::Literal(ScalarValue::Utf8(Some(val))) => {
-                            match cast::utf8_to_timestamp_ns_scalar(val) {
+                            match string_to_timestamp_nanos(val) {
                                 Ok(timestamp) => Expr::Literal(
                                     ScalarValue::TimestampNanosecond(Some(timestamp)),
                                 ),

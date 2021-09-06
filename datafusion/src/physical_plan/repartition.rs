@@ -27,7 +27,10 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::record_batch::RecordBatch;
-use arrow::{array::Array, error::Result as ArrowResult};
+use arrow::{
+    array::{Array, ArrayRef, UInt32Array, UInt64Array, Utf8Array},
+    error::Result as ArrowResult,
+};
 use arrow::{compute::take, datatypes::SchemaRef};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 

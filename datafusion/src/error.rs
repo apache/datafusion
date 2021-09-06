@@ -23,6 +23,7 @@ use std::io;
 use std::result;
 
 use arrow::error::ArrowError;
+use parquet::error::ParquetError;
 use sqlparser::parser::ParserError;
 
 /// Result type for operations that could result in an [DataFusionError]
@@ -34,6 +35,8 @@ pub type Result<T> = result::Result<T, DataFusionError>;
 pub enum DataFusionError {
     /// Error returned by arrow.
     ArrowError(ArrowError),
+    /// Wraps an error from the Parquet crate
+    ParquetError(ParquetError),
     /// Error associated to I/O operations and associated traits.
     IoError(io::Error),
     /// Error returned when SQL is syntactically incorrect.
@@ -74,6 +77,12 @@ impl From<ArrowError> for DataFusionError {
     }
 }
 
+impl From<ParquetError> for DataFusionError {
+    fn from(e: ParquetError) -> Self {
+        DataFusionError::ParquetError(e)
+    }
+}
+
 impl From<ParserError> for DataFusionError {
     fn from(e: ParserError) -> Self {
         DataFusionError::SQL(e)
@@ -84,6 +93,9 @@ impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match *self {
             DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {}", desc),
+            DataFusionError::ParquetError(ref desc) => {
+                write!(f, "Parquet error: {}", desc)
+            }
             DataFusionError::IoError(ref desc) => write!(f, "IO error: {}", desc),
             DataFusionError::SQL(ref desc) => {
                 write!(f, "SQL error: {:?}", desc)

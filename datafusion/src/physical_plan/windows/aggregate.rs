@@ -94,7 +94,9 @@ impl AggregateWindowExpr {
             .flatten()
             .collect::<Vec<ArrayRef>>();
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat(&results).map_err(DataFusionError::ArrowError)
+        concat::concatenate(&results)
+            .map(|x| ArrayRef::from(x))
+            .map_err(DataFusionError::ArrowError)
     }
 
     fn group_based_evaluate(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
@@ -171,7 +173,7 @@ impl AggregateWindowAccumulator {
         let len = value_range.end - value_range.start;
         let values = values
             .iter()
-            .map(|v| v.slice(value_range.start, len))
+            .map(|v| ArrayRef::from(v.slice(value_range.start, len)))
             .collect::<Vec<_>>();
         self.accumulator.update_batch(&values)?;
         let value = self.accumulator.evaluate()?;

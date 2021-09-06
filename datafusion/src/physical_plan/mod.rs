@@ -17,18 +17,16 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
-use self::display::DisplayableExecutionPlan;
-use self::expressions::{PhysicalSortExpr, SortColumn};
 pub use self::metrics::Metric;
 use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-use crate::error::DataFusionError;
-use crate::execution::context::ExecutionContextState;
-use crate::logical_plan::LogicalPlan;
-use crate::physical_plan::merge::MergeExec;
-use crate::{error::Result, scalar::ScalarValue};
+use crate::physical_plan::expressions::{PhysicalSortExpr, SortColumn};
+use crate::{
+    error::{DataFusionError, Result},
+    scalar::ScalarValue,
+};
 use arrow::array::ArrayRef;
 use arrow::compute::merge_sort::SortOptions;
 use arrow::compute::partition::lexicographical_partition_ranges;
@@ -41,7 +39,6 @@ use futures::stream::Stream;
 use std::fmt;
 use std::fmt::{Debug, Display};
 use std::ops::Range;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};

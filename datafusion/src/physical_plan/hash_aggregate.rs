@@ -21,12 +21,12 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use ahash::RandomState;
 use futures::{
     stream::{Stream, StreamExt},
     Future,
 };
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{
     Accumulator, AggregateExpr, DisplayFormatType, Distribution, ExecutionPlan,
@@ -37,11 +37,12 @@ use crate::{
     scalar::ScalarValue,
 };
 
-use arrow::error::{ArrowError, Result as ArrowResult};
-use arrow::{array::*, compute};
-use arrow::{buffer::MutableBuffer, datatypes::*};
 use arrow::{
+    array::*,
+    buffer::MutableBuffer,
+    compute,
     datatypes::{DataType, Field, Schema, SchemaRef},
+    error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
 use hashbrown::raw::RawTable;
@@ -320,36 +321,6 @@ pin_project! {
     }
 }
 
-fn hash_(group_values: &[ArrayRef]) -> Result<MutableBuffer<u64>> {
-    // compute the hashes
-    // todo: we should be able to use `MutableBuffer<u64>` to compute the hash and ^ them without
-    // allocating all the hashes before ^ them
-    let hashes = group_values
-        .iter()
-        .map(|x| {
-            let a = match x.data_type() {
-                DataType::Dictionary(_, d) => {
-                    // todo: think about how to perform this more efficiently
-                    // * first hash, then unpack
-                    // * do not unpack at all, and instead figure out a way to leverage dictionary-encoded.
-                    let unpacked = arrow::compute::cast::cast(x.as_ref(), d)?;
-                    arrow::compute::hash::hash(unpacked.as_ref())
-                }
-                _ => arrow::compute::hash::hash(x.as_ref()),
-            };
-            Ok(a?)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let hash = MutableBuffer::<u64>::from(hashes[0].values().as_slice());
-
-    Ok(hashes.iter().skip(1).fold(hash, |mut acc, x| {
-        acc.iter_mut()
-            .zip(x.values().iter())
-            .for_each(|(hash, other)| *hash = combine_hashes(*hash, *other));
-        acc
-    }))
-}
-
 fn group_aggregate_batch(
     mode: &AggregateMode,
     random_state: &RandomState,
@@ -438,17 +409,17 @@ fn group_aggregate_batch(
     }
 
     // Collect all indices + offsets based on keys in this vec
-    let mut batch_indices = MutableBuffer::<i32>::new();
+    let mut batch_indices = MutableBuffer::<u32>::new();
     let mut offsets = vec![0];
     let mut offset_so_far = 0;
     for group_idx in groups_with_rows.iter() {
         let indices = &accumulators.group_states[*group_idx].indices;
-        batch_indices.append_slice(indices)?;
+        batch_indices.extend_from_slice(indices);
         offset_so_far += indices.len();
         offsets.push(offset_so_far);
     }
     let batch_indices =
-        Int32Array::from_data(DataType::Int32, batch_indices.into(), None);
+        UInt32Array::from_data(DataType::UInt32, batch_indices.into(), None);
 
     // `Take` all values based on indices into Arrays
     let values: Vec<Vec<Arc<dyn Array>>> = aggr_input_values
@@ -974,7 +945,10 @@ fn create_batch_from_map(
     let columns = columns
         .iter()
         .zip(output_schema.fields().iter())
-        .map(|(col, desired_field)| cast(col, desired_field.data_type()))
+        .map(|(col, desired_field)| {
+            arrow::compute::cast::cast(col.as_ref(), desired_field.data_type())
+                .map(|v| Arc::from(v))
+        })
         .collect::<ArrowResult<Vec<_>>>()?;
 
     RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns)

@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use super::ColumnarValue;
+use crate::arrow_temporal_util::string_to_timestamp_nanos;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -26,17 +27,14 @@ use crate::{
 use arrow::{
     array::*,
     compute::cast,
-    compute::kernels::cast_utils::string_to_timestamp_nanos,
-    datatypes::{
-        ArrowPrimitiveType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
-        TimestampNanosecondType, TimestampSecondType,
-    },
+    datatypes::{DataType, TimeUnit},
     types::NativeType,
 };
 use arrow::{compute::temporal, temporal_conversions::timestamp_ns_to_datetime};
-use chrono::prelude::{DateTime, Local, NaiveDateTime, Utc};
+use chrono::prelude::{DateTime, Utc};
 use chrono::Datelike;
 use chrono::Duration;
+use chrono::Timelike;
 
 /// given a function `op` that maps a `&str` to a Result of an arrow native type,
 /// returns a `PrimitiveArray` after the application
@@ -135,7 +133,7 @@ where
     }
 }
 
-/// Calls string_to_timestamp_nanos and converts the error type
+/// Calls cast::string_to_timestamp_nanos and converts the error type
 fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
     string_to_timestamp_nanos(s).map_err(|e| e.into())
 }

@@ -51,7 +51,7 @@ fn sort_preserving_merge_operator(batches: Vec<RecordBatch>, sort: &[&str]) {
 
     let exec = MemoryExec::try_new(
         &batches.into_iter().map(|rb| vec![rb]).collect::<Vec<_>>(),
-        schema,
+        schema.clone(),
         None,
     )
     .unwrap();

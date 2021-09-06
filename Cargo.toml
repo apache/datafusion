@@ -29,3 +29,6 @@ members = [
 ]
 
 exclude = ["python"]
+
+[patch.crates-io]
+arrow2 = { path = "/home/houqp/Documents/code/arrow/arrow2" }

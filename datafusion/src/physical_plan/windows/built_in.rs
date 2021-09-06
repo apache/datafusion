@@ -98,6 +98,8 @@ impl WindowExpr for BuiltInWindowExpr {
             evaluator.evaluate(partition_points)?
         };
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat(&results).map_err(DataFusionError::ArrowError)
+        concat::concatenate(&results)
+            .map(|x| ArrayRef::from(x))
+            .map_err(DataFusionError::ArrowError)
     }
 }

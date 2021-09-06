@@ -31,19 +31,6 @@ use std::{
     sync::Arc,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-
-use crate::datasource::TableProvider;
-use crate::sql::parser::FileType;
-
-use super::expr::Expr;
-use super::extension::UserDefinedLogicalNode;
-use super::{
-    display::{GraphvizVisitor, IndentVisitor},
-    Column,
-};
-use crate::logical_plan::dfschema::DFSchemaRef;
-
 /// Join type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinType {

@@ -261,7 +261,9 @@ impl Stream for WindowAggStream {
                 *this.finished = true;
                 // check for error in receiving channel and unwrap actual result
                 let result = match result {
-                    Err(e) => Some(Err(ArrowError::ExternalError(Box::new(e)))), // error receiving
+                    Err(e) => {
+                        Some(Err(ArrowError::External("".to_string(), Box::new(e))))
+                    } // error receiving
                     Ok(result) => Some(result),
                 };
                 Poll::Ready(result)

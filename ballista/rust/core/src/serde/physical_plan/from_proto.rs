@@ -61,7 +61,6 @@ use datafusion::physical_plan::{
     expressions::{
         col, Avg, BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr,
         IsNullExpr, Literal, NegativeExpr, NotExpr, PhysicalSortExpr, TryCastExpr,
-        DEFAULT_DATAFUSION_CAST_OPTIONS,
     },
     filter::FilterExec,
     functions::{self, BuiltinScalarFunction, ScalarFunctionExpr},
@@ -620,7 +619,6 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
             ExprType::Cast(e) => Arc::new(CastExpr::new(
                 convert_box_required!(e.expr)?,
                 convert_required!(e.arrow_type)?,
-                DEFAULT_DATAFUSION_CAST_OPTIONS,
             )),
             ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
                 convert_box_required!(e.expr)?,

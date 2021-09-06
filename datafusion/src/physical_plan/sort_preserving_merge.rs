@@ -25,8 +25,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use arrow::array::ord::DynComparator;
 use arrow::array::{growable::make_growable, ord::build_compare, ArrayRef};
 use arrow::compute::sort::SortOptions;
+use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
+use arrow::error::Result as ArrowResult;
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::FusedStream;
@@ -289,7 +294,7 @@ impl SortKeyCursor {
         for (i, ((l, r), sort_options)) in zipped.enumerate() {
             if i >= cmp.len() {
                 // initialise comparators as potentially needed
-                cmp.push(arrow::array::build_compare(l.as_ref(), r.as_ref())?);
+                cmp.push(build_compare(l.as_ref(), r.as_ref())?);
             }
 
             match (l.is_valid(self.cur_row), r.is_valid(other.cur_row)) {
@@ -486,7 +491,7 @@ impl SortPreservingMergeStream {
                     make_growable(&arrays, false, self.in_progress.len());
 
                 if self.in_progress.is_empty() {
-                    return make_arrow_array(array_data.freeze());
+                    return array_data.as_arc();
                 }
 
                 let first = &self.in_progress[0];
@@ -516,7 +521,7 @@ impl SortPreservingMergeStream {
 
                 // emit final batch of rows
                 array_data.extend(buffer_idx, start_row_idx, end_row_idx);
-                make_arrow_array(array_data.freeze())
+                array_data.as_arc()
             })
             .collect();
 
@@ -663,18 +668,25 @@ mod tests {
             Some("g"),
             Some("j"),
         ]));
-        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from_slice(&[8, 7, 6, 5, 8])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 70, 90, 30]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[10, 20, 70, 90, 30]));
+        let b: ArrayRef = Arc::new(Utf8Array::<i32>::from_iter(vec![
             Some("b"),
             Some("d"),
             Some("f"),
             Some("h"),
             Some("j"),
         ]));
-        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![4, 6, 2, 2, 6]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from_slice(&[4, 6, 2, 2, 6])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
+
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
         _test_merge(
@@ -701,8 +713,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_some_overlap() {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
+        let b: ArrayRef = Arc::new(Utf8Array::<i32>::from_iter(vec![
             Some("a"),
             Some("b"),
             Some("c"),
@@ -715,7 +727,7 @@ mod tests {
         );
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![70, 90, 30, 100, 110]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[70, 90, 30, 100, 110]));
         let b: ArrayRef = Arc::new(Utf8Array::<i32>::from(&[
             Some("c"),
             Some("d"),
@@ -723,7 +735,10 @@ mod tests {
             Some("f"),
             Some("g"),
         ]));
-        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![4, 6, 2, 2, 6]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from_slice(&[4, 6, 2, 2, 6])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
         _test_merge(
@@ -750,7 +765,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_no_overlap() {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(Utf8Array::<i32>::from(&[
             Some("a"),
             Some("b"),
@@ -758,11 +773,14 @@ mod tests {
             Some("d"),
             Some("e"),
         ]));
-        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from_slice(&[8, 7, 6, 5, 8])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 70, 90, 30]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[10, 20, 70, 90, 30]));
+        let b: ArrayRef = Arc::new(Utf8Array::<i32>::from_iter(vec![
             Some("f"),
             Some("g"),
             Some("h"),
@@ -799,7 +817,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_three_partitions() {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(Utf8Array::<i32>::from(&[
             Some("a"),
             Some("b"),
@@ -807,30 +825,38 @@ mod tests {
             Some("d"),
             Some("f"),
         ]));
-        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from_slice(&[8, 7, 6, 5, 8])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 70, 90, 30]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[10, 20, 70, 90, 30]));
+        let b: ArrayRef = Arc::new(Utf8Array::<i32>::from_iter(vec![
             Some("e"),
             Some("g"),
             Some("h"),
             Some("i"),
             Some("j"),
         ]));
-        let c: ArrayRef =
-            Arc::new(TimestampNanosecondArray::from(vec![40, 60, 20, 20, 60]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from_slice(&[40, 60, 20, 20, 60])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 700, 900, 300]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[100, 200, 700, 900, 300]));
+        let b: ArrayRef = Arc::new(Utf8Array::<i32>::from_iter(vec![
             Some("f"),
             Some("g"),
             Some("h"),
             Some("i"),
             Some("j"),
         ]));
-        let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![4, 6, 2, 2, 6]));
+        let c: ArrayRef = Arc::new(
+            Int64Array::from_slice(&[4, 6, 2, 2, 6])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        );
         let b3 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
         _test_merge(
@@ -872,7 +898,7 @@ mod tests {
                 options: Default::default(),
             },
         ];
-        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let exec = MemoryExec::try_new(partitions, schema.clone(), None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), 1024));
 
         let collected = collect(merge).await.unwrap();
@@ -1208,20 +1234,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_metrics() {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"), Some("c")]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2]));
+        let b: ArrayRef =
+            Arc::new(Utf8Array::<i32>::from_iter(vec![Some("a"), Some("c")]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("b"), Some("d")]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[10, 20]));
+        let b: ArrayRef =
+            Arc::new(Utf8Array::<i32>::from_iter(vec![Some("b"), Some("d")]));
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 
-        let schema = b1.schema();
+        let schema = b1.schema().clone();
         let sort = vec![PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
             options: Default::default(),
         }];
-        let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
+        let exec =
+            MemoryExec::try_new(&[vec![b1], vec![b2]], schema.clone(), None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), 1024));
 
         let collected = collect(merge.clone()).await.unwrap();

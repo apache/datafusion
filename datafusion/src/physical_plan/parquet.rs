@@ -17,15 +17,12 @@
 
 //! Execution plan for reading Parquet files
 
-use std::any::Any;
+use fmt::Debug;
 use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::{any::Any, convert::TryInto};
 
-use super::{RecordBatchStream, SendableRecordBatchStream};
-use crate::physical_plan::{common, DisplayFormatType, ExecutionPlan, Partitioning};
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, Expr},
@@ -37,17 +34,20 @@ use crate::{
 };
 
 use arrow::{
-    datatypes::*, error::Result as ArrowResult, io::parquet::read,
+    array::ArrayRef,
+    datatypes::*,
+    error::Result as ArrowResult,
+    io::parquet::read::{self, RowGroupMetaData},
     record_batch::RecordBatch,
 };
 use log::debug;
-use parquet::file::{
-    metadata::RowGroupMetaData,
-    reader::{FileReader, SerializedFileReader},
-    statistics::Statistics as ParquetStatistics,
+
+use parquet::statistics::{
+    BinaryStatistics as ParquetBinaryStatistics,
+    BooleanStatistics as ParquetBooleanStatistics,
+    PrimitiveStatistics as ParquetPrimitiveStatistics, Statistics as ParquetStatistics,
 };
 
-use fmt::Debug;
 use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
     task,
@@ -67,9 +67,11 @@ pub struct ParquetExec {
     /// Parquet partitions to read
     pub partitions: Vec<ParquetPartition>,
     /// Schema after projection is applied
-    schema: Arc<Schema>,
+    pub schema: Arc<Schema>,
     /// Projection for which columns to load
     projection: Vec<usize>,
+    /// Batch size
+    batch_size: usize,
     /// Statistics for the data set (sum of statistics for all partitions)
     statistics: Statistics,
     /// Execution metrics
@@ -77,7 +79,7 @@ pub struct ParquetExec {
     /// Optional predicate builder
     predicate_builder: Option<PruningPredicate>,
     /// Optional limit of the number of rows
-    limit: usize,
+    limit: Option<usize>,
 }
 
 /// Represents one partition of a Parquet data set and this currently means one Parquet file.
@@ -303,7 +305,7 @@ fn producer_task(
         reader,
         Some(projection.to_vec()),
         Some(limit),
-        Arc::new(|_, _| true),
+        None,
         None,
     )?;
 
@@ -358,8 +360,9 @@ impl ExecutionPlan for ParquetExec {
         let partition = self.partitions[partition_index].clone();
         let metrics = self.metrics.clone();
         let projection = self.projection.clone();
+        let predicate_builder = self.predicate_builder.clone();
+        let batch_size = self.batch_size;
         let limit = self.limit;
-        let schema = self.schema.clone();
 
         task::spawn_blocking(move || {
             if let Err(e) = read_partition(
@@ -427,33 +430,59 @@ struct RowGroupPruningStatistics<'a> {
 
 /// Extract the min/max statistics from a `ParquetStatistics` object
 macro_rules! get_statistic {
-    ($column_statistics:expr, $func:ident, $bytes_func:ident) => {{
-        if !$column_statistics.has_min_max_set() {
-            return None;
-        }
-        match $column_statistics {
-            ParquetStatistics::Boolean(s) => Some(ScalarValue::Boolean(Some(*s.$func()))),
-            ParquetStatistics::Int32(s) => Some(ScalarValue::Int32(Some(*s.$func()))),
-            ParquetStatistics::Int64(s) => Some(ScalarValue::Int64(Some(*s.$func()))),
+    ($column_statistics:expr, $attr:ident) => {{
+        use arrow::io::parquet::read::PhysicalType;
+
+        match $column_statistics.physical_type() {
+            PhysicalType::Boolean => {
+                let stats = $column_statistics
+                    .as_any()
+                    .downcast_ref::<ParquetBooleanStatistics>()?;
+                stats.$attr.map(|v| ScalarValue::Boolean(Some(v)))
+            }
+            PhysicalType::Int32 => {
+                let stats = $column_statistics
+                    .as_any()
+                    .downcast_ref::<ParquetPrimitiveStatistics<i32>>()?;
+                stats.$attr.map(|v| ScalarValue::Int32(Some(v)))
+            }
+            PhysicalType::Int64 => {
+                let stats = $column_statistics
+                    .as_any()
+                    .downcast_ref::<ParquetPrimitiveStatistics<i64>>()?;
+                stats.$attr.map(|v| ScalarValue::Int64(Some(v)))
+            }
             // 96 bit ints not supported
-            ParquetStatistics::Int96(_) => None,
-            ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
-            ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
-            ParquetStatistics::ByteArray(s) => {
-                let s = std::str::from_utf8(s.$bytes_func())
-                    .map(|s| s.to_string())
-                    .ok();
-                Some(ScalarValue::Utf8(s))
+            PhysicalType::Int96 => None,
+            PhysicalType::Float => {
+                let stats = $column_statistics
+                    .as_any()
+                    .downcast_ref::<ParquetPrimitiveStatistics<f32>>()?;
+                stats.$attr.map(|v| ScalarValue::Float32(Some(v)))
+            }
+            PhysicalType::Double => {
+                let stats = $column_statistics
+                    .as_any()
+                    .downcast_ref::<ParquetPrimitiveStatistics<f64>>()?;
+                stats.$attr.map(|v| ScalarValue::Float64(Some(v)))
+            }
+            PhysicalType::ByteArray => {
+                let stats = $column_statistics
+                    .as_any()
+                    .downcast_ref::<ParquetBinaryStatistics>()?;
+                stats.$attr.as_ref().map(|v| {
+                    ScalarValue::Utf8(std::str::from_utf8(v).map(|s| s.to_string()).ok())
+                })
             }
             // type not supported yet
-            ParquetStatistics::FixedLenByteArray(_) => None,
+            PhysicalType::FixedLenByteArray(_) => None,
         }
     }};
 }
 
-// Extract the min or max value calling `func` or `bytes_func` on the ParquetStatistics as appropriate
+// Extract the min or max value through the `attr` field from ParquetStatistics as appropriate
 macro_rules! get_min_max_values {
-    ($self:expr, $column:expr, $func:ident, $bytes_func:ident) => {{
+    ($self:expr, $column:expr, $attr:ident) => {{
         let (column_index, field) = if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.name) {
             (v, f)
         } else {
@@ -472,10 +501,11 @@ macro_rules! get_min_max_values {
         let scalar_values : Vec<ScalarValue> = $self.row_group_metadata
             .iter()
             .flat_map(|meta| {
-                meta.column(column_index).statistics()
+                // FIXME: get rid of unwrap
+                meta.column(column_index).statistics().unwrap()
             })
             .map(|stats| {
-                get_statistic!(stats, $func, $bytes_func)
+                get_statistic!(stats, $attr)
             })
             .map(|maybe_scalar| {
                 // column either did't have statistics at all or didn't have min/max values
@@ -484,17 +514,17 @@ macro_rules! get_min_max_values {
             .collect();
 
         // ignore errors converting to arrays (e.g. different types)
-        ScalarValue::iter_to_array(scalar_values).ok()
+        ScalarValue::iter_to_array(scalar_values).ok().map(|v| Arc::from(v))
     }}
 }
 
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_min_max_values!(self, column, min, min_bytes)
+        get_min_max_values!(self, column, min_value)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_min_max_values!(self, column, max, max_bytes)
+        get_min_max_values!(self, column, max_value)
     }
 
     fn num_containers(&self) -> usize {
@@ -506,7 +536,7 @@ fn build_row_group_predicate(
     predicate_builder: &PruningPredicate,
     metrics: ParquetFileMetrics,
     row_group_metadata: &[RowGroupMetaData],
-) -> Box<dyn Fn(&RowGroupMetaData, usize) -> bool> {
+) -> Box<dyn Fn(usize, &RowGroupMetaData) -> bool> {
     let parquet_schema = predicate_builder.schema().as_ref();
 
     let pruning_stats = RowGroupPruningStatistics {
@@ -520,14 +550,14 @@ fn build_row_group_predicate(
             // NB: false means don't scan row group
             let num_pruned = values.iter().filter(|&v| !*v).count();
             metrics.row_groups_pruned.add(num_pruned);
-            Box::new(move |_, i| values[i])
+            Box::new(move |i, _| values[i])
         }
         // stats filter array could not be built
         // return a closure which will not filter out any row groups
         Err(e) => {
             debug!("Error evaluating row group predicate values {}", e);
             metrics.predicate_evaluation_errors.add(1);
-            Box::new(|_r, _i| true)
+            Box::new(|_i, _r| true)
         }
     }
 }
@@ -543,56 +573,36 @@ fn read_partition(
     response_tx: Sender<ArrowResult<RecordBatch>>,
     limit: Option<usize>,
 ) -> Result<()> {
-    let mut total_rows = 0;
     let all_files = partition.file_partition.files;
-    'outer: for partitioned_file in all_files {
+    for partitioned_file in all_files {
         let file_metrics =
             ParquetFileMetrics::new(partition_index, &*partitioned_file.path, &metrics);
         let file = File::open(partitioned_file.path.as_str())?;
-        let mut file_reader = SerializedFileReader::new(file)?;
+        let mut reader = read::RecordReader::try_new(
+            std::io::BufReader::new(file),
+            Some(projection.to_vec()),
+            limit,
+            None,
+            None,
+        )?;
+
         if let Some(predicate_builder) = predicate_builder {
-            let row_group_predicate = build_row_group_predicate(
+            let file_metadata = reader.metadata();
+            reader.set_groups_filter(Arc::new(build_row_group_predicate(
                 predicate_builder,
                 file_metrics,
-                file_reader.metadata().row_groups(),
-            );
-            file_reader.filter_row_groups(&row_group_predicate);
+                &reader.metadata().row_groups,
+            )));
         }
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
-        let mut batch_reader = arrow_reader
-            .get_record_reader_by_columns(projection.to_owned(), batch_size)?;
-        loop {
-            match batch_reader.next() {
-                Some(Ok(batch)) => {
-                    total_rows += batch.num_rows();
-                    send_result(&response_tx, Ok(batch))?;
-                    if limit.map(|l| total_rows >= l).unwrap_or(false) {
-                        break 'outer;
-                    }
-                }
-                None => {
-                    break;
-                }
-                Some(Err(e)) => {
-                    let err_msg = format!(
-                        "Error reading batch from {}: {}",
-                        partitioned_file,
-                        e.to_string()
-                    );
-                    // send error to operator
-                    send_result(
-                        &response_tx,
-                        Err(ArrowError::ParquetError(err_msg.clone())),
-                    )?;
-                    // terminate thread with error
-                    return Err(DataFusionError::Execution(err_msg));
-                }
-            }
+
+        for batch in reader {
+            response_tx
+                .blocking_send(batch)
+                .map_err(|x| DataFusionError::Execution(format!("{}", x)))?;
         }
     }
 
-    // finished reading files (dropping response_tx will close
-    // channel)
+    // finished reading files (dropping response_tx will close channel)
     Ok(())
 }
 

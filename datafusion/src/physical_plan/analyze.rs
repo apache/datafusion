@@ -25,10 +25,11 @@ use crate::{
     physical_plan::{display::DisplayableExecutionPlan, Partitioning},
     physical_plan::{DisplayFormatType, ExecutionPlan},
 };
-use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
 
 use super::{stream::RecordBatchReceiverStream, Distribution, SendableRecordBatchStream};
+use arrow::array::MutableUtf8Array;
 use async_trait::async_trait;
 
 /// `EXPLAIN ANALYZE` execution plan operator. This operator runs its input,
@@ -149,44 +150,39 @@ impl ExecutionPlan for AnalyzeExec {
             }
             let end = Instant::now();
 
-            let mut type_builder = StringBuilder::new(1);
-            let mut plan_builder = StringBuilder::new(1);
+            let mut type_builder: MutableUtf8Array<i32> = MutableUtf8Array::new();
+            let mut plan_builder: MutableUtf8Array<i32> = MutableUtf8Array::new();
 
             // TODO use some sort of enum rather than strings?
-            type_builder.append_value("Plan with Metrics").unwrap();
+            type_builder.push(Some("Plan with Metrics"));
 
             let annotated_plan =
                 DisplayableExecutionPlan::with_metrics(captured_input.as_ref())
                     .indent()
                     .to_string();
-            plan_builder.append_value(annotated_plan).unwrap();
+            plan_builder.push(Some(annotated_plan));
 
             // Verbose output
             // TODO make this more sophisticated
             if verbose {
-                type_builder.append_value("Plan with Full Metrics").unwrap();
+                type_builder.push(Some("Plan with Full Metrics"));
 
                 let annotated_plan =
                     DisplayableExecutionPlan::with_full_metrics(captured_input.as_ref())
                         .indent()
                         .to_string();
-                plan_builder.append_value(annotated_plan).unwrap();
+                plan_builder.push(Some(annotated_plan));
 
-                type_builder.append_value("Output Rows").unwrap();
-                plan_builder.append_value(total_rows.to_string()).unwrap();
+                type_builder.push(Some("Output Rows"));
+                plan_builder.push(Some(total_rows.to_string()));
 
-                type_builder.append_value("Duration").unwrap();
-                plan_builder
-                    .append_value(format!("{:?}", end - start))
-                    .unwrap();
+                type_builder.push(Some("Duration"));
+                plan_builder.push(Some(format!("{:?}", end - start)));
             }
 
             let maybe_batch = RecordBatch::try_new(
                 captured_schema,
-                vec![
-                    Arc::new(type_builder.finish()),
-                    Arc::new(plan_builder.finish()),
-                ],
+                vec![type_builder.into_arc(), plan_builder.into_arc()],
             );
             // again ignore error
             tx.send(maybe_batch).await.ok();

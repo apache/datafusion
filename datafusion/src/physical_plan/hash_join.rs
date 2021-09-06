@@ -757,8 +757,8 @@ fn build_join_indexes(
                         // If no rows matched left, still must keep the right
                         // with all nulls for left
                         if no_match {
-                            left_indices.push(None)?;
-                            right_indices.push(Some(row as u32))?;
+                            left_indices.push(None);
+                            right_indices.push(Some(row as u32));
                         }
                     }
                     None => {

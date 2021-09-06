@@ -34,14 +34,11 @@ use crate::utils;
 use crate::serde::protobuf::ShuffleWritePartition;
 use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 use async_trait::async_trait;
-use datafusion::arrow::array::{
-    Array, ArrayBuilder, ArrayRef, StringBuilder, StructBuilder, UInt32Builder,
-    UInt64Builder,
-};
+use datafusion::arrow::array::*;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::arrow::ipc::reader::FileReader;
-use datafusion::arrow::ipc::writer::FileWriter;
+use datafusion::arrow::io::ipc::read::FileReader;
+use datafusion::arrow::io::ipc::write::FileWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::hash_utils::create_hashes;
@@ -244,7 +241,7 @@ impl ShuffleWriterExec {
                             .collect::<Result<Vec<Arc<dyn Array>>>>()?;
 
                         let output_batch =
-                            RecordBatch::try_new(input_batch.schema(), columns)?;
+                            RecordBatch::try_new(input_batch.schema().clone(), columns)?;
 
                         // write non-empty batch out
 
@@ -356,18 +353,18 @@ impl ExecutionPlan for ShuffleWriterExec {
 
         // build metadata result batch
         let num_writers = part_loc.len();
-        let mut partition_builder = UInt32Builder::new(num_writers);
-        let mut path_builder = StringBuilder::new(num_writers);
-        let mut num_rows_builder = UInt64Builder::new(num_writers);
-        let mut num_batches_builder = UInt64Builder::new(num_writers);
-        let mut num_bytes_builder = UInt64Builder::new(num_writers);
+        let mut partition_builder = UInt32Vec::with_capacity(num_writers);
+        let mut path_builder = MutableUtf8Array::with_capacity(num_writers);
+        let mut num_rows_builder = UInt64Vec::with_capacity(num_writers);
+        let mut num_batches_builder = UInt64Vec::with_capacity(num_writers);
+        let mut num_bytes_builder = UInt64Vec::with_capacity(num_writers);
 
         for loc in &part_loc {
-            path_builder.append_value(loc.path.clone())?;
-            partition_builder.append_value(loc.partition_id as u32)?;
-            num_rows_builder.append_value(loc.num_rows)?;
-            num_batches_builder.append_value(loc.num_batches)?;
-            num_bytes_builder.append_value(loc.num_bytes)?;
+            path_builder.push(Some(loc.path.clone()));
+            partition_builder.push(Some(loc.partition_id as u32));
+            num_rows_builder.push(Some(loc.num_rows));
+            num_batches_builder.push(Some(loc.num_batches));
+            num_bytes_builder.push(Some(loc.num_bytes));
         }
 
         // build arrays
@@ -428,17 +425,17 @@ fn result_schema() -> SchemaRef {
     ]))
 }
 
-struct ShuffleWriter {
+struct ShuffleWriter<'a> {
     path: String,
-    writer: FileWriter<File>,
+    writer: FileWriter<'a, File>,
     num_batches: u64,
     num_rows: u64,
     num_bytes: u64,
 }
 
-impl ShuffleWriter {
+impl<'a> ShuffleWriter<'a> {
     fn new(path: &str, schema: &Schema) -> Result<Self> {
-        let file = File::create(path)
+        let mut file = File::create(path)
             .map_err(|e| {
                 BallistaError::General(format!(
                     "Failed to create partition file at {}: {:?}",
@@ -451,7 +448,7 @@ impl ShuffleWriter {
             num_rows: 0,
             num_bytes: 0,
             path: path.to_owned(),
-            writer: FileWriter::try_new(file, schema)?,
+            writer: FileWriter::try_new(&mut file, schema)?,
         })
     }
 
@@ -480,7 +477,7 @@ impl ShuffleWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::array::{StringArray, StructArray, UInt32Array, UInt64Array};
+    use datafusion::arrow::array::{Utf8Array, StructArray, UInt32Array, UInt64Array};
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::expressions::Column;
     use datafusion::physical_plan::limit::GlobalLimitExec;

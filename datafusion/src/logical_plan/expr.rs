@@ -20,9 +20,6 @@
 
 pub use super::Operator;
 
-use std::fmt;
-use std::sync::Arc;
-
 use arrow::{compute::cast::can_cast_types, datatypes::DataType};
 
 use crate::error::{DataFusionError, Result};

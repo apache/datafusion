@@ -31,6 +31,7 @@ use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
 use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
     array::*,

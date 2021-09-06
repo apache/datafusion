@@ -23,10 +23,11 @@ use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
 use arrow::array::ArrayRef;
-use arrow::compute::cast;
+use arrow::compute::cast::cast;
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use std::any::Any;
+use std::borrow::Borrow;
 use std::ops::Neg;
 use std::ops::Range;
 use std::sync::Arc;
@@ -127,9 +128,11 @@ fn create_empty_array(
     let array = value
         .as_ref()
         .map(|scalar| scalar.to_array_of_size(size))
-        .unwrap_or_else(|| new_null_array(data_type, size));
+        .unwrap_or_else(|| ArrayRef::from(new_null_array(data_type.clone(), size)));
     if array.data_type() != data_type {
-        cast(&array, data_type).map_err(DataFusionError::ArrowError)
+        cast(array.borrow(), data_type)
+            .map_err(DataFusionError::ArrowError)
+            .map(ArrayRef::from)
     } else {
         Ok(array)
     }
@@ -145,7 +148,7 @@ fn shift_with_default_value(
 
     let value_len = array.len() as i64;
     if offset == 0 {
-        Ok(arrow::array::make_array(array.data_ref().clone()))
+        Ok(array.clone())
     } else if offset == i64::MIN || offset.abs() >= value_len {
         create_empty_array(value, array.data_type(), array.len())
     } else {
@@ -158,11 +161,13 @@ fn shift_with_default_value(
         let default_values = create_empty_array(value, slice.data_type(), nulls)?;
         // Concatenate both arrays, add nulls after if shift > 0 else before
         if offset > 0 {
-            concat(&[default_values.as_ref(), slice.as_ref()])
+            concat::concatenate(&[default_values.as_ref(), slice.as_ref()])
                 .map_err(DataFusionError::ArrowError)
+                .map(ArrayRef::from)
         } else {
-            concat(&[slice.as_ref(), default_values.as_ref()])
+            concat::concatenate(&[slice.as_ref(), default_values.as_ref()])
                 .map_err(DataFusionError::ArrowError)
+                .map(ArrayRef::from)
         }
     }
 }
@@ -171,7 +176,11 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
         let value = &self.values[0];
         let value = value.slice(partition.start, partition.end - partition.start);
-        shift_with_default_value(&value, self.shift_offset, &self.default_value)
+        shift_with_default_value(
+            ArrayRef::from(value).borrow(),
+            self.shift_offset,
+            &self.default_value,
+        )
     }
 }
 
@@ -184,7 +193,8 @@ mod tests {
     use arrow::{array::*, datatypes::*};
 
     fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let arr: ArrayRef =
+            Arc::new(Int32Array::from_slice(&[1, -2, 3, -4, 5, -6, 7, 8]));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;

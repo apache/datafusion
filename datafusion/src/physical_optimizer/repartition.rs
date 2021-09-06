@@ -133,6 +133,7 @@ mod tests {
                 metrics,
                 None,
                 2048,
+                None,
             )),
         )?;
 
@@ -173,6 +174,7 @@ mod tests {
                     metrics,
                     None,
                     2048,
+                    None,
                 )),
             )?),
         )?;

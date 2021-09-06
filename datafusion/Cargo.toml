@@ -49,7 +49,8 @@ force_hash_collisions = []
 [dependencies]
 ahash = "0.7"
 hashbrown = { version = "0.11", features = ["raw"] }
-arrow = { package = "arrow2", git = "https://github.com/jorgecarleitao/arrow2", rev = "43d8cf5c54805aa437a1c7ee48f80e90f07bc553", features = ["io_csv", "io_json", "io_parquet", "io_ipc", "io_print", "ahash", "merge_sort", "compute", "regex"] }
+arrow = { package = "arrow2", version="0.5", features = ["io_csv", "io_json", "io_parquet", "io_ipc", "io_print", "ahash", "merge_sort", "compute", "regex"] }
+parquet = { package = "parquet2", version = "0.4", default_features = false, features = ["stream"] }
 sqlparser = "0.10"
 paste = "^1.0"
 num_cpus = "1.13.0"

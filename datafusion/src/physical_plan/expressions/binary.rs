@@ -776,25 +776,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn modulus_op() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]));
-        let a = Arc::new(Int32Array::from(vec![8, 32, 128, 512, 2048]));
-        let b = Arc::new(Int32Array::from(vec![2, 4, 7, 14, 32]));
-
-        apply_arithmetic::<Int32Type>(
-            schema,
-            vec![a, b],
-            Operator::Modulo,
-            Int32Array::from(vec![0, 0, 2, 8, 0]),
-        )?;
-
-        Ok(())
-    }
-
     fn apply_arithmetic<T: NativeType>(
         schema: Arc<Schema>,
         data: Vec<Arc<dyn Array>>,
@@ -837,7 +818,7 @@ mod tests {
         apply_arithmetic::<i32>(
             schema,
             vec![a, b],
-            Operator::Modulus,
+            Operator::Modulo,
             Int32Array::from_slice(&[0, 0, 2, 8, 0]),
         )?;
 
