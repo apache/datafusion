@@ -19,6 +19,8 @@
 
 # Using DataFusion as a library
 
+## Default Configuration
+
 DataFusion is [published on crates.io](https://crates.io/crates/datafusion), and is [well documented on docs.rs](https://docs.rs/datafusion/).
 
 To get started, add the following to your `Cargo.toml` file:
@@ -27,3 +29,32 @@ To get started, add the following to your `Cargo.toml` file:
 [dependencies]
 datafusion = "5.1.0"
 ```
+
+## Optimized Configuration
+
+For an optimized build several steps are required. First, use the following in your `Cargo.toml`:
+
+```toml
+[dependencies]
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", features = ["simd"]}
+tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread"] }
+snmalloc-rs = {version = "0.2", features= ["cache-friendly"]}
+num_cpus = "1.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+```
+
+Then, in your `main.rs.` update the memory allocator with the below after your imports:
+
+```rust
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+```
+
+Finally, in order to build with these optimizations `cargo nightly` is required. Based on the instruction
+set architecture you are building on you will want to configure the `target-cpu` as well, ideally
+with `native` or at least `avx2`.
+
+`RUSTFLAGS='-C target-cpu=native' cargo +nightly run --release`
