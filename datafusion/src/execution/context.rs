@@ -24,7 +24,8 @@ use crate::{
     logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::eliminate_limit::EliminateLimit,
     physical_optimizer::{
-        aggregate_statistics::AggregateStatistics, optimizer::PhysicalOptimizerRule,
+        aggregate_statistics::AggregateStatistics,
+        hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
 };
 use log::debug;
@@ -719,6 +720,7 @@ impl Default for ExecutionConfig {
                 Arc::new(Repartition::new()),
                 Arc::new(AddCoalescePartitionsExec::new()),
                 Arc::new(AggregateStatistics::new()),
+                Arc::new(HashBuildProbeOrder::new()),
             ],
             query_planner: Arc::new(DefaultQueryPlanner {}),
             default_catalog: "datafusion".to_owned(),

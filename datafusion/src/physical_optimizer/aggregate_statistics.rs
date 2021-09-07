@@ -16,7 +16,7 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
-use std::{sync::Arc, vec};
+use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
