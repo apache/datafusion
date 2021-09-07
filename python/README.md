@@ -119,6 +119,8 @@ df = df.aggregate(
 
 ```bash
 pip install datafusion
+# or
+python -m pip install datafusion
 ```
 
 ## How to develop
@@ -137,7 +139,12 @@ cd arrow-datafusion/python
 python3 -m venv venv
 # activate the venv
 source venv/bin/activate
-pip install -r requirements.txt
+# if python -V gives python 3.7
+pip install -r requirements-37.txt
+# if python -V gives python 3.8
+pip install -r requirements-38.txt
+# if python -V gives python 3.9
+pip install -r requirements-39.txt
 ```
 
 Whenever rust code changes (your changes or via `git pull`):
