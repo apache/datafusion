@@ -24,7 +24,9 @@ use crate::execution::context::ExecutionConfig;
 use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics};
+use crate::physical_plan::{
+    expressions, AggregateExpr, ColumnStatistics, ExecutionPlan, Statistics,
+};
 use crate::scalar::ScalarValue;
 
 use super::optimizer::PhysicalOptimizerRule;
@@ -47,11 +49,12 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         plan: Arc<dyn ExecutionPlan>,
         execution_config: &ExecutionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some((partial_agg_exec, stats)) = take_optimizable(&*plan) {
+        if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
                 .as_any()
                 .downcast_ref::<HashAggregateExec>()
                 .expect("take_optimizable() ensures that this is a HashAggregateExec");
+            let stats = partial_agg_exec.input().statistics();
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 if let Some((num_rows, name)) = take_optimizable_count(&**expr, &stats) {
@@ -90,12 +93,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// - its child (with posssible intermediate layers) is a partial `HashAggregateExec` node
 /// - they both have no grouping expression
 /// - the statistics are exact
-/// If this is the case, return a ref to the partial `HashAggregateExec` and the stats, else `None`.
+/// If this is the case, return a ref to the partial `HashAggregateExec`, else `None`.
 /// We would have prefered to return a casted ref to HashAggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
-fn take_optimizable(
-    node: &dyn ExecutionPlan,
-) -> Option<(Arc<dyn ExecutionPlan>, Statistics)> {
+fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> {
     if let Some(final_agg_exec) = node.as_any().downcast_ref::<HashAggregateExec>() {
         if final_agg_exec.mode() == &AggregateMode::Final
             && final_agg_exec.group_expr().is_empty()
@@ -110,7 +111,7 @@ fn take_optimizable(
                     {
                         let stats = partial_agg_exec.input().statistics();
                         if stats.is_exact {
-                            return Some((child, stats));
+                            return Some(child);
                         }
                     }
                 }
@@ -130,13 +131,13 @@ fn take_optimizable_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, &'static str)> {
-    if let (Some(num_rows), Some(count_expr)) = (
+    if let (Some(num_rows), Some(casted_expr)) = (
         stats.num_rows,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         // TODO implementing Eq on PhysicalExpr would help a lot here
-        if count_expr.expressions().len() == 1 {
-            if let Some(lit_expr) = count_expr.expressions()[0]
+        if casted_expr.expressions().len() == 1 {
+            if let Some(lit_expr) = casted_expr.expressions()[0]
                 .as_any()
                 .downcast_ref::<expressions::Literal>()
             {
@@ -154,19 +155,57 @@ fn take_optimizable_count(
 
 /// If this agg_expr is a min that is defined in the statistics, return it
 fn take_optimizable_min(
-    _agg_expr: &dyn AggregateExpr,
-    _stats: &Statistics,
-) -> Option<(ScalarValue, &'static str)> {
-    // TODO
+    agg_expr: &dyn AggregateExpr,
+    stats: &Statistics,
+) -> Option<(ScalarValue, String)> {
+    if let (Some(col_stats), Some(casted_expr)) = (
+        &stats.column_statistics,
+        agg_expr.as_any().downcast_ref::<expressions::Min>(),
+    ) {
+        if casted_expr.expressions().len() == 1 {
+            // TODO optimize with exprs other than Column
+            if let Some(col_expr) = casted_expr.expressions()[0]
+                .as_any()
+                .downcast_ref::<expressions::Column>()
+            {
+                if let ColumnStatistics {
+                    min_value: Some(val),
+                    ..
+                } = &col_stats[col_expr.index()]
+                {
+                    return Some((val.clone(), format!("MIN({})", col_expr.name())));
+                }
+            }
+        }
+    }
     None
 }
 
 /// If this agg_expr is a max that is defined in the statistics, return it
 fn take_optimizable_max(
-    _agg_expr: &dyn AggregateExpr,
-    _stats: &Statistics,
-) -> Option<(ScalarValue, &'static str)> {
-    // TODO
+    agg_expr: &dyn AggregateExpr,
+    stats: &Statistics,
+) -> Option<(ScalarValue, String)> {
+    if let (Some(col_stats), Some(casted_expr)) = (
+        &stats.column_statistics,
+        agg_expr.as_any().downcast_ref::<expressions::Max>(),
+    ) {
+        if casted_expr.expressions().len() == 1 {
+            // TODO optimize with exprs other than Column
+            if let Some(col_expr) = casted_expr.expressions()[0]
+                .as_any()
+                .downcast_ref::<expressions::Column>()
+            {
+                if let ColumnStatistics {
+                    max_value: Some(val),
+                    ..
+                } = &col_stats[col_expr.index()]
+                {
+                    return Some((val.clone(), format!("MAX({})", col_expr.name())));
+                }
+            }
+        }
+    }
     None
 }
 
