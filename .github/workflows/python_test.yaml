@@ -45,7 +45,7 @@ jobs:
         run: |
           python -m venv venv
           source venv/bin/activate
-          pip install -r python/requirements.txt
+          pip install -r python/requirements-39.txt
       - name: Run Linters
         run: |
           source venv/bin/activate
