@@ -343,9 +343,12 @@ mod test {
             lookup: Default::default(),
         };
         let props = external_props(&record_schema);
-        assert_eq!(props.get("doc"), Some(&"record documentation".to_string()));
         assert_eq!(
-            props.get("aliases"),
+            props.get("avro::doc"),
+            Some(&"record documentation".to_string())
+        );
+        assert_eq!(
+            props.get("avro::aliases"),
             Some(&"[fooalias,baralias]".to_string())
         );
         let enum_schema = AvroSchema::Enum {
@@ -358,8 +361,14 @@ mod test {
             symbols: vec![],
         };
         let props = external_props(&enum_schema);
-        assert_eq!(props.get("doc"), Some(&"enum documentation".to_string()));
-        assert_eq!(props.get("aliases"), Some(&"[fooenum,barenum]".to_string()));
+        assert_eq!(
+            props.get("avro::doc"),
+            Some(&"enum documentation".to_string())
+        );
+        assert_eq!(
+            props.get("avro::aliases"),
+            Some(&"[fooenum,barenum]".to_string())
+        );
         let fixed_schema = AvroSchema::Fixed {
             name: Name {
                 name: "fixed".to_string(),
@@ -370,7 +379,7 @@ mod test {
         };
         let props = external_props(&fixed_schema);
         assert_eq!(
-            props.get("aliases"),
+            props.get("avro::aliases"),
             Some(&"[foofixed,barfixed]".to_string())
         );
     }
