@@ -284,7 +284,7 @@ jobs:
     strategy:
       matrix:
         arch: [amd64]
-        rust: [nightly-2021-03-24]
+        rust: [nightly-2021-09-06]
     steps:
       - uses: actions/checkout@v2
         with:
