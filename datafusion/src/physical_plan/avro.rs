@@ -390,10 +390,12 @@ impl<R: Read + Unpin> RecordBatchStream for AvroStream<'_, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::StreamExt;
 
     #[tokio::test]
+    #[cfg(feature = "avro")]
     async fn test() -> Result<()> {
+        use futures::StreamExt;
+
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let avro_exec = AvroExec::try_from_path(
@@ -424,6 +426,27 @@ mod tests {
 
         let batch = results.next().await;
         assert!(batch.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "avro"))]
+    async fn test() -> Result<()> {
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = format!("{}/avro/alltypes_plain.avro", testdata);
+        let avro_exec = AvroExec::try_from_path(
+            &filename,
+            AvroReadOptions::default(),
+            Some(vec![0, 1, 2]),
+            1024,
+            None,
+        );
+        assert!(matches!(
+            avro_exec,
+            Err(DataFusionError::NotImplemented(msg))
+            if msg == "cannot read avro schema without the 'avro' feature enabled".to_string()
+        ));
 
         Ok(())
     }
