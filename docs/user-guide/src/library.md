@@ -32,11 +32,12 @@ datafusion = "5.1.0"
 
 ## Optimized Configuration
 
-For an optimized build several steps are required. First, use the following in your `Cargo.toml`:
+For an optimized build several steps are required. First, use the below in your `Cargo.toml`. It is
+worth noting that using the settings in the `[profile.release]` section will significantly increase the build time.
 
 ```toml
 [dependencies]
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", features = ["simd"]}
+datafusion = { version = "5.0" , features = ["simd"]}
 tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread"] }
 snmalloc-rs = {version = "0.2", features= ["cache-friendly"]}
 num_cpus = "1.0"
@@ -46,14 +47,14 @@ lto = true
 codegen-units = 1
 ```
 
-Then, in your `main.rs.` update the memory allocator with the below after your imports:
+Then, in `main.rs.` update the memory allocator with the below after your imports:
 
 ```rust
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 ```
 
-Finally, in order to build with these optimizations `cargo nightly` is required. Based on the instruction
+Finally, in order to build with the `simd` optimization `cargo nightly` is required. Based on the instruction
 set architecture you are building on you will want to configure the `target-cpu` as well, ideally
 with `native` or at least `avx2`.
 
