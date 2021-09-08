@@ -171,8 +171,8 @@ pub(crate) fn spawn_execution(
 
 /// Computes the statistics for on in-memory RecordBatch
 ///
-/// Only computes statistics that are in arrows metadata and does not
-/// apply any kernel on the actual data.
+/// Only computes statistics that are in arrows metadata (num rows, byte size and nulls)
+/// and does not apply any kernel on the actual data.
 pub fn compute_record_batch_statistics(
     batches: &[Vec<RecordBatch>],
     schema: &Schema,
@@ -257,6 +257,60 @@ mod tests {
         assert!(result.is_some());
         let result = result.unwrap();
         assert_eq!(batch_count * batch_size, result.num_rows());
+        Ok(())
+    }
+
+    #[test]
+    fn test_compute_record_batch_statistics_empty() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f32", DataType::Float32, false),
+            Field::new("f64", DataType::Float64, false),
+        ]));
+        let stats = compute_record_batch_statistics(&[], &schema, Some(vec![0, 1]));
+
+        assert_eq!(stats.num_rows, Some(0));
+        assert!(stats.is_exact);
+        assert_eq!(stats.total_byte_size, Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_compute_record_batch_statistics() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f32", DataType::Float32, false),
+            Field::new("f64", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Float32Array::from(vec![1., 2., 3.])),
+                Arc::new(Float64Array::from(vec![9., 8., 7.])),
+            ],
+        )?;
+        let result =
+            compute_record_batch_statistics(&[vec![batch]], &schema, Some(vec![0, 1]));
+
+        let expected = Statistics {
+            is_exact: true,
+            num_rows: Some(3),
+            total_byte_size: Some(416), // this might change a bit if the way we compute the size changes
+            column_statistics: Some(vec![
+                ColumnStatistics {
+                    distinct_count: None,
+                    max_value: None,
+                    min_value: None,
+                    null_count: Some(0),
+                },
+                ColumnStatistics {
+                    distinct_count: None,
+                    max_value: None,
+                    min_value: None,
+                    null_count: Some(0),
+                },
+            ]),
+        };
+
+        assert_eq!(result, expected);
         Ok(())
     }
 }
