@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "datafusion"
+name = "datafusion-python"
 version = "0.3.0"
 homepage = "https://github.com/apache/arrow"
 repository = "https://github.com/apache/arrow"
@@ -31,7 +31,11 @@ libc = "0.2"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 rand = "0.7"
 pyo3 = { version = "0.14.1", features = ["extension-module", "abi3", "abi3-py36"] }
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "4d61196dee8526998aee7e7bb10ea88422e5f9e1" }
+datafusion = { path = "../datafusion", version = "5.1.0" }
+# workaround for a bug introduced in
+# https://github.com/dtolnay/proc-macro2/pull/286
+# TODO: remove this version pin after upstream releases a fix
+proc-macro2 = { version = "=1.0.28" }
 
 [lib]
 name = "datafusion"
