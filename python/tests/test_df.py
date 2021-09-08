@@ -104,7 +104,7 @@ def test_join():
     )
     df1 = ctx.create_dataframe([[batch]])
 
-    df = df.join(df1, on="a", how="inner")
+    df = df.join(df1, join_keys=(["a"], ["a"]), how="inner")
     df = df.sort([f.col("a").sort(ascending=True)])
     table = pa.Table.from_batches(df.collect())
 
