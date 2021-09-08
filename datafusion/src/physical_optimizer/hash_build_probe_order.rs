@@ -18,6 +18,8 @@
 //! Utilizing exact statistics from sources to avoid scanning data
 use std::sync::Arc;
 
+use arrow::datatypes::Schema;
+
 use crate::execution::context::ExecutionConfig;
 use crate::logical_plan::JoinType;
 use crate::physical_plan::cross_join::CrossJoinExec;
@@ -77,10 +79,9 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
 /// back the values from the original left as first columns and
 /// those on the right next
 fn swap_reverting_projection(
-    left: &dyn ExecutionPlan,
-    right: &dyn ExecutionPlan,
+    left_schema: &Schema,
+    right_schema: &Schema,
 ) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
-    let right_schema = right.schema();
     let right_cols = right_schema.fields().iter().enumerate().map(|(i, f)| {
         (
             Arc::new(expressions::Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
@@ -88,7 +89,6 @@ fn swap_reverting_projection(
         )
     });
     let right_len = right_cols.len();
-    let left_schema = left.schema();
     let left_cols = left_schema.fields().iter().enumerate().map(|(i, f)| {
         (
             Arc::new(expressions::Column::new(f.name(), right_len + i))
@@ -125,7 +125,7 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
                     *hash_join.partition_mode(),
                 )?;
                 let proj = ProjectionExec::try_new(
-                    swap_reverting_projection(&**left, &**right),
+                    swap_reverting_projection(&*left.schema(), &*right.schema()),
                     Arc::new(new_join),
                 )?;
                 return Ok(Arc::new(proj));
@@ -137,7 +137,7 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
                 let new_join =
                     CrossJoinExec::try_new(Arc::clone(right), Arc::clone(left))?;
                 let proj = ProjectionExec::try_new(
-                    swap_reverting_projection(&**left, &**right),
+                    swap_reverting_projection(&*left.schema(), &*right.schema()),
                     Arc::new(new_join),
                 )?;
                 return Ok(Arc::new(proj));
@@ -148,5 +148,48 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
 
     fn name(&self) -> &str {
         "hash_build_probe_order"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    #[tokio::test]
+    async fn test_swap_reverting_projection() {
+        let left_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        let right_schema = Schema::new(vec![Field::new("c", DataType::Int32, false)]);
+
+        let proj = swap_reverting_projection(&left_schema, &right_schema);
+
+        assert_eq!(proj.len(), 3);
+
+        let (col, name) = &proj[0];
+        assert_eq!(name, "a");
+        assert_col_expr(col, "a", 1);
+
+        let (col, name) = &proj[1];
+        assert_eq!(name, "b");
+        assert_col_expr(col, "b", 2);
+
+        let (col, name) = &proj[2];
+        assert_eq!(name, "c");
+        assert_col_expr(col, "c", 0);
+    }
+
+    fn assert_col_expr(expr: &Arc<dyn PhysicalExpr>, name: &str, index: usize) {
+        let col = expr
+            .as_any()
+            .downcast_ref::<expressions::Column>()
+            .expect("Projection items should be Column expression");
+        assert_eq!(col.name(), name);
+        assert_eq!(col.index(), index);
     }
 }
