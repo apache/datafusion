@@ -1970,7 +1970,12 @@ mod tests {
         let results =
             execute("SELECT c1, AVG(c2) FROM test WHERE c1 = 123 GROUP BY c1", 4).await?;
 
-        let expected = vec!["++", "||", "++", "++"];
+        let expected = vec![
+            "+----+--------------+",
+            "| c1 | AVG(test.c2) |",
+            "+----+--------------+",
+            "+----+--------------+",
+        ];
         assert_batches_sorted_eq!(expected, &results);
 
         Ok(())
