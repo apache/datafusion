@@ -197,7 +197,7 @@ pub fn get_statistics_with_limit(
     for file in &all_files {
         num_files += 1;
         let file_stats = &file.statistics;
-        if !file_stats.is_exact {
+        is_exact &= file_stats.is_exact;
             is_exact = false;
         }
         num_rows += file_stats.num_rows.unwrap_or(0);
