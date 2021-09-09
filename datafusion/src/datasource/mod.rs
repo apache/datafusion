@@ -198,8 +198,6 @@ pub fn get_statistics_with_limit(
         num_files += 1;
         let file_stats = &file.statistics;
         is_exact &= file_stats.is_exact;
-            is_exact = false;
-        }
         num_rows += file_stats.num_rows.unwrap_or(0);
         total_byte_size += file_stats.total_byte_size.unwrap_or(0);
         if let Some(vec) = &file_stats.column_statistics {
