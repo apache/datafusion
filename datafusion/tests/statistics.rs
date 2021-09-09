@@ -276,10 +276,9 @@ async fn sql_window() -> Result<()> {
 
     assert_eq!(stats.num_rows, result.num_rows);
     assert!(result.column_statistics.is_some());
-    assert_eq!(
-        stats.column_statistics.unwrap()[1],
-        result.column_statistics.unwrap()[0],
-    );
+    let col_stats = result.column_statistics.unwrap();
+    assert_eq!(2, col_stats.len());
+    assert_eq!(stats.column_statistics.unwrap()[1], col_stats[0]);
 
     Ok(())
 }
