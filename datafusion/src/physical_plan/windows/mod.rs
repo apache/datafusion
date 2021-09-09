@@ -129,19 +129,19 @@ fn create_built_in_window_expr(
                 .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
             let n: u32 = n as u32;
             let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::nth_value(name, arg, data_type, n)?)
+            Arc::new(NthValue::nth(name, arg, data_type, n)?)
         }
         BuiltInWindowFunction::FirstValue => {
             let arg =
                 coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::first_value(name, arg, data_type))
+            Arc::new(NthValue::first(name, arg, data_type))
         }
         BuiltInWindowFunction::LastValue => {
             let arg =
                 coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::last_value(name, arg, data_type))
+            Arc::new(NthValue::last(name, arg, data_type))
         }
         _ => {
             return Err(DataFusionError::NotImplemented(format!(
