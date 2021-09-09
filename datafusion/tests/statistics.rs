@@ -260,3 +260,26 @@ async fn sql_limit() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn sql_window() -> Result<()> {
+    let (stats, schema) = fully_defined();
+    let mut ctx = init_ctx(stats.clone(), schema)?;
+
+    let df = ctx
+        .sql("SELECT c2, sum(c1) over (partition by c2) FROM stats_table")
+        .unwrap();
+
+    let physical_plan = ctx.create_physical_plan(&df.to_logical_plan()).unwrap();
+
+    let result = physical_plan.statistics();
+
+    assert_eq!(stats.num_rows, result.num_rows);
+    assert!(result.column_statistics.is_some());
+    assert_eq!(
+        stats.column_statistics.unwrap()[1],
+        result.column_statistics.unwrap()[0],
+    );
+
+    Ok(())
+}
