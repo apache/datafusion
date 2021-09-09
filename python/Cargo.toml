@@ -32,10 +32,6 @@ tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"
 rand = "0.7"
 pyo3 = { version = "0.14.1", features = ["extension-module", "abi3", "abi3-py36"] }
 datafusion = { path = "../datafusion", version = "5.1.0" }
-# workaround for a bug introduced in
-# https://github.com/dtolnay/proc-macro2/pull/286
-# TODO: remove this version pin after upstream releases a fix
-proc-macro2 = { version = "=1.0.28" }
 
 [lib]
 name = "datafusion"
