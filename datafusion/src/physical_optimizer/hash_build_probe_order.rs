@@ -23,9 +23,10 @@ use arrow::datatypes::Schema;
 use crate::execution::context::ExecutionConfig;
 use crate::logical_plan::JoinType;
 use crate::physical_plan::cross_join::CrossJoinExec;
+use crate::physical_plan::expressions::Column;
 use crate::physical_plan::hash_join::HashJoinExec;
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::{expressions, ExecutionPlan, PhysicalExpr};
+use crate::physical_plan::{ExecutionPlan, PhysicalExpr};
 
 use super::optimizer::PhysicalOptimizerRule;
 use super::utils::optimize_children;
@@ -84,15 +85,14 @@ fn swap_reverting_projection(
 ) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
     let right_cols = right_schema.fields().iter().enumerate().map(|(i, f)| {
         (
-            Arc::new(expressions::Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
             f.name().to_owned(),
         )
     });
     let right_len = right_cols.len();
     let left_cols = left_schema.fields().iter().enumerate().map(|(i, f)| {
         (
-            Arc::new(expressions::Column::new(f.name(), right_len + i))
-                as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new(f.name(), right_len + i)) as Arc<dyn PhysicalExpr>,
             f.name().to_owned(),
         )
     });
@@ -153,10 +153,106 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        physical_plan::{hash_join::PartitionMode, Statistics},
+        test::exec::StatisticsExec,
+    };
+
     use super::*;
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
+
+    fn create_big_and_small() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
+        let big = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(100000),
+                ..Default::default()
+            },
+            Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
+        ));
+
+        let small = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(10),
+                ..Default::default()
+            },
+            Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
+        ));
+        (big, small)
+    }
+
+    #[tokio::test]
+    async fn test_join_with_swap() {
+        let (big, small) = create_big_and_small();
+
+        let join = HashJoinExec::try_new(
+            Arc::clone(&big),
+            Arc::clone(&small),
+            vec![(
+                Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                Column::new_with_schema("small_col", &small.schema()).unwrap(),
+            )],
+            &JoinType::Left,
+            PartitionMode::CollectLeft,
+        )
+        .unwrap();
+
+        let optimized_join = HashBuildProbeOrder::new()
+            .optimize(Arc::new(join), &ExecutionConfig::new())
+            .unwrap();
+
+        let swapping_projection = optimized_join
+            .as_any()
+            .downcast_ref::<ProjectionExec>()
+            .expect("A proj is required to swap columns back to their original order");
+
+        assert_eq!(swapping_projection.expr().len(), 2);
+        let (col, name) = &swapping_projection.expr()[0];
+        assert_eq!(name, "big_col");
+        assert_col_expr(col, "big_col", 1);
+        let (col, name) = &swapping_projection.expr()[1];
+        assert_eq!(name, "small_col");
+        assert_col_expr(col, "small_col", 0);
+
+        let swapped_join = swapping_projection
+            .input()
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect("The type of the plan should not be changed");
+
+        assert_eq!(swapped_join.left().statistics().num_rows, Some(10));
+        assert_eq!(swapped_join.right().statistics().num_rows, Some(100000));
+    }
+
+    #[tokio::test]
+    async fn test_join_no_swap() {
+        let (big, small) = create_big_and_small();
+
+        let join = HashJoinExec::try_new(
+            Arc::clone(&small),
+            Arc::clone(&big),
+            vec![(
+                Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                Column::new_with_schema("big_col", &big.schema()).unwrap(),
+            )],
+            &JoinType::Left,
+            PartitionMode::CollectLeft,
+        )
+        .unwrap();
+
+        let optimized_join = HashBuildProbeOrder::new()
+            .optimize(Arc::new(join), &ExecutionConfig::new())
+            .unwrap();
+
+        let swapped_join = optimized_join
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect("The type of the plan should not be changed");
+
+        assert_eq!(swapped_join.left().statistics().num_rows, Some(10));
+        assert_eq!(swapped_join.right().statistics().num_rows, Some(100000));
+    }
 
     #[tokio::test]
     async fn test_swap_reverting_projection() {
@@ -187,7 +283,7 @@ mod tests {
     fn assert_col_expr(expr: &Arc<dyn PhysicalExpr>, name: &str, index: usize) {
         let col = expr
             .as_any()
-            .downcast_ref::<expressions::Column>()
+            .downcast_ref::<Column>()
             .expect("Projection items should be Column expression");
         assert_eq!(col.name(), name);
         assert_eq!(col.index(), index);

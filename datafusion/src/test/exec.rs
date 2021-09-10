@@ -393,3 +393,82 @@ impl ExecutionPlan for ErrorExec {
         Statistics::default()
     }
 }
+
+/// A mock execution plan that simply returns the provided statistics
+#[derive(Debug, Clone)]
+pub struct StatisticsExec {
+    stats: Statistics,
+    schema: Arc<Schema>,
+}
+impl StatisticsExec {
+    pub fn new(stats: Statistics, schema: Schema) -> Self {
+        assert!(
+            stats
+                .column_statistics
+                .as_ref()
+                .map(|cols| cols.len() == schema.fields().len())
+                .unwrap_or(true),
+            "if defined, the column statistics vector length should be the number of fields"
+        );
+        Self {
+            stats,
+            schema: Arc::new(schema),
+        }
+    }
+}
+#[async_trait]
+impl ExecutionPlan for StatisticsExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(2)
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        &self,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if children.is_empty() {
+            Ok(Arc::new(self.clone()))
+        } else {
+            Err(DataFusionError::Internal(
+                "Children cannot be replaced in CustomExecutionPlan".to_owned(),
+            ))
+        }
+    }
+
+    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+        unimplemented!("This plan only serves for testing statistics")
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.stats.clone()
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "StatisticsExec: col_count={}, row_count={:?}",
+                    self.schema.fields().len(),
+                    self.stats.num_rows,
+                )
+            }
+        }
+    }
+}
