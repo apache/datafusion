@@ -4483,3 +4483,65 @@ async fn like_on_string_dictionaries() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_regexp_is_match() -> Result<()> {
+    let input = vec![Some("foo"), Some("Barrr"), Some("Bazzz"), Some("ZZZZZ")]
+        .into_iter()
+        .collect::<StringArray>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    let sql = "SELECT * FROM test WHERE c1 ~ 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| Bazzz |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 ~* 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| Bazzz |",
+        "| ZZZZZ |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 !~ 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| foo   |",
+        "| Barrr |",
+        "| ZZZZZ |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 !~* 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| foo   |",
+        "| Barrr |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
