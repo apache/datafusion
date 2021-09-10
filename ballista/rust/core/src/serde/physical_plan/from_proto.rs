@@ -35,6 +35,7 @@ use datafusion::catalog::catalog::{
     CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
 };
 use datafusion::datasource::datasource::Statistics;
+use datafusion::datasource::object_store::ObjectStoreRegistry;
 use datafusion::datasource::FilePartition;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
@@ -655,6 +656,7 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                     aggregate_functions: Default::default(),
                     config: ExecutionConfig::new(),
                     execution_props: ExecutionProps::new(),
+                    object_store_registry: Arc::new(ObjectStoreRegistry::new()),
                 };
 
                 let fun_expr = functions::create_physical_fun(
