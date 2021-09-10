@@ -169,23 +169,21 @@ impl ExecutionPlan for ProjectionExec {
 
 fn stats_projection(
     stats: Statistics,
-    exprs: impl ExactSizeIterator<Item = Arc<dyn PhysicalExpr>>,
+    exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
 ) -> Statistics {
-    let column_statistics = if let Some(input_col_stats) = stats.column_statistics {
-        let mut column_stat = Vec::with_capacity(exprs.len());
-        for expr in exprs {
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                column_stat.push(input_col_stats[col.index()].clone());
-            } else {
-                // TODO stats: estimate more statistics from expressions
-                // (expressions should compute their statistics themselves)
-                column_stat.push(ColumnStatistics::default());
-            }
-        }
-        Some(column_stat)
-    } else {
-        None
-    };
+    let column_statistics = stats.column_statistics.map(|input_col_stats| {
+        exprs
+            .map(|e| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                    input_col_stats[col.index()].clone()
+                } else {
+                    // TODO stats: estimate more statistics from expressions
+                    // (expressions should compute their statistics themselves)
+                    ColumnStatistics::default()
+                }
+            })
+            .collect()
+    });
 
     Statistics {
         is_exact: stats.is_exact,
