@@ -4,10 +4,9 @@ use pyo3::prelude::*;
 
 
 #[pymodule]
-fn ballista(py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<BallistaContext>();
+fn ballista(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<context::PyBallistaContext>()?;
 
-    crate::functions::init(m);
     Ok(())
 }
 
