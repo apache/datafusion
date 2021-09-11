@@ -1122,137 +1122,33 @@ impl ScalarValue {
     }
 }
 
-impl From<f64> for ScalarValue {
-    fn from(value: f64) -> Self {
-        Some(value).into()
-    }
+macro_rules! impl_scalar {
+    ($ty:ty, $scalar:tt) => {
+        impl From<$ty> for ScalarValue {
+            fn from(value: $ty) -> Self {
+                ScalarValue::$scalar(Some(value))
+            }
+        }
+
+        impl From<Option<$ty>> for ScalarValue {
+            fn from(value: Option<$ty>) -> Self {
+                ScalarValue::$scalar(value)
+            }
+        }
+    };
 }
 
-impl From<Option<f64>> for ScalarValue {
-    fn from(value: Option<f64>) -> Self {
-        ScalarValue::Float64(value)
-    }
-}
-
-impl From<f32> for ScalarValue {
-    fn from(value: f32) -> Self {
-        Some(value).into()
-    }
-}
-
-impl From<Option<f32>> for ScalarValue {
-    fn from(value: Option<f32>) -> Self {
-        ScalarValue::Float32(value)
-    }
-}
-
-impl From<i8> for ScalarValue {
-    fn from(value: i8) -> Self {
-        Some(value).into()
-    }
-}
-
-impl From<Option<i8>> for ScalarValue {
-    fn from(value: Option<i8>) -> Self {
-        ScalarValue::Int8(value)
-    }
-}
-
-impl From<i16> for ScalarValue {
-    fn from(value: i16) -> Self {
-        Some(value).into()
-    }
-}
-
-impl From<Option<i16>> for ScalarValue {
-    fn from(value: Option<i16>) -> Self {
-        ScalarValue::Int16(value)
-    }
-}
-
-impl From<i32> for ScalarValue {
-    fn from(value: i32) -> Self {
-        Some(value).into()
-    }
-}
-
-impl From<Option<i32>> for ScalarValue {
-    fn from(value: Option<i32>) -> Self {
-        ScalarValue::Int32(value)
-    }
-}
-
-impl From<i64> for ScalarValue {
-    fn from(value: i64) -> Self {
-        Some(value).into()
-    }
-}
-
-impl From<Option<i64>> for ScalarValue {
-    fn from(value: Option<i64>) -> Self {
-        ScalarValue::Int64(value)
-    }
-}
-
-impl From<bool> for ScalarValue {
-    fn from(value: bool) -> Self {
-        Some(value).into()
-    }
-}
-
-impl From<Option<bool>> for ScalarValue {
-    fn from(value: Option<bool>) -> Self {
-        ScalarValue::Boolean(value)
-    }
-}
-
-impl From<u8> for ScalarValue {
-    fn from(value: u8) -> Self {
-        Some(value).into()
-    }
-}
-
-impl From<Option<u8>> for ScalarValue {
-    fn from(value: Option<u8>) -> Self {
-        ScalarValue::UInt8(value)
-    }
-}
-
-impl From<u16> for ScalarValue {
-    fn from(value: u16) -> Self {
-        Some(value).into()
-    }
-}
-
-impl From<Option<u16>> for ScalarValue {
-    fn from(value: Option<u16>) -> Self {
-        ScalarValue::UInt16(value)
-    }
-}
-
-impl From<u32> for ScalarValue {
-    fn from(value: u32) -> Self {
-        Some(value).into()
-    }
-}
-
-impl From<Option<u32>> for ScalarValue {
-    fn from(value: Option<u32>) -> Self {
-        ScalarValue::UInt32(value)
-    }
-}
-
-impl From<u64> for ScalarValue {
-    fn from(value: u64) -> Self {
-        Some(value).into()
-    }
-}
-
-impl From<Option<u64>> for ScalarValue {
-    fn from(value: Option<u64>) -> Self {
-        ScalarValue::UInt64(value)
-    }
-}
+impl_scalar!(f64, Float64);
+impl_scalar!(f32, Float32);
+impl_scalar!(i8, Int8);
+impl_scalar!(i16, Int16);
+impl_scalar!(i32, Int32);
+impl_scalar!(i64, Int64);
+impl_scalar!(bool, Boolean);
+impl_scalar!(u8, UInt8);
+impl_scalar!(u16, UInt16);
+impl_scalar!(u32, UInt32);
+impl_scalar!(u64, UInt64);
 
 impl From<&str> for ScalarValue {
     fn from(value: &str) -> Self {
