@@ -716,11 +716,11 @@ impl Default for ExecutionConfig {
                 Arc::new(LimitPushDown::new()),
             ],
             physical_optimizers: vec![
+                Arc::new(AggregateStatistics::new()),
+                Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(CoalesceBatches::new()),
                 Arc::new(Repartition::new()),
                 Arc::new(AddCoalescePartitionsExec::new()),
-                Arc::new(AggregateStatistics::new()),
-                Arc::new(HashBuildProbeOrder::new()),
             ],
             query_planner: Arc::new(DefaultQueryPlanner {}),
             default_catalog: "datafusion".to_owned(),
