@@ -3,5 +3,4 @@
 	url = https://github.com/apache/parquet-testing.git
 [submodule "testing"]
 	path = testing
-	url = https://github.com/Igosuki/arrow-testing.git
-	branch = avro
+	url = https://github.com/apache/arrow-testing
