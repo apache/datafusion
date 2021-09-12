@@ -160,7 +160,7 @@ impl ExecutionPlan for ExplainExec {
     }
 
     fn statistics(&self) -> Statistics {
-        // TODO stats: validate that we don't need to provide statistics on an EXPLAIN plan
+        // Statistics an EXPLAIN plan are not relevant
         Statistics::default()
     }
 }

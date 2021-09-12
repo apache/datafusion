@@ -169,7 +169,7 @@ pub(crate) fn spawn_execution(
     })
 }
 
-/// Computes the statistics for on in-memory RecordBatch
+/// Computes the statistics for an in-memory RecordBatch
 ///
 /// Only computes statistics that are in arrows metadata (num rows, byte size and nulls)
 /// and does not apply any kernel on the actual data.

@@ -210,7 +210,7 @@ impl ExecutionPlan for AnalyzeExec {
     }
 
     fn statistics(&self) -> Statistics {
-        // TODO stats: validate that we don't need to provide statistics on an EXPLAIN plan
+        // Statistics an an ANALYZE plan are not relevant
         Statistics::default()
     }
 }
