@@ -445,7 +445,7 @@ mod tests {
         assert!(matches!(
             avro_exec,
             Err(DataFusionError::NotImplemented(msg))
-            if msg == "cannot read avro schema without the 'avro' feature enabled".to_string()
+            if msg == *"cannot read avro schema without the 'avro' feature enabled"
         ));
 
         Ok(())
