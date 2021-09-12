@@ -205,8 +205,9 @@ impl ExecutionPlan for DistributedQueryExec {
     }
 
     fn statistics(&self) -> Statistics {
-        // We cannot infer the statistics until the logical plan
-        // is converted to a physical plan.
+        // This execution plan sends the logical plan to the scheduler without
+        // performing the node by node conversion to a full physical plan.
+        // This implies that we cannot infer the statistics at this stage.
         Statistics::default()
     }
 }

@@ -121,10 +121,8 @@ impl ExecutionPlan for UnresolvedShuffleExec {
     }
 
     fn statistics(&self) -> Statistics {
-        // We could try to fetch the statistics here from the shuffle writer,
-        // but it is much more valuable to optimize the plan once this
-        // nodes has been replaced by the actual ShuffleReaderExec which will
-        // have more accurate statistics from its input partitions.
+        // The full statistics are computed in the `ShuffleReaderExec` node
+        // that replaces this one once the previous stage is completed.
         Statistics::default()
     }
 }
