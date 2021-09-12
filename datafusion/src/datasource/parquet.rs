@@ -426,6 +426,10 @@ mod tests {
             .fold(0, |acc, _| async move { acc + 1i32 })
             .await;
 
+        // test metadata
+        assert_eq!(exec.statistics().num_rows, Some(8));
+        assert_eq!(exec.statistics().total_byte_size, Some(671));
+
         Ok(())
     }
 
