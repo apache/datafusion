@@ -15,11 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import datetime
 from datetime import datetime
 
-import numpy as np
-import pandas as pd
 import pyarrow as pa
 import pytest
 from datafusion import ExecutionContext
@@ -39,7 +36,11 @@ def df():
 
     # create a RecordBatch and a new DataFrame from it
     batch = pa.RecordBatch.from_arrays(
-        [helpers.data_datetime("s"), helpers.data_date32(), helpers.data_date64()],
+        [
+            helpers.data_datetime("s"),
+            helpers.data_date32(),
+            helpers.data_date64(),
+        ],
         names=["ts", "dt1", "dt2"],
     )
 
@@ -90,16 +91,8 @@ def test_select_ts_date(df):
             pa.timestamp("ns"),
             pa.timestamp("ns"),
         ),
-        (
-            [0, 1, 2],
-            pa.time32("s"),
-            pa.time32("s"),
-        ),
-        (
-            [0, 1, 2],
-            pa.time64("us"),
-            pa.time64("us"),
-        ),
+        ([0, 1, 2], pa.time32("s"), pa.time32("s"),),
+        ([0, 1, 2], pa.time64("us"), pa.time64("us"),),
     ],
 )
 def test_datetypes(ctx, input_values, input_type, output_type):
