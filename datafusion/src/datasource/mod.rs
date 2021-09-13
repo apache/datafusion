@@ -22,6 +22,7 @@ pub mod datasource;
 pub mod empty;
 pub mod json;
 pub mod memory;
+pub mod object_store;
 pub mod parquet;
 
 pub use self::csv::{CsvFile, CsvReadOptions};

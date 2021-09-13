@@ -50,7 +50,7 @@ pub struct NthValue {
 
 impl NthValue {
     /// Create a new FIRST_VALUE window aggregate function
-    pub fn first_value(
+    pub fn first(
         name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
@@ -64,7 +64,7 @@ impl NthValue {
     }
 
     /// Create a new LAST_VALUE window aggregate function
-    pub fn last_value(
+    pub fn last(
         name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
@@ -78,7 +78,7 @@ impl NthValue {
     }
 
     /// Create a new NTH_VALUE window aggregate function
-    pub fn nth_value(
+    pub fn nth(
         name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn first_value() -> Result<()> {
-        let first_value = NthValue::first_value(
+        let first_value = NthValue::first(
             "first_value".to_owned(),
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn last_value() -> Result<()> {
-        let last_value = NthValue::last_value(
+        let last_value = NthValue::last(
             "last_value".to_owned(),
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn nth_value_1() -> Result<()> {
-        let nth_value = NthValue::nth_value(
+        let nth_value = NthValue::nth(
             "nth_value".to_owned(),
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn nth_value_2() -> Result<()> {
-        let nth_value = NthValue::nth_value(
+        let nth_value = NthValue::nth(
             "nth_value".to_owned(),
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,

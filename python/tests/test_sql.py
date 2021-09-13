@@ -69,7 +69,7 @@ def test_register_csv(ctx, tmp_path):
     for table in ["csv", "csv1", "csv2"]:
         result = ctx.sql(f"SELECT COUNT(int) FROM {table}").collect()
         result = pa.Table.from_batches(result)
-        assert result.to_pydict() == {"COUNT(int)": [4]}
+        assert result.to_pydict() == {f"COUNT({table}.int)": [4]}
 
     result = ctx.sql("SELECT * FROM csv3").collect()
     result = pa.Table.from_batches(result)
@@ -88,7 +88,7 @@ def test_register_parquet(ctx, tmp_path):
 
     result = ctx.sql("SELECT COUNT(a) FROM t").collect()
     result = pa.Table.from_batches(result)
-    assert result.to_pydict() == {"COUNT(a)": [100]}
+    assert result.to_pydict() == {"COUNT(t.a)": [100]}
 
 
 def test_execute(ctx, tmp_path):
@@ -123,8 +123,8 @@ def test_execute(ctx, tmp_path):
     result_values = []
     for result in results:
         pydict = result.to_pydict()
-        result_keys.extend(pydict["CAST(a AS Int32)"])
-        result_values.extend(pydict["COUNT(a)"])
+        result_keys.extend(pydict["CAST(t.a AS Int32)"])
+        result_values.extend(pydict["COUNT(t.a)"])
 
     result_keys, result_values = (
         list(t) for t in zip(*sorted(zip(result_keys, result_values)))
@@ -141,7 +141,7 @@ def test_execute(ctx, tmp_path):
     expected_cast = pa.array([50, 50], pa.int32())
     expected = [
         pa.RecordBatch.from_arrays(
-            [expected_a, expected_cast], ["a", "CAST(a AS Int32)"]
+            [expected_a, expected_cast], ["a", "CAST(t.a AS Int32)"]
         )
     ]
     np.testing.assert_equal(expected[0].column(1), expected[0].column(1))

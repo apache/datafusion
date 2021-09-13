@@ -2247,7 +2247,14 @@ async fn explain_analyze_baseline_metrics() {
     let mut ctx = ExecutionContext::with_config(config);
     register_aggregate_csv_by_sql(&mut ctx).await;
     // a query with as many operators as we have metrics for
-    let sql = "EXPLAIN ANALYZE select count(*) from (SELECT count(*), c1 FROM aggregate_test_100 group by c1 ORDER BY c1)";
+    let sql = "EXPLAIN ANALYZE \
+               select count(*) from \
+               (SELECT count(*), c1 \
+               FROM aggregate_test_100 \
+               WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434' \
+               GROUP BY c1 \
+               ORDER BY c1)";
+    println!("running query: {}", sql);
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
@@ -2274,6 +2281,11 @@ async fn explain_analyze_baseline_metrics() {
         &formatted,
         "SortExec: [c1@0 ASC]",
         "metrics=[output_rows=5, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
+        "metrics=[output_rows=99, elapsed_compute="
     );
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
@@ -4480,6 +4492,68 @@ async fn like_on_string_dictionaries() -> Result<()> {
         "+-------+",
     ];
 
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_regexp_is_match() -> Result<()> {
+    let input = vec![Some("foo"), Some("Barrr"), Some("Bazzz"), Some("ZZZZZ")]
+        .into_iter()
+        .collect::<StringArray>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    let sql = "SELECT * FROM test WHERE c1 ~ 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| Bazzz |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 ~* 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| Bazzz |",
+        "| ZZZZZ |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 !~ 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| foo   |",
+        "| Barrr |",
+        "| ZZZZZ |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 !~* 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| foo   |",
+        "| Barrr |",
+        "+-------+",
+    ];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }

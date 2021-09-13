@@ -15,21 +15,29 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "datafusion-cli"
-version = "5.1.0-SNAPSHOT"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-edition = "2018"
-keywords = [ "arrow", "datafusion", "ballista", "query", "sql", "cli", "repl" ]
-license = "Apache-2.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
+import pyarrow as pa
+import pytest
+from datafusion import ExecutionContext
 
 
-[dependencies]
-clap = "2.33"
-rustyline = "8.0"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
-datafusion = { path = "../datafusion", version = "5.1.0" }
-arrow = { version = "^5.3"  }
-ballista = { path = "../ballista/rust/client", version = "0.6.0" }
+@pytest.fixture
+def ctx():
+    return ExecutionContext()
+
+
+def test_register_record_batches(ctx):
+
+    # create a RecordBatch and register it as memtable
+    batch = pa.RecordBatch.from_arrays(
+        [pa.array([1, 2, 3]), pa.array([4, 5, 6])],
+        names=["a", "b"],
+    )
+
+    ctx.register_record_batches("t", [[batch]])
+
+    assert ctx.tables() == {"t"}
+
+    result = ctx.sql("SELECT a+b, a-b FROM t").collect()
+
+    assert result[0].column(0) == pa.array([5, 7, 9])
+    assert result[0].column(1) == pa.array([-3, -3, -3])
