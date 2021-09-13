@@ -17,7 +17,7 @@
   under the License.
 -->
 
-## Starting a Ballista cluster using Docker
+# Starting a Ballista cluster using Docker
 
 ## Build Docker image
 
