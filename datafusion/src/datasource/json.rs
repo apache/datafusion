@@ -37,8 +37,6 @@ use crate::{
 };
 use arrow::{datatypes::SchemaRef, json::reader::infer_json_schema_from_seekable};
 
-use super::datasource::Statistics;
-
 trait SeekRead: Read + Seek {}
 
 impl<T: Seek + Read> SeekRead for T {}
@@ -48,7 +46,6 @@ pub struct NdJsonFile {
     source: Source<Box<dyn SeekRead + Send + Sync + 'static>>,
     schema: SchemaRef,
     file_extension: String,
-    statistics: Statistics,
 }
 
 impl NdJsonFile {
@@ -77,7 +74,6 @@ impl NdJsonFile {
             source: Source::Path(path.to_string()),
             schema,
             file_extension: options.file_extension.to_string(),
-            statistics: Statistics::default(),
         })
     }
 
@@ -101,7 +97,6 @@ impl NdJsonFile {
         Ok(Self {
             source: Source::Reader(Mutex::new(Some(Box::new(reader)))),
             schema,
-            statistics: Statistics::default(),
             file_extension: String::new(),
         })
     }
@@ -153,10 +148,6 @@ impl TableProvider for NdJsonFile {
             }
         };
         Ok(Arc::new(exec))
-    }
-
-    fn statistics(&self) -> Statistics {
-        self.statistics.clone()
     }
 }
 

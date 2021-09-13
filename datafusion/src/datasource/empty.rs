@@ -22,7 +22,6 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 
-use crate::datasource::datasource::Statistics;
 use crate::datasource::TableProvider;
 use crate::error::Result;
 use crate::logical_plan::Expr;
@@ -68,13 +67,5 @@ impl TableProvider for EmptyTable {
                 .collect(),
         );
         Ok(Arc::new(EmptyExec::new(false, Arc::new(projected_schema))))
-    }
-
-    fn statistics(&self) -> Statistics {
-        Statistics {
-            num_rows: Some(0),
-            total_byte_size: Some(0),
-            column_statistics: None,
-        }
     }
 }

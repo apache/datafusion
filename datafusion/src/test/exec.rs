@@ -33,8 +33,8 @@ use arrow::{
 use futures::Stream;
 
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::{
     error::{DataFusionError, Result},
@@ -203,6 +203,22 @@ impl ExecutionPlan for MockExec {
             }
         }
     }
+
+    // Panics if one of the batches is an error
+    fn statistics(&self) -> Statistics {
+        let data: ArrowResult<Vec<_>> = self
+            .data
+            .iter()
+            .map(|r| match r {
+                Ok(batch) => Ok(batch.clone()),
+                Err(e) => Err(clone_error(e)),
+            })
+            .collect();
+
+        let data = data.unwrap();
+
+        common::compute_record_batch_statistics(&[data], &self.schema, None)
+    }
 }
 
 fn clone_error(e: &ArrowError) -> ArrowError {
@@ -306,6 +322,10 @@ impl ExecutionPlan for BarrierExec {
             }
         }
     }
+
+    fn statistics(&self) -> Statistics {
+        common::compute_record_batch_statistics(&self.data, &self.schema, None)
+    }
 }
 
 /// A mock execution plan that errors on a call to execute
@@ -365,6 +385,89 @@ impl ExecutionPlan for ErrorExec {
         match t {
             DisplayFormatType::Default => {
                 write!(f, "ErrorExec")
+            }
+        }
+    }
+
+    fn statistics(&self) -> Statistics {
+        Statistics::default()
+    }
+}
+
+/// A mock execution plan that simply returns the provided statistics
+#[derive(Debug, Clone)]
+pub struct StatisticsExec {
+    stats: Statistics,
+    schema: Arc<Schema>,
+}
+impl StatisticsExec {
+    pub fn new(stats: Statistics, schema: Schema) -> Self {
+        assert!(
+            stats
+                .column_statistics
+                .as_ref()
+                .map(|cols| cols.len() == schema.fields().len())
+                .unwrap_or(true),
+            "if defined, the column statistics vector length should be the number of fields"
+        );
+        Self {
+            stats,
+            schema: Arc::new(schema),
+        }
+    }
+}
+#[async_trait]
+impl ExecutionPlan for StatisticsExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(2)
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        &self,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if children.is_empty() {
+            Ok(Arc::new(self.clone()))
+        } else {
+            Err(DataFusionError::Internal(
+                "Children cannot be replaced in CustomExecutionPlan".to_owned(),
+            ))
+        }
+    }
+
+    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+        unimplemented!("This plan only serves for testing statistics")
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.stats.clone()
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "StatisticsExec: col_count={}, row_count={:?}",
+                    self.schema.fields().len(),
+                    self.stats.num_rows,
+                )
             }
         }
     }

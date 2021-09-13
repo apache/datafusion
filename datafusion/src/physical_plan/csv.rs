@@ -33,7 +33,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
 
-use super::{DisplayFormatType, RecordBatchStream, SendableRecordBatchStream};
+use super::{
+    DisplayFormatType, RecordBatchStream, SendableRecordBatchStream, Statistics,
+};
 use async_trait::async_trait;
 
 /// CSV file read option
@@ -362,6 +364,11 @@ impl ExecutionPlan for CsvExec {
                 )
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        // TODO stats: handle statistics
+        Statistics::default()
     }
 }
 
