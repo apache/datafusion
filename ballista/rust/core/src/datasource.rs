@@ -20,7 +20,7 @@ use std::{any::Any, sync::Arc};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::Result as DFResult;
 use datafusion::{
-    datasource::{datasource::Statistics, TableProvider},
+    datasource::TableProvider,
     logical_plan::{Expr, LogicalPlan},
     physical_plan::ExecutionPlan,
 };
@@ -60,13 +60,5 @@ impl TableProvider for DfTableAdapter {
         _limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         Ok(self.plan.clone())
-    }
-
-    fn statistics(&self) -> Statistics {
-        Statistics {
-            num_rows: None,
-            total_byte_size: None,
-            column_statistics: None,
-        }
     }
 }

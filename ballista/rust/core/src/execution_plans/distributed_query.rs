@@ -35,7 +35,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 
 use async_trait::async_trait;
@@ -202,6 +202,13 @@ impl ExecutionPlan for DistributedQueryExec {
                 )
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        // This execution plan sends the logical plan to the scheduler without
+        // performing the node by node conversion to a full physical plan.
+        // This implies that we cannot infer the statistics at this stage.
+        Statistics::default()
     }
 }
 

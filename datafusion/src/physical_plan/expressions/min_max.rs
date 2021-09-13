@@ -305,12 +305,12 @@ macro_rules! min_max {
 }
 
 /// the minimum of two scalar values
-fn min(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
+pub fn min(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     min_max!(lhs, rhs, min)
 }
 
 /// the maximum of two scalar values
-fn max(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
+pub fn max(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     min_max!(lhs, rhs, max)
 }
 

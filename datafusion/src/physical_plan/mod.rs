@@ -89,6 +89,36 @@ impl Stream for EmptyRecordBatchStream {
 /// Physical planner interface
 pub use self::planner::PhysicalPlanner;
 
+/// Statistics for a physical plan node
+/// Fields are optional and can be inexact because the sources
+/// sometimes provide approximate estimates for performance reasons
+/// and the transformations output are not always predictable.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Statistics {
+    /// The number of table rows
+    pub num_rows: Option<usize>,
+    /// total byte of the table rows
+    pub total_byte_size: Option<usize>,
+    /// Statistics on a column level
+    pub column_statistics: Option<Vec<ColumnStatistics>>,
+    /// If true, any field that is `Some(..)` is the actual value in the data provided by the operator (it is not
+    /// an estimate). Any or all other fields might still be None, in which case no information is known.  
+    /// if false, any field that is `Some(..)` may contain an inexact estimate and may not be the actual value.
+    pub is_exact: bool,
+}
+/// This table statistics are estimates about column
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ColumnStatistics {
+    /// Number of null values on column
+    pub null_count: Option<usize>,
+    /// Maximum value of column
+    pub max_value: Option<ScalarValue>,
+    /// Minimum value of column
+    pub min_value: Option<ScalarValue>,
+    /// Number of distinct values
+    pub distinct_count: Option<usize>,
+}
+
 /// `ExecutionPlan` represent nodes in the DataFusion Physical Plan.
 ///
 /// Each `ExecutionPlan` is Partition-aware and is responsible for
@@ -150,6 +180,9 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "ExecutionPlan(PlaceHolder)")
     }
+
+    /// Returns the global output statistics for this `ExecutionPlan` node.
+    fn statistics(&self) -> Statistics;
 }
 
 /// Return a [wrapper](DisplayableExecutionPlan) around an

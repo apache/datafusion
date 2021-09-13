@@ -359,6 +359,7 @@ impl TryInto<Statistics> for &protobuf::Statistics {
             num_rows: Some(self.num_rows as usize),
             total_byte_size: Some(self.total_byte_size as usize),
             column_statistics: Some(column_statistics),
+            is_exact: self.is_exact,
         })
     }
 }
@@ -1177,8 +1178,7 @@ impl TryInto<Field> for &protobuf::Field {
 }
 
 use crate::serde::protobuf::ColumnStats;
-use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
-use datafusion::physical_plan::{aggregates, windows};
+use datafusion::physical_plan::{aggregates, windows, ColumnStatistics, Statistics};
 use datafusion::prelude::{
     array, date_part, date_trunc, length, lower, ltrim, md5, rtrim, sha224, sha256,
     sha384, sha512, trim, upper,

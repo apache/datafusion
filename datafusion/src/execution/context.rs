@@ -22,11 +22,11 @@ use crate::{
         information_schema::CatalogWithInformationSchema,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
-    optimizer::{
-        aggregate_statistics::AggregateStatistics, eliminate_limit::EliminateLimit,
-        hash_build_probe_order::HashBuildProbeOrder,
+    optimizer::eliminate_limit::EliminateLimit,
+    physical_optimizer::{
+        aggregate_statistics::AggregateStatistics,
+        hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
-    physical_optimizer::optimizer::PhysicalOptimizerRule,
 };
 use log::debug;
 use std::fs;
@@ -710,14 +710,14 @@ impl Default for ExecutionConfig {
             optimizers: vec![
                 Arc::new(ConstantFolding::new()),
                 Arc::new(EliminateLimit::new()),
-                Arc::new(AggregateStatistics::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(SimplifyExpressions::new()),
-                Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(LimitPushDown::new()),
             ],
             physical_optimizers: vec![
+                Arc::new(AggregateStatistics::new()),
+                Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(CoalesceBatches::new()),
                 Arc::new(Repartition::new()),
                 Arc::new(AddCoalescePartitionsExec::new()),
@@ -3178,10 +3178,6 @@ mod tests {
                 _: &[Expr],
                 _: Option<usize>,
             ) -> Result<Arc<dyn ExecutionPlan>> {
-                unimplemented!()
-            }
-
-            fn statistics(&self) -> crate::datasource::datasource::Statistics {
                 unimplemented!()
             }
         }

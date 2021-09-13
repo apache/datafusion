@@ -19,9 +19,9 @@
 
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::compute::concat;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -169,6 +169,48 @@ pub(crate) fn spawn_execution(
     })
 }
 
+/// Computes the statistics for an in-memory RecordBatch
+///
+/// Only computes statistics that are in arrows metadata (num rows, byte size and nulls)
+/// and does not apply any kernel on the actual data.
+pub fn compute_record_batch_statistics(
+    batches: &[Vec<RecordBatch>],
+    schema: &Schema,
+    projection: Option<Vec<usize>>,
+) -> Statistics {
+    let nb_rows = batches.iter().flatten().map(RecordBatch::num_rows).sum();
+
+    let total_byte_size = batches
+        .iter()
+        .flatten()
+        .flat_map(RecordBatch::columns)
+        .map(|a| a.get_array_memory_size())
+        .sum();
+
+    let projection = match projection {
+        Some(p) => p,
+        None => (0..schema.fields().len()).collect(),
+    };
+
+    let mut column_statistics = vec![ColumnStatistics::default(); projection.len()];
+
+    for partition in batches.iter() {
+        for batch in partition {
+            for (stat_index, col_index) in projection.iter().enumerate() {
+                *column_statistics[stat_index].null_count.get_or_insert(0) +=
+                    batch.column(*col_index).null_count();
+            }
+        }
+    }
+
+    Statistics {
+        num_rows: Some(nb_rows),
+        total_byte_size: Some(total_byte_size),
+        column_statistics: Some(column_statistics),
+        is_exact: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +257,60 @@ mod tests {
         assert!(result.is_some());
         let result = result.unwrap();
         assert_eq!(batch_count * batch_size, result.num_rows());
+        Ok(())
+    }
+
+    #[test]
+    fn test_compute_record_batch_statistics_empty() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f32", DataType::Float32, false),
+            Field::new("f64", DataType::Float64, false),
+        ]));
+        let stats = compute_record_batch_statistics(&[], &schema, Some(vec![0, 1]));
+
+        assert_eq!(stats.num_rows, Some(0));
+        assert!(stats.is_exact);
+        assert_eq!(stats.total_byte_size, Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_compute_record_batch_statistics() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f32", DataType::Float32, false),
+            Field::new("f64", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Float32Array::from(vec![1., 2., 3.])),
+                Arc::new(Float64Array::from(vec![9., 8., 7.])),
+            ],
+        )?;
+        let result =
+            compute_record_batch_statistics(&[vec![batch]], &schema, Some(vec![0, 1]));
+
+        let expected = Statistics {
+            is_exact: true,
+            num_rows: Some(3),
+            total_byte_size: Some(416), // this might change a bit if the way we compute the size changes
+            column_statistics: Some(vec![
+                ColumnStatistics {
+                    distinct_count: None,
+                    max_value: None,
+                    min_value: None,
+                    null_count: Some(0),
+                },
+                ColumnStatistics {
+                    distinct_count: None,
+                    max_value: None,
+                    min_value: None,
+                    null_count: Some(0),
+                },
+            ]),
+        };
+
+        assert_eq!(result, expected);
         Ok(())
     }
 }

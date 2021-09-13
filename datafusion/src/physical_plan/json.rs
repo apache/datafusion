@@ -20,7 +20,9 @@ use async_trait::async_trait;
 use futures::Stream;
 
 use super::DisplayFormatType;
-use super::{common, source::Source, ExecutionPlan, Partitioning, RecordBatchStream};
+use super::{
+    common, source::Source, ExecutionPlan, Partitioning, RecordBatchStream, Statistics,
+};
 use crate::error::{DataFusionError, Result};
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use arrow::{
@@ -323,6 +325,11 @@ impl ExecutionPlan for NdJsonExec {
                 write!(f, "NdJsonExec: source={:?}", self.source)
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        // TODO stats: handle statistics
+        Statistics::default()
     }
 }
 

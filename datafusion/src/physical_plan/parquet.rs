@@ -32,6 +32,8 @@ use crate::{
     scalar::ScalarValue,
 };
 
+use super::Statistics;
+
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
@@ -53,7 +55,6 @@ use tokio::{
     task,
 };
 
-use crate::datasource::datasource::Statistics;
 use async_trait::async_trait;
 
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -224,6 +225,7 @@ impl ParquetExec {
             num_rows: statistics.num_rows,
             total_byte_size: statistics.total_byte_size,
             column_statistics: new_column_statistics,
+            is_exact: statistics.is_exact,
         };
 
         Self {
@@ -251,11 +253,6 @@ impl ParquetExec {
     /// Batch size
     pub fn batch_size(&self) -> usize {
         self.batch_size
-    }
-
-    /// Statistics for the data set (sum of statistics for all partitions)
-    pub fn statistics(&self) -> &Statistics {
-        &self.statistics
     }
 }
 
@@ -389,6 +386,10 @@ impl ExecutionPlan for ParquetExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.statistics.clone()
     }
 }
 

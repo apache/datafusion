@@ -76,7 +76,7 @@ use datafusion::{
     physical_plan::{
         planner::{DefaultPhysicalPlanner, ExtensionPlanner},
         DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalPlanner,
-        RecordBatchStream, SendableRecordBatchStream,
+        RecordBatchStream, SendableRecordBatchStream, Statistics,
     },
     prelude::{ExecutionConfig, ExecutionContext},
 };
@@ -163,9 +163,9 @@ async fn topk_plan() -> Result<()> {
     let mut ctx = setup_table(make_topk_context()).await?;
 
     let expected = vec![
-        "| logical_plan after topk                   | TopK: k=3                                                                                |",
-        "|                                           |   Projection: #sales.customer_id, #sales.revenue                                         |",
-        "|                                           |     TableScan: sales projection=Some([0, 1])                                             |",
+        "| logical_plan after topk                    | TopK: k=3                                                                                |",
+        "|                                            |   Projection: #sales.customer_id, #sales.revenue                                         |",
+        "|                                            |     TableScan: sales projection=Some([0, 1])                                             |",
     ].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {}", QUERY);
@@ -422,6 +422,12 @@ impl ExecutionPlan for TopKExec {
                 write!(f, "TopKExec: k={}", self.k)
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        // to improve the optimizability of this plan
+        // better statistics inference could be provided
+        Statistics::default()
     }
 }
 

@@ -28,16 +28,15 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::datasource::TableProviderFilterPushDown;
 use crate::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use crate::datasource::datasource::Statistics;
 use crate::datasource::{
-    create_max_min_accs, get_col_stats, get_statistics_with_limit, FileAndSchema,
-    PartitionedFile, TableDescriptor, TableDescriptorBuilder, TableProvider,
+    create_max_min_accs, get_col_stats, FileAndSchema, PartitionedFile, TableDescriptor,
+    TableDescriptorBuilder, TableProvider,
 };
 use crate::error::Result;
 use crate::logical_plan::{combine_filters, Expr};
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::parquet::ParquetExec;
-use crate::physical_plan::{Accumulator, ExecutionPlan};
+use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 use crate::scalar::ScalarValue;
 
 /// Table-based representation of a `ParquetFile`.
@@ -156,14 +155,6 @@ impl TableProvider for ParquetTable {
             limit,
         )?))
     }
-
-    fn statistics(&self) -> Statistics {
-        self.desc.statistics()
-    }
-
-    fn has_exact_statistics(&self) -> bool {
-        true
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -198,11 +189,6 @@ impl ParquetTableDescriptor {
     /// Get file schema for all parquet files
     pub fn schema(&self) -> SchemaRef {
         self.descriptor.schema.clone()
-    }
-
-    /// Get the summary statistics for all parquet files
-    pub fn statistics(&self) -> Statistics {
-        get_statistics_with_limit(&self.descriptor, None).1
     }
 
     fn summarize_min_max(
@@ -404,6 +390,7 @@ impl TableDescriptorBuilder for ParquetTableDescriptor {
             num_rows: Some(num_rows as usize),
             total_byte_size: Some(total_byte_size as usize),
             column_statistics: column_stats,
+            is_exact: true,
         };
 
         Ok(FileAndSchema {
@@ -440,8 +427,8 @@ mod tests {
             .await;
 
         // test metadata
-        assert_eq!(table.statistics().num_rows, Some(8));
-        assert_eq!(table.statistics().total_byte_size, Some(671));
+        assert_eq!(exec.statistics().num_rows, Some(8));
+        assert_eq!(exec.statistics().total_byte_size, Some(671));
 
         Ok(())
     }
