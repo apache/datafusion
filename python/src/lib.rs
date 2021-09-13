@@ -29,6 +29,19 @@ mod types;
 mod udaf;
 mod udf;
 
+// taken from https://github.com/PyO3/pyo3/issues/471
+fn register_module_package(py: Python, package_name: &str, module: &PyModule) {
+    py.import("sys")
+        .expect("failed to import python sys module")
+        .dict()
+        .get_item("modules")
+        .expect("failed to get python modules dictionary")
+        .downcast::<pyo3::types::PyDict>()
+        .expect("failed to turn sys.modules into a PyDict")
+        .set_item(package_name, module)
+        .expect("failed to inject module");
+}
+
 /// DataFusion.
 #[pymodule]
 fn datafusion(py: Python, m: &PyModule) -> PyResult<()> {
@@ -38,6 +51,7 @@ fn datafusion(py: Python, m: &PyModule) -> PyResult<()> {
 
     let functions = PyModule::new(py, "functions")?;
     functions::init(functions)?;
+    register_module_package(py, "datafusion.functions", functions);
     m.add_submodule(functions)?;
 
     Ok(())
