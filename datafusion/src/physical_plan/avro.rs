@@ -21,7 +21,7 @@ use super::RecordBatchStream;
 use super::{common, source::Source, ExecutionPlan, Partitioning};
 use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::DisplayFormatType;
+use crate::physical_plan::{DisplayFormatType, Statistics};
 use arrow::datatypes::{Schema, SchemaRef};
 #[cfg(feature = "avro")]
 use arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
@@ -320,6 +320,10 @@ impl ExecutionPlan for AvroExec {
                 )
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        Statistics::default()
     }
 }
 

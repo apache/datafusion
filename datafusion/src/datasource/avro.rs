@@ -35,8 +35,6 @@ use crate::{
     physical_plan::{common, ExecutionPlan},
 };
 
-use super::datasource::Statistics;
-
 trait SeekRead: Read + Seek {}
 
 impl<T: Seek + Read> SeekRead for T {}
@@ -46,7 +44,6 @@ pub struct AvroFile {
     source: Source<Box<dyn SeekRead + Send + Sync + 'static>>,
     schema: SchemaRef,
     file_extension: String,
-    statistics: Statistics,
 }
 
 impl AvroFile {
@@ -64,7 +61,6 @@ impl AvroFile {
             source: Source::Path(path.to_string()),
             schema,
             file_extension: options.file_extension.to_string(),
-            statistics: Statistics::default(),
         })
     }
 
@@ -84,7 +80,6 @@ impl AvroFile {
         Ok(Self {
             source: Source::Reader(Mutex::new(Some(Box::new(reader)))),
             schema,
-            statistics: Statistics::default(),
             file_extension: String::new(),
         })
     }
@@ -107,7 +102,6 @@ impl AvroFile {
         Ok(Self {
             source: Source::Reader(Mutex::new(Some(Box::new(reader)))),
             schema,
-            statistics: Statistics::default(),
             file_extension: String::new(),
         })
     }
@@ -172,10 +166,6 @@ impl TableProvider for AvroFile {
             }
         };
         Ok(Arc::new(exec))
-    }
-
-    fn statistics(&self) -> Statistics {
-        self.statistics.clone()
     }
 }
 
