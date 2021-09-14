@@ -79,9 +79,9 @@ jobs:
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
-        # Use stack-size to work around stack overflow issues in debug builds
+        # Use zstack-size to work around stack overflow issues in debug builds
         # https://github.com/apache/arrow-datafusion/issues/419
-        RUSTFLAGS: "-C debuginfo=1 -C link-args=-Wl,-stack-size=8000000"
+        RUSTFLAGS: "-C debuginfo=1 -C link-args=-Wl,-zstack-size=16000000"
     steps:
       - uses: actions/checkout@v2
         with:
