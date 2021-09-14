@@ -42,3 +42,6 @@ snmalloc-rs = {version = "0.2", optional = true, features= ["cache-friendly"] }
 
 [dev-dependencies]
 ballista-core = { path = "../ballista/rust/core" }
+
+[profile.test]
+opt-level = 2
