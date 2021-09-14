@@ -25,7 +25,7 @@ use std::{any::Any, vec};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
-use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
@@ -227,6 +227,10 @@ impl ExecutionPlan for RepartitionExec {
                 write!(f, "RepartitionExec: partitioning={:?}", self.partitioning)
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.input.statistics()
     }
 }
 

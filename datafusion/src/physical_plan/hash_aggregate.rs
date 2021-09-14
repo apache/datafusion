@@ -53,6 +53,7 @@ use async_trait::async_trait;
 use super::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
+use super::Statistics;
 use super::{expressions::Column, RecordBatchStream, SendableRecordBatchStream};
 
 /// Hash aggregate modes
@@ -284,6 +285,26 @@ impl ExecutionPlan for HashAggregateExec {
             }
         }
         Ok(())
+    }
+
+    fn statistics(&self) -> Statistics {
+        // TODO stats: group expressions:
+        // - once expressions will be able to compute their own stats, use it here
+        // - case where we group by on a column for which with have the `distinct` stat
+        // TODO stats: aggr expression:
+        // - aggregations somtimes also preserve invariants such as min, max...
+        match self.mode {
+            AggregateMode::Final | AggregateMode::FinalPartitioned
+                if self.group_expr.is_empty() =>
+            {
+                Statistics {
+                    num_rows: Some(1),
+                    is_exact: true,
+                    ..Default::default()
+                }
+            }
+            _ => Statistics::default(),
+        }
     }
 }
 
@@ -1144,6 +1165,11 @@ mod tests {
                 stream = TestYieldingStream::Yielded;
             }
             Ok(Box::pin(stream))
+        }
+
+        fn statistics(&self) -> Statistics {
+            let (_, batches) = some_data();
+            common::compute_record_batch_statistics(&[batches], &self.schema(), None)
         }
     }
 

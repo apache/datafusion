@@ -51,7 +51,7 @@ use datafusion::physical_plan::metrics::{
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::Partitioning::RoundRobinBatch;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Metric, Partitioning, RecordBatchStream,
+    DisplayFormatType, ExecutionPlan, Metric, Partitioning, RecordBatchStream, Statistics,
 };
 use futures::StreamExt;
 use hashbrown::HashMap;
@@ -416,6 +416,10 @@ impl ExecutionPlan for ShuffleWriterExec {
                 )
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.plan.statistics()
     }
 }
 

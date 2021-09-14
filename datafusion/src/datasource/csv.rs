@@ -39,7 +39,6 @@ use std::io::{Read, Seek};
 use std::string::String;
 use std::sync::{Arc, Mutex};
 
-use crate::datasource::datasource::Statistics;
 use crate::datasource::{Source, TableProvider};
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Expr;
@@ -54,7 +53,6 @@ pub struct CsvFile {
     has_header: bool,
     delimiter: u8,
     file_extension: String,
-    statistics: Statistics,
 }
 
 impl CsvFile {
@@ -82,7 +80,6 @@ impl CsvFile {
             has_header: options.has_header,
             delimiter: options.delimiter,
             file_extension: String::from(options.file_extension),
-            statistics: Statistics::default(),
         })
     }
 
@@ -105,7 +102,6 @@ impl CsvFile {
             schema,
             has_header: options.has_header,
             delimiter: options.delimiter,
-            statistics: Statistics::default(),
             file_extension: String::new(),
         })
     }
@@ -133,7 +129,6 @@ impl CsvFile {
             schema,
             has_header: options.has_header,
             delimiter: options.delimiter,
-            statistics: Statistics::default(),
             file_extension: String::new(),
         })
     }
@@ -209,10 +204,6 @@ impl TableProvider for CsvFile {
             }
         };
         Ok(Arc::new(exec))
-    }
-
-    fn statistics(&self) -> Statistics {
-        self.statistics.clone()
     }
 }
 

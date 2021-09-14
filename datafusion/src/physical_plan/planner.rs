@@ -1393,8 +1393,9 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 mod tests {
     use super::*;
     use crate::logical_plan::{DFField, DFSchema, DFSchemaRef};
-    use crate::physical_plan::DisplayFormatType;
-    use crate::physical_plan::{csv::CsvReadOptions, expressions, Partitioning};
+    use crate::physical_plan::{
+        csv::CsvReadOptions, expressions, DisplayFormatType, Partitioning, Statistics,
+    };
     use crate::scalar::ScalarValue;
     use crate::{
         logical_plan::{col, lit, sum, LogicalPlanBuilder},
@@ -1814,6 +1815,10 @@ mod tests {
                     write!(f, "NoOpExecutionPlan")
                 }
             }
+        }
+
+        fn statistics(&self) -> Statistics {
+            unimplemented!("NoOpExecutionPlan::statistics");
         }
     }
 

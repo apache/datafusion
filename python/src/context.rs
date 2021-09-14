@@ -95,6 +95,29 @@ impl ExecutionContext {
         ))
     }
 
+    fn register_record_batches(
+        &mut self,
+        name: &str,
+        partitions: Vec<Vec<PyObject>>,
+        py: Python,
+    ) -> PyResult<()> {
+        let partitions: Vec<Vec<RecordBatch>> = partitions
+            .iter()
+            .map(|batches| {
+                batches
+                    .iter()
+                    .map(|batch| to_rust::to_rust_batch(batch.as_ref(py)))
+                    .collect()
+            })
+            .collect::<PyResult<_>>()?;
+
+        let table =
+            errors::wrap(MemTable::try_new(partitions[0][0].schema(), partitions))?;
+
+        errors::wrap(self.ctx.register_table(&*name, Arc::new(table)))?;
+        Ok(())
+    }
+
     fn register_parquet(&mut self, name: &str, path: &str) -> PyResult<()> {
         errors::wrap(self.ctx.register_parquet(name, path))?;
         Ok(())

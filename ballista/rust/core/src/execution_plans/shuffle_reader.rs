@@ -21,7 +21,7 @@ use std::{any::Any, pin::Pin};
 
 use crate::client::BallistaClient;
 use crate::memory_stream::MemoryStream;
-use crate::serde::scheduler::PartitionLocation;
+use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 
 use crate::utils::WrappedStream;
 use async_trait::async_trait;
@@ -31,7 +31,9 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan, Metric, Partitioning};
+use datafusion::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Metric, Partitioning, Statistics,
+};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,
@@ -156,6 +158,38 @@ impl ExecutionPlan for ShuffleReaderExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    fn statistics(&self) -> Statistics {
+        stats_for_partitions(
+            self.partition
+                .iter()
+                .flatten()
+                .map(|loc| loc.partition_stats),
+        )
+    }
+}
+
+fn stats_for_partitions(
+    partition_stats: impl Iterator<Item = PartitionStats>,
+) -> Statistics {
+    // TODO stats: add column statistics to PartitionStats
+    partition_stats.fold(
+        Statistics {
+            is_exact: true,
+            num_rows: Some(0),
+            total_byte_size: Some(0),
+            column_statistics: None,
+        },
+        |mut acc, part| {
+            // if any statistic is unkown it makes the entire statistic unkown
+            acc.num_rows = acc.num_rows.zip(part.num_rows).map(|(a, b)| a + b as usize);
+            acc.total_byte_size = acc
+                .total_byte_size
+                .zip(part.num_bytes)
+                .map(|(a, b)| a + b as usize);
+            acc
+        },
+    )
 }
 
 async fn fetch_partition(
@@ -176,4 +210,77 @@ async fn fetch_partition(
         )
         .await
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_stats_for_partitions_empty() {
+        let result = stats_for_partitions(std::iter::empty());
+
+        let exptected = Statistics {
+            is_exact: true,
+            num_rows: Some(0),
+            total_byte_size: Some(0),
+            column_statistics: None,
+        };
+
+        assert_eq!(result, exptected);
+    }
+
+    #[tokio::test]
+    async fn test_stats_for_partitions_full() {
+        let part_stats = vec![
+            PartitionStats {
+                num_rows: Some(10),
+                num_bytes: Some(84),
+                num_batches: Some(1),
+            },
+            PartitionStats {
+                num_rows: Some(4),
+                num_bytes: Some(65),
+                num_batches: None,
+            },
+        ];
+
+        let result = stats_for_partitions(part_stats.into_iter());
+
+        let exptected = Statistics {
+            is_exact: true,
+            num_rows: Some(14),
+            total_byte_size: Some(149),
+            column_statistics: None,
+        };
+
+        assert_eq!(result, exptected);
+    }
+
+    #[tokio::test]
+    async fn test_stats_for_partitions_missing() {
+        let part_stats = vec![
+            PartitionStats {
+                num_rows: Some(10),
+                num_bytes: Some(84),
+                num_batches: Some(1),
+            },
+            PartitionStats {
+                num_rows: None,
+                num_bytes: None,
+                num_batches: None,
+            },
+        ];
+
+        let result = stats_for_partitions(part_stats.into_iter());
+
+        let exptected = Statistics {
+            is_exact: true,
+            num_rows: None,
+            total_byte_size: None,
+            column_statistics: None,
+        };
+
+        assert_eq!(result, exptected);
+    }
 }

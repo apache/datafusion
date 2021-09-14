@@ -35,7 +35,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use super::{RecordBatchStream, SendableRecordBatchStream};
+use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 
 use async_trait::async_trait;
 
@@ -135,6 +135,27 @@ impl ExecutionPlan for GlobalLimitExec {
             }
         }
     }
+
+    fn statistics(&self) -> Statistics {
+        let input_stats = self.input.statistics();
+        match input_stats {
+            // if the input does not reach the limit globally, return input stats
+            Statistics {
+                num_rows: Some(nr), ..
+            } if nr <= self.limit => input_stats,
+            // if the input is greater than the limit, the num_row will be the limit
+            // but we won't be able to predict the other statistics
+            Statistics {
+                num_rows: Some(nr), ..
+            } if nr > self.limit => Statistics {
+                num_rows: Some(self.limit),
+                is_exact: input_stats.is_exact,
+                ..Default::default()
+            },
+            // if we don't know the input size, we can't predict the limit's behaviour
+            _ => Statistics::default(),
+        }
+    }
 }
 
 /// LocalLimitExec applies a limit to a single partition
@@ -211,6 +232,30 @@ impl ExecutionPlan for LocalLimitExec {
             DisplayFormatType::Default => {
                 write!(f, "LocalLimitExec: limit={}", self.limit)
             }
+        }
+    }
+
+    fn statistics(&self) -> Statistics {
+        let input_stats = self.input.statistics();
+        match input_stats {
+            // if the input does not reach the limit globally, return input stats
+            Statistics {
+                num_rows: Some(nr), ..
+            } if nr <= self.limit => input_stats,
+            // if the input is greater than the limit, the num_row will be greater
+            // than the limit because the partitions will be limited separatly
+            // the statistic
+            Statistics {
+                num_rows: Some(nr), ..
+            } if nr > self.limit => Statistics {
+                num_rows: Some(self.limit),
+                // this is not actually exact, but will be when GlobalLimit is applied
+                // TODO stats: find a more explicit way to vehiculate this information
+                is_exact: input_stats.is_exact,
+                ..Default::default()
+            },
+            // if we don't know the input size, we can't predict the limit's behaviour
+            _ => Statistics::default(),
         }
     }
 }

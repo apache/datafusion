@@ -275,6 +275,7 @@ message Statistics {
   int64 num_rows = 1;
   int64 total_byte_size = 2;
   repeated ColumnStats column_stats = 3;
+  bool is_exact = 4;
 }
 
 message PartitionedFile {

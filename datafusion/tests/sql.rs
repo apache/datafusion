@@ -1897,6 +1897,28 @@ async fn left_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn left_join_unbalanced() -> Result<()> {
+    // the t1_id is larger than t2_id so the hash_build_probe_order optimizer should kick in
+    let mut ctx = create_join_context_unbalanced("t1_id", "t2_id")?;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+    ];
+    let expected = vec![
+        vec!["11", "a", "z"],
+        vec!["22", "b", "y"],
+        vec!["33", "c", "NULL"],
+        vec!["44", "d", "x"],
+        vec!["77", "e", "NULL"],
+    ];
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn right_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
@@ -2069,6 +2091,43 @@ async fn cross_join() {
     assert_eq!(4 * 4 * 2, actual.len());
 }
 
+#[tokio::test]
+async fn cross_join_unbalanced() {
+    // the t1_id is larger than t2_id so the hash_build_probe_order optimizer should kick in
+    let mut ctx = create_join_context_unbalanced("t1_id", "t2_id").unwrap();
+
+    // the order of the values is not determinisitic, so we need to sort to check the values
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id, t1_name";
+    let actual = execute(&mut ctx, sql).await;
+
+    assert_eq!(
+        actual,
+        [
+            ["11", "a", "z"],
+            ["11", "a", "y"],
+            ["11", "a", "x"],
+            ["11", "a", "w"],
+            ["22", "b", "z"],
+            ["22", "b", "y"],
+            ["22", "b", "x"],
+            ["22", "b", "w"],
+            ["33", "c", "z"],
+            ["33", "c", "y"],
+            ["33", "c", "x"],
+            ["33", "c", "w"],
+            ["44", "d", "z"],
+            ["44", "d", "y"],
+            ["44", "d", "x"],
+            ["44", "d", "w"],
+            ["77", "e", "z"],
+            ["77", "e", "y"],
+            ["77", "e", "x"],
+            ["77", "e", "w"]
+        ]
+    );
+}
+
 fn create_join_context(
     column_left: &str,
     column_right: &str,
@@ -2146,6 +2205,55 @@ fn create_join_context_qualified() -> Result<ExecutionContext> {
             Arc::new(UInt32Array::from(vec![1, 2, 9, 4])),
             Arc::new(UInt32Array::from(vec![100, 200, 300, 400])),
             Arc::new(UInt32Array::from(vec![500, 600, 700, 800])),
+        ],
+    )?;
+    let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
+    ctx.register_table("t2", Arc::new(t2_table))?;
+
+    Ok(ctx)
+}
+
+/// the table column_left has more rows than the table column_right
+fn create_join_context_unbalanced(
+    column_left: &str,
+    column_right: &str,
+) -> Result<ExecutionContext> {
+    let mut ctx = ExecutionContext::new();
+
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new(column_left, DataType::UInt32, true),
+        Field::new("t1_name", DataType::Utf8, true),
+    ]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema.clone(),
+        vec![
+            Arc::new(UInt32Array::from(vec![11, 22, 33, 44, 77])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+                Some("e"),
+            ])),
+        ],
+    )?;
+    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new(column_right, DataType::UInt32, true),
+        Field::new("t2_name", DataType::Utf8, true),
+    ]));
+    let t2_data = RecordBatch::try_new(
+        t2_schema.clone(),
+        vec![
+            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
+            Arc::new(StringArray::from(vec![
+                Some("z"),
+                Some("y"),
+                Some("x"),
+                Some("w"),
+            ])),
         ],
     )?;
     let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;

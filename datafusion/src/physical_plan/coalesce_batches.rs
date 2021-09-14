@@ -37,6 +37,8 @@ use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 
+use super::Statistics;
+
 /// CoalesceBatchesExec combines small batches into larger batches for more efficient use of
 /// vectorized processing by upstream operators.
 #[derive(Debug)]
@@ -130,6 +132,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
                 )
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.input.statistics()
     }
 }
 
