@@ -151,7 +151,6 @@ impl LogicalPlanBuilder {
         table_name: impl Into<String>,
     ) -> Result<Self> {
         let provider = Arc::new(ParquetTable::try_new(path)?);
-<<<<<<< HEAD
         Self::scan(table_name, provider, projection)
     }
 
@@ -173,8 +172,6 @@ impl LogicalPlanBuilder {
         table_name: impl Into<String>,
     ) -> Result<Self> {
         let provider = Arc::new(AvroFile::try_new(&path.into(), options)?);
-=======
->>>>>>> 685d4d1b (remove hard_coded max_partitions)
         Self::scan(table_name, provider, projection)
     }
 

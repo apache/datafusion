@@ -34,10 +34,6 @@ use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
 
-<<<<<<< HEAD
-=======
-use super::datasource::ColumnStatistics;
->>>>>>> 685d4d1b (remove hard_coded max_partitions)
 use crate::datasource::datasource::ScanConfigs;
 
 /// In-memory table

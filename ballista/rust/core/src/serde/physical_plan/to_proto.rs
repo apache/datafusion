@@ -284,7 +284,6 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                             .collect(),
                         batch_size: exec.batch_size() as u32,
                         target_partitions: exec.target_partitions() as u32,
-<<<<<<< HEAD
                     },
                 )),
             })
@@ -307,8 +306,6 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                         file_extension: exec.file_extension().to_owned(),
                         schema: Some(exec.file_schema().as_ref().into()),
                         batch_size: exec.batch_size() as u32,
-=======
->>>>>>> 685d4d1b (remove hard_coded max_partitions)
                     },
                 )),
             })

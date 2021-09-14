@@ -1016,10 +1016,7 @@ impl FunctionRegistry for ExecutionContextState {
 mod tests {
 
     use super::*;
-<<<<<<< HEAD
     use crate::logical_plan::{binary_expr, lit, Operator};
-=======
->>>>>>> 685d4d1b (remove hard_coded max_partitions)
     use crate::datasource::datasource::ScanConfigs;
     use crate::physical_plan::functions::make_scalar_function;
     use crate::physical_plan::{collect, collect_partitioned};

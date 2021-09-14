@@ -167,7 +167,6 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     Arc::new(parquet_table),
                     projection,
                 )?
-<<<<<<< HEAD
                 .build()
                 .map_err(|e| e.into())
             }
@@ -194,8 +193,6 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     projection,
                     &scan.table_name,
                 )?
-=======
->>>>>>> 685d4d1b (remove hard_coded max_partitions)
                 .build()
                 .map_err(|e| e.into())
             }
