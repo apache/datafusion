@@ -132,19 +132,20 @@ Bootstrap:
 ```bash
 # fetch this repo
 git clone git@github.com:apache/arrow-datafusion.git
-
+# change to python directory
 cd arrow-datafusion/python
-
 # prepare development environment (used to build wheel / install in development)
 python3 -m venv venv
 # activate the venv
 source venv/bin/activate
+# update pip itself if necessary
+python -m pip install -U pip
 # if python -V gives python 3.7
-pip install -r requirements-37.txt
+python -m pip install -r requirements-37.txt
 # if python -V gives python 3.8
-pip install -r requirements-38.txt
+python -m pip install -r requirements-38.txt
 # if python -V gives python 3.9
-pip install -r requirements-39.txt
+python -m pip install -r requirements-39.txt
 ```
 
 Whenever rust code changes (your changes or via `git pull`):
@@ -161,16 +162,20 @@ To change test dependencies, change the `requirements.in` and run
 
 ```bash
 # install pip-tools (this can be done only once), also consider running in venv
-pip install pip-tools
+python -m pip install pip-tools
 
 # change requirements.in and then run
-pip-compile --generate-hashes
+python -m piptools compile --generate-hashes -o requirements-37.txt
+# or run this is you are on python 3.8
+python -m piptools compile --generate-hashes -o requirements-38.txt
+# or run this is you are on python 3.9
+python -m piptools compile --generate-hashes -o requirements-39.txt
 ```
 
-To update dependencies, run
+To update dependencies, run with `-U`
 
 ```bash
-pip-compile update
+python -m piptools compile -U --generate-hashes -o requirements-39.txt
 ```
 
 More details [here](https://github.com/jazzband/pip-tools)
