@@ -28,7 +28,7 @@ use datafusion::arrow::{
 };
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion::{error::Result, physical_plan::RecordBatchStream};
 use futures::stream::SelectAll;
@@ -115,6 +115,10 @@ impl ExecutionPlan for CollectExec {
                 write!(f, "CollectExec")
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.plan.statistics()
     }
 }
 

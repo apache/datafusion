@@ -23,11 +23,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::error::{DataFusionError, Result};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
@@ -38,8 +38,10 @@ use futures::Stream;
 pub struct MemoryExec {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
-    /// Schema representing the data after the optional projection is applied
+    /// Schema representing the data before projection
     schema: SchemaRef,
+    /// Schema representing the data after the optional projection is applied
+    projected_schema: SchemaRef,
     /// Optional projection
     projection: Option<Vec<usize>>,
 }
@@ -47,7 +49,7 @@ pub struct MemoryExec {
 impl fmt::Debug for MemoryExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "partitions: [...]")?;
-        write!(f, "schema: {:?}", self.schema)?;
+        write!(f, "schema: {:?}", self.projected_schema)?;
         write!(f, "projection: {:?}", self.projection)
     }
 }
@@ -61,7 +63,7 @@ impl ExecutionPlan for MemoryExec {
 
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.projected_schema.clone()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -87,7 +89,7 @@ impl ExecutionPlan for MemoryExec {
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(MemoryStream::try_new(
             self.partitions[partition].clone(),
-            self.schema.clone(),
+            self.projected_schema.clone(),
             self.projection.clone(),
         )?))
     }
@@ -110,18 +112,47 @@ impl ExecutionPlan for MemoryExec {
             }
         }
     }
+
+    /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
+    fn statistics(&self) -> Statistics {
+        common::compute_record_batch_statistics(
+            &self.partitions,
+            &self.schema,
+            self.projection.clone(),
+        )
+    }
 }
 
 impl MemoryExec {
     /// Create a new execution plan for reading in-memory record batches
+    /// The provided `schema` should not have the projection applied.
     pub fn try_new(
         partitions: &[Vec<RecordBatch>],
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
+        let projected_schema = match &projection {
+            Some(columns) => {
+                let fields: Result<Vec<Field>> = columns
+                    .iter()
+                    .map(|i| {
+                        if *i < schema.fields().len() {
+                            Ok(schema.field(*i).clone())
+                        } else {
+                            Err(DataFusionError::Internal(
+                                "Projection index out of range".to_string(),
+                            ))
+                        }
+                    })
+                    .collect();
+                Arc::new(Schema::new(fields?))
+            }
+            None => Arc::clone(&schema),
+        };
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
+            projected_schema,
             projection,
         })
     }
@@ -187,5 +218,118 @@ impl RecordBatchStream for MemoryStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physical_plan::ColumnStatistics;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use futures::StreamExt;
+
+    fn mock_data() -> Result<(SchemaRef, RecordBatch)> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![None, None, Some(9)])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
+            ],
+        )?;
+
+        Ok((schema, batch))
+    }
+
+    #[tokio::test]
+    async fn test_with_projection() -> Result<()> {
+        let (schema, batch) = mock_data()?;
+
+        let executor = MemoryExec::try_new(&[vec![batch]], schema, Some(vec![2, 1]))?;
+        let statistics = executor.statistics();
+
+        assert_eq!(statistics.num_rows, Some(3));
+        assert_eq!(
+            statistics.column_statistics,
+            Some(vec![
+                ColumnStatistics {
+                    null_count: Some(2),
+                    max_value: None,
+                    min_value: None,
+                    distinct_count: None,
+                },
+                ColumnStatistics {
+                    null_count: Some(0),
+                    max_value: None,
+                    min_value: None,
+                    distinct_count: None,
+                },
+            ])
+        );
+
+        // scan with projection
+        let mut it = executor.execute(0).await?;
+        let batch2 = it.next().await.unwrap()?;
+        assert_eq!(2, batch2.schema().fields().len());
+        assert_eq!("c", batch2.schema().field(0).name());
+        assert_eq!("b", batch2.schema().field(1).name());
+        assert_eq!(2, batch2.num_columns());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_without_projection() -> Result<()> {
+        let (schema, batch) = mock_data()?;
+
+        let executor = MemoryExec::try_new(&[vec![batch]], schema, None)?;
+        let statistics = executor.statistics();
+
+        assert_eq!(statistics.num_rows, Some(3));
+        assert_eq!(
+            statistics.column_statistics,
+            Some(vec![
+                ColumnStatistics {
+                    null_count: Some(0),
+                    max_value: None,
+                    min_value: None,
+                    distinct_count: None,
+                },
+                ColumnStatistics {
+                    null_count: Some(0),
+                    max_value: None,
+                    min_value: None,
+                    distinct_count: None,
+                },
+                ColumnStatistics {
+                    null_count: Some(2),
+                    max_value: None,
+                    min_value: None,
+                    distinct_count: None,
+                },
+                ColumnStatistics {
+                    null_count: Some(0),
+                    max_value: None,
+                    min_value: None,
+                    distinct_count: None,
+                },
+            ])
+        );
+
+        let mut it = executor.execute(0).await?;
+        let batch1 = it.next().await.unwrap()?;
+        assert_eq!(4, batch1.schema().fields().len());
+        assert_eq!(4, batch1.num_columns());
+
+        Ok(())
     }
 }

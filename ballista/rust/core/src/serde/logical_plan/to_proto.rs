@@ -25,7 +25,6 @@ use crate::serde::{protobuf, BallistaError};
 use datafusion::arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit,
 };
-use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
 use datafusion::datasource::{CsvFile, PartitionedFile, TableDescriptor};
 use datafusion::logical_plan::{
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
@@ -36,6 +35,7 @@ use datafusion::physical_plan::functions::BuiltinScalarFunction;
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
 };
+use datafusion::physical_plan::{ColumnStatistics, Statistics};
 use datafusion::{datasource::parquet::ParquetTable, logical_plan::exprlist_to_fields};
 use protobuf::{
     arrow_type, logical_expr_node::ExprType, scalar_type, DateUnit, PrimitiveScalarType,
@@ -278,6 +278,7 @@ impl From<&Statistics> for protobuf::Statistics {
             num_rows: s.num_rows.map(|n| n as i64).unwrap_or(none_value),
             total_byte_size: s.total_byte_size.map(|n| n as i64).unwrap_or(none_value),
             column_stats,
+            is_exact: s.is_exact,
         }
     }
 }

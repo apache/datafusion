@@ -27,13 +27,14 @@ use std::task::{Context, Poll};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
+    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use super::{RecordBatchStream, SendableRecordBatchStream};
+use super::expressions::Column;
+use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use async_trait::async_trait;
 
 use futures::stream::Stream;
@@ -157,6 +158,40 @@ impl ExecutionPlan for ProjectionExec {
             }
         }
     }
+
+    fn statistics(&self) -> Statistics {
+        stats_projection(
+            self.input.statistics(),
+            self.expr.iter().map(|(e, _)| Arc::clone(e)),
+        )
+    }
+}
+
+fn stats_projection(
+    stats: Statistics,
+    exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
+) -> Statistics {
+    let column_statistics = stats.column_statistics.map(|input_col_stats| {
+        exprs
+            .map(|e| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                    input_col_stats[col.index()].clone()
+                } else {
+                    // TODO stats: estimate more statistics from expressions
+                    // (expressions should compute their statistics themselves)
+                    ColumnStatistics::default()
+                }
+            })
+            .collect()
+    });
+
+    Statistics {
+        is_exact: stats.is_exact,
+        num_rows: stats.num_rows,
+        column_statistics,
+        // TODO stats: knowing the type of the new columns we can guess the output size
+        total_byte_size: None,
+    }
 }
 
 fn batch_project(
@@ -213,7 +248,8 @@ mod tests {
 
     use super::*;
     use crate::physical_plan::csv::{CsvExec, CsvReadOptions};
-    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::expressions::{self, col};
+    use crate::scalar::ScalarValue;
     use crate::test;
     use futures::future;
 
@@ -257,5 +293,63 @@ mod tests {
         assert_eq!(100, row_count);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stats_projection_columns_only() {
+        let source = Statistics {
+            is_exact: true,
+            num_rows: Some(5),
+            total_byte_size: Some(23),
+            column_statistics: Some(vec![
+                ColumnStatistics {
+                    distinct_count: Some(5),
+                    max_value: Some(ScalarValue::Int64(Some(21))),
+                    min_value: Some(ScalarValue::Int64(Some(-4))),
+                    null_count: Some(0),
+                },
+                ColumnStatistics {
+                    distinct_count: Some(1),
+                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
+                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
+                    null_count: Some(3),
+                },
+                ColumnStatistics {
+                    distinct_count: None,
+                    max_value: Some(ScalarValue::Float32(Some(1.1))),
+                    min_value: Some(ScalarValue::Float32(Some(0.1))),
+                    null_count: None,
+                },
+            ]),
+        };
+
+        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(expressions::Column::new("col1", 1)),
+            Arc::new(expressions::Column::new("col0", 0)),
+        ];
+
+        let result = stats_projection(source, exprs.into_iter());
+
+        let expected = Statistics {
+            is_exact: true,
+            num_rows: Some(5),
+            total_byte_size: None,
+            column_statistics: Some(vec![
+                ColumnStatistics {
+                    distinct_count: Some(1),
+                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
+                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
+                    null_count: Some(3),
+                },
+                ColumnStatistics {
+                    distinct_count: Some(5),
+                    max_value: Some(ScalarValue::Int64(Some(21))),
+                    min_value: Some(ScalarValue::Int64(Some(-4))),
+                    null_count: Some(0),
+                },
+            ]),
+        };
+
+        assert_eq!(result, expected);
     }
 }

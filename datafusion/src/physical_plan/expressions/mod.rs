@@ -38,6 +38,7 @@ mod is_not_null;
 mod is_null;
 mod lead_lag;
 mod literal;
+#[macro_use]
 mod min_max;
 mod negative;
 mod not;
@@ -47,6 +48,11 @@ mod rank;
 mod row_number;
 mod sum;
 mod try_cast;
+
+/// Module with some convenient methods used in expression building
+pub mod helpers {
+    pub use super::min_max::{max, min};
+}
 
 pub use average::{avg_return_type, Avg, AvgAccumulator};
 pub use binary::{binary, binary_operator_data_type, BinaryExpr};

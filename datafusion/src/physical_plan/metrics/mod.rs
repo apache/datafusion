@@ -141,7 +141,7 @@ impl Metric {
     }
 
     /// What labels are present for this metric?
-    fn labels(&self) -> &[Label] {
+    pub fn labels(&self) -> &[Label] {
         &self.labels
     }
 

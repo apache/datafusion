@@ -76,7 +76,7 @@ use datafusion::{
     physical_plan::{
         planner::{DefaultPhysicalPlanner, ExtensionPlanner},
         DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalPlanner,
-        RecordBatchStream, SendableRecordBatchStream,
+        RecordBatchStream, SendableRecordBatchStream, Statistics,
     },
     prelude::{ExecutionConfig, ExecutionContext},
 };
@@ -422,6 +422,12 @@ impl ExecutionPlan for TopKExec {
                 write!(f, "TopKExec: k={}", self.k)
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        // to improve the optimizability of this plan
+        // better statistics inference could be provided
+        Statistics::default()
     }
 }
 

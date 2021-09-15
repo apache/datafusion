@@ -28,7 +28,7 @@ use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
-use super::SendableRecordBatchStream;
+use super::{common, SendableRecordBatchStream, Statistics};
 
 use async_trait::async_trait;
 
@@ -53,6 +53,23 @@ impl EmptyExec {
     /// Specifies whether this exec produces a row or not
     pub fn produce_one_row(&self) -> bool {
         self.produce_one_row
+    }
+
+    fn data(&self) -> Result<Vec<RecordBatch>> {
+        let batch = if self.produce_one_row {
+            vec![RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new(
+                    "placeholder",
+                    DataType::Null,
+                    true,
+                )])),
+                vec![Arc::new(NullArray::new(1))],
+            )?]
+        } else {
+            vec![]
+        };
+
+        Ok(batch)
     }
 }
 
@@ -101,22 +118,8 @@ impl ExecutionPlan for EmptyExec {
             )));
         }
 
-        // Makes a stream only contains one null element if needed
-        let data = if self.produce_one_row {
-            vec![RecordBatch::try_new(
-                Arc::new(Schema::new(vec![Field::new(
-                    "placeholder",
-                    DataType::Null,
-                    true,
-                )])),
-                vec![Arc::new(NullArray::new(1))],
-            )?]
-        } else {
-            vec![]
-        };
-
         Ok(Box::pin(MemoryStream::try_new(
-            data,
+            self.data()?,
             self.schema.clone(),
             None,
         )?))
@@ -132,6 +135,13 @@ impl ExecutionPlan for EmptyExec {
                 write!(f, "EmptyExec: produce_one_row={}", self.produce_one_row)
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        let batch = self
+            .data()
+            .expect("Create empty RecordBatch should not fail");
+        common::compute_record_batch_statistics(&[batch], &self.schema, None)
     }
 }
 

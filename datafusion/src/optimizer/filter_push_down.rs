@@ -543,7 +543,6 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::datasource::Statistics;
     use crate::datasource::TableProvider;
     use crate::logical_plan::{lit, sum, DFSchema, Expr, LogicalPlanBuilder, Operator};
     use crate::physical_plan::ExecutionPlan;
@@ -1160,10 +1159,6 @@ mod tests {
 
         fn as_any(&self) -> &dyn std::any::Any {
             self
-        }
-
-        fn statistics(&self) -> Statistics {
-            Statistics::default()
         }
     }
 

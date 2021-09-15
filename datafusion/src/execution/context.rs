@@ -22,12 +22,11 @@ use crate::{
         information_schema::CatalogWithInformationSchema,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
-    optimizer::{
+    optimizer::eliminate_limit::EliminateLimit,
+    physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
-        common_subexpr_eliminate::CommonSubexprEliminate,
-        eliminate_limit::EliminateLimit, hash_build_probe_order::HashBuildProbeOrder,
+        hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
-    physical_optimizer::optimizer::PhysicalOptimizerRule,
 };
 use log::debug;
 use std::fs;
@@ -58,6 +57,7 @@ use crate::execution::dataframe_impl::DataFrameImpl;
 use crate::logical_plan::{
     FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
+use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::constant_folding::ConstantFolding;
 use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
@@ -712,14 +712,14 @@ impl Default for ExecutionConfig {
                 Arc::new(ConstantFolding::new()),
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
-                Arc::new(AggregateStatistics::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(SimplifyExpressions::new()),
-                Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(LimitPushDown::new()),
             ],
             physical_optimizers: vec![
+                Arc::new(AggregateStatistics::new()),
+                Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(CoalesceBatches::new()),
                 Arc::new(Repartition::new()),
                 Arc::new(AddCoalescePartitionsExec::new()),
@@ -3201,10 +3201,6 @@ mod tests {
                 _: &[Expr],
                 _: Option<usize>,
             ) -> Result<Arc<dyn ExecutionPlan>> {
-                unimplemented!()
-            }
-
-            fn statistics(&self) -> crate::datasource::datasource::Statistics {
                 unimplemented!()
             }
         }
