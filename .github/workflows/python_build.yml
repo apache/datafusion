@@ -18,6 +18,8 @@
 name: Python Release Build
 on:
   push:
+    tags:
+      - "*-rc*"
 
 defaults:
   run:
