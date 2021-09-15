@@ -58,4 +58,6 @@ Finally, in order to build with the `simd` optimization `cargo nightly` is requi
 set architecture you are building on you will want to configure the `target-cpu` as well, ideally
 with `native` or at least `avx2`.
 
-`RUSTFLAGS='-C target-cpu=native' cargo +nightly run --release`
+```
+RUSTFLAGS='-C target-cpu=native' cargo +nightly run --release
+```

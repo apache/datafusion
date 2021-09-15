@@ -15,9 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[book]
-authors = ["Apache Arrow"]
-language = "en"
-multilingual = false
-src = "src"
-title = "DataFusion User Guide"
+sphinx==2.4.4
+pydata-sphinx-theme
+myst-parser<1
+maturin<0.12
