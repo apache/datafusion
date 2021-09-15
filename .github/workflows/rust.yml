@@ -105,13 +105,14 @@ jobs:
         run: |
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          # run tests on all workspace members with default feature list
-          cargo test
+          # run tests on all workspace members with default feature list + avro
+          RUST_MIN_STACK=10485760 cargo test --features=avro
           # test datafusion examples
           cd datafusion-examples
           cargo test --no-default-features
           cargo run --example csv_sql
           cargo run --example parquet_sql
+          cargo run --example avro_sql --features=datafusion/avro
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"

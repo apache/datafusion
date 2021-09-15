@@ -25,6 +25,7 @@ use crate::serde::{protobuf, BallistaError};
 use datafusion::arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit,
 };
+use datafusion::datasource::avro::AvroFile;
 use datafusion::datasource::{CsvFile, PartitionedFile, TableDescriptor};
 use datafusion::logical_plan::{
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
@@ -793,6 +794,19 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                             },
                         )),
                     })
+                } else if let Some(avro) = source.downcast_ref::<AvroFile>() {
+                    Ok(protobuf::LogicalPlanNode {
+                        logical_plan_type: Some(LogicalPlanType::AvroScan(
+                            protobuf::AvroTableScanNode {
+                                table_name: table_name.to_owned(),
+                                path: avro.path().to_owned(),
+                                projection,
+                                schema: Some(schema),
+                                file_extension: avro.file_extension().to_string(),
+                                filters,
+                            },
+                        )),
+                    })
                 } else {
                     Err(BallistaError::General(format!(
                         "logical plan to_proto unsupported table provider {:?}",
@@ -974,6 +988,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     FileType::NdJson => protobuf::FileType::NdJson,
                     FileType::Parquet => protobuf::FileType::Parquet,
                     FileType::CSV => protobuf::FileType::Csv,
+                    FileType::Avro => protobuf::FileType::Avro,
                 };
 
                 Ok(protobuf::LogicalPlanNode {
@@ -1098,7 +1113,13 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                         )
                     }
                 };
-                let arg = &args[0];
+                let arg_expr: Option<Box<protobuf::LogicalExprNode>> = if !args.is_empty()
+                {
+                    let arg = &args[0];
+                    Some(Box::new(arg.try_into()?))
+                } else {
+                    None
+                };
                 let partition_by = partition_by
                     .iter()
                     .map(|e| e.try_into())
@@ -1111,7 +1132,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     protobuf::window_expr_node::WindowFrame::Frame(window_frame.into())
                 });
                 let window_expr = Box::new(protobuf::WindowExprNode {
-                    expr: Some(Box::new(arg.try_into()?)),
+                    expr: arg_expr,
                     window_function: Some(window_function),
                     partition_by,
                     order_by,
@@ -1284,7 +1305,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
             Expr::Wildcard => Ok(protobuf::LogicalExprNode {
                 expr_type: Some(protobuf::logical_expr_node::ExprType::Wildcard(true)),
             }),
-            Expr::TryCast { .. } => unimplemented!(),
+            _ => unimplemented!(),
         }
     }
 }
@@ -1473,6 +1494,9 @@ impl TryInto<protobuf::ScalarFunction> for &BuiltinScalarFunction {
             BuiltinScalarFunction::SHA256 => Ok(protobuf::ScalarFunction::Sha256),
             BuiltinScalarFunction::SHA384 => Ok(protobuf::ScalarFunction::Sha384),
             BuiltinScalarFunction::SHA512 => Ok(protobuf::ScalarFunction::Sha512),
+            BuiltinScalarFunction::ToTimestampMillis => {
+                Ok(protobuf::ScalarFunction::Totimestampmillis)
+            }
             _ => Err(BallistaError::General(format!(
                 "logical_plan::to_proto() unsupported scalar function {:?}",
                 self

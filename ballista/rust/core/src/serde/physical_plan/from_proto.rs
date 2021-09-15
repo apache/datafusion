@@ -43,6 +43,7 @@ use datafusion::logical_plan::{
     window_frames::WindowFrame, DFSchema, Expr, JoinConstraint, JoinType,
 };
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
+use datafusion::physical_plan::avro::{AvroExec, AvroReadOptions};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::PartitionMode;
@@ -152,6 +153,21 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     scan.batch_size as usize,
                     None,
                 )))
+            }
+            PhysicalPlanType::AvroScan(scan) => {
+                let schema = Arc::new(convert_required!(scan.schema)?);
+                let options = AvroReadOptions {
+                    schema: Some(schema),
+                    file_extension: &scan.file_extension,
+                };
+                let projection = scan.projection.iter().map(|i| *i as usize).collect();
+                Ok(Arc::new(AvroExec::try_from_path(
+                    &scan.path,
+                    options,
+                    Some(projection),
+                    scan.batch_size as usize,
+                    None,
+                )?))
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -544,6 +560,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha384 => BuiltinScalarFunction::SHA384,
             ScalarFunction::Sha512 => BuiltinScalarFunction::SHA512,
             ScalarFunction::Ln => BuiltinScalarFunction::Ln,
+            ScalarFunction::Totimestampmillis => BuiltinScalarFunction::ToTimestampMillis,
         }
     }
 }

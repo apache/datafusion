@@ -152,6 +152,7 @@ enum ScalarFunction {
   SHA384 = 32;
   SHA512 = 33;
   LN = 34;
+  TOTIMESTAMPMILLIS = 35;
 }
 
 message ScalarFunctionNode {
@@ -253,6 +254,7 @@ message LogicalPlanNode {
     WindowNode window = 13;
     AnalyzeNode analyze = 14;
     CrossJoinNode cross_join = 15;
+    AvroTableScanNode avro_scan = 16;
   }
 }
 
@@ -294,6 +296,15 @@ message ParquetTableScanNode {
   TableDescriptor table_desc = 2;
   ProjectionColumns projection = 3;
   repeated LogicalExprNode filters = 4;
+}
+
+message AvroTableScanNode {
+  string table_name = 1;
+  string path = 2;
+  string file_extension = 3;
+  ProjectionColumns projection = 4;
+  Schema schema = 5;
+  repeated LogicalExprNode filters = 6;
 }
 
 message ProjectionNode {
@@ -340,6 +351,7 @@ enum FileType{
   NdJson = 0;
   Parquet = 1;
   CSV = 2;
+  Avro = 3;
 }
 
 message AnalyzeNode {
@@ -456,6 +468,7 @@ message PhysicalPlanNode {
     WindowAggExecNode window = 17;
     ShuffleWriterExecNode shuffle_writer = 18;
     CrossJoinExecNode cross_join = 19;
+    AvroScanExecNode avro_scan = 20;
   }
 }
 
@@ -604,6 +617,17 @@ message CsvScanExecNode {
   bool has_header = 5;
   uint32 batch_size = 6;
   string delimiter = 7;
+
+  // partition filenames
+  repeated string filename = 8;
+}
+
+message AvroScanExecNode {
+  string path = 1;
+  repeated uint32 projection = 2;
+  Schema schema = 3;
+  string file_extension = 4;
+  uint32 batch_size = 5;
 
   // partition filenames
   repeated string filename = 8;

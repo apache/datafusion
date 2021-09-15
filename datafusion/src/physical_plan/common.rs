@@ -108,6 +108,20 @@ pub(crate) fn combine_batches(
 }
 
 /// Recursively builds a list of files in a directory with a given extension
+pub fn build_checked_file_list(dir: &str, ext: &str) -> Result<Vec<String>> {
+    let mut filenames: Vec<String> = Vec::new();
+    build_file_list_recurse(dir, &mut filenames, ext)?;
+    if filenames.is_empty() {
+        return Err(DataFusionError::Plan(format!(
+            "No files found at {path} with file extension {file_extension}",
+            path = dir,
+            file_extension = ext
+        )));
+    }
+    Ok(filenames)
+}
+
+/// Recursively builds a list of files in a directory with a given extension
 pub fn build_file_list(dir: &str, ext: &str) -> Result<Vec<String>> {
     let mut filenames: Vec<String> = Vec::new();
     build_file_list_recurse(dir, &mut filenames, ext)?;

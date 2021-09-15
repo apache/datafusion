@@ -46,7 +46,7 @@ impl<R> std::fmt::Debug for Source<R> {
         Ok(())
     }
 }
-impl std::fmt::Display for Source {
+impl<R> std::fmt::Display for Source<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Source::PartitionedFiles { path, filenames } => {

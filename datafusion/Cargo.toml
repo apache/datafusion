@@ -44,7 +44,8 @@ regex_expressions = ["regex", "lazy_static"]
 unicode_expressions = ["unicode-segmentation"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
-
+# Used to enable the avro format
+avro = ["avro-rs", "num-traits"]
 
 [dependencies]
 ahash = "0.7"
@@ -69,6 +70,8 @@ regex = { version = "^1.4.3", optional = true }
 lazy_static = { version = "^1.4.0", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
 rand = "0.8"
+avro-rs = { version = "0.13", features = ["snappy"], optional = true }
+num-traits = { version = "0.2", optional = true }
 
 [dev-dependencies]
 criterion = "0.3"
