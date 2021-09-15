@@ -20,15 +20,12 @@ use arrow::datatypes::{DataType, Field};
 use crate::error::{DataFusionError, Result};
 use crate::scalar::ScalarValue;
 
-/// Returns the a field access indexed by `name` from a [`DataType::List`] or [`DataType::Dictionnary`].
+/// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Dictionnary`].
 /// # Error
 /// Errors if
 /// * the `data_type` is not a Struct or,
 /// * there is no field key is not of the required index type
-pub fn get_indexed_field<'a>(
-    data_type: &'a DataType,
-    key: &ScalarValue,
-) -> Result<Field> {
+pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Field> {
     match (data_type, key) {
         (DataType::Dictionary(ref kt, ref vt), ScalarValue::Utf8(Some(k))) => {
             match kt.as_ref() {
