@@ -30,6 +30,6 @@ inside a Python virtualenv.
 
 ## Build
 
-```
+```bash
 make html
 ```
