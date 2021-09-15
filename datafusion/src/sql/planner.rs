@@ -212,6 +212,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             FileType::NdJson => {}
+            FileType::Avro => {}
         };
 
         let schema = self.build_schema(columns)?;

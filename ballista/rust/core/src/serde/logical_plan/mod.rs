@@ -643,8 +643,12 @@ mod roundtrip_tests {
 
         let df_schema_ref = schema.to_dfschema_ref()?;
 
-        let filetypes: [FileType; 3] =
-            [FileType::NdJson, FileType::Parquet, FileType::CSV];
+        let filetypes: [FileType; 4] = [
+            FileType::NdJson,
+            FileType::Parquet,
+            FileType::CSV,
+            FileType::Avro,
+        ];
 
         for file in filetypes.iter() {
             let create_table_node = LogicalPlan::CreateExternalTable {

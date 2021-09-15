@@ -1911,17 +1911,13 @@ mod tests {
     impl ExprRewriter for FooBarRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             match expr {
-                Expr::Literal(scalar) => {
-                    if let ScalarValue::Utf8(Some(utf8_val)) = scalar {
-                        let utf8_val = if utf8_val == "foo" {
-                            "bar".to_string()
-                        } else {
-                            utf8_val
-                        };
-                        Ok(lit(utf8_val))
+                Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
+                    let utf8_val = if utf8_val == "foo" {
+                        "bar".to_string()
                     } else {
-                        Ok(Expr::Literal(scalar))
-                    }
+                        utf8_val
+                    };
+                    Ok(lit(utf8_val))
                 }
                 // otherwise, return the expression unchanged
                 expr => Ok(expr),

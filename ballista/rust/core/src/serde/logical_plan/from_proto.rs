@@ -32,6 +32,7 @@ use datafusion::logical_plan::{
     LogicalPlan, LogicalPlanBuilder, Operator,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
+use datafusion::physical_plan::avro::AvroReadOptions;
 use datafusion::physical_plan::csv::CsvReadOptions;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 use datafusion::scalar::ScalarValue;
@@ -168,6 +169,32 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     Arc::new(parquet_table),
                     projection,
                 )? //TODO remove hard-coded max_partitions
+                .build()
+                .map_err(|e| e.into())
+            }
+            LogicalPlanType::AvroScan(scan) => {
+                let schema: Schema = convert_required!(scan.schema)?;
+                let options = AvroReadOptions {
+                    schema: Some(Arc::new(schema.clone())),
+                    file_extension: &scan.file_extension,
+                };
+
+                let mut projection = None;
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
+                        .columns
+                        .iter()
+                        .map(|name| schema.index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    projection = Some(column_indices);
+                }
+
+                LogicalPlanBuilder::scan_avro_with_name(
+                    &scan.path,
+                    options,
+                    projection,
+                    &scan.table_name,
+                )?
                 .build()
                 .map_err(|e| e.into())
             }
@@ -1193,6 +1220,7 @@ impl TryFrom<i32> for protobuf::FileType {
             _x if _x == FileType::NdJson as i32 => Ok(FileType::NdJson),
             _x if _x == FileType::Parquet as i32 => Ok(FileType::Parquet),
             _x if _x == FileType::Csv as i32 => Ok(FileType::Csv),
+            _x if _x == FileType::Avro as i32 => Ok(FileType::Avro),
             invalid => Err(BallistaError::General(format!(
                 "Attempted to convert invalid i32 to protobuf::Filetype: {}",
                 invalid
@@ -1209,6 +1237,7 @@ impl Into<datafusion::sql::parser::FileType> for protobuf::FileType {
             protobuf::FileType::NdJson => FileType::NdJson,
             protobuf::FileType::Parquet => FileType::Parquet,
             protobuf::FileType::Csv => FileType::CSV,
+            protobuf::FileType::Avro => FileType::Avro,
         }
     }
 }

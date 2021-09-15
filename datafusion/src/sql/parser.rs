@@ -43,6 +43,8 @@ pub enum FileType {
     Parquet,
     /// Comma separated values
     CSV,
+    /// Avro binary records
+    Avro,
 }
 
 impl FromStr for FileType {
@@ -53,8 +55,9 @@ impl FromStr for FileType {
             "PARQUET" => Ok(Self::Parquet),
             "NDJSON" => Ok(Self::NdJson),
             "CSV" => Ok(Self::CSV),
+            "AVRO" => Ok(Self::Avro),
             other => Err(ParserError::ParserError(format!(
-                "expect one of PARQUET, NDJSON, or CSV, found: {}",
+                "expect one of PARQUET, AVRO, NDJSON, or CSV, found: {}",
                 other
             ))),
         }
@@ -390,10 +393,21 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
+        // positive case: it is ok for avro files not to have columns specified
+        let sql = "CREATE EXTERNAL TABLE t STORED AS AVRO LOCATION 'foo.avro'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![],
+            file_type: FileType::Avro,
+            has_header: false,
+            location: "foo.avro".into(),
+        });
+        expect_parse_ok(sql, expected)?;
+
         // Error cases: Invalid type
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS UNKNOWN_TYPE LOCATION 'foo.csv'";
-        expect_parse_error(sql, "expect one of PARQUET, NDJSON, or CSV");
+        expect_parse_error(sql, "expect one of PARQUET, AVRO, NDJSON, or CSV");
 
         Ok(())
     }

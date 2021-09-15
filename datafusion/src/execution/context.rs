@@ -67,6 +67,8 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
+use crate::datasource::avro::AvroFile;
+use crate::physical_plan::avro::AvroReadOptions;
 use crate::physical_plan::csv::CsvReadOptions;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udf::ScalarUDF;
@@ -197,6 +199,11 @@ impl ExecutionContext {
                     let plan = LogicalPlanBuilder::empty(false).build()?;
                     Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
                 }
+                FileType::Avro => {
+                    self.register_avro(name, location, AvroReadOptions::default())?;
+                    let plan = LogicalPlanBuilder::empty(false).build()?;
+                    Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                }
                 _ => Err(DataFusionError::NotImplemented(format!(
                     "Unsupported file type {:?}.",
                     file_type
@@ -271,6 +278,19 @@ impl ExecutionContext {
             .insert(f.name.clone(), Arc::new(f));
     }
 
+    /// Creates a DataFrame for reading an Avro data source.
+
+    pub fn read_avro(
+        &mut self,
+        filename: impl Into<String>,
+        options: AvroReadOptions,
+    ) -> Result<Arc<dyn DataFrame>> {
+        Ok(Arc::new(DataFrameImpl::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::scan_avro(filename, options, None)?.build()?,
+        )))
+    }
+
     /// Creates a DataFrame for reading a CSV data source.
     pub fn read_csv(
         &mut self,
@@ -331,6 +351,18 @@ impl ExecutionContext {
                 .with_enable_pruning(m.config.parquet_pruning)
         };
         self.register_table(name, Arc::new(table))?;
+        Ok(())
+    }
+
+    /// Registers an Avro data source so that it can be referenced from SQL statements
+    /// executed against this context.
+    pub fn register_avro(
+        &mut self,
+        name: &str,
+        filename: &str,
+        options: AvroReadOptions,
+    ) -> Result<()> {
+        self.register_table(name, Arc::new(AvroFile::try_new(filename, options)?))?;
         Ok(())
     }
 

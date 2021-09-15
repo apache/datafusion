@@ -167,7 +167,6 @@ impl DFSchema {
                 (None, Some(_)) | (None, None) => field.name() == name,
             })
             .map(|(idx, _)| idx);
-
         match matches.next() {
             None => Err(DataFusionError::Plan(format!(
                 "No field named '{}.{}'. Valid fields are {}.",

@@ -212,6 +212,7 @@
 
 extern crate sqlparser;
 
+pub mod avro_to_arrow;
 pub mod catalog;
 pub mod dataframe;
 pub mod datasource;
