@@ -36,23 +36,3 @@ datafusion = { path = "../datafusion", version = "5.1.0" }
 [lib]
 name = "datafusion"
 crate-type = ["cdylib"]
-
-[package.metadata.maturin]
-requires-dist = ["pyarrow>=1"]
-
-classifier = [
-    "Development Status :: 2 - Pre-Alpha",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
-    "License :: OSI Approved",
-    "Operating System :: MacOS",
-    "Operating System :: Microsoft :: Windows",
-    "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.6",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python",
-    "Programming Language :: Rust",
-]

@@ -26,7 +26,24 @@ defaults:
     working-directory: ./python
 
 jobs:
+  generate-license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Generate license file
+        run: python ../dev/create_license.py
+      - uses: actions/upload-artifact@v2
+        with:
+          name: python-wheel-license
+          path: python/LICENSE.txt
+
   build-python-mac-win:
+    needs: [generate-license]
     name: Mac/Win
     runs-on: ${{ matrix.os }}
     strategy:
@@ -50,6 +67,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install maturin==0.11.2
 
+      - run: rm LICENSE.txt
+      - name: Download LICENSE.txt
+        uses: actions/download-artifact@v2
+        with:
+          name: python-wheel-license
+          path: python
+
       - name: Build Python package
         run: maturin build --release --no-sdist --strip
 
@@ -68,13 +92,22 @@ jobs:
           path: python/target/wheels/*
 
   build-manylinux:
+    needs: [generate-license]
     name: Manylinux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
+      - run: rm LICENSE.txt
+      - name: Download LICENSE.txt
+        uses: actions/download-artifact@v2
+        with:
+          name: python-wheel-license
+          path: python
+      - run: cat LICENSE.txt
       - name: Build wheels
         run: |
-          docker run --rm -v $(pwd):/io \
+          docker run --rm -v $(pwd)/..:/io \
+            --workdir /io/python \
             konstin2/maturin:v0.11.2 \
             build --release --manylinux 2010
       - name: Archive wheels
