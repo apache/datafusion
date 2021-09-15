@@ -17,7 +17,7 @@
   under the License.
 -->
 
-## Ballista Rust Client
+# Ballista Rust Client
 
 Ballista usage is very similar to DataFusion. Tha main difference is that the starting point is a `BallistaContext`
 instead of the DataFusion `ExecutionContext`. Ballista uses the same DataFrame API as DataFusion.

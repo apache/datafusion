@@ -37,7 +37,7 @@ DataFusion supports the following syntax for queries:
 
 </code>
 
-# WITH clause
+## WITH clause
 
 A with clause allows to give names for queries and reference them by name.
 
@@ -46,7 +46,7 @@ WITH x AS (SELECT a, MAX(b) AS b FROM t GROUP BY a)
 SELECT a, b FROM x;
 ```
 
-# SELECT clause
+## SELECT clause
 
 Example:
 
@@ -61,7 +61,7 @@ By default `ALL` will be used, which returns all the rows.
 SELECT DISTINCT person, age FROM employees
 ```
 
-# FROM clause
+## FROM clause
 
 Example:
 
@@ -69,7 +69,7 @@ Example:
 SELECT t.a FROM table AS t
 ```
 
-# WHERE clause
+## WHERE clause
 
 Example:
 
@@ -77,7 +77,7 @@ Example:
 SELECT a FROM table WHERE a > 10
 ```
 
-# GROUP BY clause
+## GROUP BY clause
 
 Example:
 
@@ -85,7 +85,7 @@ Example:
 SELECT a, b, MAX(c) FROM table GROUP BY a, b
 ```
 
-# HAVING clause
+## HAVING clause
 
 Example:
 
@@ -93,7 +93,7 @@ Example:
 SELECT a, b, MAX(c) FROM table GROUP BY a, b HAVING MAX(c) > 10
 ```
 
-# UNION clause
+## UNION clause
 
 Example:
 
@@ -111,7 +111,7 @@ SELECT
 FROM table2
 ```
 
-# ORDER BY clause
+## ORDER BY clause
 
 Orders the results by the referenced expression. By default it uses ascending order (`ASC`).
 This order can be changed to descending by adding `DESC` after the order-by expressions.
@@ -124,7 +124,7 @@ SELECT age, person FROM table ORDER BY age DESC;
 SELECT age, person FROM table ORDER BY age, person DESC;
 ```
 
-# LIMIT clause
+## LIMIT clause
 
 Limits the number of rows to be a maximum of `count` rows. `count` should be a non-negative integer.
 

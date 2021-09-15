@@ -17,7 +17,7 @@
   under the License.
 -->
 
-## Overview
+# Overview
 
 Ballista is a distributed compute platform primarily implemented in Rust, and powered by Apache Arrow. It is
 built on an architecture that allows other programming languages to be supported as first-class citizens without paying

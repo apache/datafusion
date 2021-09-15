@@ -17,15 +17,19 @@
   under the License.
 -->
 
-# DataFusion User Guide Source
+# DataFusion docs
 
-This directory contains the sources for the DataFusion user guide.
+## Dependencies
 
-## Generate HTML
+It's recommended to install build dependencies and build the the documentation
+inside a Python virtualenv.
 
-To generate the user guide in HTML format, run the following commands:
+- Python
+- `pip install -r requirements.txt`
+- Datafusion python package. You can install the latest version by running `maturin develop` inside `../python` directory.
+
+## Build
 
 ```bash
-cargo install mdbook
-mdbook build
+make html
 ```

@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# DataFusion
+# Introduction
 
 DataFusion is an extensible query execution framework, written in
 Rust, that uses [Apache Arrow](https://arrow.apache.org) as its
