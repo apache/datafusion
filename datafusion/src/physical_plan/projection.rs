@@ -34,6 +34,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 use super::expressions::Column;
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use async_trait::async_trait;
 
@@ -49,6 +50,8 @@ pub struct ProjectionExec {
     schema: SchemaRef,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl ProjectionExec {
@@ -76,6 +79,7 @@ impl ProjectionExec {
             expr,
             schema,
             input: input.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -131,6 +135,7 @@ impl ExecutionPlan for ProjectionExec {
             schema: self.schema.clone(),
             expr: self.expr.iter().map(|x| x.0.clone()).collect(),
             input: self.input.execute(partition).await?,
+            baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
     }
 
@@ -157,6 +162,10 @@ impl ExecutionPlan for ProjectionExec {
                 write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
             }
         }
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn statistics(&self) -> Statistics {
@@ -194,20 +203,20 @@ fn stats_projection(
     }
 }
 
-fn batch_project(
-    batch: &RecordBatch,
-    expressions: &[Arc<dyn PhysicalExpr>],
-    schema: &SchemaRef,
-) -> ArrowResult<RecordBatch> {
-    expressions
-        .iter()
-        .map(|expr| expr.evaluate(batch))
-        .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-        .collect::<Result<Vec<_>>>()
-        .map_or_else(
-            |e| Err(DataFusionError::into_arrow_external_error(e)),
-            |arrays| RecordBatch::try_new(schema.clone(), arrays),
-        )
+impl ProjectionStream {
+    fn batch_project(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
+        // records time on drop
+        let _timer = self.baseline_metrics.elapsed_compute().timer();
+        self.expr
+            .iter()
+            .map(|expr| expr.evaluate(batch))
+            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .collect::<Result<Vec<_>>>()
+            .map_or_else(
+                |e| Err(DataFusionError::into_arrow_external_error(e)),
+                |arrays| RecordBatch::try_new(self.schema.clone(), arrays),
+            )
+    }
 }
 
 /// Projection iterator
@@ -215,6 +224,7 @@ struct ProjectionStream {
     schema: SchemaRef,
     expr: Vec<Arc<dyn PhysicalExpr>>,
     input: SendableRecordBatchStream,
+    baseline_metrics: BaselineMetrics,
 }
 
 impl Stream for ProjectionStream {
@@ -224,10 +234,12 @@ impl Stream for ProjectionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.input.poll_next_unpin(cx).map(|x| match x {
-            Some(Ok(batch)) => Some(batch_project(&batch, &self.expr, &self.schema)),
+        let poll = self.input.poll_next_unpin(cx).map(|x| match x {
+            Some(Ok(batch)) => Some(self.batch_project(&batch)),
             other => other,
-        })
+        });
+
+        self.baseline_metrics.record_poll(poll)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

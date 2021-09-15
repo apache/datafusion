@@ -2361,13 +2361,15 @@ async fn explain_analyze_baseline_metrics() {
                FROM aggregate_test_100 \
                WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434' \
                GROUP BY c1 \
-               ORDER BY c1)";
+               ORDER BY c1) \
+               LIMIT 1";
     println!("running query: {}", sql);
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
     let results = collect(physical_plan.clone()).await.unwrap();
     let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
+    println!("Query Output:\n\n{}", formatted);
     let formatted = normalize_for_explain(&formatted);
 
     assert_metrics!(
@@ -2395,14 +2397,32 @@ async fn explain_analyze_baseline_metrics() {
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
         "metrics=[output_rows=99, elapsed_compute="
     );
+    assert_metrics!(
+        &formatted,
+        "GlobalLimitExec: limit=1, ",
+        "metrics=[output_rows=1, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "ProjectionExec: expr=[COUNT(UInt8(1))",
+        "metrics=[output_rows=1, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "CoalesceBatchesExec: target_batch_size=4096",
+        "metrics=[output_rows=5, elapsed_compute"
+    );
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
-        use datafusion::physical_plan::{
-            hash_aggregate::HashAggregateExec, sort::SortExec,
-        };
+        use datafusion::physical_plan;
 
-        plan.as_any().downcast_ref::<SortExec>().is_some()
-            || plan.as_any().downcast_ref::<HashAggregateExec>().is_some()
+        plan.as_any().downcast_ref::<physical_plan::sort::SortExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::hash_aggregate::HashAggregateExec>().is_some()
+            // CoalescePartitionsExec doesn't do any work so is not included
+            || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::coalesce_batches::CoalesceBatchesExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::limit::GlobalLimitExec>().is_some()
     }
 
     // Validate that the recorded elapsed compute time was more than

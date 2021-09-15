@@ -37,7 +37,8 @@ use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 
-use super::Statistics;
+use super::metrics::{BaselineMetrics, MetricsSet};
+use super::{metrics::ExecutionPlanMetricsSet, Statistics};
 
 /// CoalesceBatchesExec combines small batches into larger batches for more efficient use of
 /// vectorized processing by upstream operators.
@@ -47,6 +48,8 @@ pub struct CoalesceBatchesExec {
     input: Arc<dyn ExecutionPlan>,
     /// Minimum number of rows for coalesces batches
     target_batch_size: usize,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl CoalesceBatchesExec {
@@ -55,6 +58,7 @@ impl CoalesceBatchesExec {
         Self {
             input,
             target_batch_size,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -115,6 +119,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
             buffer: Vec::new(),
             buffered_rows: 0,
             is_closed: false,
+            baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
     }
 
@@ -132,6 +137,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
                 )
             }
         }
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn statistics(&self) -> Statistics {
@@ -152,6 +161,8 @@ struct CoalesceBatchesStream {
     buffered_rows: usize,
     /// Whether the stream has finished returning all of its data or not
     is_closed: bool,
+    /// Execution metrics
+    baseline_metrics: BaselineMetrics,
 }
 
 impl Stream for CoalesceBatchesStream {
@@ -161,6 +172,26 @@ impl Stream for CoalesceBatchesStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        let poll = self.poll_next_inner(cx);
+        self.baseline_metrics.record_poll(poll)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // we can't predict the size of incoming batches so re-use the size hint from the input
+        self.input.size_hint()
+    }
+}
+
+impl CoalesceBatchesStream {
+    fn poll_next_inner(
+        self: &mut Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+        // Get a clone (uses same underlying atomic) as self gets borrowed below
+        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
+        // records time on drop
+        let _timer = cloned_time.timer();
+
         if self.is_closed {
             return Poll::Ready(None);
         }
@@ -220,11 +251,6 @@ impl Stream for CoalesceBatchesStream {
                 Poll::Pending => return Poll::Pending,
             }
         }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        // we can't predict the size of incoming batches so re-use the size hint from the input
-        self.input.size_hint()
     }
 }
 
