@@ -309,9 +309,6 @@ impl DefaultPhysicalPlanner {
         async move {
             let batch_size = ctx_state.config.batch_size;
 
-            // TODO make this configurable
-            let parallelism = 4;
-
             let exec_plan: Result<Arc<dyn ExecutionPlan>> = match logical_plan {
                 LogicalPlan::TableScan {
                     source,
@@ -599,13 +596,8 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?) )
                 }
                 LogicalPlan::Union { inputs, .. } => {
-                    let physical_plan_futures = inputs
-                        .iter()
-                        .map(|input| self.create_initial_plan(input, ctx_state))
-                        .collect::<Vec<_>>();
-
-                    let physical_plans = futures::stream::iter(physical_plan_futures)
-                        .buffered(parallelism)
+                    let physical_plans = futures::stream::iter(inputs)
+                        .then(|lp| self.create_initial_plan(lp, ctx_state))
                         .try_collect::<Vec<_>>()
                         .await?;
                     Ok(Arc::new(UnionExec::new(physical_plans)) )
@@ -782,14 +774,8 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(AnalyzeExec::new(*verbose, input, schema)))
                 }
                 LogicalPlan::Extension { node } => {
-                    let physical_inputs_futures = node
-                        .inputs()
-                        .into_iter()
-                        .map(|input_plan| self.create_initial_plan(input_plan, ctx_state))
-                        .collect::<Vec<_>>();
-
-                    let physical_inputs = futures::stream::iter(physical_inputs_futures)
-                        .buffered(parallelism)
+                    let physical_inputs = futures::stream::iter(node.inputs())
+                        .then(|lp| self.create_initial_plan(lp, ctx_state))
                         .try_collect::<Vec<_>>()
                         .await?;
 
