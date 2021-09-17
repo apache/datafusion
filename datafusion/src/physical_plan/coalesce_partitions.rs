@@ -97,8 +97,6 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-
         // CoalescePartitionsExec produces a single partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
@@ -113,10 +111,16 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 "CoalescePartitionsExec requires at least one input partition".to_owned(),
             )),
             1 => {
-                // bypass any threading if there is a single partition
+                // bypass any threading / metrics if there is a single partition
                 self.input.execute(0).await
             }
             _ => {
+                let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+                // record the (very) minimal work done so that
+                // elapsed_compute is not reported as 0
+                let elapsed_compute = baseline_metrics.elapsed_compute().clone();
+                let _timer = elapsed_compute.timer();
+
                 // use a stream that allows each sender to put in at
                 // least one result in an attempt to maximize
                 // parallelism.

@@ -2352,13 +2352,17 @@ async fn explain_analyze_baseline_metrics() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     // a query with as many operators as we have metrics for
     let sql = "EXPLAIN ANALYZE \
-               select count(*) from \
-               (SELECT count(*), c1 \
-               FROM aggregate_test_100 \
-               WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434' \
-               GROUP BY c1 \
-               ORDER BY c1) \
-               LIMIT 1";
+               SELECT count(*) as cnt FROM \
+                 (SELECT count(*), c1 \
+                  FROM aggregate_test_100 \
+                  WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434' \
+                  GROUP BY c1 \
+                  ORDER BY c1 ) \
+                 UNION ALL \
+               SELECT 1 as cnt \
+                 UNION ALL \
+               SELECT lead(c1, 1) OVER () as cnt FROM (select 1 as c1) \
+               LIMIT 2";
     println!("running query: {}", sql);
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
@@ -2409,6 +2413,8 @@ async fn explain_analyze_baseline_metrics() {
         "metrics=[output_rows=5, elapsed_compute"
     );
 
+    assert!(false, "TODO: Test for cpaslce partitoon, union and window agg exec");
+
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
 
@@ -2418,6 +2424,9 @@ async fn explain_analyze_baseline_metrics() {
             || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::coalesce_batches::CoalesceBatchesExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::coalesce_partitions::CoalescePartitionsExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::union::UnionExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::windows::WindowAggExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::limit::GlobalLimitExec>().is_some()
     }
 
