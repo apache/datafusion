@@ -122,14 +122,19 @@ impl DataFrame {
     /// Unless some order is specified in the plan, there is no guarantee of the order of the result
     fn collect(&self, py: Python) -> PyResult<PyObject> {
         let ctx = _ExecutionContext::from(self.ctx_state.clone());
+        let rt = Runtime::new().unwrap();
         let plan = ctx
             .optimize(&self.plan)
             .map_err(|e| -> errors::DataFusionError { e.into() })?;
-        let plan = ctx
-            .create_physical_plan(&plan)
-            .map_err(|e| -> errors::DataFusionError { e.into() })?;
 
-        let rt = Runtime::new().unwrap();
+        let plan = py.allow_threads(|| {
+            rt.block_on(async {
+                ctx.create_physical_plan(&plan)
+                    .await
+                    .map_err(|e| -> errors::DataFusionError { e.into() })
+            })
+        })?;
+
         let batches = py.allow_threads(|| {
             rt.block_on(async {
                 collect(plan)
@@ -144,12 +149,20 @@ impl DataFrame {
     #[args(num = "20")]
     fn show(&self, py: Python, num: usize) -> PyResult<()> {
         let ctx = _ExecutionContext::from(self.ctx_state.clone());
-        let plan = ctx
-            .optimize(&self.limit(num)?.plan)
-            .and_then(|plan| ctx.create_physical_plan(&plan))
-            .map_err(|e| -> errors::DataFusionError { e.into() })?;
-
         let rt = Runtime::new().unwrap();
+        let plan = py.allow_threads(|| {
+            rt.block_on(async {
+                let l_plan = ctx
+                    .optimize(&self.limit(num)?.plan)
+                    .map_err(|e| -> errors::DataFusionError { e.into() })?;
+                let p_plan = ctx
+                    .create_physical_plan(&l_plan)
+                    .await
+                    .map_err(|e| -> errors::DataFusionError { e.into() })?;
+                Ok::<_, PyErr>(p_plan)
+            })
+        })?;
+
         let batches = py.allow_threads(|| {
             rt.block_on(async {
                 collect(plan)
