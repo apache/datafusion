@@ -30,6 +30,7 @@ use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
+use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
@@ -269,8 +270,9 @@ impl BallistaQueryPlanner {
     }
 }
 
+#[async_trait]
 impl QueryPlanner for BallistaQueryPlanner {
-    fn create_physical_plan(
+    async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
         _ctx_state: &ExecutionContextState,

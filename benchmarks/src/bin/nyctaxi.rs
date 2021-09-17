@@ -121,7 +121,7 @@ async fn execute_sql(ctx: &mut ExecutionContext, sql: &str, debug: bool) -> Resu
     if debug {
         println!("Optimized logical plan:\n{:?}", plan);
     }
-    let physical_plan = ctx.create_physical_plan(&plan)?;
+    let physical_plan = ctx.create_physical_plan(&plan).await?;
     let result = collect(physical_plan).await?;
     if debug {
         pretty::print_batches(&result)?;

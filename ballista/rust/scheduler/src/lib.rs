@@ -418,6 +418,7 @@ impl SchedulerGrpc for SchedulerServer {
 
                 let plan = fail_job!(datafusion_ctx
                     .create_physical_plan(&optimized_plan)
+                    .await
                     .map_err(|e| {
                         let msg = format!("Could not create physical plan: {}", e);
                         error!("{}", msg);
@@ -447,6 +448,7 @@ impl SchedulerGrpc for SchedulerServer {
                 let mut planner = DistributedPlanner::new();
                 let stages = fail_job!(planner
                     .plan_query_stages(&job_id_spawn, plan)
+                    .await
                     .map_err(|e| {
                         let msg = format!("Could not plan query stages: {}", e);
                         error!("{}", msg);

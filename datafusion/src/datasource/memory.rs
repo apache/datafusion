@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use async_trait::async_trait;
 
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
@@ -66,7 +67,7 @@ impl MemTable {
         output_partitions: Option<usize>,
     ) -> Result<Self> {
         let schema = t.schema();
-        let exec = t.scan(&None, batch_size, &[], None)?;
+        let exec = t.scan(&None, batch_size, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
         let tasks = (0..partition_count)
@@ -114,6 +115,7 @@ impl MemTable {
     }
 }
 
+#[async_trait]
 impl TableProvider for MemTable {
     fn as_any(&self) -> &dyn Any {
         self
@@ -123,7 +125,7 @@ impl TableProvider for MemTable {
         self.schema.clone()
     }
 
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         _batch_size: usize,
@@ -168,7 +170,7 @@ mod tests {
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
         // scan with projection
-        let exec = provider.scan(&Some(vec![2, 1]), 1024, &[], None)?;
+        let exec = provider.scan(&Some(vec![2, 1]), 1024, &[], None).await?;
         let mut it = exec.execute(0).await?;
         let batch2 = it.next().await.unwrap()?;
         assert_eq!(2, batch2.schema().fields().len());
@@ -198,7 +200,7 @@ mod tests {
 
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
-        let exec = provider.scan(&None, 1024, &[], None)?;
+        let exec = provider.scan(&None, 1024, &[], None).await?;
         let mut it = exec.execute(0).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
@@ -207,8 +209,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_invalid_projection() -> Result<()> {
+    #[tokio::test]
+    async fn test_invalid_projection() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -228,7 +230,7 @@ mod tests {
 
         let projection: Vec<usize> = vec![0, 4];
 
-        match provider.scan(&Some(projection), 1024, &[], None) {
+        match provider.scan(&Some(projection), 1024, &[], None).await {
             Err(DataFusionError::Internal(e)) => {
                 assert_eq!("\"Projection index out of range\"", format!("{:?}", e))
             }
@@ -349,7 +351,7 @@ mod tests {
         let provider =
             MemTable::try_new(Arc::new(merged_schema), vec![vec![batch1, batch2]])?;
 
-        let exec = provider.scan(&None, 1024, &[], None)?;
+        let exec = provider.scan(&None, 1024, &[], None).await?;
         let mut it = exec.execute(0).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());

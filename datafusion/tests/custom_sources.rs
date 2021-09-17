@@ -182,6 +182,7 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
 }
 
+#[async_trait]
 impl TableProvider for CustomTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
@@ -191,7 +192,7 @@ impl TableProvider for CustomTableProvider {
         TEST_CUSTOM_SCHEMA_REF!()
     }
 
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         _batch_size: usize,
@@ -236,7 +237,7 @@ async fn custom_source_dataframe() -> Result<()> {
     );
     assert_eq!(format!("{:?}", optimized_plan), expected);
 
-    let physical_plan = ctx.create_physical_plan(&optimized_plan)?;
+    let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
@@ -260,7 +261,10 @@ async fn optimizers_catch_all_statistics() {
         .sql("SELECT count(*), min(c1), max(c1) from test")
         .unwrap();
 
-    let physical_plan = ctx.create_physical_plan(&df.to_logical_plan()).unwrap();
+    let physical_plan = ctx
+        .create_physical_plan(&df.to_logical_plan())
+        .await
+        .unwrap();
 
     // when the optimization kicks in, the source is replaced by an EmptyExec
     assert!(

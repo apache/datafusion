@@ -27,6 +27,7 @@ use std::{
 };
 
 use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
 
 use crate::physical_plan::avro::{AvroExec, AvroReadOptions};
 use crate::{
@@ -120,6 +121,7 @@ impl AvroFile {
     }
 }
 
+#[async_trait]
 impl TableProvider for AvroFile {
     fn as_any(&self) -> &dyn Any {
         self
@@ -129,7 +131,7 @@ impl TableProvider for AvroFile {
         self.schema.clone()
     }
 
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         batch_size: usize,
@@ -185,7 +187,7 @@ mod tests {
     async fn read_small_batches() -> Result<()> {
         let table = load_table("alltypes_plain.avro")?;
         let projection = None;
-        let exec = table.scan(&projection, 2, &[], None)?;
+        let exec = table.scan(&projection, 2, &[], None).await?;
         let stream = exec.execute(0).await?;
 
         let _ = stream
@@ -414,7 +416,7 @@ mod tests {
         table: Arc<dyn TableProvider>,
         projection: &Option<Vec<usize>>,
     ) -> Result<RecordBatch> {
-        let exec = table.scan(projection, 1024, &[], None)?;
+        let exec = table.scan(projection, 1024, &[], None).await?;
         let mut it = exec.execute(0).await?;
         it.next()
             .await

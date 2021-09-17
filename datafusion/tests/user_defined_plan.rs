@@ -202,10 +202,11 @@ fn make_topk_context() -> ExecutionContext {
 
 struct TopKQueryPlanner {}
 
+#[async_trait]
 impl QueryPlanner for TopKQueryPlanner {
     /// Given a `LogicalPlan` created from above, create an
     /// `ExecutionPlan` suitable for execution
-    fn create_physical_plan(
+    async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
         ctx_state: &ExecutionContextState,
@@ -216,7 +217,9 @@ impl QueryPlanner for TopKQueryPlanner {
                 TopKPlanner {},
             )]);
         // Delegate most work of physical planning to the default physical planner
-        physical_planner.create_physical_plan(logical_plan, ctx_state)
+        physical_planner
+            .create_physical_plan(logical_plan, ctx_state)
+            .await
     }
 }
 

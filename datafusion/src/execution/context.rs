@@ -81,6 +81,7 @@ use crate::sql::{
 };
 use crate::variable::{VarProvider, VarType};
 use crate::{dataframe::DataFrame, physical_plan::udaf::AggregateUDF};
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -533,17 +534,27 @@ impl ExecutionContext {
     }
 
     /// Creates a physical plan from a logical plan.
-    pub fn create_physical_plan(
+    pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut state = self.state.lock().unwrap();
-        state.execution_props.start_execution();
+        let (state, planner) = {
+            let mut state = self.state.lock().unwrap();
+            state.execution_props.start_execution();
 
-        state
-            .config
-            .query_planner
-            .create_physical_plan(logical_plan, &state)
+            // We need to clone `state` to release the lock that is not `Send`. We could
+            // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
+            // propagate async even to the `LogicalPlan` building methods.
+            // Cloning `state` here is fine as we then pass it as immutable `&state`, which
+            // means that we avoid write consistency issues as the cloned version will not
+            // be written to. As for eventual modifications that would be applied to the
+            // original state after it has been cloned, they will not be picked up by the
+            // clone but that is okay, as it is equivalent to postponing the state update
+            // by keeping the lock until the end of the function scope.
+            (state.clone(), Arc::clone(&state.config.query_planner))
+        };
+
+        planner.create_physical_plan(logical_plan, &state).await
     }
 
     /// Executes a query and writes the results to a partitioned CSV file.
@@ -676,9 +687,10 @@ impl FunctionRegistry for ExecutionContext {
 }
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
+#[async_trait]
 pub trait QueryPlanner {
     /// Given a `LogicalPlan`, create an `ExecutionPlan` suitable for execution
-    fn create_physical_plan(
+    async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
         ctx_state: &ExecutionContextState,
@@ -688,15 +700,16 @@ pub trait QueryPlanner {
 /// The query planner used if no user defined planner is provided
 struct DefaultQueryPlanner {}
 
+#[async_trait]
 impl QueryPlanner for DefaultQueryPlanner {
     /// Given a `LogicalPlan`, create an `ExecutionPlan` suitable for execution
-    fn create_physical_plan(
+    async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planner = DefaultPhysicalPlanner::default();
-        planner.create_physical_plan(logical_plan, ctx_state)
+        planner.create_physical_plan(logical_plan, ctx_state).await
     }
 }
 
@@ -1054,6 +1067,7 @@ mod tests {
     use arrow::compute::add;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
+    use async_trait::async_trait;
     use std::fs::File;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};
@@ -1214,7 +1228,7 @@ mod tests {
             ctx.create_logical_plan("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")?;
         let logical_plan = ctx.optimize(&logical_plan)?;
 
-        let physical_plan = ctx.create_physical_plan(&logical_plan)?;
+        let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
 
         let results = collect_partitioned(physical_plan).await?;
 
@@ -1290,7 +1304,7 @@ mod tests {
         \n  TableScan: test projection=Some([1])";
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
-        let physical_plan = ctx.create_physical_plan(&optimized_plan)?;
+        let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
 
         assert_eq!(1, physical_plan.schema().fields().len());
         assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
@@ -1301,8 +1315,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn preserve_nullability_on_projection() -> Result<()> {
+    #[tokio::test]
+    async fn preserve_nullability_on_projection() -> Result<()> {
         let tmp_dir = TempDir::new()?;
         let ctx = create_ctx(&tmp_dir, 1)?;
 
@@ -1314,7 +1328,7 @@ mod tests {
             .build()?;
 
         let plan = ctx.optimize(&plan)?;
-        let physical_plan = ctx.create_physical_plan(&Arc::new(plan))?;
+        let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
         assert!(!physical_plan.schema().field_with_name("c1")?.is_nullable());
         Ok(())
     }
@@ -1366,7 +1380,7 @@ mod tests {
         );
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
-        let physical_plan = ctx.create_physical_plan(&optimized_plan)?;
+        let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
 
         assert_eq!(1, physical_plan.schema().fields().len());
         assert_eq!("b", physical_plan.schema().field(0).name().as_str());
@@ -2442,8 +2456,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn aggregate_with_alias() -> Result<()> {
+    #[tokio::test]
+    async fn aggregate_with_alias() -> Result<()> {
         let tmp_dir = TempDir::new()?;
         let ctx = create_ctx(&tmp_dir, 1)?;
 
@@ -2459,7 +2473,7 @@ mod tests {
 
         let plan = ctx.optimize(&plan)?;
 
-        let physical_plan = ctx.create_physical_plan(&Arc::new(plan))?;
+        let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
         assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
         assert_eq!(
             "total_salary",
@@ -2873,8 +2887,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn send_context_to_threads() -> Result<()> {
+    #[tokio::test]
+    async fn send_context_to_threads() -> Result<()> {
         // ensure ExecutionContexts can be used in a multi-threaded
         // environment. Usecase is for concurrent planing.
         let tmp_dir = TempDir::new()?;
@@ -2900,8 +2914,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn ctx_sql_should_optimize_plan() -> Result<()> {
+    #[tokio::test]
+    async fn ctx_sql_should_optimize_plan() -> Result<()> {
         let mut ctx = ExecutionContext::new();
         let plan1 =
             ctx.create_logical_plan("SELECT * FROM (SELECT 1) WHERE TRUE AND TRUE")?;
@@ -2977,7 +2991,7 @@ mod tests {
         );
 
         let plan = ctx.optimize(&plan)?;
-        let plan = ctx.create_physical_plan(&plan)?;
+        let plan = ctx.create_physical_plan(&plan).await?;
         let result = collect(plan).await?;
 
         let expected = vec![
@@ -3247,6 +3261,7 @@ mod tests {
     async fn information_schema_tables_table_types() {
         struct TestTable(TableType);
 
+        #[async_trait]
         impl TableProvider for TestTable {
             fn as_any(&self) -> &dyn std::any::Any {
                 self
@@ -3260,7 +3275,7 @@ mod tests {
                 unimplemented!()
             }
 
-            fn scan(
+            async fn scan(
                 &self,
                 _: &Option<Vec<usize>>,
                 _: usize,
@@ -3764,8 +3779,9 @@ mod tests {
 
     struct MyPhysicalPlanner {}
 
+    #[async_trait]
     impl PhysicalPlanner for MyPhysicalPlanner {
-        fn create_physical_plan(
+        async fn create_physical_plan(
             &self,
             _logical_plan: &LogicalPlan,
             _ctx_state: &ExecutionContextState,
@@ -3788,14 +3804,17 @@ mod tests {
 
     struct MyQueryPlanner {}
 
+    #[async_trait]
     impl QueryPlanner for MyQueryPlanner {
-        fn create_physical_plan(
+        async fn create_physical_plan(
             &self,
             logical_plan: &LogicalPlan,
             ctx_state: &ExecutionContextState,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             let physical_planner = MyPhysicalPlanner {};
-            physical_planner.create_physical_plan(logical_plan, ctx_state)
+            physical_planner
+                .create_physical_plan(logical_plan, ctx_state)
+                .await
         }
     }
 
@@ -3822,7 +3841,7 @@ mod tests {
     ) -> Result<()> {
         let logical_plan = ctx.create_logical_plan(sql)?;
         let logical_plan = ctx.optimize(&logical_plan)?;
-        let physical_plan = ctx.create_physical_plan(&logical_plan)?;
+        let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
         ctx.write_csv(physical_plan, out_dir.to_string()).await
     }
 
@@ -3835,7 +3854,7 @@ mod tests {
     ) -> Result<()> {
         let logical_plan = ctx.create_logical_plan(sql)?;
         let logical_plan = ctx.optimize(&logical_plan)?;
-        let physical_plan = ctx.create_physical_plan(&logical_plan)?;
+        let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
         ctx.write_parquet(physical_plan, out_dir.to_string(), writer_properties)
             .await
     }

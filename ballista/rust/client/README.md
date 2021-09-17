@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
        FROM tripdata
        GROUP BY passenger_count
        ORDER BY passenger_count",
-   )?;
+   ).await?;
 
    // collect the results and print them to stdout
    let results = df.collect().await?;
