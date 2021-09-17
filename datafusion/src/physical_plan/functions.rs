@@ -57,7 +57,7 @@ use std::convert::From;
 use std::{any::Any, fmt, str::FromStr, sync::Arc};
 
 /// A function's signature, which defines the function's supported argument types.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Signature {
     /// arbitrary number of arguments of an common type out of a list of valid types
     // A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
@@ -94,7 +94,7 @@ pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
 
 /// Enum of all built-in scalar functions
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub enum BuiltinScalarFunction {
     // math functions
     /// abs
