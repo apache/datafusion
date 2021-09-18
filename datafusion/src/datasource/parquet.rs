@@ -18,7 +18,6 @@
 //! Parquet data source
 
 use std::any::Any;
-use std::fs::File;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -29,17 +28,21 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::datasource::TableProviderFilterPushDown;
 use crate::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use crate::datasource::object_store::get_object_store;
+use crate::datasource::object_store::local::os_parquet::LocalParquetFileReader;
+use crate::datasource::parquet::dynamic_reader::DynChunkReader;
 use crate::datasource::{
     create_max_min_accs, get_col_stats, FileAndSchema, PartitionedFile, TableDescriptor,
     TableDescriptorBuilder, TableProvider,
 };
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{combine_filters, Expr};
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::parquet::ParquetExec;
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 use crate::scalar::ScalarValue;
 
+pub mod dynamic_reader;
 /// Table-based representation of a `ParquetFile`.
 pub struct ParquetTable {
     /// Descriptor of the table, including schema, files, etc.
@@ -339,8 +342,7 @@ impl ParquetTableDescriptor {
 
 impl TableDescriptorBuilder for ParquetTableDescriptor {
     fn file_meta(path: &str) -> Result<FileAndSchema> {
-        let file = File::open(path)?;
-        let file_reader = Arc::new(SerializedFileReader::new(file)?);
+        let file_reader = Arc::new(get_file_reader(path)?);
         let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
         let path = path.to_string();
         let schema = arrow_reader.get_schema()?;
@@ -404,6 +406,27 @@ impl TableDescriptorBuilder for ParquetTableDescriptor {
             file: PartitionedFile { path, statistics },
             schema,
         })
+    }
+}
+
+/// Get parquet ``SerializedFileReader`` which is based on ``ChunkReader``
+#[inline]
+pub fn get_file_reader(path: &str) -> Result<SerializedFileReader<DynChunkReader>> {
+    let chunk_reader = get_chunk_reader(path)?;
+    Ok(SerializedFileReader::new(chunk_reader)?)
+}
+
+fn get_chunk_reader(path: &str) -> Result<DynChunkReader> {
+    let os = get_object_store(path)?;
+    match os.get_schema() {
+        "file" => {
+            let obj_reader = os.file_reader_from_path(path)?;
+            Ok(LocalParquetFileReader::get_dyn_chunk_reader(obj_reader)?)
+        }
+        _ => Err(DataFusionError::Internal(format!(
+            "No suitable object store found for {}",
+            os.get_schema()
+        ))),
     }
 }
 

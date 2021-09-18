@@ -16,7 +16,6 @@
 // under the License.
 
 //! Object store that represents the Local File System.
-
 use std::fs::Metadata;
 use std::sync::Arc;
 
@@ -29,14 +28,27 @@ use crate::datasource::object_store::{
 use crate::error::DataFusionError;
 use crate::error::Result;
 
+pub mod os_parquet;
+
+/// scheme for Local File System
+pub static LOCAL_SCHEME: &str = "file";
+
 #[derive(Debug)]
 /// Local File System as Object Store.
 pub struct LocalFileSystem;
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
-        list_all(prefix.to_owned()).await
+    fn get_schema(&self) -> &'static str {
+        LOCAL_SCHEME
+    }
+
+    async fn list_file(
+        &self,
+        prefix: &str,
+        ext: Option<String>,
+    ) -> Result<FileMetaStream> {
+        list_all(prefix.to_owned(), ext).await
     }
 
     async fn list_dir(
@@ -47,23 +59,41 @@ impl ObjectStore for LocalFileSystem {
         todo!()
     }
 
+    fn file_reader_from_path(&self, file_path: &str) -> Result<Arc<dyn ObjectReader>> {
+        let metadata = std::fs::metadata(file_path)?;
+        if metadata.is_file() {
+            self.file_reader(get_meta(String::from(file_path), metadata))
+        } else {
+            Err(DataFusionError::IoError(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Path of {:?} is not for file", file_path),
+            )))
+        }
+    }
+
     fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 }
 
 struct LocalFileReader {
-    file: FileMeta,
+    file: Arc<FileMeta>,
 }
 
 impl LocalFileReader {
     fn new(file: FileMeta) -> Result<Self> {
-        Ok(Self { file })
+        Ok(Self {
+            file: Arc::new(file),
+        })
     }
 }
 
 #[async_trait]
 impl ObjectReader for LocalFileReader {
+    fn get_file_meta(&self) -> Arc<FileMeta> {
+        self.file.clone()
+    }
+
     async fn chunk_reader(
         &self,
         _start: u64,
@@ -77,17 +107,18 @@ impl ObjectReader for LocalFileReader {
     }
 }
 
-async fn list_all(prefix: String) -> Result<FileMetaStream> {
-    fn get_meta(path: String, metadata: Metadata) -> FileMeta {
-        FileMeta {
-            path,
-            last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
-            size: metadata.len(),
-        }
+fn get_meta(path: String, metadata: Metadata) -> FileMeta {
+    FileMeta {
+        path,
+        last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
+        size: metadata.len(),
     }
+}
 
+async fn list_all(prefix: String, ext: Option<String>) -> Result<FileMetaStream> {
     async fn find_files_in_dir(
         path: String,
+        ext: &Option<String>,
         to_visit: &mut Vec<String>,
     ) -> Result<Vec<FileMeta>> {
         let mut dir = tokio::fs::read_dir(path).await?;
@@ -99,7 +130,11 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
                 if metadata.is_dir() {
                     to_visit.push(child_path.to_string());
                 } else {
-                    files.push(get_meta(child_path.to_owned(), metadata))
+                    if ext.is_none()
+                        || child_path.ends_with(ext.as_ref().unwrap().as_str())
+                    {
+                        files.push(get_meta(child_path.to_owned(), metadata))
+                    }
                 }
             } else {
                 return Err(DataFusionError::Plan("Invalid path".to_string()));
@@ -115,16 +150,25 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
             Ok(get_meta(prefix, prefix_meta))
         })))
     } else {
-        let result = stream::unfold(vec![prefix], move |mut to_visit| async move {
-            match to_visit.pop() {
-                None => None,
-                Some(path) => {
-                    let file_stream = match find_files_in_dir(path, &mut to_visit).await {
-                        Ok(files) => stream::iter(files).map(Ok).left_stream(),
-                        Err(e) => stream::once(async { Err(e) }).right_stream(),
-                    };
+        let result = stream::unfold(vec![prefix], move |mut to_visit| {
+            let ext_clone = ext.clone();
+            async move {
+                match to_visit.pop() {
+                    None => None,
+                    Some(path) => {
+                        let file_stream = match find_files_in_dir(
+                            path,
+                            &ext_clone,
+                            &mut to_visit,
+                        )
+                        .await
+                        {
+                            Ok(files) => stream::iter(files).map(Ok).left_stream(),
+                            Err(e) => stream::once(async { Err(e) }).right_stream(),
+                        };
 
-                    Some((file_stream, to_visit))
+                        Some((file_stream, to_visit))
+                    }
                 }
             }
         })
@@ -136,10 +180,11 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::StreamExt;
     use std::collections::HashSet;
     use std::fs::create_dir;
     use std::fs::File;
+
+    use futures::StreamExt;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -160,7 +205,7 @@ mod tests {
         File::create(&c_path)?;
 
         let mut all_files = HashSet::new();
-        let mut files = list_all(tmp.path().to_str().unwrap().to_string()).await?;
+        let mut files = list_all(tmp.path().to_str().unwrap().to_string(), None).await?;
         while let Some(file) = files.next().await {
             let file = file?;
             assert_eq!(file.size, 0);

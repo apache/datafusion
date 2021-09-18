@@ -17,24 +17,27 @@
 
 //! Object Store abstracts access to an underlying file/object storage.
 
-pub mod local;
-
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use futures::{AsyncRead, Stream};
-
-use local::LocalFileSystem;
+use chrono::Utc;
+use futures::executor::block_on;
+use futures::{AsyncRead, Stream, StreamExt};
+use local::{LocalFileSystem, LOCAL_SCHEME};
 
 use crate::error::{DataFusionError, Result};
-use chrono::Utc;
+
+pub mod local;
 
 /// Object Reader for one file in a object store
 #[async_trait]
 pub trait ObjectReader {
+    /// Get file meta
+    fn get_file_meta(&self) -> Arc<FileMeta>;
+
     /// Get reader for a part [start, start + length] in the file asynchronously
     async fn chunk_reader(&self, start: u64, length: usize)
         -> Result<Arc<dyn AsyncRead>>;
@@ -75,8 +78,15 @@ pub type ListEntryStream =
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
 #[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
+    /// Get file system scheme
+    fn get_schema(&self) -> &'static str;
+
     /// Returns all the files in path `prefix`
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream>;
+    async fn list_file(
+        &self,
+        prefix: &str,
+        ext: Option<String>,
+    ) -> Result<FileMetaStream>;
 
     /// Returns all the files in `prefix` if the `prefix` is already a leaf dir,
     /// or all paths between the `prefix` and the first occurrence of the `delimiter` if it is provided.
@@ -86,11 +96,17 @@ pub trait ObjectStore: Sync + Send + Debug {
         delimiter: Option<String>,
     ) -> Result<ListEntryStream>;
 
+    /// Get object reader for the path of one file
+    fn file_reader_from_path(&self, file_path: &str) -> Result<Arc<dyn ObjectReader>>;
+
     /// Get object reader for one file
     fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
 }
 
-static LOCAL_SCHEME: &str = "file";
+lazy_static! {
+    static ref OBJECT_STORES: Box<ObjectStoreRegistry> =
+        Box::new(ObjectStoreRegistry::new());
+}
 
 /// A Registry holds all the object stores at runtime with a scheme for each store.
 /// This allows the user to extend DataFusion with different storage systems such as S3 or HDFS
@@ -148,4 +164,22 @@ impl ObjectStoreRegistry {
             Ok(Arc::new(LocalFileSystem))
         }
     }
+}
+
+/// Get object store based on the path uri
+pub fn get_object_store(path: &str) -> Result<Arc<dyn ObjectStore>> {
+    OBJECT_STORES.get_by_uri(path)
+}
+
+/// List all of the file name for a directory with a specified file extension
+pub fn list_file(path: &str, ext: Option<String>) -> Result<Vec<String>> {
+    let stream = block_on(list_file_meta(path, ext))?;
+    Ok(stream.into_iter().map(|m| m.path).collect::<Vec<_>>())
+}
+
+/// List all of the file meta for a directory with a specified file extension
+async fn list_file_meta(path: &str, ext: Option<String>) -> Result<Vec<FileMeta>> {
+    let os = get_object_store(path)?;
+    let stream = os.list_file(path, ext).await?;
+    Ok(stream.map(|m| m.unwrap()).collect::<Vec<_>>().await)
 }

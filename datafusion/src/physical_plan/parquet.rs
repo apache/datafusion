@@ -18,7 +18,6 @@
 //! Execution plan for reading Parquet files
 
 use std::fmt;
-use std::fs::File;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
@@ -42,8 +41,7 @@ use arrow::{
 };
 use log::debug;
 use parquet::file::{
-    metadata::RowGroupMetaData,
-    reader::{FileReader, SerializedFileReader},
+    metadata::RowGroupMetaData, reader::FileReader,
     statistics::Statistics as ParquetStatistics,
 };
 
@@ -59,7 +57,7 @@ use async_trait::async_trait;
 
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::stream::RecordBatchReceiverStream;
-use crate::datasource::parquet::ParquetTableDescriptor;
+use crate::datasource::parquet::{get_file_reader, ParquetTableDescriptor};
 use crate::datasource::{get_statistics_with_limit, FilePartition, PartitionedFile};
 
 /// Execution plan for scanning one or more Parquet partitions
@@ -534,8 +532,7 @@ fn read_partition(
     'outer: for partitioned_file in all_files {
         let file_metrics =
             ParquetFileMetrics::new(partition_index, &*partitioned_file.path, &metrics);
-        let file = File::open(partitioned_file.path.as_str())?;
-        let mut file_reader = SerializedFileReader::new(file)?;
+        let mut file_reader = get_file_reader(partitioned_file.path.as_str())?;
         if let Some(predicate_builder) = predicate_builder {
             let row_group_predicate = build_row_group_predicate(
                 predicate_builder,

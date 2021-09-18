@@ -31,9 +31,9 @@ pub use self::datasource::{TableProvider, TableType};
 pub use self::memory::MemTable;
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::common::build_file_list;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+use object_store::list_file;
 use std::sync::Arc;
 
 /// Source for table input data
@@ -115,7 +115,7 @@ pub trait TableDescriptorBuilder {
         provided_schema: Option<Schema>,
         collect_statistics: bool,
     ) -> Result<TableDescriptor> {
-        let filenames = build_file_list(path, ext)?;
+        let filenames = list_file(path, Some(String::from(ext)))?;
         if filenames.is_empty() {
             return Err(DataFusionError::Plan(format!(
                 "No file (with .{} extension) found at path {}",
