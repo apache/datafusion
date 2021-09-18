@@ -845,7 +845,7 @@ fn produce_from_matched(
     // Find indices which didn't match any right row (are false)
     let indices = if unmatched {
         UInt64Array::from_iter_values(
-            (1..visited_left_side.len())
+            (0..visited_left_side.len())
                 .into_iter()
                 .filter(|v| !visited_left_side.get_bit(*v))
                 .map(|v| v as u64),
@@ -853,7 +853,7 @@ fn produce_from_matched(
     } else {
         // produce those that did match
         UInt64Array::from_iter_values(
-            (1..visited_left_side.len())
+            (0..visited_left_side.len())
                 .into_iter()
                 .filter(|v| visited_left_side.get_bit(*v))
                 .map(|v| v as u64),
