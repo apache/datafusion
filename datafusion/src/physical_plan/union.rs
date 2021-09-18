@@ -23,13 +23,18 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::datatypes::SchemaRef;
+use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use futures::StreamExt;
 
 use super::{
-    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning,
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{error::Result, physical_plan::expressions};
+use crate::{
+    error::Result,
+    physical_plan::{expressions, metrics::BaselineMetrics},
+};
 use async_trait::async_trait;
 
 /// UNION ALL execution plan
@@ -37,12 +42,17 @@ use async_trait::async_trait;
 pub struct UnionExec {
     /// Input execution plan
     inputs: Vec<Arc<dyn ExecutionPlan>>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl UnionExec {
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
-        UnionExec { inputs }
+        UnionExec {
+            inputs,
+            metrics: ExecutionPlanMetricsSet::new(),
+        }
     }
 }
 
@@ -82,11 +92,18 @@ impl ExecutionPlan for UnionExec {
     }
 
     async fn execute(&self, mut partition: usize) -> Result<SendableRecordBatchStream> {
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        // record the tiny amount of work done in this function so
+        // elapsed_compute is reported as non zero
+        let elapsed_compute = baseline_metrics.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer(); // record on drop
+
         // find partition to execute
         for input in self.inputs.iter() {
             // Calculate whether partition belongs to the current partition
             if partition < input.output_partitioning().partition_count() {
-                return input.execute(partition).await;
+                let stream = input.execute(partition).await?;
+                return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
             } else {
                 partition -= input.output_partitioning().partition_count();
             }
@@ -110,12 +127,50 @@ impl ExecutionPlan for UnionExec {
         }
     }
 
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
     fn statistics(&self) -> Statistics {
         self.inputs
             .iter()
             .map(|ep| ep.statistics())
             .reduce(stats_union)
             .unwrap_or_default()
+    }
+}
+
+/// Stream wrapper that records `BaselineMetrics` for a particular
+/// partition
+struct ObservedStream {
+    inner: SendableRecordBatchStream,
+    baseline_metrics: BaselineMetrics,
+}
+
+impl ObservedStream {
+    fn new(inner: SendableRecordBatchStream, baseline_metrics: BaselineMetrics) -> Self {
+        Self {
+            inner,
+            baseline_metrics,
+        }
+    }
+}
+
+impl RecordBatchStream for ObservedStream {
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
+        self.inner.schema()
+    }
+}
+
+impl futures::Stream for ObservedStream {
+    type Item = arrow::error::Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let poll = self.inner.poll_next_unpin(cx);
+        self.baseline_metrics.record_poll(poll)
     }
 }
 

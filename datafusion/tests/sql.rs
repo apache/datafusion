@@ -2302,9 +2302,9 @@ async fn csv_explain_analyze() {
     let formatted = normalize_for_explain(&formatted);
 
     // Only test basic plumbing and try to avoid having to change too
-    // many things
-    let needle =
-        "CoalescePartitionsExec, metrics=[output_rows=5, elapsed_compute=NOT RECORDED";
+    // many things. explain_analyze_baseline_metrics covers the values
+    // in greater depth
+    let needle = "CoalescePartitionsExec, metrics=[output_rows=5, elapsed_compute=";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";
@@ -2352,13 +2352,17 @@ async fn explain_analyze_baseline_metrics() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     // a query with as many operators as we have metrics for
     let sql = "EXPLAIN ANALYZE \
-               select count(*) from \
-               (SELECT count(*), c1 \
-               FROM aggregate_test_100 \
-               WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434' \
-               GROUP BY c1 \
-               ORDER BY c1) \
-               LIMIT 1";
+               SELECT count(*) as cnt FROM \
+                 (SELECT count(*), c1 \
+                  FROM aggregate_test_100 \
+                  WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434' \
+                  GROUP BY c1 \
+                  ORDER BY c1 ) \
+                 UNION ALL \
+               SELECT 1 as cnt \
+                 UNION ALL \
+               SELECT lead(c1, 1) OVER () as cnt FROM (select 1 as c1) \
+               LIMIT 3";
     println!("running query: {}", sql);
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
@@ -2368,11 +2372,6 @@ async fn explain_analyze_baseline_metrics() {
     println!("Query Output:\n\n{}", formatted);
     let formatted = normalize_for_explain(&formatted);
 
-    assert_metrics!(
-        &formatted,
-        "CoalescePartitionsExec",
-        "metrics=[output_rows=5, elapsed_compute=NOT RECORDED"
-    );
     assert_metrics!(
         &formatted,
         "HashAggregateExec: mode=Partial, gby=[]",
@@ -2385,7 +2384,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "SortExec: [c1@0 ASC]",
+        "SortExec: [c1@1 ASC]",
         "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(
@@ -2395,8 +2394,13 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "GlobalLimitExec: limit=1, ",
+        "GlobalLimitExec: limit=3, ",
         "metrics=[output_rows=1, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "LocalLimitExec: limit=3",
+        "metrics=[output_rows=3, elapsed_compute="
     );
     assert_metrics!(
         &formatted,
@@ -2408,6 +2412,21 @@ async fn explain_analyze_baseline_metrics() {
         "CoalesceBatchesExec: target_batch_size=4096",
         "metrics=[output_rows=5, elapsed_compute"
     );
+    assert_metrics!(
+        &formatted,
+        "CoalescePartitionsExec",
+        "metrics=[output_rows=5, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "UnionExec",
+        "metrics=[output_rows=3, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "WindowAggExec",
+        "metrics=[output_rows=1, elapsed_compute="
+    );
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
@@ -2416,9 +2435,13 @@ async fn explain_analyze_baseline_metrics() {
             || plan.as_any().downcast_ref::<physical_plan::hash_aggregate::HashAggregateExec>().is_some()
             // CoalescePartitionsExec doesn't do any work so is not included
             || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::limit::GlobalLimitExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::limit::LocalLimitExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::coalesce_batches::CoalesceBatchesExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::limit::GlobalLimitExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::coalesce_partitions::CoalescePartitionsExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::union::UnionExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::windows::WindowAggExec>().is_some()
     }
 
     // Validate that the recorded elapsed compute time was more than
