@@ -924,7 +924,7 @@ fn produce_from_matched(
         UInt64Array::from_iter_values(
             (1..visited_left_side.len())
                 .into_iter()
-                .filter(|v| !visited_left_side.get_bit(v))
+                .filter(|v| !visited_left_side.get_bit(*v))
                 .map(|v| v as u64),
         )
     } else {
@@ -932,7 +932,7 @@ fn produce_from_matched(
         UInt64Array::from_iter_values(
             (1..visited_left_side.len())
                 .into_iter()
-                .filter(|v| visited_left_side.get_bit(v))
+                .filter(|v| visited_left_side.get_bit(*v))
                 .map(|v| v as u64),
         )
     };
