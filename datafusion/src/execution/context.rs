@@ -57,6 +57,7 @@ use crate::execution::dataframe_impl::DataFrameImpl;
 use crate::logical_plan::{
     FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
+use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::constant_folding::ConstantFolding;
 use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
@@ -741,6 +742,7 @@ impl Default for ExecutionConfig {
             batch_size: 8192,
             optimizers: vec![
                 Arc::new(ConstantFolding::new()),
+                Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
@@ -1020,6 +1022,7 @@ impl FunctionRegistry for ExecutionContextState {
 mod tests {
 
     use super::*;
+    use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::make_scalar_function;
     use crate::physical_plan::{collect, collect_partitioned};
     use crate::test;
@@ -1999,6 +2002,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_avg_add() -> Result<()> {
+        let results = execute(
+            "SELECT AVG(c1), AVG(c1) + 1, AVG(c1) + 2, 1 + AVG(c1) FROM test",
+            4,
+        )
+        .await?;
+        assert_eq!(results.len(), 1);
+
+        let expected = vec![
+            "+--------------+----------------------------+----------------------------+----------------------------+",
+            "| AVG(test.c1) | AVG(test.c1) Plus Int64(1) | AVG(test.c1) Plus Int64(2) | Int64(1) Plus AVG(test.c1) |",
+            "+--------------+----------------------------+----------------------------+----------------------------+",
+            "| 1.5          | 2.5                        | 3.5                        | 2.5                        |",
+            "+--------------+----------------------------+----------------------------+----------------------------+",
+        ];
+        assert_batches_sorted_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn join_partitioned() -> Result<()> {
         // self join on partition id (workaround for duplicate column name)
         let results = execute(
@@ -2164,6 +2188,30 @@ mod tests {
             ];
             assert_batches_sorted_eq!(expected, &results);
         }
+    }
+
+    #[tokio::test]
+    async fn unprojected_filter() {
+        let mut ctx = ExecutionContext::new();
+        let df = ctx
+            .read_table(test::table_with_sequence(1, 3).unwrap())
+            .unwrap();
+
+        let df = df
+            .select(vec![binary_expr(col("i"), Operator::Plus, col("i"))])
+            .unwrap()
+            .filter(col("i").gt(lit(2)))
+            .unwrap();
+        let results = df.collect().await.unwrap();
+
+        let expected = vec![
+            "+--------------------------+",
+            "| ?table?.i Plus ?table?.i |",
+            "+--------------------------+",
+            "| 6                        |",
+            "+--------------------------+",
+        ];
+        assert_batches_sorted_eq!(expected, &results);
     }
 
     #[tokio::test]
