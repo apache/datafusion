@@ -35,6 +35,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
     array::*,
+    compute::aggregate::estimated_bytes_size,
     datatypes::{DataType, Field},
     io::ipc::read::FileReader,
     io::ipc::write::FileWriter,
@@ -90,8 +91,7 @@ pub async fn write_stream_to_disk(
         let batch_size_bytes: usize = batch
             .columns()
             .iter()
-            // FIXME: .map(|array| array.get_array_memory_size())
-            .map(|_array| 0)
+            .map(|array| estimated_bytes_size(array.as_ref()))
             .sum();
         num_batches += 1;
         num_rows += batch.num_rows();

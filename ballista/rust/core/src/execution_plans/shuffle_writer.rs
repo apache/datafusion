@@ -35,6 +35,7 @@ use crate::serde::protobuf::ShuffleWritePartition;
 use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 use async_trait::async_trait;
 use datafusion::arrow::array::*;
+use datafusion::arrow::compute::aggregate::estimated_bytes_size;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::io::ipc::read::FileReader;
@@ -461,9 +462,7 @@ impl<'a> ShuffleWriter<'a> {
         let num_bytes: usize = batch
             .columns()
             .iter()
-            .map(|_array| 0)
-            // FIXME: add arrow2 with array_memory_size capability and enable this.
-            // .map(|array| array.get_array_memory_size())
+            .map(|array| estimated_bytes_size(array.as_ref()))
             .sum();
         self.num_bytes += num_bytes as u64;
         Ok(())
