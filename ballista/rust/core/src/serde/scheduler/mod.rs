@@ -162,7 +162,7 @@ impl PartitionStats {
         let values = vec![num_rows, num_batches, num_bytes];
 
         Ok(Arc::new(StructArray::from_data(
-            self.arrow_struct_fields(),
+            DataType::Struct(self.arrow_struct_fields()),
             values,
             None,
         )))

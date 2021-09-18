@@ -212,13 +212,17 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
             PhysicalPlanType::Window(window_agg) => {
                 let input: Arc<dyn ExecutionPlan> =
                     convert_box_required!(window_agg.input)?;
-                let input_schema = window_agg.input_schema.ok_or_else(|| {
-                    BallistaError::General(
-                        "input_schema in WindowAggrNode is missing.".to_owned(),
-                    )
-                })?;
-
-                let physical_schema = Arc::new(input_schema);
+                let input_schema = window_agg
+                    .input_schema
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BallistaError::General(
+                            "input_schema in WindowAggrNode is missing.".to_owned(),
+                        )
+                    })?
+                    .clone();
+                let physical_schema: SchemaRef =
+                    SchemaRef::new((&input_schema).try_into()?);
 
                 let physical_window_expr: Vec<Arc<dyn WindowExpr>> = window_agg
                     .window_expr

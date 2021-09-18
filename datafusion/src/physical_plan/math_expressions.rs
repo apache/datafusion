@@ -20,6 +20,7 @@ use rand::{thread_rng, Rng};
 use std::iter;
 use std::sync::Arc;
 
+use arrow::array::Float32Array;
 use arrow::array::Float64Array;
 use arrow::compute::arity::unary;
 use arrow::datatypes::DataType;
@@ -27,24 +28,34 @@ use arrow::datatypes::DataType;
 use super::{ColumnarValue, ScalarValue};
 use crate::error::{DataFusionError, Result};
 
+macro_rules! downcast_compute_op {
+    ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident, $DT: path) => {{
+        let n = $ARRAY.as_any().downcast_ref::<$TYPE>();
+        match n {
+            Some(array) => {
+                let res: $TYPE =
+                    unary(array, |x| x.$FUNC(), $DT);
+                Ok(Arc::new(res))
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "Invalid data type for {}",
+                $NAME
+            ))),
+        }
+    }};
+}
+
 macro_rules! unary_primitive_array_op {
     ($VALUE:expr, $NAME:expr, $FUNC:ident) => {{
         match ($VALUE) {
             ColumnarValue::Array(array) => match array.data_type() {
                 DataType::Float32 => {
-                    let array = array.as_any().downcast_ref().unwrap();
-                    let array = unary::<f32, _, f64>(
-                        array,
-                        |x| x.$FUNC() as f64,
-                        DataType::Float32,
-                    );
-                    Ok(ColumnarValue::Array(Arc::new(array)))
+                    let result = downcast_compute_op!(array, $NAME, $FUNC, Float32Array, DataType::Float32);
+                    Ok(ColumnarValue::Array(result?))
                 }
                 DataType::Float64 => {
-                    let array = array.as_any().downcast_ref().unwrap();
-                    let array =
-                        unary::<f64, _, f64>(array, |x| x.$FUNC(), DataType::Float64);
-                    Ok(ColumnarValue::Array(Arc::new(array)))
+                    let result = downcast_compute_op!(array, $NAME, $FUNC, Float64Array, DataType::Float64);
+                    Ok(ColumnarValue::Array(result?))
                 }
                 other => Err(DataFusionError::Internal(format!(
                     "Unsupported data type {:?} for function {}",

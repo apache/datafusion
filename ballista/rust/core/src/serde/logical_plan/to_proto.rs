@@ -51,6 +51,7 @@ impl protobuf::IntervalUnit {
         match interval_unit {
             IntervalUnit::YearMonth => protobuf::IntervalUnit::YearMonth,
             IntervalUnit::DayTime => protobuf::IntervalUnit::DayTime,
+            IntervalUnit::MonthDayNano => protobuf::IntervalUnit::MonthDayNano,
         }
     }
 
@@ -62,6 +63,7 @@ impl protobuf::IntervalUnit {
             Some(interval_unit) => Ok(match interval_unit {
                 protobuf::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
                 protobuf::IntervalUnit::DayTime => IntervalUnit::DayTime,
+                protobuf::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
             }),
             None => Err(proto_error(
                 "Error converting i32 to DateUnit: Passed invalid variant",
@@ -235,7 +237,7 @@ impl TryInto<DataType> for &protobuf::ArrowType {
                     .iter()
                     .map(|field| field.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                DataType::Union(union_types)
+                DataType::Union(union_types, None, false)
             }
             protobuf::arrow_type::ArrowTypeEnum::Dictionary(boxed_dict) => {
                 let dict_ref = boxed_dict.as_ref();
@@ -389,7 +391,7 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     .map(|field| field.into())
                     .collect::<Vec<_>>(),
             }),
-            DataType::Union(union_types) => ArrowTypeEnum::Union(protobuf::Union {
+            DataType::Union(union_types, _, _) => ArrowTypeEnum::Union(protobuf::Union {
                 union_types: union_types
                     .iter()
                     .map(|field| field.into())
@@ -407,6 +409,8 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     fractional: *fractional as u64,
                 })
             }
+            DataType::Extension(_, _, _) =>
+                panic!("DataType::Extension is not supported")
         }
     }
 }
@@ -535,7 +539,7 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
             | DataType::FixedSizeList(_, _)
             | DataType::LargeList(_)
             | DataType::Struct(_)
-            | DataType::Union(_)
+            | DataType::Union(_, _, _)
             | DataType::Dictionary(_, _)
             | DataType::Decimal(_, _) => {
                 return Err(proto_error(format!(
@@ -543,6 +547,8 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
                     val
                 )))
             }
+            DataType::Extension(_, _, _) =>
+                panic!("DataType::Extension is not supported")
         };
         Ok(scalar_value)
     }

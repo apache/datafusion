@@ -979,6 +979,7 @@ enum TimeUnit{
 enum IntervalUnit{
     YearMonth = 0;
     DayTime = 1;
+    MonthDayNano = 2;
 }
 
 message Decimal{

@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn invalid_cast() {
         // Ensure a useful error happens at plan time if invalid casts are used
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Null, false)]);
 
         let result = try_cast(col("a", &schema).unwrap(), &schema, DataType::LargeBinary);
         result.expect_err("expected Invalid CAST");

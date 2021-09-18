@@ -154,7 +154,10 @@ mod tests {
             let expression = cast_with_options(col("a", &schema)?, &schema, $TYPE)?;
 
             // verify that its display is correct
-            assert_eq!(format!("CAST(a AS {:?})", $TYPE), format!("{}", expression));
+            assert_eq!(
+                format!("CAST(a@0 AS {:?})", $TYPE),
+                format!("{}", expression)
+            );
 
             // verify that the expression's type is correct
             assert_eq!(expression.data_type(&schema)?, $TYPE);
@@ -235,7 +238,7 @@ mod tests {
     #[test]
     fn invalid_cast() {
         // Ensure a useful error happens at plan time if invalid casts are used
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Null, false)]);
 
         let result = cast(col("a", &schema).unwrap(), &schema, DataType::LargeBinary);
         result.expect_err("expected Invalid CAST");

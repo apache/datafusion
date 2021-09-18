@@ -511,7 +511,7 @@ impl SortPreservingMergeStream {
                     }
 
                     // emit current batch of rows for current buffer
-                    array_data.extend(buffer_idx, start_row_idx, end_row_idx);
+                    array_data.extend(buffer_idx, start_row_idx, end_row_idx - start_row_idx);
 
                     // start new batch of rows
                     buffer_idx = next_buffer_idx;
@@ -520,7 +520,7 @@ impl SortPreservingMergeStream {
                 }
 
                 // emit final batch of rows
-                array_data.extend(buffer_idx, start_row_idx, end_row_idx);
+                array_data.extend(buffer_idx, start_row_idx, end_row_idx - start_row_idx);
                 array_data.as_arc()
             })
             .collect();
@@ -965,7 +965,7 @@ mod tests {
                 options: Default::default(),
             },
             PhysicalSortExpr {
-                expr: col("c7", &schema).unwrap(),
+                expr: col("c12", &schema).unwrap(),
                 options: SortOptions::default(),
             },
         ];
@@ -1180,7 +1180,7 @@ mod tests {
     async fn test_async() {
         let schema = test::aggr_test_schema();
         let sort = vec![PhysicalSortExpr {
-            expr: col("c7", &schema).unwrap(),
+            expr: col("c12", &schema).unwrap(),
             options: SortOptions::default(),
         }];
 

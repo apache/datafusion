@@ -1,3 +1,4 @@
+
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -243,6 +244,8 @@ impl TryInto<datafusion::arrow::datatypes::DataType>
                     .iter()
                     .map(|field| field.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
+                None,
+                false,
             ),
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
                 let pb_key_datatype = dict

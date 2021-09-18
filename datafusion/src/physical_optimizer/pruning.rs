@@ -1394,7 +1394,7 @@ mod tests {
         let expr = col("b1").not().eq(lit(true));
         let p = PruningPredicate::try_new(&expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, vec![true, false, false, true, true]);
+        assert_eq!(result, vec![true, true, false, true, true]);
     }
 
     /// Creates setup for int32 chunk pruning

@@ -248,6 +248,11 @@ impl ParquetExec {
         &self.projection
     }
 
+    /// Batch size
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
     /// Statistics for the data set (sum of statistics for all partitions)
     pub fn statistics(&self) -> &Statistics {
         &self.statistics

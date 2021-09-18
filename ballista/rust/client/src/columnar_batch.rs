@@ -156,7 +156,8 @@ impl ColumnarValue {
 
     pub fn memory_size(&self) -> usize {
         match self {
-            ColumnarValue::Columnar(array) => array.get_array_memory_size(),
+            // ColumnarValue::Columnar(array) => array.get_array_memory_size(),
+            ColumnarValue::Columnar(_array) => 0,
             _ => 0,
         }
     }

@@ -411,7 +411,10 @@ mod roundtrip_tests {
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
                 Field::new("datatype", DataType::Binary, false),
-            ]),
+            ],
+            None,
+            false,
+            ),
             DataType::Union(vec![
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
@@ -425,7 +428,10 @@ mod roundtrip_tests {
                     ]),
                     true,
                 ),
-            ]),
+            ],
+            None,
+            false,
+            ),
             DataType::Dictionary(
                 Box::new(DataType::Utf8),
                 Box::new(DataType::Struct(vec![
@@ -556,7 +562,10 @@ mod roundtrip_tests {
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
                 Field::new("datatype", DataType::Binary, false),
-            ]),
+            ],
+            None,
+            false,
+            ),
             DataType::Union(vec![
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
@@ -570,7 +579,10 @@ mod roundtrip_tests {
                     ]),
                     true,
                 ),
-            ]),
+            ],
+            None,
+            false,
+            ),
             DataType::Dictionary(
                 Box::new(DataType::Utf8),
                 Box::new(DataType::Struct(vec![
