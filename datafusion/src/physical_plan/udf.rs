@@ -69,6 +69,17 @@ impl PartialEq for ScalarUDF {
     }
 }
 
+impl PartialOrd for ScalarUDF {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let c = self.name.partial_cmp(&other.name);
+        if matches!(c, Some(std::cmp::Ordering::Equal)) {
+            self.signature.partial_cmp(&other.signature)
+        } else {
+            c
+        }
+    }
+}
+
 impl ScalarUDF {
     /// Create a new ScalarUDF
     pub fn new(
