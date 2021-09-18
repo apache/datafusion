@@ -2302,9 +2302,9 @@ async fn csv_explain_analyze() {
     let formatted = normalize_for_explain(&formatted);
 
     // Only test basic plumbing and try to avoid having to change too
-    // many things
-    let needle =
-        "CoalescePartitionsExec, metrics=[output_rows=5, elapsed_compute=NOT RECORDED";
+    // many things. explain_analyze_baseline_metrics covers the values
+    // in greater depth
+    let needle = "CoalescePartitionsExec, metrics=[output_rows=5, elapsed_compute=";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";
