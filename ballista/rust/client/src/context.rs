@@ -66,7 +66,9 @@ impl BallistaContextState {
         config: &BallistaConfig,
         concurrent_tasks: usize,
     ) -> ballista_core::error::Result<Self> {
-        info!("Running in local mode. Scheduler will be run in-proc");
+        use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
+
+        log::info!("Running in local mode. Scheduler will be run in-proc");
 
         let addr = ballista_scheduler::new_standalone_scheduler().await?;
 
@@ -78,8 +80,8 @@ impl BallistaContextState {
             .await
             {
                 Err(_) => {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    info!("Attempting to connect to in-proc scheduler...");
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    log::info!("Attempting to connect to in-proc scheduler...");
                 }
                 Ok(scheduler) => break scheduler,
             }
@@ -297,8 +299,10 @@ mod tests {
     #[cfg(feature = "standalone")]
     async fn test_standalone_mode() {
         use super::*;
-        let context = BallistaContext::standalone(1).await.unwrap();
+        let context = BallistaContext::standalone(&BallistaConfig::new().unwrap(), 1)
+            .await
+            .unwrap();
         let df = context.sql("SELECT 1;").unwrap();
-        context.collect(&df.to_logical_plan()).await.unwrap();
+        df.collect().await.unwrap();
     }
 }
