@@ -17,6 +17,10 @@
 
 //! Execution plan for reading CSV files
 
+use crate::error::{DataFusionError, Result};
+use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{common, source::Source, Partitioning};
+use arrow::io::csv;
 use futures::StreamExt;
 use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
@@ -26,7 +30,6 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
-use arrow::io::csv::read;
 use arrow::record_batch::RecordBatch;
 
 use futures::Stream;
@@ -36,12 +39,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{
-    common, source::Source, DisplayFormatType, ExecutionPlan, Partitioning,
+use super::{
+    DisplayFormatType, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-
-use super::{RecordBatchStream, SendableRecordBatchStream};
 use async_trait::async_trait;
 
 /// CSV file read option
@@ -154,17 +154,17 @@ pub fn infer_schema_from_files(
     let mut records_to_read = max_read_records.unwrap_or(std::usize::MAX);
 
     for fname in files.iter() {
-        let mut reader = read::ReaderBuilder::new()
+        let mut reader = csv::read::ReaderBuilder::new()
             .delimiter(delimiter)
             .has_headers(has_header)
             .from_path(fname)
             .map_err(ArrowError::from_external_error)?;
 
-        let schema = read::infer_schema(
+        let schema = csv::read::infer_schema(
             &mut reader,
             Some(records_to_read),
             has_header,
-            &read::infer,
+            &csv::read::infer,
         )?;
 
         schemas.push(schema);
@@ -308,12 +308,12 @@ impl CsvExec {
         filenames: &[String],
         options: &CsvReadOptions,
     ) -> Result<Schema> {
-        infer_schema_from_files(
+        Ok(infer_schema_from_files(
             filenames,
             options.delimiter,
             Some(options.schema_infer_max_records),
             options.has_header,
-        )
+        )?)
     }
 }
 
@@ -329,16 +329,16 @@ fn producer_task<R: Read>(
     projection: &[usize],
     schema: Arc<Schema>,
 ) -> Result<()> {
-    let mut reader = read::ReaderBuilder::new()
+    let mut reader = csv::read::ReaderBuilder::new()
         .delimiter(delimiter)
         .has_headers(has_header)
         .from_reader(reader);
 
     let mut current_read = 0;
-    let mut rows = vec![read::ByteRecord::default(); batch_size];
+    let mut rows = vec![csv::read::ByteRecord::default(); batch_size];
     while current_read < limit {
         let batch_size = batch_size.min(limit - current_read);
-        let rows_read = read::read_rows(&mut reader, 0, &mut rows[..batch_size])?;
+        let rows_read = csv::read::read_rows(&mut reader, 0, &mut rows[..batch_size])?;
         current_read += rows_read;
 
         let batch = deserialize(&rows[..rows_read], projection, schema.clone());
@@ -354,16 +354,16 @@ fn producer_task<R: Read>(
 
 // CPU-intensive task
 fn deserialize(
-    rows: &[read::ByteRecord],
+    rows: &[csv::read::ByteRecord],
     projection: &[usize],
     schema: SchemaRef,
 ) -> ArrowResult<RecordBatch> {
-    read::deserialize_batch(
+    csv::read::deserialize_batch(
         rows,
         schema.fields(),
         Some(projection),
         0,
-        read::deserialize_column,
+        csv::read::deserialize_column,
     )
 }
 
@@ -445,11 +445,16 @@ impl ExecutionPlan for CsvExec {
                     ReceiverStream::new(response_rx),
                 )))
             }
-            Source::Reader(reader) => {
-                let (response_tx, response_rx): (Sender<Payload>, Receiver<Payload>) =
-                    channel(2);
+            Source::Reader(rdr) => {
+                if partition != 0 {
+                    Err(DataFusionError::Internal(
+                        "Only partition 0 is valid when CSV comes from a reader"
+                            .to_string(),
+                    ))
+                } else if let Some(reader) = rdr.lock().unwrap().take() {
+                    let (response_tx, response_rx): (Sender<Payload>, Receiver<Payload>) =
+                        channel(2);
 
-                if let Some(reader) = reader.lock().unwrap().take() {
                     task::spawn_blocking(move || {
                         producer_task(
                             reader,
@@ -492,6 +497,11 @@ impl ExecutionPlan for CsvExec {
                 )
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        // TODO stats: handle statistics
+        Statistics::default()
     }
 }
 

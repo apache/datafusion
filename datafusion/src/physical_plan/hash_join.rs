@@ -38,7 +38,6 @@ use arrow::compute::take;
 
 use hashbrown::raw::RawTable;
 
-use super::hash_utils::create_hashes;
 use super::{
     coalesce_partitions::CoalescePartitionsExec,
     hash_utils::{build_join_schema, check_join_is_valid, JoinOn},
@@ -47,6 +46,7 @@ use super::{
     expressions::Column,
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
 };
+use super::{hash_utils::create_hashes, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::JoinType;
 
@@ -452,6 +452,13 @@ impl ExecutionPlan for HashJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn statistics(&self) -> Statistics {
+        // TODO stats: it is not possible in general to know the output size of joins
+        // There are some special cases though, for example:
+        // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
+        Statistics::default()
     }
 }
 

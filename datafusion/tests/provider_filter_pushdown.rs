@@ -19,15 +19,13 @@ use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion::datasource::datasource::{
-    Statistics, TableProvider, TableProviderFilterPushDown,
-};
+use datafusion::datasource::datasource::{TableProvider, TableProviderFilterPushDown};
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::common::SizedRecordBatchStream;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
@@ -96,6 +94,12 @@ impl ExecutionPlan for CustomPlan {
             }
         }
     }
+
+    fn statistics(&self) -> Statistics {
+        // here we could provide more accurate statistics
+        // but we want to test the filter pushdown not the CBOs
+        Statistics::default()
+    }
 }
 
 #[derive(Clone)]
@@ -141,10 +145,6 @@ impl TableProvider for CustomProvider {
                 batches: vec![],
             })),
         }
-    }
-
-    fn statistics(&self) -> Statistics {
-        Statistics::default()
     }
 
     fn supports_filter_pushdown(&self, _: &Expr) -> Result<TableProviderFilterPushDown> {

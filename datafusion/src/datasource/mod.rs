@@ -17,22 +17,23 @@
 
 //! DataFusion data sources
 
+pub mod avro;
 pub mod csv;
 pub mod datasource;
 pub mod empty;
 pub mod json;
 pub mod memory;
+pub mod object_store;
 pub mod parquet;
 
 pub use self::csv::{CsvFile, CsvReadOptions};
 pub use self::datasource::{TableProvider, TableType};
 pub use self::memory::MemTable;
 use crate::arrow::datatypes::{Schema, SchemaRef};
-use crate::datasource::datasource::{ColumnStatistics, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::common::build_file_list;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::Accumulator;
+use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
 use std::sync::Arc;
 
 /// Source for table input data
@@ -193,9 +194,11 @@ pub fn get_statistics_with_limit(
 
     let mut num_rows = 0;
     let mut num_files = 0;
+    let mut is_exact = true;
     for file in &all_files {
         num_files += 1;
         let file_stats = &file.statistics;
+        is_exact &= file_stats.is_exact;
         num_rows += file_stats.num_rows.unwrap_or(0);
         total_byte_size += file_stats.total_byte_size.unwrap_or(0);
         if let Some(vec) = &file_stats.column_statistics {
@@ -230,7 +233,10 @@ pub fn get_statistics_with_limit(
             break;
         }
     }
-    all_files.truncate(num_files);
+    if num_files < all_files.len() {
+        is_exact = false;
+        all_files.truncate(num_files);
+    }
 
     let column_stats = if has_statistics {
         Some(get_col_stats(
@@ -247,6 +253,7 @@ pub fn get_statistics_with_limit(
         num_rows: Some(num_rows as usize),
         total_byte_size: Some(total_byte_size as usize),
         column_statistics: column_stats,
+        is_exact,
     };
     (all_files, statistics)
 }

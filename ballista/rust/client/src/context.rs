@@ -32,6 +32,7 @@ use datafusion::dataframe::DataFrame;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::dataframe_impl::DataFrameImpl;
 use datafusion::logical_plan::LogicalPlan;
+use datafusion::physical_plan::avro::AvroReadOptions;
 use datafusion::physical_plan::csv::CsvReadOptions;
 use datafusion::sql::parser::FileType;
 
@@ -125,6 +126,30 @@ impl BallistaContext {
         })
     }
 
+    /// Create a DataFrame representing an Avro table scan
+
+    pub fn read_avro(
+        &self,
+        path: &str,
+        options: AvroReadOptions,
+    ) -> Result<Arc<dyn DataFrame>> {
+        // convert to absolute path because the executor likely has a different working directory
+        let path = PathBuf::from(path);
+        let path = fs::canonicalize(&path)?;
+
+        // use local DataFusion context for now but later this might call the scheduler
+        let mut ctx = {
+            let guard = self.state.lock().unwrap();
+            create_df_ctx_with_ballista_query_planner(
+                &guard.scheduler_host,
+                guard.scheduler_port,
+                guard.config(),
+            )
+        };
+        let df = ctx.read_avro(path.to_str().unwrap(), options)?;
+        Ok(df)
+    }
+
     /// Create a DataFrame representing a Parquet table scan
 
     pub fn read_parquet(&self, path: &str) -> Result<Arc<dyn DataFrame>> {
@@ -193,6 +218,17 @@ impl BallistaContext {
         self.register_table(name, df.as_ref())
     }
 
+    pub fn register_avro(
+        &self,
+        name: &str,
+        path: &str,
+        options: AvroReadOptions,
+    ) -> Result<()> {
+        let df = self.read_avro(path, options)?;
+        self.register_table(name, df.as_ref())?;
+        Ok(())
+    }
+
     /// Create a DataFrame from a SQL statement
     pub fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let mut ctx = {
@@ -238,6 +274,10 @@ impl BallistaContext {
                 }
                 FileType::Parquet => {
                     self.register_parquet(name, location)?;
+                    Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
+                }
+                FileType::Avro => {
+                    self.register_avro(name, location, AvroReadOptions::default())?;
                     Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
                 }
                 _ => Err(DataFusionError::NotImplemented(format!(

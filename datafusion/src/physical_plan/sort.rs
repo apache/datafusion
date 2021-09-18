@@ -20,7 +20,7 @@
 use super::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
-use super::{RecordBatchStream, SendableRecordBatchStream};
+use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
@@ -178,6 +178,10 @@ impl ExecutionPlan for SortExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.input.statistics()
     }
 }
 

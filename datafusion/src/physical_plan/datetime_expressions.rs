@@ -250,14 +250,8 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let f = |x: Option<&i64>| x.map(|x| date_trunc_single(granularity, *x)).transpose();
 
     Ok(match array {
-        ColumnarValue::Scalar(scalar) => {
-            if let ScalarValue::TimestampNanosecond(v) = scalar {
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond((f)(v.as_ref())?))
-            } else {
-                return Err(DataFusionError::Execution(
-                    "array of `date_trunc` must be non-null scalar Utf8".to_string(),
-                ));
-            }
+        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v)) => {
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond((f)(v.as_ref())?))
         }
         ColumnarValue::Array(array) => {
             let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
@@ -268,6 +262,11 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 .to(DataType::Timestamp(TimeUnit::Nanosecond, None));
 
             ColumnarValue::Array(Arc::new(array))
+        }
+        _ => {
+            return Err(DataFusionError::Execution(
+                "array of `date_trunc` must be non-null scalar Utf8".to_string(),
+            ));
         }
     })
 }

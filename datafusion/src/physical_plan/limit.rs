@@ -36,7 +36,10 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use super::{RecordBatchStream, SendableRecordBatchStream};
+use super::{
+    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
+};
 
 use async_trait::async_trait;
 
@@ -47,12 +50,18 @@ pub struct GlobalLimitExec {
     input: Arc<dyn ExecutionPlan>,
     /// Maximum number of rows to return
     limit: usize,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl GlobalLimitExec {
     /// Create a new GlobalLimitExec
     pub fn new(input: Arc<dyn ExecutionPlan>, limit: usize) -> Self {
-        GlobalLimitExec { input, limit }
+        GlobalLimitExec {
+            input,
+            limit,
+            metrics: ExecutionPlanMetricsSet::new(),
+        }
     }
 
     /// Input execution plan
@@ -121,8 +130,13 @@ impl ExecutionPlan for GlobalLimitExec {
             ));
         }
 
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let stream = self.input.execute(0).await?;
-        Ok(Box::pin(LimitStream::new(stream, self.limit)))
+        Ok(Box::pin(LimitStream::new(
+            stream,
+            self.limit,
+            baseline_metrics,
+        )))
     }
 
     fn fmt_as(
@@ -136,6 +150,31 @@ impl ExecutionPlan for GlobalLimitExec {
             }
         }
     }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
+    fn statistics(&self) -> Statistics {
+        let input_stats = self.input.statistics();
+        match input_stats {
+            // if the input does not reach the limit globally, return input stats
+            Statistics {
+                num_rows: Some(nr), ..
+            } if nr <= self.limit => input_stats,
+            // if the input is greater than the limit, the num_row will be the limit
+            // but we won't be able to predict the other statistics
+            Statistics {
+                num_rows: Some(nr), ..
+            } if nr > self.limit => Statistics {
+                num_rows: Some(self.limit),
+                is_exact: input_stats.is_exact,
+                ..Default::default()
+            },
+            // if we don't know the input size, we can't predict the limit's behaviour
+            _ => Statistics::default(),
+        }
+    }
 }
 
 /// LocalLimitExec applies a limit to a single partition
@@ -145,12 +184,18 @@ pub struct LocalLimitExec {
     input: Arc<dyn ExecutionPlan>,
     /// Maximum number of rows to return
     limit: usize,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl LocalLimitExec {
     /// Create a new LocalLimitExec partition
     pub fn new(input: Arc<dyn ExecutionPlan>, limit: usize) -> Self {
-        Self { input, limit }
+        Self {
+            input,
+            limit,
+            metrics: ExecutionPlanMetricsSet::new(),
+        }
     }
 
     /// Input execution plan
@@ -199,8 +244,13 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let stream = self.input.execute(partition).await?;
-        Ok(Box::pin(LimitStream::new(stream, self.limit)))
+        Ok(Box::pin(LimitStream::new(
+            stream,
+            self.limit,
+            baseline_metrics,
+        )))
     }
 
     fn fmt_as(
@@ -212,6 +262,34 @@ impl ExecutionPlan for LocalLimitExec {
             DisplayFormatType::Default => {
                 write!(f, "LocalLimitExec: limit={}", self.limit)
             }
+        }
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
+    fn statistics(&self) -> Statistics {
+        let input_stats = self.input.statistics();
+        match input_stats {
+            // if the input does not reach the limit globally, return input stats
+            Statistics {
+                num_rows: Some(nr), ..
+            } if nr <= self.limit => input_stats,
+            // if the input is greater than the limit, the num_row will be greater
+            // than the limit because the partitions will be limited separatly
+            // the statistic
+            Statistics {
+                num_rows: Some(nr), ..
+            } if nr > self.limit => Statistics {
+                num_rows: Some(self.limit),
+                // this is not actually exact, but will be when GlobalLimit is applied
+                // TODO stats: find a more explicit way to vehiculate this information
+                is_exact: input_stats.is_exact,
+                ..Default::default()
+            },
+            // if we don't know the input size, we can't predict the limit's behaviour
+            _ => Statistics::default(),
         }
     }
 }
@@ -236,20 +314,29 @@ struct LimitStream {
     schema: SchemaRef,
     // the current number of rows which have been produced
     current_len: usize,
+    /// Execution time metrics
+    baseline_metrics: BaselineMetrics,
 }
 
 impl LimitStream {
-    fn new(input: SendableRecordBatchStream, limit: usize) -> Self {
+    fn new(
+        input: SendableRecordBatchStream,
+        limit: usize,
+        baseline_metrics: BaselineMetrics,
+    ) -> Self {
         let schema = input.schema();
         Self {
             limit,
             input: Some(input),
             schema,
             current_len: 0,
+            baseline_metrics,
         }
     }
 
     fn stream_limit(&mut self, batch: RecordBatch) -> Option<RecordBatch> {
+        // records time on drop
+        let _timer = self.baseline_metrics.elapsed_compute().timer();
         if self.current_len == self.limit {
             self.input = None; // clear input so it can be dropped early
             None
@@ -272,14 +359,16 @@ impl Stream for LimitStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        match &mut self.input {
+        let poll = match &mut self.input {
             Some(input) => input.poll_next_unpin(cx).map(|x| match x {
                 Some(Ok(batch)) => Ok(self.stream_limit(batch)).transpose(),
                 other => other,
             }),
             // input has been cleared
             None => Poll::Ready(None),
-        }
+        };
+
+        self.baseline_metrics.record_poll(poll)
     }
 }
 
@@ -350,7 +439,8 @@ mod tests {
 
         // limit of six needs to consume the entire first record batch
         // (5 rows) and 1 row from the second (1 row)
-        let limit_stream = LimitStream::new(Box::pin(input), 6);
+        let baseline_metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let limit_stream = LimitStream::new(Box::pin(input), 6, baseline_metrics);
         assert_eq!(index.value(), 0);
 
         let results = collect(Box::pin(limit_stream)).await.unwrap();

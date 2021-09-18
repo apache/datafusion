@@ -28,6 +28,8 @@ use arrow::{array::*, datatypes::*, record_batch::RecordBatch};
 use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::logical_plan::LogicalPlan;
+#[cfg(feature = "avro")]
+use datafusion::physical_plan::avro::AvroReadOptions;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
@@ -1881,6 +1883,28 @@ async fn left_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn left_join_unbalanced() -> Result<()> {
+    // the t1_id is larger than t2_id so the hash_build_probe_order optimizer should kick in
+    let mut ctx = create_join_context_unbalanced("t1_id", "t2_id")?;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+    ];
+    let expected = vec![
+        vec!["11", "a", "z"],
+        vec!["22", "b", "y"],
+        vec!["33", "c", "NULL"],
+        vec!["44", "d", "x"],
+        vec!["77", "e", "NULL"],
+    ];
+    for sql in equivalent_sql.iter() {
+        let actual = execute(&mut ctx, sql).await;
+        assert_eq!(expected, actual);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn right_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
@@ -2053,6 +2077,43 @@ async fn cross_join() {
     assert_eq!(4 * 4 * 2, actual.len());
 }
 
+#[tokio::test]
+async fn cross_join_unbalanced() {
+    // the t1_id is larger than t2_id so the hash_build_probe_order optimizer should kick in
+    let mut ctx = create_join_context_unbalanced("t1_id", "t2_id").unwrap();
+
+    // the order of the values is not determinisitic, so we need to sort to check the values
+    let sql =
+        "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id, t1_name";
+    let actual = execute(&mut ctx, sql).await;
+
+    assert_eq!(
+        actual,
+        [
+            ["11", "a", "z"],
+            ["11", "a", "y"],
+            ["11", "a", "x"],
+            ["11", "a", "w"],
+            ["22", "b", "z"],
+            ["22", "b", "y"],
+            ["22", "b", "x"],
+            ["22", "b", "w"],
+            ["33", "c", "z"],
+            ["33", "c", "y"],
+            ["33", "c", "x"],
+            ["33", "c", "w"],
+            ["44", "d", "z"],
+            ["44", "d", "y"],
+            ["44", "d", "x"],
+            ["44", "d", "w"],
+            ["77", "e", "z"],
+            ["77", "e", "y"],
+            ["77", "e", "x"],
+            ["77", "e", "w"]
+        ]
+    );
+}
+
 fn create_join_context(
     column_left: &str,
     column_right: &str,
@@ -2130,6 +2191,55 @@ fn create_join_context_qualified() -> Result<ExecutionContext> {
             Arc::new(UInt32Array::from_slice(&[1, 2, 9, 4])),
             Arc::new(UInt32Array::from_slice(&[100, 200, 300, 400])),
             Arc::new(UInt32Array::from_slice(&[500, 600, 700, 800])),
+        ],
+    )?;
+    let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
+    ctx.register_table("t2", Arc::new(t2_table))?;
+
+    Ok(ctx)
+}
+
+/// the table column_left has more rows than the table column_right
+fn create_join_context_unbalanced(
+    column_left: &str,
+    column_right: &str,
+) -> Result<ExecutionContext> {
+    let mut ctx = ExecutionContext::new();
+
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new(column_left, DataType::UInt32, true),
+        Field::new("t1_name", DataType::Utf8, true),
+    ]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema.clone(),
+        vec![
+            Arc::new(UInt32Array::from(vec![11, 22, 33, 44, 77])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+                Some("e"),
+            ])),
+        ],
+    )?;
+    let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new(column_right, DataType::UInt32, true),
+        Field::new("t2_name", DataType::Utf8, true),
+    ]));
+    let t2_data = RecordBatch::try_new(
+        t2_schema.clone(),
+        vec![
+            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
+            Arc::new(StringArray::from(vec![
+                Some("z"),
+                Some("y"),
+                Some("x"),
+                Some("w"),
+            ])),
         ],
     )?;
     let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
@@ -2231,12 +2341,21 @@ async fn explain_analyze_baseline_metrics() {
     let mut ctx = ExecutionContext::with_config(config);
     register_aggregate_csv_by_sql(&mut ctx).await;
     // a query with as many operators as we have metrics for
-    let sql = "EXPLAIN ANALYZE select count(*) from (SELECT count(*), c1 FROM aggregate_test_100 group by c1 ORDER BY c1)";
+    let sql = "EXPLAIN ANALYZE \
+               select count(*) from \
+               (SELECT count(*), c1 \
+               FROM aggregate_test_100 \
+               WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434' \
+               GROUP BY c1 \
+               ORDER BY c1) \
+               LIMIT 1";
+    println!("running query: {}", sql);
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
     let results = collect(physical_plan.clone()).await.unwrap();
     let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
+    println!("Query Output:\n\n{}", formatted);
     let formatted = normalize_for_explain(&formatted);
 
     assert_metrics!(
@@ -2259,14 +2378,37 @@ async fn explain_analyze_baseline_metrics() {
         "SortExec: [c1@0 ASC]",
         "metrics=[output_rows=5, elapsed_compute="
     );
+    assert_metrics!(
+        &formatted,
+        "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
+        "metrics=[output_rows=99, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "GlobalLimitExec: limit=1, ",
+        "metrics=[output_rows=1, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "ProjectionExec: expr=[COUNT(UInt8(1))",
+        "metrics=[output_rows=1, elapsed_compute="
+    );
+    assert_metrics!(
+        &formatted,
+        "CoalesceBatchesExec: target_batch_size=4096",
+        "metrics=[output_rows=5, elapsed_compute"
+    );
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
-        use datafusion::physical_plan::{
-            hash_aggregate::HashAggregateExec, sort::SortExec,
-        };
+        use datafusion::physical_plan;
 
-        plan.as_any().downcast_ref::<SortExec>().is_some()
-            || plan.as_any().downcast_ref::<HashAggregateExec>().is_some()
+        plan.as_any().downcast_ref::<physical_plan::sort::SortExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::hash_aggregate::HashAggregateExec>().is_some()
+            // CoalescePartitionsExec doesn't do any work so is not included
+            || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::coalesce_batches::CoalesceBatchesExec>().is_some()
+            || plan.as_any().downcast_ref::<physical_plan::limit::GlobalLimitExec>().is_some()
     }
 
     // Validate that the recorded elapsed compute time was more than
@@ -2800,6 +2942,17 @@ fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
     ctx.register_parquet(
         "alltypes_plain",
         &format!("{}/alltypes_plain.parquet", testdata),
+    )
+    .unwrap();
+}
+
+#[cfg(feature = "avro")]
+fn register_alltypes_avro(ctx: &mut ExecutionContext) {
+    let testdata = datafusion::test_util::arrow_test_data();
+    ctx.register_avro(
+        "alltypes_plain",
+        &format!("{}/avro/alltypes_plain.avro", testdata),
+        AvroReadOptions::default(),
     )
     .unwrap();
 }
@@ -4437,4 +4590,200 @@ async fn like_on_string_dictionaries() -> Result<()> {
 
     assert_batches_eq!(expected, &actual);
     Ok(())
+}
+
+#[tokio::test]
+async fn test_regexp_is_match() -> Result<()> {
+    let input = vec![Some("foo"), Some("Barrr"), Some("Bazzz"), Some("ZZZZZ")]
+        .into_iter()
+        .collect::<StringArray>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    let sql = "SELECT * FROM test WHERE c1 ~ 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| Bazzz |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 ~* 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| Bazzz |",
+        "| ZZZZZ |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 !~ 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| foo   |",
+        "| Barrr |",
+        "| ZZZZZ |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 !~* 'z'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| foo   |",
+        "| Barrr |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[cfg(feature = "avro")]
+#[tokio::test]
+async fn avro_query() {
+    let mut ctx = ExecutionContext::new();
+    register_alltypes_avro(&mut ctx);
+    // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
+    // so we need an explicit cast
+    let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+-----------------------------------------+",
+        "| id | CAST(alltypes_plain.string_col AS Utf8) |",
+        "+----+-----------------------------------------+",
+        "| 4  | 0                                       |",
+        "| 5  | 1                                       |",
+        "| 6  | 0                                       |",
+        "| 7  | 1                                       |",
+        "| 2  | 0                                       |",
+        "| 3  | 1                                       |",
+        "| 0  | 0                                       |",
+        "| 1  | 1                                       |",
+        "+----+-----------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+}
+
+#[cfg(feature = "avro")]
+#[tokio::test]
+async fn avro_query_multiple_files() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let table_path = tempdir.path();
+    let testdata = datafusion::test_util::arrow_test_data();
+    let alltypes_plain_file = format!("{}/avro/alltypes_plain.avro", testdata);
+    std::fs::copy(
+        &alltypes_plain_file,
+        format!("{}/alltypes_plain1.avro", table_path.display()),
+    )
+    .unwrap();
+    std::fs::copy(
+        &alltypes_plain_file,
+        format!("{}/alltypes_plain2.avro", table_path.display()),
+    )
+    .unwrap();
+
+    let mut ctx = ExecutionContext::new();
+    ctx.register_avro(
+        "alltypes_plain",
+        table_path.display().to_string().as_str(),
+        AvroReadOptions::default(),
+    )
+    .unwrap();
+    // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
+    // so we need an explicit cast
+    let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+-----------------------------------------+",
+        "| id | CAST(alltypes_plain.string_col AS Utf8) |",
+        "+----+-----------------------------------------+",
+        "| 4  | 0                                       |",
+        "| 5  | 1                                       |",
+        "| 6  | 0                                       |",
+        "| 7  | 1                                       |",
+        "| 2  | 0                                       |",
+        "| 3  | 1                                       |",
+        "| 0  | 0                                       |",
+        "| 1  | 1                                       |",
+        "| 4  | 0                                       |",
+        "| 5  | 1                                       |",
+        "| 6  | 0                                       |",
+        "| 7  | 1                                       |",
+        "| 2  | 0                                       |",
+        "| 3  | 1                                       |",
+        "| 0  | 0                                       |",
+        "| 1  | 1                                       |",
+        "+----+-----------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+}
+
+#[cfg(feature = "avro")]
+#[tokio::test]
+async fn avro_single_nan_schema() {
+    let mut ctx = ExecutionContext::new();
+    let testdata = datafusion::test_util::arrow_test_data();
+    ctx.register_avro(
+        "single_nan",
+        &format!("{}/avro/single_nan.avro", testdata),
+        AvroReadOptions::default(),
+    )
+    .unwrap();
+    let sql = "SELECT mycol FROM single_nan";
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).unwrap();
+    let results = collect(plan).await.unwrap();
+    for batch in results {
+        assert_eq!(1, batch.num_rows());
+        assert_eq!(1, batch.num_columns());
+    }
+}
+
+#[cfg(feature = "avro")]
+#[tokio::test]
+async fn avro_explain() {
+    let mut ctx = ExecutionContext::new();
+    register_alltypes_avro(&mut ctx);
+
+    let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
+    let actual = execute(&mut ctx, sql).await;
+    let actual = normalize_vec_for_explain(actual);
+    let expected = vec![
+        vec![
+            "logical_plan",
+            "Projection: #COUNT(UInt8(1))\
+            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n    TableScan: alltypes_plain projection=Some([0])",
+        ],
+        vec![
+            "physical_plan",
+            "ProjectionExec: expr=[COUNT(UInt8(1))@0 as COUNT(UInt8(1))]\
+            \n  HashAggregateExec: mode=Final, gby=[], aggr=[COUNT(UInt8(1))]\
+            \n    CoalescePartitionsExec\
+            \n      HashAggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
+            \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
+            \n          AvroExec: source=Path(ARROW_TEST_DATA/avro/alltypes_plain.avro: [ARROW_TEST_DATA/avro/alltypes_plain.avro]), batch_size=8192, limit=None\
+            \n",
+        ],
+    ];
+    assert_eq!(expected, actual);
 }

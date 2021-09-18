@@ -161,9 +161,13 @@ impl DataFrame {
         Ok(pretty::print_batches(&batches).unwrap())
     }
 
-
     /// Returns the join of two DataFrames `on`.
-    fn join(&self, right: &DataFrame, on: Vec<&str>, how: &str) -> PyResult<Self> {
+    fn join(
+        &self,
+        right: &DataFrame,
+        join_keys: (Vec<&str>, Vec<&str>),
+        how: &str,
+    ) -> PyResult<Self> {
         let builder = LogicalPlanBuilder::from(self.plan.clone());
 
         let join_type = match how {
@@ -182,7 +186,7 @@ impl DataFrame {
             }
         };
 
-        let builder = errors::wrap(builder.join(&right.plan, join_type, on.clone(), on))?;
+        let builder = errors::wrap(builder.join(&right.plan, join_type, join_keys))?;
 
         let plan = errors::wrap(builder.build())?;
 

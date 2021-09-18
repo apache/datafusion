@@ -33,15 +33,13 @@
 //! let schema = csvdata.schema();
 //! ```
 
+use arrow::datatypes::SchemaRef;
+use arrow::io::csv;
 use std::any::Any;
 use std::io::{Read, Seek};
 use std::string::String;
 use std::sync::{Arc, Mutex};
 
-use arrow::datatypes::SchemaRef;
-use arrow::io::csv::read as csv_read;
-
-use crate::datasource::datasource::Statistics;
 use crate::datasource::{Source, TableProvider};
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Expr;
@@ -56,7 +54,6 @@ pub struct CsvFile {
     has_header: bool,
     delimiter: u8,
     file_extension: String,
-    statistics: Statistics,
 }
 
 impl CsvFile {
@@ -84,7 +81,6 @@ impl CsvFile {
             has_header: options.has_header,
             delimiter: options.delimiter,
             file_extension: String::from(options.file_extension),
-            statistics: Statistics::default(),
         })
     }
 
@@ -107,26 +103,25 @@ impl CsvFile {
             schema,
             has_header: options.has_header,
             delimiter: options.delimiter,
-            statistics: Statistics::default(),
             file_extension: String::new(),
         })
     }
 
     /// Attempt to initialize a `CsvRead` from a reader impls `Seek`. The schema can be inferred automatically.
     pub fn try_new_from_reader_infer_schema<R: Read + Seek + Send + Sync + 'static>(
-        reader: R,
+        mut reader: R,
         options: CsvReadOptions,
     ) -> Result<Self> {
-        let mut reader = csv_read::ReaderBuilder::new()
+        let mut reader = csv::read::ReaderBuilder::new()
             .delimiter(options.delimiter)
             .from_reader(reader);
         let schema = Arc::new(match options.schema {
             Some(s) => s.clone(),
-            None => csv_read::infer_schema(
+            None => csv::read::infer_schema(
                 &mut reader,
                 Some(options.schema_infer_max_records),
                 options.has_header,
-                &csv_read::infer,
+                &csv::read::infer,
             )?,
         });
         let reader = reader.into_inner();
@@ -136,7 +131,6 @@ impl CsvFile {
             schema,
             has_header: options.has_header,
             delimiter: options.delimiter,
-            statistics: Statistics::default(),
             file_extension: String::new(),
         })
     }
@@ -212,10 +206,6 @@ impl TableProvider for CsvFile {
             }
         };
         Ok(Arc::new(exec))
-    }
-
-    fn statistics(&self) -> Statistics {
-        self.statistics.clone()
     }
 }
 

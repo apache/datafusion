@@ -23,8 +23,10 @@ use std::sync::Arc;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::StringifiedPlan,
-    physical_plan::Partitioning,
-    physical_plan::{common::SizedRecordBatchStream, DisplayFormatType, ExecutionPlan},
+    physical_plan::{
+        common::SizedRecordBatchStream, DisplayFormatType, ExecutionPlan, Partitioning,
+        Statistics,
+    },
 };
 use arrow::{array::*, datatypes::SchemaRef, record_batch::RecordBatch};
 
@@ -154,6 +156,11 @@ impl ExecutionPlan for ExplainExec {
                 write!(f, "ExplainExec")
             }
         }
+    }
+
+    fn statistics(&self) -> Statistics {
+        // Statistics an EXPLAIN plan are not relevant
+        Statistics::default()
     }
 }
 

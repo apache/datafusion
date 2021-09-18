@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::Int32Array;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::array::{Int32Array, PrimitiveArray, UInt64Array};
+use arrow::compute::kernels::aggregate;
+use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use datafusion::{
-    datasource::{datasource::Statistics, TableProvider},
-    physical_plan::collect,
-};
+use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::scalar::ScalarValue;
+use datafusion::{datasource::TableProvider, physical_plan::collect};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::DisplayFormatType,
@@ -34,7 +34,8 @@ use datafusion::logical_plan::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use datafusion::physical_plan::{
-    ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+    ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 
 use futures::stream::Stream;
@@ -145,6 +146,40 @@ impl ExecutionPlan for CustomExecutionPlan {
             }
         }
     }
+
+    fn statistics(&self) -> Statistics {
+        let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
+        Statistics {
+            is_exact: true,
+            num_rows: Some(batch.num_rows()),
+            total_byte_size: None,
+            column_statistics: Some(
+                self.projection
+                    .clone()
+                    .unwrap_or_else(|| (0..batch.columns().len()).collect())
+                    .iter()
+                    .map(|i| ColumnStatistics {
+                        null_count: Some(batch.column(*i).null_count()),
+                        min_value: Some(ScalarValue::Int32(aggregate::min(
+                            batch
+                                .column(*i)
+                                .as_any()
+                                .downcast_ref::<PrimitiveArray<Int32Type>>()
+                                .unwrap(),
+                        ))),
+                        max_value: Some(ScalarValue::Int32(aggregate::max(
+                            batch
+                                .column(*i)
+                                .as_any()
+                                .downcast_ref::<PrimitiveArray<Int32Type>>()
+                                .unwrap(),
+                        ))),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
+        }
+    }
 }
 
 impl TableProvider for CustomTableProvider {
@@ -166,10 +201,6 @@ impl TableProvider for CustomTableProvider {
         Ok(Arc::new(CustomExecutionPlan {
             projection: projection.clone(),
         }))
-    }
-
-    fn statistics(&self) -> Statistics {
-        Statistics::default()
     }
 }
 
@@ -217,4 +248,53 @@ async fn custom_source_dataframe() -> Result<()> {
     assert_eq!(origin_rec_batch.num_rows(), batches[0].num_rows());
 
     Ok(())
+}
+
+#[tokio::test]
+async fn optimizers_catch_all_statistics() {
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(CustomTableProvider))
+        .unwrap();
+
+    let df = ctx
+        .sql("SELECT count(*), min(c1), max(c1) from test")
+        .unwrap();
+
+    let physical_plan = ctx.create_physical_plan(&df.to_logical_plan()).unwrap();
+
+    // when the optimization kicks in, the source is replaced by an EmptyExec
+    assert!(
+        contains_empty_exec(Arc::clone(&physical_plan)),
+        "Expected aggregate_statistics optimizations missing: {:?}",
+        physical_plan
+    );
+
+    let expected = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("COUNT(UInt8(1))", DataType::UInt64, false),
+            Field::new("MIN(test.c1)", DataType::Int32, false),
+            Field::new("MAX(test.c1)", DataType::Int32, false),
+        ])),
+        vec![
+            Arc::new(UInt64Array::from(vec![4])),
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![100])),
+        ],
+    )
+    .unwrap();
+
+    let actual = collect(physical_plan).await.unwrap();
+
+    assert_eq!(actual.len(), 1);
+    assert_eq!(format!("{:?}", actual[0]), format!("{:?}", expected));
+}
+
+fn contains_empty_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
+    if plan.as_any().is::<EmptyExec>() {
+        true
+    } else if plan.children().len() != 1 {
+        false
+    } else {
+        contains_empty_exec(Arc::clone(&plan.children()[0]))
+    }
 }

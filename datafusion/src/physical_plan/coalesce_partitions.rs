@@ -31,7 +31,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::RecordBatchStream;
+use super::{RecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 
@@ -152,6 +152,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.input.statistics()
     }
 }
 

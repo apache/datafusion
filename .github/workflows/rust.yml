@@ -105,13 +105,14 @@ jobs:
         run: |
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          # run tests on all workspace members with default feature list
-          cargo test
+          # run tests on all workspace members with default feature list + avro
+          RUST_MIN_STACK=10485760 cargo test --features=avro
           # test datafusion examples
           cd datafusion-examples
           cargo test --no-default-features
           cargo run --example csv_sql
           cargo run --example parquet_sql
+          cargo run --example avro_sql --features=datafusion/avro
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
@@ -284,7 +285,7 @@ jobs:
     strategy:
       matrix:
         arch: [amd64]
-        rust: [nightly-2021-03-24]
+        rust: [nightly-2021-09-07]
     steps:
       - uses: actions/checkout@v2
         with:
@@ -310,7 +311,6 @@ jobs:
           cargo miri setup
           cargo clean
           cargo miri test
-
 
   # Check answers are correct when hash values collide
   hash-collisions:
@@ -358,44 +358,43 @@ jobs:
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
-
 # Coverage job was failing. https://github.com/apache/arrow-datafusion/issues/590 tracks re-instating it
 
-  # coverage:
-  #   name: Coverage
-  #   runs-on: ubuntu-latest
-  #   strategy:
-  #     matrix:
-  #       arch: [amd64]
-  #       rust: [stable]
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #       with:
-  #         submodules: true
-  #     - name: Cache Cargo
-  #       uses: actions/cache@v2
-  #       with:
-  #         path: /home/runner/.cargo
-  #         # this key is not equal because the user is different than on a container (runner vs github)
-  #         key: cargo-coverage-cache-
-  #     - name: Cache Rust dependencies
-  #       uses: actions/cache@v2
-  #       with:
-  #         path: /home/runner/target
-  #         # this key is not equal because coverage uses different compilation flags.
-  #         key: ${{ runner.os }}-${{ matrix.arch }}-target-coverage-cache-${{ matrix.rust }}-
-  #     - name: Run coverage
-  #       run: |
-  #         export ARROW_TEST_DATA=$(pwd)/testing/data
-  #         export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
+# coverage:
+#   name: Coverage
+#   runs-on: ubuntu-latest
+#   strategy:
+#     matrix:
+#       arch: [amd64]
+#       rust: [stable]
+#   steps:
+#     - uses: actions/checkout@v2
+#       with:
+#         submodules: true
+#     - name: Cache Cargo
+#       uses: actions/cache@v2
+#       with:
+#         path: /home/runner/.cargo
+#         # this key is not equal because the user is different than on a container (runner vs github)
+#         key: cargo-coverage-cache-
+#     - name: Cache Rust dependencies
+#       uses: actions/cache@v2
+#       with:
+#         path: /home/runner/target
+#         # this key is not equal because coverage uses different compilation flags.
+#         key: ${{ runner.os }}-${{ matrix.arch }}-target-coverage-cache-${{ matrix.rust }}-
+#     - name: Run coverage
+#       run: |
+#         export ARROW_TEST_DATA=$(pwd)/testing/data
+#         export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
 
-  #         # 2020-11-15: There is a cargo-tarpaulin regression in 0.17.0
-  #         # see https://github.com/xd009642/tarpaulin/issues/618
-  #         cargo install --version 0.16.0 cargo-tarpaulin
-  #         cargo tarpaulin --out Xml
-  #       env:
-  #         CARGO_HOME: "/home/runner/.cargo"
-  #         CARGO_TARGET_DIR: "/home/runner/target"
-  #     - name: Report coverage
-  #       continue-on-error: true
-  #       run: bash <(curl -s https://codecov.io/bash)
+#         # 2020-11-15: There is a cargo-tarpaulin regression in 0.17.0
+#         # see https://github.com/xd009642/tarpaulin/issues/618
+#         cargo install --version 0.16.0 cargo-tarpaulin
+#         cargo tarpaulin --out Xml
+#       env:
+#         CARGO_HOME: "/home/runner/.cargo"
+#         CARGO_TARGET_DIR: "/home/runner/target"
+#     - name: Report coverage
+#       continue-on-error: true
+#       run: bash <(curl -s https://codecov.io/bash)

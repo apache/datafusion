@@ -19,8 +19,8 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
-    common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, WindowExpr,
+    common, ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan,
+    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use arrow::{
     array::ArrayRef,
@@ -161,6 +161,26 @@ impl ExecutionPlan for WindowAggExec {
             }
         }
         Ok(())
+    }
+
+    fn statistics(&self) -> Statistics {
+        let input_stat = self.input.statistics();
+        let win_cols = self.window_expr.len();
+        let input_cols = self.input_schema.fields().len();
+        // TODO stats: some windowing function will maintain invariants such as min, max...
+        let mut column_statistics = vec![ColumnStatistics::default(); win_cols];
+        if let Some(input_col_stats) = input_stat.column_statistics {
+            column_statistics.extend(input_col_stats);
+        } else {
+            column_statistics.extend(vec![ColumnStatistics::default(); input_cols]);
+        }
+        Statistics {
+            is_exact: input_stat.is_exact,
+            num_rows: input_stat.num_rows,
+            column_statistics: Some(column_statistics),
+            // TODO stats: knowing the type of the new columns we can guess the output size
+            total_byte_size: None,
+        }
     }
 }
 

@@ -22,11 +22,11 @@ use crate::{
         information_schema::CatalogWithInformationSchema,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
-    optimizer::{
-        aggregate_statistics::AggregateStatistics, eliminate_limit::EliminateLimit,
-        hash_build_probe_order::HashBuildProbeOrder,
+    optimizer::eliminate_limit::EliminateLimit,
+    physical_optimizer::{
+        aggregate_statistics::AggregateStatistics,
+        hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
-    physical_optimizer::optimizer::PhysicalOptimizerRule,
 };
 use log::debug;
 use std::fs;
@@ -52,6 +52,7 @@ use crate::catalog::{
     ResolvedTableReference, TableReference,
 };
 use crate::datasource::csv::CsvFile;
+use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
 use crate::datasource::parquet::ParquetTable;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
@@ -69,6 +70,8 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
+use crate::datasource::avro::AvroFile;
+use crate::physical_plan::avro::AvroReadOptions;
 use crate::physical_plan::csv::CsvReadOptions;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udf::ScalarUDF;
@@ -165,6 +168,7 @@ impl ExecutionContext {
                 aggregate_functions: HashMap::new(),
                 config,
                 execution_props: ExecutionProps::new(),
+                object_store_registry: Arc::new(ObjectStoreRegistry::new()),
             })),
         }
     }
@@ -193,6 +197,11 @@ impl ExecutionContext {
                 }
                 FileType::Parquet => {
                     self.register_parquet(name, location)?;
+                    let plan = LogicalPlanBuilder::empty(false).build()?;
+                    Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                }
+                FileType::Avro => {
+                    self.register_avro(name, location, AvroReadOptions::default())?;
                     let plan = LogicalPlanBuilder::empty(false).build()?;
                     Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
                 }
@@ -270,6 +279,19 @@ impl ExecutionContext {
             .insert(f.name.clone(), Arc::new(f));
     }
 
+    /// Creates a DataFrame for reading an Avro data source.
+
+    pub fn read_avro(
+        &mut self,
+        filename: impl Into<String>,
+        options: AvroReadOptions,
+    ) -> Result<Arc<dyn DataFrame>> {
+        Ok(Arc::new(DataFrameImpl::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::scan_avro(filename, options, None)?.build()?,
+        )))
+    }
+
     /// Creates a DataFrame for reading a CSV data source.
     pub fn read_csv(
         &mut self,
@@ -333,6 +355,18 @@ impl ExecutionContext {
         Ok(())
     }
 
+    /// Registers an Avro data source so that it can be referenced from SQL statements
+    /// executed against this context.
+    pub fn register_avro(
+        &mut self,
+        name: &str,
+        filename: &str,
+        options: AvroReadOptions,
+    ) -> Result<()> {
+        self.register_table(name, Arc::new(AvroFile::try_new(filename, options)?))?;
+        Ok(())
+    }
+
     /// Registers a named catalog using a custom `CatalogProvider` so that
     /// it can be referenced from SQL statements executed against this
     /// context.
@@ -362,6 +396,29 @@ impl ExecutionContext {
     /// Retrieves a `CatalogProvider` instance by name
     pub fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         self.state.lock().unwrap().catalog_list.catalog(name)
+    }
+
+    /// Registers a object store with scheme using a custom `ObjectStore` so that
+    /// an external file system or object storage system could be used against this context.
+    ///
+    /// Returns the `ObjectStore` previously registered for this scheme, if any
+    pub fn register_object_store(
+        &self,
+        scheme: impl Into<String>,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        let scheme = scheme.into();
+
+        self.state
+            .lock()
+            .unwrap()
+            .object_store_registry
+            .register_store(scheme, object_store)
+    }
+
+    /// Retrieves a `ObjectStore` instance by scheme
+    pub fn object_store(&self, scheme: &str) -> Option<Arc<dyn ObjectStore>> {
+        self.state.lock().unwrap().object_store_registry.get(scheme)
     }
 
     /// Registers a table using a custom `TableProvider` so that
@@ -719,14 +776,14 @@ impl Default for ExecutionConfig {
             optimizers: vec![
                 Arc::new(ConstantFolding::new()),
                 Arc::new(EliminateLimit::new()),
-                Arc::new(AggregateStatistics::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(SimplifyExpressions::new()),
-                Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(LimitPushDown::new()),
             ],
             physical_optimizers: vec![
+                Arc::new(AggregateStatistics::new()),
+                Arc::new(HashBuildProbeOrder::new()),
                 Arc::new(CoalesceBatches::new()),
                 Arc::new(Repartition::new()),
                 Arc::new(AddCoalescePartitionsExec::new()),
@@ -883,6 +940,8 @@ pub struct ExecutionContextState {
     pub config: ExecutionConfig,
     /// Execution properties
     pub execution_props: ExecutionProps,
+    /// Object Store that are registered with the context
+    pub object_store_registry: Arc<ObjectStoreRegistry>,
 }
 
 impl ExecutionProps {
@@ -910,6 +969,7 @@ impl ExecutionContextState {
             aggregate_functions: HashMap::new(),
             config: ExecutionConfig::new(),
             execution_props: ExecutionProps::new(),
+            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
         }
     }
 
@@ -3186,10 +3246,6 @@ mod tests {
                 _: &[Expr],
                 _: Option<usize>,
             ) -> Result<Arc<dyn ExecutionPlan>> {
-                unimplemented!()
-            }
-
-            fn statistics(&self) -> crate::datasource::datasource::Statistics {
                 unimplemented!()
             }
         }

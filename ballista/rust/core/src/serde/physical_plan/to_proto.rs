@@ -62,6 +62,7 @@ use crate::execution_plans::{
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{protobuf, BallistaError};
+use datafusion::physical_plan::avro::AvroExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::functions::{BuiltinScalarFunction, ScalarFunctionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -281,6 +282,28 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                             .iter()
                             .map(|n| *n as u32)
                             .collect(),
+                        batch_size: exec.batch_size() as u32,
+                    },
+                )),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<AvroExec>() {
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::AvroScan(
+                    protobuf::AvroScanExecNode {
+                        path: exec.path().to_owned(),
+                        filename: exec.filenames().to_vec(),
+                        projection: exec
+                            .projection()
+                            .ok_or_else(|| {
+                                BallistaError::General(
+                                    "projection in AvroExec doesn't exist.".to_owned(),
+                                )
+                            })?
+                            .iter()
+                            .map(|n| *n as u32)
+                            .collect(),
+                        file_extension: exec.file_extension().to_owned(),
+                        schema: Some(exec.file_schema().as_ref().into()),
                         batch_size: exec.batch_size() as u32,
                     },
                 )),

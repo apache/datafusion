@@ -27,14 +27,16 @@ use std::task::{Context, Poll};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
+    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use super::{RecordBatchStream, SendableRecordBatchStream};
+use super::expressions::Column;
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use async_trait::async_trait;
 
 use futures::stream::Stream;
@@ -49,6 +51,8 @@ pub struct ProjectionExec {
     schema: SchemaRef,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl ProjectionExec {
@@ -76,6 +80,7 @@ impl ProjectionExec {
             expr,
             schema,
             input: input.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -131,6 +136,7 @@ impl ExecutionPlan for ProjectionExec {
             schema: self.schema.clone(),
             expr: self.expr.iter().map(|x| x.0.clone()).collect(),
             input: self.input.execute(partition).await?,
+            baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
     }
 
@@ -158,22 +164,60 @@ impl ExecutionPlan for ProjectionExec {
             }
         }
     }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
+    fn statistics(&self) -> Statistics {
+        stats_projection(
+            self.input.statistics(),
+            self.expr.iter().map(|(e, _)| Arc::clone(e)),
+        )
+    }
 }
 
-fn batch_project(
-    batch: &RecordBatch,
-    expressions: &[Arc<dyn PhysicalExpr>],
-    schema: &SchemaRef,
-) -> ArrowResult<RecordBatch> {
-    expressions
-        .iter()
-        .map(|expr| expr.evaluate(batch))
-        .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-        .collect::<Result<Vec<_>>>()
-        .map_or_else(
-            |e| Err(DataFusionError::into_arrow_external_error(e)),
-            |arrays| RecordBatch::try_new(schema.clone(), arrays),
-        )
+fn stats_projection(
+    stats: Statistics,
+    exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
+) -> Statistics {
+    let column_statistics = stats.column_statistics.map(|input_col_stats| {
+        exprs
+            .map(|e| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                    input_col_stats[col.index()].clone()
+                } else {
+                    // TODO stats: estimate more statistics from expressions
+                    // (expressions should compute their statistics themselves)
+                    ColumnStatistics::default()
+                }
+            })
+            .collect()
+    });
+
+    Statistics {
+        is_exact: stats.is_exact,
+        num_rows: stats.num_rows,
+        column_statistics,
+        // TODO stats: knowing the type of the new columns we can guess the output size
+        total_byte_size: None,
+    }
+}
+
+impl ProjectionStream {
+    fn batch_project(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
+        // records time on drop
+        let _timer = self.baseline_metrics.elapsed_compute().timer();
+        self.expr
+            .iter()
+            .map(|expr| expr.evaluate(batch))
+            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .collect::<Result<Vec<_>>>()
+            .map_or_else(
+                |e| Err(DataFusionError::into_arrow_external_error(e)),
+                |arrays| RecordBatch::try_new(self.schema.clone(), arrays),
+            )
+    }
 }
 
 /// Projection iterator
@@ -181,6 +225,7 @@ struct ProjectionStream {
     schema: SchemaRef,
     expr: Vec<Arc<dyn PhysicalExpr>>,
     input: SendableRecordBatchStream,
+    baseline_metrics: BaselineMetrics,
 }
 
 impl Stream for ProjectionStream {
@@ -190,10 +235,12 @@ impl Stream for ProjectionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.input.poll_next_unpin(cx).map(|x| match x {
-            Some(Ok(batch)) => Some(batch_project(&batch, &self.expr, &self.schema)),
+        let poll = self.input.poll_next_unpin(cx).map(|x| match x {
+            Some(Ok(batch)) => Some(self.batch_project(&batch)),
             other => other,
-        })
+        });
+
+        self.baseline_metrics.record_poll(poll)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -214,7 +261,8 @@ mod tests {
 
     use super::*;
     use crate::physical_plan::csv::{CsvExec, CsvReadOptions};
-    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::expressions::{self, col};
+    use crate::scalar::ScalarValue;
     use crate::test;
     use futures::future;
 
@@ -258,5 +306,63 @@ mod tests {
         assert_eq!(100, row_count);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stats_projection_columns_only() {
+        let source = Statistics {
+            is_exact: true,
+            num_rows: Some(5),
+            total_byte_size: Some(23),
+            column_statistics: Some(vec![
+                ColumnStatistics {
+                    distinct_count: Some(5),
+                    max_value: Some(ScalarValue::Int64(Some(21))),
+                    min_value: Some(ScalarValue::Int64(Some(-4))),
+                    null_count: Some(0),
+                },
+                ColumnStatistics {
+                    distinct_count: Some(1),
+                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
+                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
+                    null_count: Some(3),
+                },
+                ColumnStatistics {
+                    distinct_count: None,
+                    max_value: Some(ScalarValue::Float32(Some(1.1))),
+                    min_value: Some(ScalarValue::Float32(Some(0.1))),
+                    null_count: None,
+                },
+            ]),
+        };
+
+        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(expressions::Column::new("col1", 1)),
+            Arc::new(expressions::Column::new("col0", 0)),
+        ];
+
+        let result = stats_projection(source, exprs.into_iter());
+
+        let expected = Statistics {
+            is_exact: true,
+            num_rows: Some(5),
+            total_byte_size: None,
+            column_statistics: Some(vec![
+                ColumnStatistics {
+                    distinct_count: Some(1),
+                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
+                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
+                    null_count: Some(3),
+                },
+                ColumnStatistics {
+                    distinct_count: Some(5),
+                    max_value: Some(ScalarValue::Int64(Some(21))),
+                    min_value: Some(ScalarValue::Int64(Some(-4))),
+                    null_count: Some(0),
+                },
+            ]),
+        };
+
+        assert_eq!(result, expected);
     }
 }

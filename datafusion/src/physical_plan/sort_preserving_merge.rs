@@ -42,7 +42,7 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
     Distribution, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 
 /// Sort preserving merge execution plan
@@ -185,6 +185,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.input.statistics()
     }
 }
 
