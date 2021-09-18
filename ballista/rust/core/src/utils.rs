@@ -90,7 +90,7 @@ pub async fn write_stream_to_disk(
         let batch_size_bytes: usize = batch
             .columns()
             .iter()
-            // .map(|array| array.get_array_memory_size())
+            // FIXME: .map(|array| array.get_array_memory_size())
             .map(|_array| 0)
             .sum();
         num_batches += 1;

@@ -21,7 +21,7 @@
 //! will use the ShuffleReaderExec to read these results.
 
 use std::fs::File;
-use std::iter::{Iterator, FromIterator};
+use std::iter::{FromIterator, Iterator};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -53,8 +53,8 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 use hashbrown::HashMap;
 use log::{debug, info};
-use uuid::Uuid;
 use std::cell::RefCell;
+use uuid::Uuid;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
 /// can be executed as one unit with each partition being executed in parallel. The output of each
@@ -233,11 +233,14 @@ impl ShuffleWriterExec {
                             .columns()
                             .iter()
                             .map(|c| {
-                                take::take(c.as_ref(),
-                                           &PrimitiveArray::<u64>::from_slice(&partition_indices))
-                                    .map_err(|e| {
-                                        DataFusionError::Execution(e.to_string())
-                                    }).map(ArrayRef::from)
+                                take::take(
+                                    c.as_ref(),
+                                    &PrimitiveArray::<u64>::from_slice(
+                                        &partition_indices,
+                                    ),
+                                )
+                                .map_err(|e| DataFusionError::Execution(e.to_string()))
+                                .map(ArrayRef::from)
                             })
                             .collect::<Result<Vec<Arc<dyn Array>>>>()?;
 
@@ -459,7 +462,7 @@ impl<'a> ShuffleWriter<'a> {
             .columns()
             .iter()
             .map(|_array| 0)
-            // TODO: add arrow2 with array_memory_size capability and enable this.
+            // FIXME: add arrow2 with array_memory_size capability and enable this.
             // .map(|array| array.get_array_memory_size())
             .sum();
         self.num_bytes += num_bytes as u64;
@@ -478,7 +481,7 @@ impl<'a> ShuffleWriter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::array::{Utf8Array, StructArray, UInt32Array, UInt64Array};
+    use datafusion::arrow::array::{StructArray, UInt32Array, UInt64Array, Utf8Array};
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::expressions::Column;
     use datafusion::physical_plan::limit::GlobalLimitExec;
@@ -526,6 +529,7 @@ mod tests {
             .unwrap();
 
         let num_rows = stats
+            // see https://github.com/jorgecarleitao/arrow2/pull/416 for fix
             .column_by_name("num_rows")
             .unwrap()
             .as_any()
@@ -561,6 +565,7 @@ mod tests {
             .downcast_ref::<StructArray>()
             .unwrap();
         let num_rows = stats
+            // see https://github.com/jorgecarleitao/arrow2/pull/416 for fix
             .column_by_name("num_rows")
             .unwrap()
             .as_any()
