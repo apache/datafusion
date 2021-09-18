@@ -804,8 +804,11 @@ impl Expr {
     where
         R: ExprRewriter,
     {
-        if !rewriter.pre_visit(&self)? {
-            return Ok(self);
+        let need_mutate = match rewriter.pre_visit(&self)? {
+            RewriteRecursion::Mutate => return rewriter.mutate(self),
+            RewriteRecursion::Stop => return Ok(self),
+            RewriteRecursion::Continue => true,
+            RewriteRecursion::Skip => false,
         };
 
         // recurse into all sub expressions(and cover all expression types)
@@ -915,14 +918,18 @@ impl Expr {
                 negated,
             } => Expr::InList {
                 expr: rewrite_boxed(expr, rewriter)?,
-                list,
+                list: rewrite_vec(list, rewriter)?,
                 negated,
             },
             Expr::Wildcard => Expr::Wildcard,
         };
 
         // now rewrite this expression itself
-        rewriter.mutate(expr)
+        if need_mutate {
+            rewriter.mutate(expr)
+        } else {
+            Ok(expr)
+        }
     }
 }
 
@@ -990,15 +997,27 @@ pub trait ExpressionVisitor: Sized {
     }
 }
 
+/// Controls how the [ExprRewriter] recursion should proceed.
+pub enum RewriteRecursion {
+    /// Continue rewrite / visit this expression.
+    Continue,
+    /// Call [mutate()] immediately and return.
+    Mutate,
+    /// Do not rewrite / visit the children of this expression.
+    Stop,
+    /// Keep recursive but skip mutate on this expression
+    Skip,
+}
+
 /// Trait for potentially recursively rewriting an [`Expr`] expression
 /// tree. When passed to `Expr::rewrite`, `ExpressionVisitor::mutate` is
 /// invoked recursively on all nodes of an expression tree. See the
 /// comments on `Expr::rewrite` for details on its use
 pub trait ExprRewriter: Sized {
     /// Invoked before any children of `expr` are rewritten /
-    /// visited. Default implementation returns `Ok(true)`
-    fn pre_visit(&mut self, _expr: &Expr) -> Result<bool> {
-        Ok(true)
+    /// visited. Default implementation returns `Ok(RewriteRecursion::Continue)`
+    fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
+        Ok(RewriteRecursion::Continue)
     }
 
     /// Invoked after all children of `expr` have been mutated and
@@ -1721,13 +1740,17 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         } => {
             let mut name = "CASE ".to_string();
             if let Some(e) = expr {
-                name += &format!("{:?} ", e);
+                let e = create_name(e, input_schema)?;
+                name += &format!("{} ", e);
             }
             for (w, t) in when_then_expr {
-                name += &format!("WHEN {:?} THEN {:?} ", w, t);
+                let when = create_name(w, input_schema)?;
+                let then = create_name(t, input_schema)?;
+                name += &format!("WHEN {} THEN {} ", when, then);
             }
             if let Some(e) = else_expr {
-                name += &format!("ELSE {:?} ", e);
+                let e = create_name(e, input_schema)?;
+                name += &format!("ELSE {} ", e);
             }
             name += "END";
             Ok(name)
@@ -1887,9 +1910,9 @@ mod tests {
             Ok(expr)
         }
 
-        fn pre_visit(&mut self, expr: &Expr) -> Result<bool> {
+        fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
             self.v.push(format!("Previsited {:?}", expr));
-            Ok(true)
+            Ok(RewriteRecursion::Continue)
         }
     }
 
