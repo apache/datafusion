@@ -217,7 +217,7 @@ impl fmt::Display for Column {
 ///   assert_eq!(op, Operator::Eq);
 /// }
 /// ```
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Box<Expr>, String),
@@ -2092,5 +2092,19 @@ mod tests {
         test_unary_scalar_expr!(Translate, translate);
         test_unary_scalar_expr!(Trim, trim);
         test_unary_scalar_expr!(Upper, upper);
+    }
+
+    #[test]
+    fn test_partial_ord() {
+        // Test validates that partial ord is defined for Expr, not
+        // intended to exhaustively test all possibilities
+        let exp1 = col("a") + lit(1);
+        let exp2 = col("a") + lit(2);
+        let exp3 = !(col("a") + lit(2));
+
+        assert!(exp1 < exp2);
+        assert!(exp2 > exp1);
+        assert!(exp2 < exp3);
+        assert!(exp3 > exp2);
     }
 }

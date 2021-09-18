@@ -71,6 +71,17 @@ impl PartialEq for AggregateUDF {
     }
 }
 
+impl PartialOrd for AggregateUDF {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let c = self.name.partial_cmp(&other.name);
+        if matches!(c, Some(std::cmp::Ordering::Equal)) {
+            self.signature.partial_cmp(&other.signature)
+        } else {
+            c
+        }
+    }
+}
+
 impl AggregateUDF {
     /// Create a new AggregateUDF
     pub fn new(
