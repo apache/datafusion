@@ -515,7 +515,11 @@ impl SortPreservingMergeStream {
                     }
 
                     // emit current batch of rows for current buffer
-                    array_data.extend(buffer_idx, start_row_idx, end_row_idx - start_row_idx);
+                    array_data.extend(
+                        buffer_idx,
+                        start_row_idx,
+                        end_row_idx - start_row_idx,
+                    );
 
                     // start new batch of rows
                     buffer_idx = next_buffer_idx;

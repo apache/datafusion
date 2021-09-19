@@ -407,30 +407,32 @@ mod roundtrip_tests {
                     true,
                 ),
             ]),
-            DataType::Union(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-            ],
-            None,
-            false,
+            DataType::Union(
+                vec![
+                    Field::new("nullable", DataType::Boolean, false),
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("datatype", DataType::Binary, false),
+                ],
+                None,
+                false,
             ),
-            DataType::Union(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-                Field::new(
-                    "nested_struct",
-                    DataType::Struct(vec![
-                        Field::new("nullable", DataType::Boolean, false),
-                        Field::new("name", DataType::Utf8, false),
-                        Field::new("datatype", DataType::Binary, false),
-                    ]),
-                    true,
-                ),
-            ],
-            None,
-            false,
+            DataType::Union(
+                vec![
+                    Field::new("nullable", DataType::Boolean, false),
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("datatype", DataType::Binary, false),
+                    Field::new(
+                        "nested_struct",
+                        DataType::Struct(vec![
+                            Field::new("nullable", DataType::Boolean, false),
+                            Field::new("name", DataType::Utf8, false),
+                            Field::new("datatype", DataType::Binary, false),
+                        ]),
+                        true,
+                    ),
+                ],
+                None,
+                false,
             ),
             DataType::Dictionary(
                 Box::new(DataType::Utf8),
@@ -558,30 +560,32 @@ mod roundtrip_tests {
                     true,
                 ),
             ]),
-            DataType::Union(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-            ],
-            None,
-            false,
+            DataType::Union(
+                vec![
+                    Field::new("nullable", DataType::Boolean, false),
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("datatype", DataType::Binary, false),
+                ],
+                None,
+                false,
             ),
-            DataType::Union(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-                Field::new(
-                    "nested_struct",
-                    DataType::Struct(vec![
-                        Field::new("nullable", DataType::Boolean, false),
-                        Field::new("name", DataType::Utf8, false),
-                        Field::new("datatype", DataType::Binary, false),
-                    ]),
-                    true,
-                ),
-            ],
-            None,
-            false,
+            DataType::Union(
+                vec![
+                    Field::new("nullable", DataType::Boolean, false),
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("datatype", DataType::Binary, false),
+                    Field::new(
+                        "nested_struct",
+                        DataType::Struct(vec![
+                            Field::new("nullable", DataType::Boolean, false),
+                            Field::new("name", DataType::Utf8, false),
+                            Field::new("datatype", DataType::Binary, false),
+                        ]),
+                        true,
+                    ),
+                ],
+                None,
+                false,
             ),
             DataType::Dictionary(
                 Box::new(DataType::Utf8),

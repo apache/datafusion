@@ -299,8 +299,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Float32Array::from(vec![1., 2., 3.])),
-                Arc::new(Float64Array::from(vec![9., 8., 7.])),
+                Arc::new(Float32Array::from_slice(&[1., 2., 3.])),
+                Arc::new(Float64Array::from_slice(&[9., 8., 7.])),
             ],
         )?;
         let result =
@@ -309,7 +309,7 @@ mod tests {
         let expected = Statistics {
             is_exact: true,
             num_rows: Some(3),
-            total_byte_size: Some(416), // this might change a bit if the way we compute the size changes
+            total_byte_size: Some(36), // this might change a bit if the way we compute the size changes
             column_statistics: Some(vec![
                 ColumnStatistics {
                     distinct_count: None,

@@ -411,8 +411,9 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     fractional: *fractional as u64,
                 })
             }
-            DataType::Extension(_, _, _) =>
+            DataType::Extension(_, _, _) => {
                 panic!("DataType::Extension is not supported")
+            }
         }
     }
 }

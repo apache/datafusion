@@ -51,7 +51,7 @@ avro = ["avro-rs", "num-traits"]
 ahash = "0.7"
 hashbrown = { version = "0.11", features = ["raw"] }
 arrow = { package = "arrow2", version="0.5", features = ["io_csv", "io_json", "io_parquet", "io_parquet_compression", "io_ipc", "io_print", "ahash", "merge_sort", "compute", "regex"] }
-parquet = { package = "parquet2", version = "0.4", default_features = false, features = ["stream"] }
+parquet = { package = "parquet2", version = "0.5", default_features = false, features = ["stream"] }
 sqlparser = "0.10"
 paste = "^1.0"
 num_cpus = "1.13.0"

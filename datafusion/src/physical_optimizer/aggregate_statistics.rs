@@ -237,8 +237,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from_slice(&[1, 2, 3])),
+                Arc::new(Int32Array::from_slice(&[4, 5, 6])),
             ],
         )?;
 
@@ -258,7 +258,7 @@ mod tests {
         let result = common::collect(optimized.execute(0).await?).await?;
         assert_eq!(
             result[0].schema(),
-            Arc::new(Schema::new(vec![Field::new(
+            &Arc::new(Schema::new(vec![Field::new(
                 "COUNT(Uint8(1))",
                 DataType::UInt64,
                 false
@@ -269,9 +269,8 @@ mod tests {
                 .column(0)
                 .as_any()
                 .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .values(),
-            &[3]
+                .unwrap(),
+            &UInt64Array::from_slice(&[3]),
         );
         Ok(())
     }

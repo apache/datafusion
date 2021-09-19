@@ -20,6 +20,7 @@
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 use crate::error::{DataFusionError, Result};
+use arrow::scalar::Scalar;
 use arrow::{
     array::*,
     buffer::MutableBuffer,
@@ -1197,6 +1198,92 @@ impl_try_from!(UInt64, u64);
 impl_try_from!(Float32, f32);
 impl_try_from!(Float64, f64);
 impl_try_from!(Boolean, bool);
+
+impl TryInto<Box<dyn Scalar>> for &ScalarValue {
+    type Error = DataFusionError;
+
+    fn try_into(self) -> Result<Box<dyn Scalar>> {
+        use arrow::scalar::*;
+        match self {
+            ScalarValue::Boolean(b) => Ok(Box::new(BooleanScalar::new(*b))),
+            ScalarValue::Float32(f) => {
+                Ok(Box::new(PrimitiveScalar::<f32>::new(DataType::Float32, *f)))
+            }
+            ScalarValue::Float64(f) => {
+                Ok(Box::new(PrimitiveScalar::<f64>::new(DataType::Float64, *f)))
+            }
+            ScalarValue::Int8(i) => {
+                Ok(Box::new(PrimitiveScalar::<i8>::new(DataType::Int8, *i)))
+            }
+            ScalarValue::Int16(i) => {
+                Ok(Box::new(PrimitiveScalar::<i16>::new(DataType::Int16, *i)))
+            }
+            ScalarValue::Int32(i) => {
+                Ok(Box::new(PrimitiveScalar::<i32>::new(DataType::Int32, *i)))
+            }
+            ScalarValue::Int64(i) => {
+                Ok(Box::new(PrimitiveScalar::<i64>::new(DataType::Int64, *i)))
+            }
+            ScalarValue::UInt8(u) => {
+                Ok(Box::new(PrimitiveScalar::<u8>::new(DataType::UInt8, *u)))
+            }
+            ScalarValue::UInt16(u) => {
+                Ok(Box::new(PrimitiveScalar::<u16>::new(DataType::UInt16, *u)))
+            }
+            ScalarValue::UInt32(u) => {
+                Ok(Box::new(PrimitiveScalar::<u32>::new(DataType::UInt32, *u)))
+            }
+            ScalarValue::UInt64(u) => {
+                Ok(Box::new(PrimitiveScalar::<u64>::new(DataType::UInt64, *u)))
+            }
+            ScalarValue::Utf8(s) => Ok(Box::new(Utf8Scalar::<i32>::new(s.clone()))),
+            ScalarValue::LargeUtf8(s) => Ok(Box::new(Utf8Scalar::<i64>::new(s.clone()))),
+            ScalarValue::Binary(b) => Ok(Box::new(BinaryScalar::<i32>::new(b.clone()))),
+            ScalarValue::LargeBinary(b) => {
+                Ok(Box::new(BinaryScalar::<i64>::new(b.clone())))
+            }
+            ScalarValue::Date32(i) => {
+                Ok(Box::new(PrimitiveScalar::<i32>::new(DataType::Date32, *i)))
+            }
+            ScalarValue::Date64(i) => {
+                Ok(Box::new(PrimitiveScalar::<i64>::new(DataType::Date64, *i)))
+            }
+            ScalarValue::TimestampSecond(i) => Ok(Box::new(PrimitiveScalar::<i64>::new(
+                DataType::Timestamp(TimeUnit::Second, None),
+                *i,
+            ))),
+            ScalarValue::TimestampMillisecond(i) => {
+                Ok(Box::new(PrimitiveScalar::<i64>::new(
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    *i,
+                )))
+            }
+            ScalarValue::TimestampMicrosecond(i) => {
+                Ok(Box::new(PrimitiveScalar::<i64>::new(
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    *i,
+                )))
+            }
+            ScalarValue::TimestampNanosecond(i) => {
+                Ok(Box::new(PrimitiveScalar::<i64>::new(
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    *i,
+                )))
+            }
+            ScalarValue::IntervalYearMonth(i) => {
+                Ok(Box::new(PrimitiveScalar::<i32>::new(
+                    DataType::Interval(IntervalUnit::YearMonth),
+                    *i,
+                )))
+            }
+
+            // List and IntervalDayTime comparison not possible in arrow2
+            _ => Err(DataFusionError::Internal(
+                "Conversion not possible in arrow2".to_owned(),
+            )),
+        }
+    }
+}
 
 impl TryFrom<&DataType> for ScalarValue {
     type Error = DataFusionError;

@@ -33,8 +33,7 @@ macro_rules! downcast_compute_op {
         let n = $ARRAY.as_any().downcast_ref::<$TYPE>();
         match n {
             Some(array) => {
-                let res: $TYPE =
-                    unary(array, |x| x.$FUNC(), $DT);
+                let res: $TYPE = unary(array, |x| x.$FUNC(), $DT);
                 Ok(Arc::new(res))
             }
             _ => Err(DataFusionError::Internal(format!(
@@ -50,11 +49,23 @@ macro_rules! unary_primitive_array_op {
         match ($VALUE) {
             ColumnarValue::Array(array) => match array.data_type() {
                 DataType::Float32 => {
-                    let result = downcast_compute_op!(array, $NAME, $FUNC, Float32Array, DataType::Float32);
+                    let result = downcast_compute_op!(
+                        array,
+                        $NAME,
+                        $FUNC,
+                        Float32Array,
+                        DataType::Float32
+                    );
                     Ok(ColumnarValue::Array(result?))
                 }
                 DataType::Float64 => {
-                    let result = downcast_compute_op!(array, $NAME, $FUNC, Float64Array, DataType::Float64);
+                    let result = downcast_compute_op!(
+                        array,
+                        $NAME,
+                        $FUNC,
+                        Float64Array,
+                        DataType::Float64
+                    );
                     Ok(ColumnarValue::Array(result?))
                 }
                 other => Err(DataFusionError::Internal(format!(
