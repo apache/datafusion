@@ -1182,24 +1182,10 @@ mod tests {
     #[tokio::test]
     async fn test_async() {
         let schema = test::aggr_test_schema();
-        let sort = vec![
-            PhysicalSortExpr {
-                expr: col("c7", &schema).unwrap(),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: col("c1", &schema).unwrap(),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: col("c2", &schema).unwrap(),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: col("c3", &schema).unwrap(),
-                options: SortOptions::default(),
-            },
-        ];
+        let sort = vec![PhysicalSortExpr {
+            expr: col("c12", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
 
         let batches = sorted_partitioned_input(sort.clone(), &[5, 7, 3]).await;
 
