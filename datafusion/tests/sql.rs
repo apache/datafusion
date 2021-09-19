@@ -4716,6 +4716,69 @@ async fn test_regexp_is_match() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Result<()> {
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int32Array::from(vec![1, 2, 3])) as _),
+        (
+            "country",
+            Arc::new(StringArray::from(vec!["Germany", "Sweden", "Japan"])) as _,
+        ),
+    ])
+    .unwrap();
+    let countries = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+
+    let batch = RecordBatch::try_from_iter(vec![
+        (
+            "id",
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7])) as _,
+        ),
+        (
+            "city",
+            Arc::new(StringArray::from(vec![
+                "Hamburg",
+                "Stockholm",
+                "Osaka",
+                "Berlin",
+                "Göteborg",
+                "Tokyo",
+                "Kyoto",
+            ])) as _,
+        ),
+        (
+            "country_id",
+            Arc::new(Int32Array::from(vec![1, 2, 3, 1, 2, 3, 3])) as _,
+        ),
+    ])
+    .unwrap();
+    let cities = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("countries", Arc::new(countries))?;
+    ctx.register_table("cities", Arc::new(cities))?;
+
+    // city.id is not in the on constraint, but the output result will contain both city.id and
+    // country.id
+    let sql = "SELECT t1.id, t2.id, t1.city, t2.country FROM cities AS t1 JOIN countries AS t2 ON t1.country_id = t2.id ORDER BY t1.id";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+----+-----------+---------+",
+        "| id | id | city      | country |",
+        "+----+----+-----------+---------+",
+        "| 1  | 1  | Hamburg   | Germany |",
+        "| 2  | 2  | Stockholm | Sweden  |",
+        "| 3  | 3  | Osaka     | Japan   |",
+        "| 4  | 1  | Berlin    | Germany |",
+        "| 5  | 2  | Göteborg  | Sweden  |",
+        "| 6  | 3  | Tokyo     | Japan   |",
+        "| 7  | 3  | Kyoto     | Japan   |",
+        "+----+----+-----------+---------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
 #[cfg(feature = "avro")]
 #[tokio::test]
 async fn avro_query() {

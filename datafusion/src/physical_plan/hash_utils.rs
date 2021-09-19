@@ -80,36 +80,68 @@ fn check_join_set_is_valid(
             )));
     };
 
-    let remaining = right
-        .difference(on_right)
-        .cloned()
-        .collect::<HashSet<Column>>();
-
-    let collisions = left.intersection(&remaining).collect::<HashSet<_>>();
-
-    if !collisions.is_empty() {
-        return Err(DataFusionError::Plan(format!(
-                "The left schema and the right schema have the following columns with the same name without being on the ON statement: {:?}. Consider aliasing them.",
-                collisions,
-            )));
-    };
-
     Ok(())
+}
+
+/// Information about the index and placement (left or right) of the columns
+#[derive(Debug, Clone)]
+pub struct ColumnIndex {
+    /// Index of the column
+    pub index: usize,
+    /// Whether the column is at the left or right side
+    pub is_left: bool,
 }
 
 /// Creates a schema for a join operation.
 /// The fields from the left side are first
-pub fn build_join_schema(left: &Schema, right: &Schema, join_type: &JoinType) -> Schema {
-    let fields: Vec<Field> = match join_type {
+pub fn build_join_schema(
+    left: &Schema,
+    right: &Schema,
+    join_type: &JoinType,
+) -> (Schema, Vec<ColumnIndex>) {
+    let (fields, column_indices): (Vec<Field>, Vec<ColumnIndex>) = match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            let left_fields = left.fields().iter();
-            let right_fields = right.fields().iter();
+            let left_fields = left.fields().iter().cloned().enumerate().map(|(i, f)| {
+                (
+                    f,
+                    ColumnIndex {
+                        index: i,
+                        is_left: true,
+                    },
+                )
+            });
+            let right_fields =
+                right.fields().iter().cloned().enumerate().map(|(i, f)| {
+                    (
+                        f,
+                        ColumnIndex {
+                            index: i,
+                            is_left: false,
+                        },
+                    )
+                });
+
             // left then right
-            left_fields.chain(right_fields).cloned().collect()
+            left_fields.chain(right_fields).unzip()
         }
-        JoinType::Semi | JoinType::Anti => left.fields().clone(),
+        JoinType::Semi | JoinType::Anti => left
+            .fields()
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, f)| {
+                (
+                    f,
+                    ColumnIndex {
+                        index: i,
+                        is_left: true,
+                    },
+                )
+            })
+            .unzip(),
     };
-    Schema::new(fields)
+
+    (Schema::new(fields), column_indices)
 }
 
 // Combines two hashes into one hash
@@ -649,7 +681,7 @@ mod tests {
         let right = vec![Column::new("a", 0), Column::new("b", 1)];
         let on = &[(Column::new("a", 0), Column::new("b", 1))];
 
-        assert!(check(&left, &right, on).is_err());
+        assert!(check(&left, &right, on).is_ok());
     }
 
     #[test]
