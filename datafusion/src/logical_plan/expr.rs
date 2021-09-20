@@ -1360,11 +1360,19 @@ pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
 pub trait Literal {
     /// convert the value to a Literal expression
     fn lit(&self) -> Expr;
+
+    /// convert the number to literal expression of timestamp in nanosecond
+    fn lit_timestamp_nanosecond(&self) -> Expr;
 }
 
 impl Literal for &str {
     fn lit(&self) -> Expr {
         Expr::Literal(ScalarValue::Utf8(Some((*self).to_owned())))
+    }
+
+    // Not convert to timestamp for &str. Just return usual literal
+    fn lit_timestamp_nanosecond(&self) -> Expr {
+        self.lit()
     }
 }
 
@@ -1372,11 +1380,42 @@ impl Literal for String {
     fn lit(&self) -> Expr {
         Expr::Literal(ScalarValue::Utf8(Some((*self).to_owned())))
     }
+
+    // Not convert to timestamp for &str. Just return usual literal
+    fn lit_timestamp_nanosecond(&self) -> Expr {
+        self.lit()
+    }
 }
 
 impl Literal for ScalarValue {
     fn lit(&self) -> Expr {
         Expr::Literal(self.clone())
+    }
+    fn lit_timestamp_nanosecond(&self) -> Expr {
+        match self {
+            ScalarValue::Int64(Some(val)) => {
+                Expr::Literal(ScalarValue::TimestampNanosecond(Some(*val)))
+            }
+            ScalarValue::Int32(Some(val)) => {
+                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
+            }
+            ScalarValue::Int16(Some(val)) => {
+                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
+            }
+            ScalarValue::Int8(Some(val)) => {
+                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
+            }
+            ScalarValue::UInt8(Some(val)) => {
+                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
+            }
+            ScalarValue::UInt16(Some(val)) => {
+                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
+            }
+            ScalarValue::UInt32(Some(val)) => {
+                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
+            }
+            _ => self.lit(), // usual literal for other data types
+        }
     }
 }
 
@@ -1386,6 +1425,11 @@ macro_rules! make_literal {
         impl Literal for $TYPE {
             fn lit(&self) -> Expr {
                 Expr::Literal(ScalarValue::$SCALAR(Some(self.clone())))
+            }
+
+            fn lit_timestamp_nanosecond(&self) -> Expr {
+                let scalar = ScalarValue::$SCALAR(Some(self.clone()));
+                scalar.lit_timestamp_nanosecond()
             }
         }
     };
@@ -1406,6 +1450,11 @@ make_literal!(u64, UInt64, "literal expression containing a u64");
 /// Create a literal expression
 pub fn lit<T: Literal>(n: T) -> Expr {
     n.lit()
+}
+
+/// Create a literal timestamp expression
+pub fn lit_timestamp_nanosecond<T: Literal>(n: T) -> Expr {
+    n.lit_timestamp_nanosecond()
 }
 
 /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
@@ -1869,6 +1918,21 @@ mod tests {
             .when(col("state").eq(lit("NY")), lit("212"))
             .end();
         assert!(maybe_expr.is_err());
+    }
+
+    #[test]
+    fn test_lit_timestamp_nanosecond() {
+        let expr = col("time").eq(lit_timestamp_nanosecond(10)); // 10 is an implicit i32
+        let expected = col("time").eq(lit(ScalarValue::TimestampNanosecond(Some(10))));
+        assert_eq!(expr, expected);
+
+        let i: i64 = 10;
+        let expr = col("time").eq(lit_timestamp_nanosecond(i));
+        assert_eq!(expr, expected);
+
+        let i: u32 = 10;
+        let expr = col("time").eq(lit_timestamp_nanosecond(i));
+        assert_eq!(expr, expected);
     }
 
     #[test]
