@@ -809,6 +809,15 @@ impl ExecutionConfig {
         self
     }
 
+    /// Replace the optimizer rules
+    pub fn with_optimizer_rules(
+        mut self,
+        optimizers: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+    ) -> Self {
+        self.optimizers = optimizers;
+        self
+    }
+
     /// Replace the physical optimizer rules
     pub fn with_physical_optimizer_rules(
         mut self,
