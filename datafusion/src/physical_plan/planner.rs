@@ -42,7 +42,7 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sort::SortExec;
 use crate::physical_plan::udf;
 use crate::physical_plan::windows::WindowAggExec;
-use crate::physical_plan::{hash_utils, Partitioning};
+use crate::physical_plan::{join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::scalar::ScalarValue;
 use crate::sql::utils::{generate_sort_key, window_expr_common_partition_keys};
@@ -676,7 +676,7 @@ impl DefaultPhysicalPlanner {
                             Column::new(&r.name, right_df_schema.index_of_column(r)?),
                         ))
                     })
-                    .collect::<Result<hash_utils::JoinOn>>()?;
+                    .collect::<Result<join_utils::JoinOn>>()?;
 
                 if ctx_state.config.target_partitions > 1
                     && ctx_state.config.repartition_joins

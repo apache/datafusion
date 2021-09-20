@@ -26,91 +26,10 @@ use arrow::array::{
     TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::datatypes::{
-    ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Int16Type, Int32Type,
-    Int64Type, Int8Type, Schema, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowDictionaryKeyType, ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type,
+    Int8Type, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use std::collections::HashSet;
 use std::sync::Arc;
-
-use crate::logical_plan::JoinType;
-use crate::physical_plan::expressions::Column;
-
-/// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(Column, Column)>;
-/// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(Column, Column)];
-
-/// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
-/// They are valid whenever their columns' intersection equals the set `on`
-pub fn check_join_is_valid(left: &Schema, right: &Schema, on: JoinOnRef) -> Result<()> {
-    let left: HashSet<Column> = left
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(idx, f)| Column::new(f.name(), idx))
-        .collect();
-    let right: HashSet<Column> = right
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(idx, f)| Column::new(f.name(), idx))
-        .collect();
-
-    check_join_set_is_valid(&left, &right, on)
-}
-
-/// Checks whether the sets left, right and on compose a valid join.
-/// They are valid whenever their intersection equals the set `on`
-fn check_join_set_is_valid(
-    left: &HashSet<Column>,
-    right: &HashSet<Column>,
-    on: &[(Column, Column)],
-) -> Result<()> {
-    let on_left = &on.iter().map(|on| on.0.clone()).collect::<HashSet<_>>();
-    let left_missing = on_left.difference(left).collect::<HashSet<_>>();
-
-    let on_right = &on.iter().map(|on| on.1.clone()).collect::<HashSet<_>>();
-    let right_missing = on_right.difference(right).collect::<HashSet<_>>();
-
-    if !left_missing.is_empty() | !right_missing.is_empty() {
-        return Err(DataFusionError::Plan(format!(
-                "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {:?}\nMissing on the right: {:?}",
-                left_missing,
-                right_missing,
-            )));
-    };
-
-    let remaining = right
-        .difference(on_right)
-        .cloned()
-        .collect::<HashSet<Column>>();
-
-    let collisions = left.intersection(&remaining).collect::<HashSet<_>>();
-
-    if !collisions.is_empty() {
-        return Err(DataFusionError::Plan(format!(
-                "The left schema and the right schema have the following columns with the same name without being on the ON statement: {:?}. Consider aliasing them.",
-                collisions,
-            )));
-    };
-
-    Ok(())
-}
-
-/// Creates a schema for a join operation.
-/// The fields from the left side are first
-pub fn build_join_schema(left: &Schema, right: &Schema, join_type: &JoinType) -> Schema {
-    let fields: Vec<Field> = match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            let left_fields = left.fields().iter();
-            let right_fields = right.fields().iter();
-            // left then right
-            left_fields.chain(right_fields).cloned().collect()
-        }
-        JoinType::Semi | JoinType::Anti => left.fields().clone(),
-    };
-    Schema::new(fields)
-}
 
 // Combines two hashes into one hash
 #[inline]
@@ -601,65 +520,6 @@ mod tests {
     use arrow::{array::DictionaryArray, datatypes::Int8Type};
 
     use super::*;
-
-    fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
-        let left = left
-            .iter()
-            .map(|x| x.to_owned())
-            .collect::<HashSet<Column>>();
-        let right = right
-            .iter()
-            .map(|x| x.to_owned())
-            .collect::<HashSet<Column>>();
-        check_join_set_is_valid(&left, &right, on)
-    }
-
-    #[test]
-    fn check_valid() -> Result<()> {
-        let left = vec![Column::new("a", 0), Column::new("b1", 1)];
-        let right = vec![Column::new("a", 0), Column::new("b2", 1)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
-
-        check(&left, &right, on)?;
-        Ok(())
-    }
-
-    #[test]
-    fn check_not_in_right() {
-        let left = vec![Column::new("a", 0), Column::new("b", 1)];
-        let right = vec![Column::new("b", 0)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
-
-        assert!(check(&left, &right, on).is_err());
-    }
-
-    #[test]
-    fn check_not_in_left() {
-        let left = vec![Column::new("b", 0)];
-        let right = vec![Column::new("a", 0)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
-
-        assert!(check(&left, &right, on).is_err());
-    }
-
-    #[test]
-    fn check_collision() {
-        // column "a" would appear both in left and right
-        let left = vec![Column::new("a", 0), Column::new("c", 1)];
-        let right = vec![Column::new("a", 0), Column::new("b", 1)];
-        let on = &[(Column::new("a", 0), Column::new("b", 1))];
-
-        assert!(check(&left, &right, on).is_err());
-    }
-
-    #[test]
-    fn check_in_right() {
-        let left = vec![Column::new("a", 0), Column::new("c", 1)];
-        let right = vec![Column::new("b", 0)];
-        let on = &[(Column::new("a", 0), Column::new("b", 0))];
-
-        assert!(check(&left, &right, on).is_ok());
-    }
 
     #[test]
     fn create_hashes_for_float_arrays() -> Result<()> {
