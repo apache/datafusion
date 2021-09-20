@@ -589,12 +589,12 @@ impl DefaultPhysicalPlanner {
                 )?;
                 Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
             }
-            LogicalPlan::Union { inputs, .. } => {
+            LogicalPlan::Union { inputs, is_all, .. } => {
                 let physical_plans = inputs
                     .iter()
                     .map(|input| self.create_initial_plan(input, ctx_state))
                     .collect::<Result<Vec<_>>>()?;
-                Ok(Arc::new(UnionExec::new(physical_plans)))
+                Ok(Arc::new(UnionExec::new(physical_plans, *is_all)))
             }
             LogicalPlan::Repartition {
                 input,

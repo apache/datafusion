@@ -100,6 +100,7 @@ fn limit_push_down(
                 inputs,
                 alias,
                 schema,
+                is_all,
             },
             Some(upper_limit),
         ) => {
@@ -122,6 +123,7 @@ fn limit_push_down(
                 inputs: new_inputs,
                 alias: alias.clone(),
                 schema: schema.clone(),
+                is_all: is_all.clone(),
             })
         }
         // For other nodes we can't push down the limit
@@ -236,7 +238,7 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .union(LogicalPlanBuilder::from(table_scan).build()?)?
+            .union(LogicalPlanBuilder::from(table_scan).build()?, true)?
             .limit(1000)?
             .build()?;
 

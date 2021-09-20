@@ -37,22 +37,30 @@ use crate::{
 };
 use async_trait::async_trait;
 
-/// UNION ALL execution plan
+/// UNION execution plan
 #[derive(Debug)]
 pub struct UnionExec {
     /// Input execution plan
     inputs: Vec<Arc<dyn ExecutionPlan>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Union ALL or Union
+    is_all: bool,
 }
 
 impl UnionExec {
     /// Create a new UnionExec
-    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
+    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>, is_all: bool) -> Self {
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
+            is_all,
         }
+    }
+
+    /// UNION ALL or UNION
+    pub fn is_all(&self) -> bool {
+        self.is_all
     }
 }
 
@@ -88,7 +96,7 @@ impl ExecutionPlan for UnionExec {
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(UnionExec::new(children)))
+        Ok(Arc::new(UnionExec::new(children, self.is_all)))
     }
 
     async fn execute(&self, mut partition: usize) -> Result<SendableRecordBatchStream> {
@@ -252,7 +260,8 @@ mod tests {
             None,
         )?;
 
-        let union_exec = Arc::new(UnionExec::new(vec![Arc::new(csv), Arc::new(csv2)]));
+        let union_exec =
+            Arc::new(UnionExec::new(vec![Arc::new(csv), Arc::new(csv2)], true));
 
         // Should have 9 partitions and 9 output batches
         assert_eq!(union_exec.output_partitioning().partition_count(), 9);

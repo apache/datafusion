@@ -158,6 +158,8 @@ pub enum LogicalPlan {
         schema: DFSchemaRef,
         /// Union output relation alias
         alias: Option<String>,
+        /// Union ALL or Union
+        is_all: bool,
     },
     /// Produces rows from a table provider by reference or from the context
     TableScan {

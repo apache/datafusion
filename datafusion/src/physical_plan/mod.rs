@@ -88,6 +88,8 @@ impl Stream for EmptyRecordBatchStream {
 
 /// Physical planner interface
 pub use self::planner::PhysicalPlanner;
+use crate::physical_plan::union::UnionExec;
+use arrow::util::display::array_value_to_string;
 
 /// Statistics for a physical plan node
 /// Fields are optional and can be inexact because the sources
@@ -308,8 +310,38 @@ pub fn visit_execution_plan<V: ExecutionPlanVisitor>(
 
 /// Execute the [ExecutionPlan] and collect the results in memory
 pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
-    let stream = execute_stream(plan).await?;
-    common::collect(stream).await
+    let stream = execute_stream(plan.clone()).await?;
+    let any_plan = plan.as_any().downcast_ref::<UnionExec>();
+    match any_plan {
+        Some(&UnionExec { .. }) => {
+            let record_batches = common::collect(stream).await;
+            if any_plan.unwrap().is_all() {
+                return record_batches;
+            }
+            let mut new_record_batches = Vec::new();
+            let mut vec_str = Vec::new();
+            for record_batch in record_batches.unwrap() {
+                for _row in 0..record_batch.num_rows() {
+                    let mut array_str = String::new();
+                    let mut vec_array = Vec::new();
+                    for col in 0..record_batch.num_columns() {
+                        let column = record_batch.column(col);
+                        array_str += &*array_value_to_string(column, 1)?;
+                        vec_array.push(column.clone());
+                    }
+                    if vec_str.contains(&array_str) {
+                        continue;
+                    }
+                    vec_str.push(array_str);
+                    let rb =
+                        RecordBatch::try_new(record_batch.schema(), vec_array).unwrap();
+                    new_record_batches.push(rb);
+                }
+            }
+            Ok(new_record_batches)
+        }
+        None => common::collect(stream).await,
+    }
 }
 
 /// Execute the [ExecutionPlan] and return a single stream of results

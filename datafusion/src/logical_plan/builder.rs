@@ -287,8 +287,13 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a union
-    pub fn union(&self, plan: LogicalPlan) -> Result<Self> {
-        Ok(Self::from(union_with_alias(self.plan.clone(), plan, None)?))
+    pub fn union(&self, plan: LogicalPlan, is_all: bool) -> Result<Self> {
+        Ok(Self::from(union_with_alias(
+            self.plan.clone(),
+            plan,
+            None,
+            is_all,
+        )?))
     }
 
     /// Apply a join with on constraint
@@ -567,6 +572,7 @@ pub fn union_with_alias(
     left_plan: LogicalPlan,
     right_plan: LogicalPlan,
     alias: Option<String>,
+    is_all: bool,
 ) -> Result<LogicalPlan> {
     let inputs = vec![left_plan, right_plan]
         .into_iter()
@@ -598,6 +604,7 @@ pub fn union_with_alias(
         schema: union_schema,
         inputs,
         alias,
+        is_all,
     })
 }
 
@@ -753,9 +760,9 @@ mod tests {
         )?;
 
         let plan = plan
-            .union(plan.build()?)?
-            .union(plan.build()?)?
-            .union(plan.build()?)?
+            .union(plan.build()?, true)?
+            .union(plan.build()?, true)?
+            .union(plan.build()?, true)?
             .build()?;
 
         // output has only one union

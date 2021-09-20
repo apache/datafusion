@@ -114,7 +114,7 @@ mod tests {
             .unwrap()
             .limit(0)
             .unwrap()
-            .union(plan1)
+            .union(plan1, true)
             .unwrap()
             .build()
             .unwrap();

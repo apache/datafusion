@@ -856,7 +856,7 @@ mod tests {
     fn union_all() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .union(LogicalPlanBuilder::from(table_scan).build()?)?
+            .union(LogicalPlanBuilder::from(table_scan).build()?, true)?
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
         // filter appears below Union

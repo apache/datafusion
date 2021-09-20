@@ -145,7 +145,11 @@ pub trait DataFrame: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
-    fn union(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>>;
+    fn union(
+        &self,
+        dataframe: Arc<dyn DataFrame>,
+        is_all: bool,
+    ) -> Result<Arc<dyn DataFrame>>;
 
     /// Sort the DataFrame by the specified sorting expressions. Any expression can be turned into
     /// a sort expression by calling its [sort](../logical_plan/enum.Expr.html#method.sort) method.

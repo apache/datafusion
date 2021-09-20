@@ -385,6 +385,7 @@ fn optimize_plan(
             inputs,
             schema,
             alias,
+            is_all,
         } => {
             // UNION inputs will reference the same column with different identifiers, so we need
             // to populate new_required_columns by unqualified column name based on required fields
@@ -421,6 +422,7 @@ fn optimize_plan(
                 inputs: new_inputs,
                 schema: schema.clone(),
                 alias: alias.clone(),
+                is_all: is_all.clone(),
             })
         }
         // all other nodes: Add any additional columns used by

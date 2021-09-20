@@ -208,9 +208,13 @@ impl DataFrame for DataFrameImpl {
         Arc::new(registry)
     }
 
-    fn union(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>> {
+    fn union(
+        &self,
+        dataframe: Arc<dyn DataFrame>,
+        is_all: bool,
+    ) -> Result<Arc<dyn DataFrame>> {
         let plan = LogicalPlanBuilder::from(self.to_logical_plan())
-            .union(dataframe.to_logical_plan())?
+            .union(dataframe.to_logical_plan(), is_all)?
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
     }
