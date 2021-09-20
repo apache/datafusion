@@ -25,7 +25,6 @@ pub fn print_version() {
 
 pub mod client;
 pub mod config;
-pub mod datasource;
 pub mod error;
 pub mod execution_plans;
 pub mod memory_stream;
