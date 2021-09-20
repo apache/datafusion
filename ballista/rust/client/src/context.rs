@@ -23,12 +23,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ballista_core::config::BallistaConfig;
-use ballista_core::{
-    datasource::DfTableAdapter, utils::create_df_ctx_with_ballista_query_planner,
-};
+use ballista_core::utils::create_df_ctx_with_ballista_query_planner;
 
 use datafusion::catalog::TableReference;
 use datafusion::dataframe::DataFrame;
+use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::dataframe_impl::DataFrameImpl;
 use datafusion::logical_plan::LogicalPlan;
@@ -44,7 +43,7 @@ struct BallistaContextState {
     /// Scheduler port
     scheduler_port: u16,
     /// Tables that have been registered with this context
-    tables: HashMap<String, LogicalPlan>,
+    tables: HashMap<String, Arc<dyn TableProvider>>,
 }
 
 impl BallistaContextState {
@@ -197,11 +196,13 @@ impl BallistaContext {
     }
 
     /// Register a DataFrame as a table that can be referenced from a SQL query
-    pub fn register_table(&self, name: &str, table: &dyn DataFrame) -> Result<()> {
+    pub fn register_table(
+        &self,
+        name: &str,
+        table: Arc<dyn TableProvider>,
+    ) -> Result<()> {
         let mut state = self.state.lock().unwrap();
-        state
-            .tables
-            .insert(name.to_owned(), table.to_logical_plan());
+        state.tables.insert(name.to_owned(), table);
         Ok(())
     }
 
@@ -211,13 +212,17 @@ impl BallistaContext {
         path: &str,
         options: CsvReadOptions,
     ) -> Result<()> {
-        let df = self.read_csv(path, options)?;
-        self.register_table(name, df.as_ref())
+        match self.read_csv(path, options)?.to_logical_plan() {
+            LogicalPlan::TableScan { source, .. } => self.register_table(name, source),
+            _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
+        }
     }
 
     pub fn register_parquet(&self, name: &str, path: &str) -> Result<()> {
-        let df = self.read_parquet(path)?;
-        self.register_table(name, df.as_ref())
+        match self.read_parquet(path)?.to_logical_plan() {
+            LogicalPlan::TableScan { source, .. } => self.register_table(name, source),
+            _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
+        }
     }
 
     pub fn register_avro(
@@ -226,9 +231,10 @@ impl BallistaContext {
         path: &str,
         options: AvroReadOptions,
     ) -> Result<()> {
-        let df = self.read_avro(path, options)?;
-        self.register_table(name, df.as_ref())?;
-        Ok(())
+        match self.read_avro(path, options)?.to_logical_plan() {
+            LogicalPlan::TableScan { source, .. } => self.register_table(name, source),
+            _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
+        }
     }
 
     /// Create a DataFrame from a SQL statement
@@ -245,12 +251,10 @@ impl BallistaContext {
         // register tables with DataFusion context
         {
             let state = self.state.lock().unwrap();
-            for (name, plan) in &state.tables {
-                let plan = ctx.optimize(plan)?;
-                let execution_plan = ctx.create_physical_plan(&plan)?;
+            for (name, prov) in &state.tables {
                 ctx.register_table(
                     TableReference::Bare { table: name },
-                    Arc::new(DfTableAdapter::new(plan, execution_plan)),
+                    Arc::clone(prov),
                 )?;
             }
         }

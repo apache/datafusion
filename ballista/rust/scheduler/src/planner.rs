@@ -22,13 +22,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ballista_core::datasource::DfTableAdapter;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::{
     execution_plans::{ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec},
     serde::scheduler::PartitionLocation,
 };
-use datafusion::execution::context::ExecutionContext;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::windows::WindowAggExec;
@@ -96,10 +94,7 @@ impl DistributedPlanner {
             stages.append(&mut child_stages);
         }
 
-        if let Some(adapter) = execution_plan.as_any().downcast_ref::<DfTableAdapter>() {
-            let ctx = ExecutionContext::new();
-            Ok((ctx.create_physical_plan(&adapter.logical_plan)?, stages))
-        } else if let Some(coalesce) = execution_plan
+        if let Some(coalesce) = execution_plan
             .as_any()
             .downcast_ref::<CoalescePartitionsExec>()
         {
