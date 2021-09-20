@@ -163,9 +163,8 @@ pub trait TableDescriptorBuilder {
                 ext, path
             )));
         }
-        let merged_schemas = Schema::try_merge(schemas).unwrap();
-        println!("{:?}", &merged_schemas);
-        let result_schema = provided_schema.unwrap_or_else(|| merged_schemas);
+
+        let result_schema = provided_schema.unwrap_or_else(|| schemas.pop().unwrap());
 
         Ok(TableDescriptor {
             path: path.to_string(),
