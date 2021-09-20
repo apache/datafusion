@@ -20,7 +20,6 @@
 //! processes.
 
 use super::super::proto_error;
-use crate::datasource::DfTableAdapter;
 use crate::serde::{protobuf, BallistaError};
 use datafusion::arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit,
@@ -728,20 +727,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 ..
             } => {
                 let schema = source.schema();
-
-                // unwrap the DFTableAdapter to get to the real TableProvider
-                let source = if let Some(adapter) =
-                    source.as_any().downcast_ref::<DfTableAdapter>()
-                {
-                    match &adapter.logical_plan {
-                        LogicalPlan::TableScan { source, .. } => Ok(source.as_any()),
-                        _ => Err(BallistaError::General(
-                            "Invalid LogicalPlan::TableScan".to_owned(),
-                        )),
-                    }
-                } else {
-                    Ok(source.as_any())
-                }?;
+                let source = source.as_any();
 
                 let projection = match projection {
                     None => None,
