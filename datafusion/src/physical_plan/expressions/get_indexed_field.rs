@@ -86,7 +86,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                         array.as_any().downcast_ref::<ListArray>().unwrap();
                     let x: Vec<Arc<dyn Array>> = as_list_array
                         .iter()
-                        .filter_map(|o| o.map(|list| list.slice(*i as usize, 1).clone()))
+                        .filter_map(|o| o.map(|list| list.slice(*i as usize, 1)))
                         .collect();
                     let vec = x.iter().map(|a| a.as_ref()).collect::<Vec<&dyn Array>>();
                     let iter = concat(vec.as_slice()).unwrap();
