@@ -136,7 +136,8 @@ pub trait TableDescriptorBuilder {
                     let FileAndSchema {file, schema} = Self::file_meta(file_path)?;
                     if schemas.is_empty() {
                         schemas.push(schema);
-                    } else if schema != schemas[0] {
+                        
+                    } else if schema.fields() != schemas[0].fields() {
                         // we currently get the schema information from the first file rather than do
                         // schema merging and this is a limitation.
                         // See https://issues.apache.org/jira/browse/ARROW-11017
@@ -163,8 +164,9 @@ pub trait TableDescriptorBuilder {
                 ext, path
             )));
         }
-
-        let result_schema = provided_schema.unwrap_or_else(|| schemas.pop().unwrap());
+        let merged_schemas = Schema::try_merge(schemas).unwrap();
+        println!("{:?}", &merged_schemas);
+        let result_schema = provided_schema.unwrap_or_else(|| merged_schemas);
 
         Ok(TableDescriptor {
             path: path.to_string(),
