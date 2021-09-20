@@ -132,7 +132,7 @@ datafusion = "5.0.0"
 
 ## Using DataFusion as a binary
 
-DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](datafusion/docs/cli.md) for more information.
+DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](https://arrow.apache.org/datafusion/cli/index.html) for more information.
 
 # Status
 
