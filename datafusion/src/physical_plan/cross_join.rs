@@ -28,7 +28,7 @@ use arrow::record_batch::RecordBatch;
 use futures::{Stream, TryStreamExt};
 
 use super::{
-    coalesce_partitions::CoalescePartitionsExec, hash_utils::check_join_is_valid,
+    coalesce_partitions::CoalescePartitionsExec, join_utils::check_join_is_valid,
     ColumnStatistics, Statistics,
 };
 use crate::{

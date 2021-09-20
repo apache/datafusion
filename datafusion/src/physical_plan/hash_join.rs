@@ -52,7 +52,7 @@ use hashbrown::raw::RawTable;
 
 use super::{
     coalesce_partitions::CoalescePartitionsExec,
-    hash_utils::{build_join_schema, check_join_is_valid, ColumnIndex, JoinOn},
+    join_utils::{build_join_schema, check_join_is_valid, ColumnIndex, JoinOn, JoinSide},
 };
 use super::{
     expressions::Column,
@@ -552,12 +552,15 @@ fn build_batch_from_indices(
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
 
     for column_index in column_indices {
-        let array = if column_index.is_left {
-            let array = left.column(column_index.index);
-            compute::take(array.as_ref(), &left_indices, None)?
-        } else {
-            let array = right.column(column_index.index);
-            compute::take(array.as_ref(), &right_indices, None)?
+        let array = match column_index.side {
+            JoinSide::Left => {
+                let array = left.column(column_index.index);
+                compute::take(array.as_ref(), &left_indices, None)?
+            }
+            JoinSide::Right => {
+                let array = right.column(column_index.index);
+                compute::take(array.as_ref(), &right_indices, None)?
+            }
         };
         columns.push(array);
     }
@@ -824,12 +827,15 @@ fn produce_from_matched(
     let num_rows = indices.len();
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
     for (idx, column_index) in column_indices.iter().enumerate() {
-        let array = if column_index.is_left {
-            let array = left_data.1.column(column_index.index);
-            compute::take(array.as_ref(), &indices, None).unwrap()
-        } else {
-            let datatype = schema.field(idx).data_type();
-            arrow::array::new_null_array(datatype, num_rows)
+        let array = match column_index.side {
+            JoinSide::Left => {
+                let array = left_data.1.column(column_index.index);
+                compute::take(array.as_ref(), &indices, None).unwrap()
+            }
+            JoinSide::Right => {
+                let datatype = schema.field(idx).data_type();
+                arrow::array::new_null_array(datatype, num_rows)
+            }
         };
 
         columns.push(array);
