@@ -131,17 +131,38 @@ fn take_optimizable_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, &'static str)> {
-    if let (Some(num_rows), Some(casted_expr)) = (
+    println!("{:?}", agg_expr);
+    println!("{:?}", agg_expr.expressions());
+    if let (Some(num_rows), Some(col_stats), Some(casted_expr)) = (
         stats.num_rows,
+        &stats.column_statistics,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         // TODO implementing Eq on PhysicalExpr would help a lot here
+        println!("{:?}", num_rows);
+        println!("{:?}", col_stats);
+        println!("{:?}", casted_expr);
         if casted_expr.expressions().len() == 1 {
             if let Some(lit_expr) = casted_expr.expressions()[0]
                 .as_any()
                 .downcast_ref::<expressions::Literal>()
             {
+                // if let Some(col_expr) = casted_expr.expressions()[0]
+                //     .as_any()
+                //     .downcast_ref::<expressions::Column>()
+                // {
+                //     if let ColumnStatistics {
+                //         null_count: Some(null_count),
+                //         ..
+                //     } = &col_stats[col_expr.index()]
+                //     {
+                //         return Some((
+                //             ScalarValue::UInt64(Some(num_rows as u64 - *null_count as u64)),
+                //             "COUNT(Uint8(1)",
+                //         ));
+                //     }
                 if lit_expr.value() == &ScalarValue::UInt8(Some(1)) {
+                    println!("{:?}", lit_expr);
                     return Some((
                         ScalarValue::UInt64(Some(num_rows as u64)),
                         "COUNT(Uint8(1))",
