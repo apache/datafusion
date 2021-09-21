@@ -301,7 +301,6 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
         let start = Instant::now();
         let df = ctx
             .sql(&sql)
-            .await
             .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))?;
         let batches = df
             .collect()

@@ -286,7 +286,7 @@ async fn exec_and_print(
 
     let df = match ctx {
         Context::Local(datafusion) => datafusion.sql(&sql)?,
-        Context::Remote(ballista) => ballista.sql(&sql).await?,
+        Context::Remote(ballista) => ballista.sql(&sql)?,
     };
 
     let results = df.collect().await?;

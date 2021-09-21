@@ -238,7 +238,7 @@ impl BallistaContext {
     }
 
     /// Create a DataFrame from a SQL statement
-    pub async fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
+    pub fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let mut ctx = {
             let state = self.state.lock().unwrap();
             create_df_ctx_with_ballista_query_planner(
