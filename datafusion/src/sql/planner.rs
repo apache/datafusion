@@ -1913,7 +1913,7 @@ mod tests {
         let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE state = 'CO'";
         let expected = "Projection: #person.id, #person.first_name, #person.last_name\
-                        \n  Filter: #person.state Eq Utf8(\"CO\")\
+                        \n  Filter: #person.state = Utf8(\"CO\")\
                         \n    TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -1953,7 +1953,7 @@ mod tests {
         let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE state = 'CO' AND age >= 21 AND age <= 65";
         let expected = "Projection: #person.id, #person.first_name, #person.last_name\
-            \n  Filter: #person.state Eq Utf8(\"CO\") And #person.age GtEq Int64(21) And #person.age LtEq Int64(65)\
+            \n  Filter: #person.state = Utf8(\"CO\") AND #person.age >= Int64(21) AND #person.age <= Int64(65)\
             \n    TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -1964,7 +1964,7 @@ mod tests {
             "SELECT state FROM person WHERE birth_date < CAST (158412331400600000 as timestamp)";
 
         let expected = "Projection: #person.state\
-            \n  Filter: #person.birth_date Lt CAST(Int64(158412331400600000) AS Timestamp(Nanosecond, None))\
+            \n  Filter: #person.birth_date < CAST(Int64(158412331400600000) AS Timestamp(Nanosecond, None))\
             \n    TableScan: person projection=None";
 
         quick_test(sql, expected);
@@ -1976,7 +1976,7 @@ mod tests {
             "SELECT state FROM person WHERE birth_date < CAST ('2020-01-01' as date)";
 
         let expected = "Projection: #person.state\
-            \n  Filter: #person.birth_date Lt CAST(Utf8(\"2020-01-01\") AS Date32)\
+            \n  Filter: #person.birth_date < CAST(Utf8(\"2020-01-01\") AS Date32)\
             \n    TableScan: person projection=None";
 
         quick_test(sql, expected);
@@ -1993,12 +1993,12 @@ mod tests {
                    AND age < 65 \
                    AND age <= 65";
         let expected = "Projection: #person.age, #person.first_name, #person.last_name\
-                        \n  Filter: #person.age Eq Int64(21) \
-                        And #person.age NotEq Int64(21) \
-                        And #person.age Gt Int64(21) \
-                        And #person.age GtEq Int64(21) \
-                        And #person.age Lt Int64(65) \
-                        And #person.age LtEq Int64(65)\
+                        \n  Filter: #person.age = Int64(21) \
+                        AND #person.age != Int64(21) \
+                        AND #person.age > Int64(21) \
+                        AND #person.age >= Int64(21) \
+                        AND #person.age < Int64(65) \
+                        AND #person.age <= Int64(65)\
                         \n    TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -2051,9 +2051,9 @@ mod tests {
                    WHERE fn1 = 'X' AND age < 30";
 
         let expected = "Projection: #fn1, #person.age\
-                        \n  Filter: #fn1 Eq Utf8(\"X\") And #person.age Lt Int64(30)\
+                        \n  Filter: #fn1 = Utf8(\"X\") AND #person.age < Int64(30)\
                         \n    Projection: #person.first_name AS fn1, #person.age\
-                        \n      Filter: #person.age Gt Int64(20)\
+                        \n      Filter: #person.age > Int64(20)\
                         \n        TableScan: person projection=None";
 
         quick_test(sql, expected);
@@ -2086,7 +2086,7 @@ mod tests {
                    FROM person
                    HAVING age > 100 AND age < 200";
         let expected = "Projection: #person.id, #person.age\
-                        \n  Filter: #person.age Gt Int64(100) And #person.age Lt Int64(200)\
+                        \n  Filter: #person.age > Int64(100) AND #person.age < Int64(200)\
                         \n    TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -2133,7 +2133,7 @@ mod tests {
                    FROM person
                    HAVING MAX(age) < 30";
         let expected = "Projection: #MAX(person.age)\
-                        \n  Filter: #MAX(person.age) Lt Int64(30)\
+                        \n  Filter: #MAX(person.age) < Int64(30)\
                         \n    Aggregate: groupBy=[[]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2145,7 +2145,7 @@ mod tests {
                    FROM person
                    HAVING MAX(first_name) > 'M'";
         let expected = "Projection: #MAX(person.age)\
-                        \n  Filter: #MAX(person.first_name) Gt Utf8(\"M\")\
+                        \n  Filter: #MAX(person.first_name) > Utf8(\"M\")\
                         \n    Aggregate: groupBy=[[]], aggr=[[MAX(#person.age), MAX(#person.first_name)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2170,7 +2170,7 @@ mod tests {
                    HAVING max_age < 30";
         // FIXME: add test for having in execution
         let expected = "Projection: #MAX(person.age) AS max_age\
-                        \n  Filter: #MAX(person.age) Lt Int64(30)\
+                        \n  Filter: #MAX(person.age) < Int64(30)\
                         \n    Aggregate: groupBy=[[]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2182,7 +2182,7 @@ mod tests {
                    FROM person
                    HAVING MAX(age) < 30";
         let expected = "Projection: #MAX(person.age) AS max_age\
-                        \n  Filter: #MAX(person.age) Lt Int64(30)\
+                        \n  Filter: #MAX(person.age) < Int64(30)\
                         \n    Aggregate: groupBy=[[]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2195,7 +2195,7 @@ mod tests {
                    GROUP BY first_name
                    HAVING first_name = 'M'";
         let expected = "Projection: #person.first_name, #MAX(person.age)\
-                        \n  Filter: #person.first_name Eq Utf8(\"M\")\
+                        \n  Filter: #person.first_name = Utf8(\"M\")\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2209,9 +2209,9 @@ mod tests {
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
         let expected = "Projection: #person.first_name, #MAX(person.age)\
-                        \n  Filter: #MAX(person.age) Lt Int64(100)\
+                        \n  Filter: #MAX(person.age) < Int64(100)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
-                        \n      Filter: #person.id Gt Int64(5)\
+                        \n      Filter: #person.id > Int64(5)\
                         \n        TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -2225,9 +2225,9 @@ mod tests {
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
         let expected = "Projection: #person.first_name, #MAX(person.age)\
-                        \n  Filter: #MAX(person.age) Lt Int64(100)\
+                        \n  Filter: #MAX(person.age) < Int64(100)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
-                        \n      Filter: #person.id Gt Int64(5) And #person.age Gt Int64(18)\
+                        \n      Filter: #person.id > Int64(5) AND #person.age > Int64(18)\
                         \n        TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -2239,7 +2239,7 @@ mod tests {
                    GROUP BY first_name
                    HAVING MAX(age) > 2 AND fn = 'M'";
         let expected = "Projection: #person.first_name AS fn, #MAX(person.age)\
-                        \n  Filter: #MAX(person.age) Gt Int64(2) And #person.first_name Eq Utf8(\"M\")\
+                        \n  Filter: #MAX(person.age) > Int64(2) AND #person.first_name = Utf8(\"M\")\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2253,7 +2253,7 @@ mod tests {
                    GROUP BY first_name
                    HAVING MAX(age) > 2 AND max_age < 5 AND first_name = 'M' AND fn = 'N'";
         let expected = "Projection: #person.first_name AS fn, #MAX(person.age) AS max_age\
-                        \n  Filter: #MAX(person.age) Gt Int64(2) And #MAX(person.age) Lt Int64(5) And #person.first_name Eq Utf8(\"M\") And #person.first_name Eq Utf8(\"N\")\
+                        \n  Filter: #MAX(person.age) > Int64(2) AND #MAX(person.age) < Int64(5) AND #person.first_name = Utf8(\"M\") AND #person.first_name = Utf8(\"N\")\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2266,7 +2266,7 @@ mod tests {
                    GROUP BY first_name
                    HAVING MAX(age) > 100";
         let expected = "Projection: #person.first_name, #MAX(person.age)\
-                        \n  Filter: #MAX(person.age) Gt Int64(100)\
+                        \n  Filter: #MAX(person.age) > Int64(100)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2292,7 +2292,7 @@ mod tests {
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MAX(age) < 200";
         let expected = "Projection: #person.first_name, #MAX(person.age)\
-                        \n  Filter: #MAX(person.age) Gt Int64(100) And #MAX(person.age) Lt Int64(200)\
+                        \n  Filter: #MAX(person.age) > Int64(100) AND #MAX(person.age) < Int64(200)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2305,7 +2305,7 @@ mod tests {
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MIN(id) < 50";
         let expected = "Projection: #person.first_name, #MAX(person.age)\
-                        \n  Filter: #MAX(person.age) Gt Int64(100) And #MIN(person.id) Lt Int64(50)\
+                        \n  Filter: #MAX(person.age) > Int64(100) AND #MIN(person.id) < Int64(50)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age), MIN(#person.id)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2319,7 +2319,7 @@ mod tests {
                    GROUP BY first_name
                    HAVING max_age > 100";
         let expected = "Projection: #person.first_name, #MAX(person.age) AS max_age\
-                        \n  Filter: #MAX(person.age) Gt Int64(100)\
+                        \n  Filter: #MAX(person.age) > Int64(100)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2333,8 +2333,8 @@ mod tests {
                    GROUP BY first_name
                    HAVING max_age_plus_one > 100";
         let expected =
-            "Projection: #person.first_name, #MAX(person.age) Plus Int64(1) AS max_age_plus_one\
-                        \n  Filter: #MAX(person.age) Plus Int64(1) Gt Int64(100)\
+            "Projection: #person.first_name, #MAX(person.age) + Int64(1) AS max_age_plus_one\
+                        \n  Filter: #MAX(person.age) + Int64(1) > Int64(100)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2348,8 +2348,8 @@ mod tests {
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MIN(id - 2) < 50";
         let expected = "Projection: #person.first_name, #MAX(person.age)\
-                        \n  Filter: #MAX(person.age) Gt Int64(100) And #MIN(person.id Minus Int64(2)) Lt Int64(50)\
-                        \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age), MIN(#person.id Minus Int64(2))]]\
+                        \n  Filter: #MAX(person.age) > Int64(100) AND #MIN(person.id - Int64(2)) < Int64(50)\
+                        \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age), MIN(#person.id - Int64(2))]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -2361,7 +2361,7 @@ mod tests {
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND COUNT(*) < 50";
         let expected = "Projection: #person.first_name, #MAX(person.age)\
-                        \n  Filter: #MAX(person.age) Gt Int64(100) And #COUNT(UInt8(1)) Lt Int64(50)\
+                        \n  Filter: #MAX(person.age) > Int64(100) AND #COUNT(UInt8(1)) < Int64(50)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age), COUNT(UInt8(1))]]\
                         \n      TableScan: person projection=None";
         quick_test(sql, expected);
@@ -2370,7 +2370,7 @@ mod tests {
     #[test]
     fn select_binary_expr() {
         let sql = "SELECT age + salary from person";
-        let expected = "Projection: #person.age Plus #person.salary\
+        let expected = "Projection: #person.age + #person.salary\
                         \n  TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -2378,7 +2378,7 @@ mod tests {
     #[test]
     fn select_binary_expr_nested() {
         let sql = "SELECT (age + salary)/2 from person";
-        let expected = "Projection: #person.age Plus #person.salary Divide Int64(2)\
+        let expected = "Projection: #person.age + #person.salary / Int64(2)\
                         \n  TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -2627,7 +2627,7 @@ mod tests {
         quick_test(
             "SELECT MIN(first_name) FROM person GROUP BY age + 1",
             "Projection: #MIN(person.first_name)\
-             \n  Aggregate: groupBy=[[#person.age Plus Int64(1)]], aggr=[[MIN(#person.first_name)]]\
+             \n  Aggregate: groupBy=[[#person.age + Int64(1)]], aggr=[[MIN(#person.first_name)]]\
              \n    TableScan: person projection=None",
         );
     }
@@ -2637,14 +2637,14 @@ mod tests {
     ) {
         quick_test(
             "SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1",
-            "Projection: #person.age Plus Int64(1), #MIN(person.first_name)\
-             \n  Aggregate: groupBy=[[#person.age Plus Int64(1)]], aggr=[[MIN(#person.first_name)]]\
+            "Projection: #person.age + Int64(1), #MIN(person.first_name)\
+             \n  Aggregate: groupBy=[[#person.age + Int64(1)]], aggr=[[MIN(#person.first_name)]]\
              \n    TableScan: person projection=None",
         );
         quick_test(
             "SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1",
-            "Projection: #MIN(person.first_name), #person.age Plus Int64(1)\
-             \n  Aggregate: groupBy=[[#person.age Plus Int64(1)]], aggr=[[MIN(#person.first_name)]]\
+            "Projection: #MIN(person.first_name), #person.age + Int64(1)\
+             \n  Aggregate: groupBy=[[#person.age + Int64(1)]], aggr=[[MIN(#person.first_name)]]\
              \n    TableScan: person projection=None",
         );
     }
@@ -2654,8 +2654,8 @@ mod tests {
     {
         quick_test(
             "SELECT ((age + 1) / 2) * (age + 1), MIN(first_name) FROM person GROUP BY age + 1",
-            "Projection: #person.age Plus Int64(1) Divide Int64(2) Multiply #person.age Plus Int64(1), #MIN(person.first_name)\
-             \n  Aggregate: groupBy=[[#person.age Plus Int64(1)]], aggr=[[MIN(#person.first_name)]]\
+            "Projection: #person.age + Int64(1) / Int64(2) * #person.age + Int64(1), #MIN(person.first_name)\
+             \n  Aggregate: groupBy=[[#person.age + Int64(1)]], aggr=[[MIN(#person.first_name)]]\
              \n    TableScan: person projection=None",
         );
     }
@@ -2688,7 +2688,7 @@ mod tests {
     fn select_simple_aggregate_nested_in_binary_expr_with_groupby() {
         quick_test(
             "SELECT state, MIN(age) < 10 FROM person GROUP BY state",
-            "Projection: #person.state, #MIN(person.age) Lt Int64(10)\
+            "Projection: #person.state, #MIN(person.age) < Int64(10)\
              \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age)]]\
              \n    TableScan: person projection=None",
         );
@@ -2698,7 +2698,7 @@ mod tests {
     fn select_simple_aggregate_and_nested_groupby_column() {
         quick_test(
             "SELECT age + 1, MAX(first_name) FROM person GROUP BY age",
-            "Projection: #person.age Plus Int64(1), #MAX(person.first_name)\
+            "Projection: #person.age + Int64(1), #MAX(person.first_name)\
              \n  Aggregate: groupBy=[[#person.age]], aggr=[[MAX(#person.first_name)]]\
              \n    TableScan: person projection=None",
         );
@@ -2708,7 +2708,7 @@ mod tests {
     fn select_aggregate_compounded_with_groupby_column() {
         quick_test(
             "SELECT age + MIN(salary) FROM person GROUP BY age",
-            "Projection: #person.age Plus #MIN(person.salary)\
+            "Projection: #person.age + #MIN(person.salary)\
              \n  Aggregate: groupBy=[[#person.age]], aggr=[[MIN(#person.salary)]]\
              \n    TableScan: person projection=None",
         );
@@ -2718,8 +2718,8 @@ mod tests {
     fn select_aggregate_with_non_column_inner_expression_with_groupby() {
         quick_test(
             "SELECT state, MIN(age + 1) FROM person GROUP BY state",
-            "Projection: #person.state, #MIN(person.age Plus Int64(1))\
-            \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age Plus Int64(1))]]\
+            "Projection: #person.state, #MIN(person.age + Int64(1))\
+            \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age + Int64(1))]]\
             \n    TableScan: person projection=None",
         );
     }
@@ -2771,8 +2771,8 @@ mod tests {
     fn select_where_nullif_division() {
         let sql = "SELECT c3/(c4+c5) \
                    FROM aggregate_test_100 WHERE c3/nullif(c4+c5, 0) > 0.1";
-        let expected = "Projection: #aggregate_test_100.c3 Divide #aggregate_test_100.c4 Plus #aggregate_test_100.c5\
-            \n  Filter: #aggregate_test_100.c3 Divide nullif(#aggregate_test_100.c4 Plus #aggregate_test_100.c5, Int64(0)) Gt Float64(0.1)\
+        let expected = "Projection: #aggregate_test_100.c3 / #aggregate_test_100.c4 + #aggregate_test_100.c5\
+            \n  Filter: #aggregate_test_100.c3 / nullif(#aggregate_test_100.c4 + #aggregate_test_100.c5, Int64(0)) > Float64(0.1)\
             \n    TableScan: aggregate_test_100 projection=None";
         quick_test(sql, expected);
     }
@@ -2781,7 +2781,7 @@ mod tests {
     fn select_where_with_negative_operator() {
         let sql = "SELECT c3 FROM aggregate_test_100 WHERE c3 > -0.1 AND -c4 > 0";
         let expected = "Projection: #aggregate_test_100.c3\
-            \n  Filter: #aggregate_test_100.c3 Gt Float64(-0.1) And (- #aggregate_test_100.c4) Gt Int64(0)\
+            \n  Filter: #aggregate_test_100.c3 > Float64(-0.1) AND (- #aggregate_test_100.c4) > Int64(0)\
             \n    TableScan: aggregate_test_100 projection=None";
         quick_test(sql, expected);
     }
@@ -2790,7 +2790,7 @@ mod tests {
     fn select_where_with_positive_operator() {
         let sql = "SELECT c3 FROM aggregate_test_100 WHERE c3 > +0.1 AND +c4 > 0";
         let expected = "Projection: #aggregate_test_100.c3\
-            \n  Filter: #aggregate_test_100.c3 Gt Float64(0.1) And #aggregate_test_100.c4 Gt Int64(0)\
+            \n  Filter: #aggregate_test_100.c3 > Float64(0.1) AND #aggregate_test_100.c4 > Int64(0)\
             \n    TableScan: aggregate_test_100 projection=None";
         quick_test(sql, expected);
     }
@@ -2945,7 +2945,7 @@ mod tests {
             JOIN orders \
             ON id = customer_id AND order_id > 1 ";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Filter: #orders.order_id Gt Int64(1)\
+        \n  Filter: #orders.order_id > Int64(1)\
         \n    Join: #person.id = #orders.customer_id\
         \n      TableScan: person projection=None\
         \n      TableScan: orders projection=None";
@@ -2961,7 +2961,7 @@ mod tests {
         let expected = "Projection: #person.id, #orders.order_id\
         \n  Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
-        \n    Filter: #orders.order_id Gt Int64(1)\
+        \n    Filter: #orders.order_id > Int64(1)\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -2974,7 +2974,7 @@ mod tests {
             ON id = customer_id AND id > 1";
         let expected = "Projection: #person.id, #orders.order_id\
         \n  Join: #person.id = #orders.customer_id\
-        \n    Filter: #person.id Gt Int64(1)\
+        \n    Filter: #person.id > Int64(1)\
         \n      TableScan: person projection=None\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3041,7 +3041,7 @@ mod tests {
         FROM orders \
         WHERE delivered = false OR delivered = true";
         let expected = "Projection: #orders.order_id\
-            \n  Filter: #orders.delivered Eq Boolean(false) Or #orders.delivered Eq Boolean(true)\
+            \n  Filter: #orders.delivered = Boolean(false) OR #orders.delivered = Boolean(true)\
             \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -3130,8 +3130,8 @@ mod tests {
     fn empty_over_plus() {
         let sql = "SELECT order_id, MAX(qty * 1.1) OVER () from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty Multiply Float64(1.1))\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty Multiply Float64(1.1))]]\
+        Projection: #orders.order_id, #MAX(orders.qty * Float64(1.1))\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty * Float64(1.1))]]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -3270,9 +3270,9 @@ mod tests {
     fn over_order_by_two_sort_keys() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY (order_id + 1)) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST], #MIN(orders.qty) ORDER BY [#orders.order_id Plus Int64(1) ASC NULLS FIRST]\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST], #MIN(orders.qty) ORDER BY [#orders.order_id + Int64(1) ASC NULLS FIRST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
-        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id Plus Int64(1) ASC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id + Int64(1) ASC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }

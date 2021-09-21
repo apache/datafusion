@@ -663,7 +663,7 @@ mod tests {
         .build()?;
 
         let expected = "Projection: #employee_csv.id\
-        \n  Filter: #employee_csv.state Eq Utf8(\"CO\")\
+        \n  Filter: #employee_csv.state = Utf8(\"CO\")\
         \n    TableScan: employee_csv projection=Some([0, 3])";
 
         assert_eq!(expected, format!("{:?}", plan));

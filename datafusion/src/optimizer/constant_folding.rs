@@ -592,7 +592,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Filter: NOT #test.b And #test.c\
+        \n  Filter: NOT #test.b AND #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -609,7 +609,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Filter: NOT #test.b Or NOT #test.c\
+        \n  Filter: NOT #test.b OR NOT #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
