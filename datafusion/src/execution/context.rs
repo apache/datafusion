@@ -3775,42 +3775,34 @@ mod tests {
             Arc::new(Schema::new(fields.clone())),
         ];
 
-        match fs::create_dir(table_path) {
-            Ok(()) => {
-                for i in 0..2 {
-                    let filename = format!("part-{}.parquet", i);
-                    let path = table_path.join(&filename);
-                    let file = fs::File::create(path).unwrap();
-                    let mut writer = ArrowWriter::try_new(
-                        file.try_clone().unwrap(),
-                        schemas[i].clone(),
-                        None,
-                    )
-                    .unwrap();
+        if let Ok(()) = fs::create_dir(table_path) {
+            for (i, schema) in schemas.iter().enumerate().take(2) {
+                let filename = format!("part-{}.parquet", i);
+                let path = table_path.join(&filename);
+                let file = fs::File::create(path).unwrap();
+                let mut writer =
+                    ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), None)
+                        .unwrap();
 
-                    // create mock record batch
-                    let ids = Arc::new(Int32Array::from(vec![i as i32]));
-                    let names = Arc::new(StringArray::from(vec!["test"]));
-                    let rec_batch =
-                        RecordBatch::try_new(schemas[i].clone(), vec![ids, names])
-                            .unwrap();
+                // create mock record batch
+                let ids = Arc::new(Int32Array::from(vec![i as i32]));
+                let names = Arc::new(StringArray::from(vec!["test"]));
+                let rec_batch =
+                    RecordBatch::try_new(schema.clone(), vec![ids, names]).unwrap();
 
-                    writer.write(&rec_batch).unwrap();
-                    writer.close().unwrap();
-                }
+                writer.write(&rec_batch).unwrap();
+                writer.close().unwrap();
             }
-            _ => {}
         }
 
         // Read the parquet files into a dataframe to confirm results
+        // (no errors)
         let mut ctx = ExecutionContext::new();
         let df = ctx
             .read_parquet(table_dir.to_str().unwrap().to_string())
             .unwrap();
         let result = df.collect().await.unwrap();
 
-        // I expected this to be true if files are read sequentially
-        // assert_eq!(result[0].schema().metadata(), &non_empty_metadata);
         assert_eq!(result[0].schema().metadata(), result[1].schema().metadata());
     }
 
