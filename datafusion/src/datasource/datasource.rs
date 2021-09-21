@@ -20,6 +20,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
 use crate::logical_plan::Expr;
@@ -54,6 +56,7 @@ pub enum TableType {
 }
 
 /// Source table
+#[async_trait]
 pub trait TableProvider: Sync + Send {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
@@ -68,7 +71,7 @@ pub trait TableProvider: Sync + Send {
     }
 
     /// Create an ExecutionPlan that will scan the table.
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         batch_size: usize,

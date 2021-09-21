@@ -188,7 +188,7 @@ async fn parquet_single_nan_schema() {
     let sql = "SELECT mycol FROM single_nan";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).await.unwrap();
     let results = collect(plan).await.unwrap();
     for batch in results {
         assert_eq!(1, batch.num_rows());
@@ -223,7 +223,7 @@ async fn parquet_list_columns() {
     let sql = "SELECT int64_list, utf8_list FROM list_columns";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).await.unwrap();
     let results = collect(plan).await.unwrap();
 
     //   int64_list              utf8_list
@@ -928,7 +928,7 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
     let sql = "SELECT avg(c12) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).await.unwrap();
     let results = collect(plan).await.unwrap();
     let batch = &results[0];
     let column = batch.column(0);
@@ -2366,7 +2366,7 @@ async fn explain_analyze_baseline_metrics() {
     println!("running query: {}", sql);
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
-    let physical_plan = ctx.create_physical_plan(&plan).unwrap();
+    let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
     let results = collect(physical_plan.clone()).await.unwrap();
     let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
     println!("Query Output:\n\n{}", formatted);
@@ -2648,7 +2648,7 @@ async fn csv_explain_plans() {
     // Physical plan
     // Create plan
     let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).expect(&msg);
+    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
@@ -2845,7 +2845,7 @@ async fn csv_explain_verbose_plans() {
     // Physical plan
     // Create plan
     let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).expect(&msg);
+    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
@@ -3002,7 +3002,7 @@ async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<Record
     let optimized_logical_schema = plan.schema();
 
     let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).expect(&msg);
+    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
 
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
     let results = collect(plan).await.expect(&msg);
@@ -4401,7 +4401,7 @@ async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
     let plan = ctx.create_logical_plan(sql).expect(&msg);
 
     let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).expect(&msg);
+    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
 
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
     let res = collect(plan).await.expect(&msg);
@@ -4439,7 +4439,7 @@ async fn test_cast_expressions_error() -> Result<()> {
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).await.unwrap();
     let result = collect(plan).await;
 
     match result {
@@ -4469,7 +4469,7 @@ async fn test_physical_plan_display_indent() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
 
-    let physical_plan = ctx.create_physical_plan(&plan).unwrap();
+    let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
     let expected = vec![
         "GlobalLimitExec: limit=10",
         "  SortExec: [the_min@2 DESC]",
@@ -4517,7 +4517,7 @@ async fn test_physical_plan_display_indent_multi_children() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
 
-    let physical_plan = ctx.create_physical_plan(&plan).unwrap();
+    let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
     let expected = vec![
         "ProjectionExec: expr=[c1@0 as c1]",
         "  CoalesceBatchesExec: target_batch_size=4096",
@@ -4555,7 +4555,7 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
     let logical_plan = ctx.create_logical_plan(sql)?;
-    let physical_plan = ctx.create_physical_plan(&logical_plan);
+    let physical_plan = ctx.create_physical_plan(&logical_plan).await;
     let err = physical_plan.unwrap_err();
     assert_eq!(err.to_string(), "Error during planning: Invalid or wrong number of arguments passed to aggregate: 'COUNT(DISTINCT )'");
     Ok(())
@@ -4875,7 +4875,7 @@ async fn avro_single_nan_schema() {
     let sql = "SELECT mycol FROM single_nan";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).await.unwrap();
     let results = collect(plan).await.unwrap();
     for batch in results {
         assert_eq!(1, batch.num_rows());

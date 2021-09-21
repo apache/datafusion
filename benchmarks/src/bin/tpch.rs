@@ -348,7 +348,7 @@ async fn execute_query(
     if debug {
         println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
-    let physical_plan = ctx.create_physical_plan(&plan)?;
+    let physical_plan = ctx.create_physical_plan(&plan).await?;
     if debug {
         println!(
             "=== Physical plan ===\n{}\n",
@@ -394,7 +394,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
         // create the physical plan
         let csv = csv.to_logical_plan();
         let csv = ctx.optimize(&csv)?;
-        let csv = ctx.create_physical_plan(&csv)?;
+        let csv = ctx.create_physical_plan(&csv).await?;
 
         let output_path = output_root_path.join(table);
         let output_path = output_path.to_str().unwrap().to_owned();
@@ -1063,7 +1063,7 @@ mod tests {
         use datafusion::physical_plan::ExecutionPlan;
         use std::convert::TryInto;
 
-        fn round_trip_query(n: usize) -> Result<()> {
+        async fn round_trip_query(n: usize) -> Result<()> {
             let config = ExecutionConfig::new()
                 .with_target_partitions(1)
                 .with_batch_size(10);
@@ -1110,7 +1110,7 @@ mod tests {
 
             // test physical plan roundtrip
             if env::var("TPCH_DATA").is_ok() {
-                let physical_plan = ctx.create_physical_plan(&plan)?;
+                let physical_plan = ctx.create_physical_plan(&plan).await?;
                 let proto: protobuf::PhysicalPlanNode =
                     (physical_plan.clone()).try_into().unwrap();
                 let round_trip: Arc<dyn ExecutionPlan> = (&proto).try_into().unwrap();
@@ -1126,9 +1126,9 @@ mod tests {
 
         macro_rules! test_round_trip {
             ($tn:ident, $query:expr) => {
-                #[test]
-                fn $tn() -> Result<()> {
-                    round_trip_query($query)
+                #[tokio::test]
+                async fn $tn() -> Result<()> {
+                    round_trip_query($query).await
                 }
             };
         }

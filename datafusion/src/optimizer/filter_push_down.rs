@@ -549,6 +549,7 @@ mod tests {
     use crate::test::*;
     use crate::{logical_plan::col, prelude::JoinType};
     use arrow::datatypes::SchemaRef;
+    use async_trait::async_trait;
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
@@ -1129,6 +1130,7 @@ mod tests {
         pub filter_support: TableProviderFilterPushDown,
     }
 
+    #[async_trait]
     impl TableProvider for PushDownProvider {
         fn schema(&self) -> SchemaRef {
             Arc::new(arrow::datatypes::Schema::new(vec![
@@ -1140,7 +1142,7 @@ mod tests {
             ]))
         }
 
-        fn scan(
+        async fn scan(
             &self,
             _: &Option<Vec<usize>>,
             _: usize,

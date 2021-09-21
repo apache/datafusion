@@ -34,6 +34,7 @@
 //! ```
 
 use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
 use std::any::Any;
 use std::io::{Read, Seek};
 use std::string::String;
@@ -157,6 +158,7 @@ impl CsvFile {
     }
 }
 
+#[async_trait]
 impl TableProvider for CsvFile {
     fn as_any(&self) -> &dyn Any {
         self
@@ -166,7 +168,7 @@ impl TableProvider for CsvFile {
         self.schema.clone()
     }
 
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         batch_size: usize,

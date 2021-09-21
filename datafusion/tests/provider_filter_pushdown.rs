@@ -110,6 +110,7 @@ struct CustomProvider {
     one_batch: RecordBatch,
 }
 
+#[async_trait]
 impl TableProvider for CustomProvider {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -119,7 +120,7 @@ impl TableProvider for CustomProvider {
         self.zero_batch.schema()
     }
 
-    fn scan(
+    async fn scan(
         &self,
         _: &Option<Vec<usize>>,
         _: usize,

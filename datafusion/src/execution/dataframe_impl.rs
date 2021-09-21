@@ -57,7 +57,7 @@ impl DataFrameImpl {
         let state = self.ctx_state.lock().unwrap().clone();
         let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
         let plan = ctx.optimize(&self.plan)?;
-        ctx.create_physical_plan(&plan)
+        ctx.create_physical_plan(&plan).await
     }
 }
 
