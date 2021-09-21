@@ -22,71 +22,53 @@ use uuid::Uuid;
 
 use tokio::runtime::Runtime;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 
+use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
-use datafusion::execution::context::ExecutionContext as _ExecutionContext;
+use datafusion::execution::context::ExecutionContext;
 use datafusion::prelude::CsvReadOptions;
 
-use crate::dataframe;
-use crate::errors;
+use crate::{dataframe, errors, functions};
 use crate::functions::{self, PyVolatility};
-use crate::to_rust;
 use crate::types::PyDataType;
+use crate::catalog::PyCatalog;
+use crate::dataframe::PyDataFrame;
+use crate::errors::DataFusionError;
 
-/// `ExecutionContext` is able to plan and execute DataFusion plans.
+
+/// `PyExecutionContext` is able to plan and execute DataFusion plans.
 /// It has a powerful optimizer, a physical planner for local execution, and a
 /// multi-threaded execution engine to perform the execution.
-#[pyclass(unsendable)]
-pub(crate) struct ExecutionContext {
-    ctx: _ExecutionContext,
+#[pyclass(name = "ExecutionContext", unsendable)]
+pub(crate) struct PyExecutionContext {
+    ctx: ExecutionContext,
 }
 
 #[pymethods]
-impl ExecutionContext {
+impl PyExecutionContext {
+    // TODO(kszucs): should expose the configuration options as keyword arguments
     #[new]
     fn new() -> Self {
-        ExecutionContext {
-            ctx: _ExecutionContext::new(),
+        PyExecutionContext {
+            ctx: ExecutionContext::new(),
         }
     }
 
-    /// Returns a DataFrame whose plan corresponds to the SQL statement.
-    fn sql(&mut self, query: &str, py: Python) -> PyResult<dataframe::DataFrame> {
-        let rt = Runtime::new().unwrap();
-        let df = py.allow_threads(|| {
-            rt.block_on(async {
-                self.ctx
-                    .sql(query)
-                    .await
-                    .map_err(|e| -> errors::DataFusionError { e.into() })
-            })
-        })?;
-        Ok(dataframe::DataFrame::new(
-            self.ctx.state.clone(),
-            df.to_logical_plan(),
-        ))
+    /// Returns a PyDataFrame whose plan corresponds to the SQL statement.
+    fn sql(&mut self, query: &str) -> PyResult<PyDataFrame> {
+        let df = self.ctx.sql(query).map_err(DataFusionError::from)?;
+        Ok(PyDataFrame::new(df))
     }
 
     fn create_dataframe(
         &mut self,
-        partitions: Vec<Vec<PyObject>>,
-        py: Python,
-    ) -> PyResult<dataframe::DataFrame> {
-        let partitions: Vec<Vec<RecordBatch>> = partitions
-            .iter()
-            .map(|batches| {
-                batches
-                    .iter()
-                    .map(|batch| to_rust::to_rust_batch(batch.as_ref(py)))
-                    .collect()
-            })
-            .collect::<PyResult<_>>()?;
-
-        let table =
-            errors::wrap(MemTable::try_new(partitions[0][0].schema(), partitions))?;
+        partitions: Vec<Vec<RecordBatch>>,
+    ) -> PyResult<PyDataFrame> {
+        let table = MemTable::try_new(partitions[0][0].schema(), partitions)
+            .map_err(DataFusionError::from)?;
 
         // generate a random (unique) name for this table
         // table name cannot start with numeric digit
@@ -95,43 +77,32 @@ impl ExecutionContext {
                 .to_simple()
                 .encode_lower(&mut Uuid::encode_buffer());
 
-        errors::wrap(self.ctx.register_table(&*name, Arc::new(table)))?;
-        Ok(dataframe::DataFrame::new(
-            self.ctx.state.clone(),
-            errors::wrap(self.ctx.table(&*name))?.to_logical_plan(),
-        ))
+        self.ctx
+            .register_table(&*name, Arc::new(table))
+            .map_err(DataFusionError::from)?;
+        let table = self.ctx.table(&*name).map_err(DataFusionError::from)?;
+
+        let df = PyDataFrame::new(table);
+        Ok(df)
     }
 
     fn register_record_batches(
         &mut self,
         name: &str,
-        partitions: Vec<Vec<PyObject>>,
-        py: Python,
+        partitions: Vec<Vec<RecordBatch>>,
     ) -> PyResult<()> {
-        let partitions: Vec<Vec<RecordBatch>> = partitions
-            .iter()
-            .map(|batches| {
-                batches
-                    .iter()
-                    .map(|batch| to_rust::to_rust_batch(batch.as_ref(py)))
-                    .collect()
-            })
-            .collect::<PyResult<_>>()?;
-
-        let table =
-            errors::wrap(MemTable::try_new(partitions[0][0].schema(), partitions))?;
-
-        errors::wrap(self.ctx.register_table(&*name, Arc::new(table)))?;
+        let schema = partitions[0][0].schema();
+        let table = MemTable::try_new(schema, partitions)?;
+        self.ctx
+            .register_table(name, Arc::new(table))
+            .map_err(DataFusionError::from)?;
         Ok(())
     }
 
-    fn register_parquet(&mut self, name: &str, path: &str, py: Python) -> PyResult<()> {
-        let rt = Runtime::new().unwrap();
-        py.allow_threads(|| {
-            rt.block_on(async {
-                errors::wrap(self.ctx.register_parquet(name, path).await)
-            })
-        })?;
+    fn register_parquet(&mut self, name: &str, path: &str) -> PyResult<()> {
+        self.ctx
+            .register_parquet(name, path)
+            .map_err(DataFusionError::from)?;
         Ok(())
     }
 
@@ -146,7 +117,7 @@ impl ExecutionContext {
         &mut self,
         name: &str,
         path: PathBuf,
-        schema: Option<&PyAny>,
+        schema: Option<Schema>,
         has_header: bool,
         delimiter: &str,
         schema_infer_max_records: usize,
@@ -156,10 +127,6 @@ impl ExecutionContext {
         let path = path
             .to_str()
             .ok_or(PyValueError::new_err("Unable to convert path to a string"))?;
-        let schema = match schema {
-            Some(s) => Some(to_rust::to_rust_schema(s)?),
-            None => None,
-        };
         let delimiter = delimiter.as_bytes();
         if delimiter.len() != 1 {
             return Err(PyValueError::new_err(
@@ -174,12 +141,9 @@ impl ExecutionContext {
             .file_extension(file_extension);
         options.schema = schema.as_ref();
 
-        let rt = Runtime::new().unwrap();
-        py.allow_threads(|| {
-            rt.block_on(async {
-                errors::wrap(self.ctx.register_csv(name, path, options).await)
-            })
-        })?;
+        self.ctx
+            .register_csv(name, path, options)
+            .map_err(DataFusionError::from)?;
         Ok(())
     }
 
@@ -190,14 +154,33 @@ impl ExecutionContext {
         args_types: Vec<PyDataType>,
         return_type: PyDataType,
         volatility: PyVolatility,
-    ) {
+    ) -> PyResult<()> {
         let function =
-            functions::create_udf(func, args_types, return_type, volatility, name);
-
+            functions::create_udf(func, args_types, return_type, volatility, name)?;
         self.ctx.register_udf(function.function);
+        Ok(())
+    }
+
+    #[args(name = "\"datafusion\"")]
+    fn catalog(&self, name: &str) -> PyResult<PyCatalog> {
+        match self.ctx.catalog(name) {
+            Some(catalog) => Ok(PyCatalog::new(catalog)),
+            None => Err(PyKeyError::new_err(format!(
+                "Catalog with name {} doesn't exist.",
+                &name
+            ))),
+        }
     }
 
     fn tables(&self) -> HashSet<String> {
         self.ctx.tables().unwrap()
+    }
+
+    fn table(&self, name: &str) -> PyResult<PyDataFrame> {
+        Ok(PyDataFrame::new(self.ctx.table(name)?))
+    }
+
+    fn empty_table(&self) -> PyResult<PyDataFrame> {
+        Ok(PyDataFrame::new(self.ctx.read_empty()?))
     }
 }

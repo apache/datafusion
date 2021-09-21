@@ -17,15 +17,12 @@
 
 use pyo3::prelude::*;
 
+mod catalog;
 mod context;
 mod dataframe;
 mod errors;
 mod expression;
 mod functions;
-mod scalar;
-mod to_py;
-mod to_rust;
-mod types;
 mod udaf;
 mod udf;
 
@@ -44,15 +41,19 @@ fn register_module_package(py: Python, package_name: &str, module: &PyModule) {
 
 /// DataFusion.
 #[pymodule]
-fn datafusion(py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<context::ExecutionContext>()?;
-    m.add_class::<dataframe::DataFrame>()?;
-    m.add_class::<expression::Expression>()?;
+fn internals(py: Python, m: &PyModule) -> PyResult<()> {
+    expression::init(m)?;
 
     let functions = PyModule::new(py, "functions")?;
     functions::init(functions)?;
     register_module_package(py, "datafusion.functions", functions);
     m.add_submodule(functions)?;
+
+    m.add_class::<catalog::PyCatalog>()?;
+    m.add_class::<catalog::PyDatabase>()?;
+    m.add_class::<catalog::PyTable>()?;
+    m.add_class::<context::PyExecutionContext>()?;
+    m.add_class::<dataframe::PyDataFrame>()?;
 
     Ok(())
 }

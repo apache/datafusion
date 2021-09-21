@@ -20,16 +20,13 @@ use std::sync::Arc;
 use pyo3::{prelude::*, types::PyTuple};
 
 use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::pyarrow::PyArrowConvert;
 
 use datafusion::error::Result;
 use datafusion::{
     error::DataFusionError as InnerDataFusionError, physical_plan::Accumulator,
     scalar::ScalarValue,
 };
-
-use crate::scalar::Scalar;
-use crate::to_py::to_py_array;
-use crate::to_rust::to_rust_scalar;
 
 #[derive(Debug)]
 struct PyAccumulator {
@@ -43,18 +40,9 @@ impl PyAccumulator {
 }
 
 impl Accumulator for PyAccumulator {
-    fn state(&self) -> Result<Vec<datafusion::scalar::ScalarValue>> {
-        Python::with_gil(|py| {
-            let state = self
-                .accum
-                .as_ref(py)
-                .call_method0("to_scalars")
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?
-                .extract::<Vec<Scalar>>()
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
-
-            Ok(state.into_iter().map(|v| v.scalar).collect::<Vec<_>>())
-        })
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Python::with_gil(|py| self.accum.as_ref(py).call_method0("to_scalars")?.extract())
+            .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
     }
 
     fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
@@ -67,17 +55,9 @@ impl Accumulator for PyAccumulator {
         todo!()
     }
 
-    fn evaluate(&self) -> Result<datafusion::scalar::ScalarValue> {
-        Python::with_gil(|py| {
-            let value = self
-                .accum
-                .as_ref(py)
-                .call_method0("evaluate")
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
-
-            to_rust_scalar(value)
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
-        })
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Python::with_gil(|py| self.accum.as_ref(py).call_method0("evaluate")?.extract())
+            .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -88,10 +68,7 @@ impl Accumulator for PyAccumulator {
             // 1.
             let py_args = values
                 .iter()
-                .map(|arg| {
-                    // remove unwrap
-                    to_py_array(arg, py).unwrap()
-                })
+                .map(|arg| arg.data().to_owned().to_pyarrow(py).unwrap())
                 .collect::<Vec<_>>();
             let py_args = PyTuple::new(py, py_args);
 
@@ -111,7 +88,8 @@ impl Accumulator for PyAccumulator {
             // 2. merge
             let state = &states[0];
 
-            let state = to_py_array(state, py)
+            let state = state
+                .to_pyarrow(py)
                 .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
 
             // 2.

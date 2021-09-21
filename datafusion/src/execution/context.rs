@@ -329,6 +329,14 @@ impl ExecutionContext {
         )))
     }
 
+    /// Creates an empty DataFrame.
+    pub fn read_empty(&self) -> Result<Arc<dyn DataFrame>> {
+        Ok(Arc::new(DataFrameImpl::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::empty(true).build()?,
+        )))
+    }
+
     /// Creates a DataFrame for reading a CSV data source.
     pub async fn read_csv(
         &mut self,
@@ -565,6 +573,7 @@ impl ExecutionContext {
     /// register_table function.
     ///
     /// Returns an error if no table has been registered with the provided reference.
+    /// NOTE(kszucs): perhaps it should be called dataframe() instead?
     pub fn table<'a>(
         &self,
         table_ref: impl Into<TableReference<'a>>,

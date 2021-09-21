@@ -475,7 +475,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![], vec![max(col("b"))])?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
             .build()?;
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(#test.b)]]\
@@ -508,7 +508,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("c"))?
-            .aggregate(vec![], vec![max(col("b"))])?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
             .build()?;
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(#test.b)]]\

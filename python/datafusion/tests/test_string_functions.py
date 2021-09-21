@@ -17,6 +17,7 @@
 
 import pyarrow as pa
 import pytest
+
 from datafusion import ExecutionContext
 from datafusion import functions as f
 

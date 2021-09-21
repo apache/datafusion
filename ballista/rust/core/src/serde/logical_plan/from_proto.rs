@@ -106,14 +106,15 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
             }
             LogicalPlanType::Selection(selection) => {
                 let input: LogicalPlan = convert_box_required!(selection.input)?;
+                let expr: Expr = selection
+                    .expr
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BallistaError::General("expression required".to_string())
+                    })?
+                    .try_into()?;
                 LogicalPlanBuilder::from(input)
-                    .filter(
-                        selection
-                            .expr
-                            .as_ref()
-                            .expect("expression required")
-                            .try_into()?,
-                    )?
+                    .filter(expr)?
                     .build()
                     .map_err(|e| e.into())
             }
@@ -123,7 +124,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .window_expr
                     .iter()
                     .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .window(window_expr)?
                     .build()
@@ -135,12 +136,12 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .group_expr
                     .iter()
                     .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<Expr>, _>>()?;
                 let aggr_expr = aggregate
                     .aggr_expr
                     .iter()
                     .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .aggregate(group_expr, aggr_expr)?
                     .build()

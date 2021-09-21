@@ -43,6 +43,7 @@ simd = ["arrow/simd"]
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 regex_expressions = ["regex"]
 unicode_expressions = ["unicode-segmentation"]
+pyarrow = ["pyo3", "arrow/pyarrow"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable the avro format
@@ -75,6 +76,7 @@ smallvec = { version = "1.6", features = ["union"] }
 rand = "0.8"
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 num-traits = { version = "0.2", optional = true }
+pyo3 = { version = "0.14", optional = true }
 
 [dev-dependencies]
 criterion = "0.3"

@@ -15,15 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::{prelude::*, types::PyTuple};
-
-use datafusion::{arrow::array, physical_plan::functions::make_scalar_function};
-
+use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::pyarrow::PyArrowConvert;
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::functions::ScalarFunctionImplementation;
-
-use crate::to_py::to_py_array;
-use crate::to_rust::to_rust;
+use datafusion::{arrow::array, physical_plan::functions::make_scalar_function};
+use pyo3::{prelude::*, types::PyTuple};
 
 /// creates a DataFusion's UDF implementation from a python function that expects pyarrow arrays
 /// This is more efficient as it performs a zero-copy of the contents.
@@ -38,10 +35,7 @@ pub fn array_udf(func: PyObject) -> ScalarFunctionImplementation {
                 // 1.
                 let py_args = args
                     .iter()
-                    .map(|arg| {
-                        // remove unwrap
-                        to_py_array(arg, py).unwrap()
-                    })
+                    .map(|arg| arg.data().to_owned().to_pyarrow(py).unwrap())
                     .collect::<Vec<_>>();
                 let py_args = PyTuple::new(py, py_args);
 
@@ -52,7 +46,7 @@ pub fn array_udf(func: PyObject) -> ScalarFunctionImplementation {
                     Err(error) => Err(DataFusionError::Execution(format!("{:?}", error))),
                 }?;
 
-                let array = to_rust(value).unwrap();
+                let array = ArrayRef::from_pyarrow(value).unwrap();
                 Ok(array)
             })
         },
