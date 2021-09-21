@@ -1385,37 +1385,6 @@ impl Literal for ScalarValue {
     }
 }
 
-impl TimestampLiteral for ScalarValue {
-    fn lit_timestamp_nano(&self) -> Expr {
-        match self {
-            ScalarValue::Int64(Some(val)) => {
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some(*val)))
-            }
-            ScalarValue::Int32(Some(val)) => {
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
-            }
-            ScalarValue::Int16(Some(val)) => {
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
-            }
-            ScalarValue::Int8(Some(val)) => {
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
-            }
-            ScalarValue::UInt8(Some(val)) => {
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
-            }
-            ScalarValue::UInt16(Some(val)) => {
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
-            }
-            ScalarValue::UInt32(Some(val)) => {
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some((*val).into())))
-            }
-            _ => {
-                panic!("cannot convert {} to timestamp nanosecond", self)
-            }
-        }
-    }
-}
-
 macro_rules! make_literal {
     ($TYPE:ty, $SCALAR:ident, $DOC: expr) => {
         #[doc = $DOC]
