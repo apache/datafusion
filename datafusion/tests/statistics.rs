@@ -59,6 +59,7 @@ impl StatisticsValidation {
     }
 }
 
+#[async_trait]
 impl TableProvider for StatisticsValidation {
     fn as_any(&self) -> &dyn Any {
         self
@@ -68,7 +69,7 @@ impl TableProvider for StatisticsValidation {
         Arc::clone(&self.schema)
     }
 
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         _batch_size: usize,
@@ -212,7 +213,10 @@ async fn sql_basic() -> Result<()> {
 
     let df = ctx.sql("SELECT * from stats_table").unwrap();
 
-    let physical_plan = ctx.create_physical_plan(&df.to_logical_plan()).unwrap();
+    let physical_plan = ctx
+        .create_physical_plan(&df.to_logical_plan())
+        .await
+        .unwrap();
 
     // the statistics should be those of the source
     assert_eq!(stats, physical_plan.statistics());
@@ -227,7 +231,10 @@ async fn sql_filter() -> Result<()> {
 
     let df = ctx.sql("SELECT * FROM stats_table WHERE c1 = 5").unwrap();
 
-    let physical_plan = ctx.create_physical_plan(&df.to_logical_plan()).unwrap();
+    let physical_plan = ctx
+        .create_physical_plan(&df.to_logical_plan())
+        .await
+        .unwrap();
 
     // with a filtering condition we loose all knowledge about the statistics
     assert_eq!(Statistics::default(), physical_plan.statistics());
@@ -241,7 +248,10 @@ async fn sql_limit() -> Result<()> {
     let mut ctx = init_ctx(stats.clone(), schema)?;
 
     let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").unwrap();
-    let physical_plan = ctx.create_physical_plan(&df.to_logical_plan()).unwrap();
+    let physical_plan = ctx
+        .create_physical_plan(&df.to_logical_plan())
+        .await
+        .unwrap();
     // when the limit is smaller than the original number of lines
     // we loose all statistics except the for number of rows which becomes the limit
     assert_eq!(
@@ -254,7 +264,10 @@ async fn sql_limit() -> Result<()> {
     );
 
     let df = ctx.sql("SELECT * FROM stats_table LIMIT 100").unwrap();
-    let physical_plan = ctx.create_physical_plan(&df.to_logical_plan()).unwrap();
+    let physical_plan = ctx
+        .create_physical_plan(&df.to_logical_plan())
+        .await
+        .unwrap();
     // when the limit is larger than the original number of lines, statistics remain unchanged
     assert_eq!(stats, physical_plan.statistics());
 
@@ -270,7 +283,10 @@ async fn sql_window() -> Result<()> {
         .sql("SELECT c2, sum(c1) over (partition by c2) FROM stats_table")
         .unwrap();
 
-    let physical_plan = ctx.create_physical_plan(&df.to_logical_plan()).unwrap();
+    let physical_plan = ctx
+        .create_physical_plan(&df.to_logical_plan())
+        .await
+        .unwrap();
 
     let result = physical_plan.statistics();
 

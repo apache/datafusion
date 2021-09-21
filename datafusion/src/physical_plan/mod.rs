@@ -193,31 +193,34 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 /// use datafusion::prelude::*;
 /// use datafusion::physical_plan::displayable;
 ///
-/// // Hard code target_partitions as it appears in the RepartitionExec output
-/// let config = ExecutionConfig::new()
-///     .with_target_partitions(3);
-/// let mut ctx = ExecutionContext::with_config(config);
+/// #[tokio::main]
+/// async fn main() {
+///   // Hard code target_partitions as it appears in the RepartitionExec output
+///   let config = ExecutionConfig::new()
+///       .with_target_partitions(3);
+///   let mut ctx = ExecutionContext::with_config(config);
 ///
-/// // register the a table
-/// ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).unwrap();
+///   // register the a table
+///   ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).unwrap();
 ///
-/// // create a plan to run a SQL query
-/// let plan = ctx
-///    .create_logical_plan("SELECT a FROM example WHERE a < 5")
-///    .unwrap();
-/// let plan = ctx.optimize(&plan).unwrap();
-/// let physical_plan = ctx.create_physical_plan(&plan).unwrap();
+///   // create a plan to run a SQL query
+///   let plan = ctx
+///      .create_logical_plan("SELECT a FROM example WHERE a < 5")
+///      .unwrap();
+///   let plan = ctx.optimize(&plan).unwrap();
+///   let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
 ///
-/// // Format using display string
-/// let displayable_plan = displayable(physical_plan.as_ref());
-/// let plan_string = format!("{}", displayable_plan.indent());
+///   // Format using display string
+///   let displayable_plan = displayable(physical_plan.as_ref());
+///   let plan_string = format!("{}", displayable_plan.indent());
 ///
-/// assert_eq!("ProjectionExec: expr=[a@0 as a]\
-///            \n  CoalesceBatchesExec: target_batch_size=4096\
-///            \n    FilterExec: a@0 < 5\
-///            \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
-///            \n        CsvExec: source=Path(tests/example.csv: [tests/example.csv]), has_header=true",
-///             plan_string.trim());
+///   assert_eq!("ProjectionExec: expr=[a@0 as a]\
+///              \n  CoalesceBatchesExec: target_batch_size=4096\
+///              \n    FilterExec: a@0 < 5\
+///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
+///              \n        CsvExec: source=Path(tests/example.csv: [tests/example.csv]), has_header=true",
+///               plan_string.trim());
+/// }
 /// ```
 ///
 pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {

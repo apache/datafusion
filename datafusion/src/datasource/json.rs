@@ -36,6 +36,7 @@ use crate::{
     },
 };
 use arrow::{datatypes::SchemaRef, json::reader::infer_json_schema_from_seekable};
+use async_trait::async_trait;
 
 trait SeekRead: Read + Seek {}
 
@@ -101,6 +102,8 @@ impl NdJsonFile {
         })
     }
 }
+
+#[async_trait]
 impl TableProvider for NdJsonFile {
     fn as_any(&self) -> &dyn Any {
         self
@@ -110,7 +113,7 @@ impl TableProvider for NdJsonFile {
         self.schema.clone()
     }
 
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         batch_size: usize,

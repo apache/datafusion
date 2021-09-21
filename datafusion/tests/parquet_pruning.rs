@@ -533,6 +533,7 @@ impl ContextWithParquet {
         let physical_plan = self
             .ctx
             .create_physical_plan(&logical_plan)
+            .await
             .expect("creating physical plan");
 
         let results = datafusion::physical_plan::collect(physical_plan.clone())

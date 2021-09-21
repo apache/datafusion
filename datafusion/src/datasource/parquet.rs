@@ -21,6 +21,7 @@ use std::any::Any;
 use std::fs::File;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use parquet::arrow::ArrowReader;
 use parquet::arrow::ParquetFileArrowReader;
 use parquet::file::serialized_reader::SerializedFileReader;
@@ -110,6 +111,7 @@ impl ParquetTable {
     }
 }
 
+#[async_trait]
 impl TableProvider for ParquetTable {
     fn as_any(&self) -> &dyn Any {
         self
@@ -129,7 +131,7 @@ impl TableProvider for ParquetTable {
 
     /// Scan the file(s), using the provided projection, and return one BatchIterator per
     /// partition.
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         batch_size: usize,
@@ -414,7 +416,7 @@ mod tests {
     async fn read_small_batches() -> Result<()> {
         let table = load_table("alltypes_plain.parquet")?;
         let projection = None;
-        let exec = table.scan(&projection, 2, &[], None)?;
+        let exec = table.scan(&projection, 2, &[], None).await?;
         let stream = exec.execute(0).await?;
 
         let _ = stream
@@ -635,7 +637,7 @@ mod tests {
         table: Arc<dyn TableProvider>,
         projection: &Option<Vec<usize>>,
     ) -> Result<RecordBatch> {
-        let exec = table.scan(projection, 1024, &[], None)?;
+        let exec = table.scan(projection, 1024, &[], None).await?;
         let mut it = exec.execute(0).await?;
         it.next()
             .await
