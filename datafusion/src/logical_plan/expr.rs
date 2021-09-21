@@ -1360,9 +1360,6 @@ pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
 pub trait Literal {
     /// convert the value to a Literal expression
     fn lit(&self) -> Expr;
-
-    // /// convert the number to literal expression of timestamp in nanosecond
-    // fn lit_timestamp_nanosecond(&self) -> Expr;
 }
 
 /// Trait for converting a type to a literal timestamp
