@@ -63,3 +63,13 @@ Table of content
 
    Datafusion <https://github.com/apache/arrow-datafusion/blob/master/README.md>
    Ballista <https://github.com/apache/arrow-datafusion/tree/master/ballista/README.md>
+
+.. _toc.community:
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Community
+
+   community/communication
+   Issue tracker <https://github.com/apache/arrow-datafusion/issues>
+   Code of conduct <https://github.com/apache/arrow-datafusion/blob/master/CODE_OF_CONDUCT.md>
