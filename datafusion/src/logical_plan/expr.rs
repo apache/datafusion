@@ -941,6 +941,33 @@ impl Not for Expr {
     }
 }
 
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Expr::BinaryExpr {
+                ref left,
+                ref right,
+                ref op,
+            } => write!(f, "{} {} {}", left, op, right),
+            Expr::AggregateFunction {
+                /// Name of the function
+                ref fun,
+                /// List of expressions to feed to the functions as arguments
+                ref args,
+                /// Whether this is a DISTINCT aggregation or not
+                ref distinct,
+            } => fmt_function(f, &fun.to_string(), *distinct, args, true),
+            Expr::ScalarFunction {
+                /// Name of the function
+                ref fun,
+                /// List of expressions to feed to the functions as arguments
+                ref args,
+            } => fmt_function(f, &fun.to_string(), false, args, true),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
 #[allow(clippy::boxed_local)]
 fn rewrite_boxed<R>(boxed_expr: Box<Expr>, rewriter: &mut R) -> Result<Box<Expr>>
 where
@@ -1603,8 +1630,14 @@ fn fmt_function(
     fun: &str,
     distinct: bool,
     args: &[Expr],
+    display: bool,
 ) -> fmt::Result {
-    let args: Vec<String> = args.iter().map(|arg| format!("{:?}", arg)).collect();
+    let args: Vec<String> = match display {
+        true => args.iter().map(|arg| format!("{}", arg)).collect(),
+        false => args.iter().map(|arg| format!("{:?}", arg)).collect(),
+    };
+
+    // let args: Vec<String> = args.iter().map(|arg| format!("{:?}", arg)).collect();
     let distinct_str = match distinct {
         true => "DISTINCT ",
         false => "",
@@ -1648,7 +1681,7 @@ impl fmt::Debug for Expr {
             Expr::IsNull(expr) => write!(f, "{:?} IS NULL", expr),
             Expr::IsNotNull(expr) => write!(f, "{:?} IS NOT NULL", expr),
             Expr::BinaryExpr { left, op, right } => {
-                write!(f, "{:?} {:?} {:?}", left, op, right)
+                write!(f, "{:?} {} {:?}", left, op, right)
             }
             Expr::Sort {
                 expr,
@@ -1667,10 +1700,10 @@ impl fmt::Debug for Expr {
                 }
             }
             Expr::ScalarFunction { fun, args, .. } => {
-                fmt_function(f, &fun.to_string(), false, args)
+                fmt_function(f, &fun.to_string(), false, args, false)
             }
             Expr::ScalarUDF { fun, ref args, .. } => {
-                fmt_function(f, &fun.name, false, args)
+                fmt_function(f, &fun.name, false, args, false)
             }
             Expr::WindowFunction {
                 fun,
@@ -1679,7 +1712,7 @@ impl fmt::Debug for Expr {
                 order_by,
                 window_frame,
             } => {
-                fmt_function(f, &fun.to_string(), false, args)?;
+                fmt_function(f, &fun.to_string(), false, args, false)?;
                 if !partition_by.is_empty() {
                     write!(f, " PARTITION BY {:?}", partition_by)?;
                 }
@@ -1702,9 +1735,9 @@ impl fmt::Debug for Expr {
                 distinct,
                 ref args,
                 ..
-            } => fmt_function(f, &fun.to_string(), *distinct, args),
+            } => fmt_function(f, &fun.to_string(), *distinct, args, true),
             Expr::AggregateUDF { fun, ref args, .. } => {
-                fmt_function(f, &fun.name, false, args)
+                fmt_function(f, &fun.name, false, args, false)
             }
             Expr::Between {
                 expr,
@@ -1762,7 +1795,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::BinaryExpr { left, op, right } => {
             let left = create_name(left, input_schema)?;
             let right = create_name(right, input_schema)?;
-            Ok(format!("{} {:?} {}", left, op, right))
+            Ok(format!("{} {} {}", left, op, right))
         }
         Expr::Case {
             expr,
@@ -1925,12 +1958,12 @@ mod tests {
         assert_eq!(
             rewriter.v,
             vec![
-                "Previsited #state Eq Utf8(\"CO\")",
+                "Previsited #state = Utf8(\"CO\")",
                 "Previsited #state",
                 "Mutated #state",
                 "Previsited Utf8(\"CO\")",
                 "Mutated Utf8(\"CO\")",
-                "Mutated #state Eq Utf8(\"CO\")"
+                "Mutated #state = Utf8(\"CO\")"
             ]
         )
     }

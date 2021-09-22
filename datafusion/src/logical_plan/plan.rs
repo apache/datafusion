@@ -551,7 +551,7 @@ impl LogicalPlan {
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #foo_csv.id Eq Int32(5)\
+    /// assert_eq!("Filter: #foo_csv.id = Int32(5)\
     ///              \n  TableScan: foo_csv projection=None",
     ///             display_string);
     /// ```
@@ -575,7 +575,7 @@ impl LogicalPlan {
     ///
     /// ```text
     /// Projection: #employee.id [id:Int32]\
-    ///    Filter: #employee.state Eq Utf8(\"CO\") [id:Int32, state:Utf8]\
+    ///    Filter: #employee.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
     ///      TableScan: employee projection=Some([0, 3]) [id:Int32, state:Utf8]";
     /// ```
     ///
@@ -592,7 +592,7 @@ impl LogicalPlan {
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: #foo_csv.id Eq Int32(5) [id:Int32]\
+    /// assert_eq!("Filter: #foo_csv.id = Int32(5) [id:Int32]\
     ///             \n  TableScan: foo_csv projection=None [id:Int32]",
     ///             display_string);
     /// ```
@@ -939,7 +939,7 @@ mod tests {
         let plan = display_plan();
 
         let expected = "Projection: #employee_csv.id\
-        \n  Filter: #employee_csv.state Eq Utf8(\"CO\")\
+        \n  Filter: #employee_csv.state = Utf8(\"CO\")\
         \n    TableScan: employee_csv projection=Some([0, 3])";
 
         assert_eq!(expected, format!("{}", plan.display_indent()));
@@ -950,7 +950,7 @@ mod tests {
         let plan = display_plan();
 
         let expected = "Projection: #employee_csv.id [id:Int32]\
-                        \n  Filter: #employee_csv.state Eq Utf8(\"CO\") [id:Int32, state:Utf8]\
+                        \n  Filter: #employee_csv.state = Utf8(\"CO\") [id:Int32, state:Utf8]\
                         \n    TableScan: employee_csv projection=Some([0, 3]) [id:Int32, state:Utf8]";
 
         assert_eq!(expected, format!("{}", plan.display_indent_schema()));

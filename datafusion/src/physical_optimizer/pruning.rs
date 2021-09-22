@@ -1020,7 +1020,7 @@ mod tests {
     #[test]
     fn row_group_predicate_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "#c1_min LtEq Int32(1) And Int32(1) LtEq #c1_max";
+        let expected_expr = "#c1_min <= Int32(1) AND Int32(1) <= #c1_max";
 
         // test column on the left
         let expr = col("c1").eq(lit(1));
@@ -1040,7 +1040,7 @@ mod tests {
     #[test]
     fn row_group_predicate_not_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "#c1_min NotEq Int32(1) Or Int32(1) NotEq #c1_max";
+        let expected_expr = "#c1_min != Int32(1) OR Int32(1) != #c1_max";
 
         // test column on the left
         let expr = col("c1").not_eq(lit(1));
@@ -1060,7 +1060,7 @@ mod tests {
     #[test]
     fn row_group_predicate_gt() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "#c1_max Gt Int32(1)";
+        let expected_expr = "#c1_max > Int32(1)";
 
         // test column on the left
         let expr = col("c1").gt(lit(1));
@@ -1080,7 +1080,7 @@ mod tests {
     #[test]
     fn row_group_predicate_gt_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "#c1_max GtEq Int32(1)";
+        let expected_expr = "#c1_max >= Int32(1)";
 
         // test column on the left
         let expr = col("c1").gt_eq(lit(1));
@@ -1099,7 +1099,7 @@ mod tests {
     #[test]
     fn row_group_predicate_lt() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "#c1_min Lt Int32(1)";
+        let expected_expr = "#c1_min < Int32(1)";
 
         // test column on the left
         let expr = col("c1").lt(lit(1));
@@ -1119,7 +1119,7 @@ mod tests {
     #[test]
     fn row_group_predicate_lt_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "#c1_min LtEq Int32(1)";
+        let expected_expr = "#c1_min <= Int32(1)";
 
         // test column on the left
         let expr = col("c1").lt_eq(lit(1));
@@ -1144,7 +1144,7 @@ mod tests {
         ]);
         // test AND operator joining supported c1 < 1 expression and unsupported c2 > c3 expression
         let expr = col("c1").lt(lit(1)).and(col("c2").lt(col("c3")));
-        let expected_expr = "#c1_min Lt Int32(1) And Boolean(true)";
+        let expected_expr = "#c1_min < Int32(1) AND Boolean(true)";
         let predicate_expr =
             build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
         assert_eq!(format!("{:?}", predicate_expr), expected_expr);
@@ -1160,7 +1160,7 @@ mod tests {
         ]);
         // test OR operator joining supported c1 < 1 expression and unsupported c2 % 2 expression
         let expr = col("c1").lt(lit(1)).or(col("c2").modulus(lit(2)));
-        let expected_expr = "#c1_min Lt Int32(1) Or Boolean(true)";
+        let expected_expr = "#c1_min < Int32(1) OR Boolean(true)";
         let predicate_expr =
             build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
         assert_eq!(format!("{:?}", predicate_expr), expected_expr);
@@ -1184,7 +1184,7 @@ mod tests {
     #[test]
     fn row_group_predicate_not_bool() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
-        let expected_expr = "NOT #c1_min And #c1_max";
+        let expected_expr = "NOT #c1_min AND #c1_max";
 
         let expr = col("c1").not();
         let predicate_expr =
@@ -1197,7 +1197,7 @@ mod tests {
     #[test]
     fn row_group_predicate_bool() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
-        let expected_expr = "#c1_min Or #c1_max";
+        let expected_expr = "#c1_min OR #c1_max";
 
         let expr = col("c1");
         let predicate_expr =
@@ -1210,7 +1210,7 @@ mod tests {
     #[test]
     fn row_group_predicate_lt_bool() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
-        let expected_expr = "#c1_min Lt Boolean(true)";
+        let expected_expr = "#c1_min < Boolean(true)";
 
         // DF doesn't support arithmetic on boolean columns so
         // this predicate will error when evaluated
@@ -1233,7 +1233,7 @@ mod tests {
         let expr = col("c1")
             .lt(lit(1))
             .and(col("c2").eq(lit(2)).or(col("c2").eq(lit(3))));
-        let expected_expr = "#c1_min Lt Int32(1) And #c2_min LtEq Int32(2) And Int32(2) LtEq #c2_max Or #c2_min LtEq Int32(3) And Int32(3) LtEq #c2_max";
+        let expected_expr = "#c1_min < Int32(1) AND #c2_min <= Int32(2) AND Int32(2) <= #c2_max OR #c2_min <= Int32(3) AND Int32(3) <= #c2_max";
         let predicate_expr =
             build_predicate_expression(&expr, &schema, &mut required_columns)?;
         assert_eq!(format!("{:?}", predicate_expr), expected_expr);

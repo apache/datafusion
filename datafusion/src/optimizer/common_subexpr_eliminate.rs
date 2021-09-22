@@ -714,8 +714,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a Multiply Int32(1) Minus test.b), SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a Multiply Int32(1) Minus test.b Multiply Int32(1) Plus #test.c)]]\
-        \n  Projection: #test.a Multiply Int32(1) Minus #test.b AS BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a, #test.a, #test.b, #test.c\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a * Int32(1) - test.b), SUM(#BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a AS test.a * Int32(1) - test.b * Int32(1) + #test.c)]]\
+        \n  Projection: #test.a * Int32(1) - #test.b AS BinaryExpr-*BinaryExpr--Column-test.bLiteral1Column-test.a, #test.a, #test.b, #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -737,7 +737,7 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[Int32(1) Plus #AggregateFunction-AVGfalseColumn-test.a AS AVG(test.a), Int32(1) Minus #AggregateFunction-AVGfalseColumn-test.a AS AVG(test.a)]]\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[Int32(1) + #AggregateFunction-AVGfalseColumn-test.a AS AVG(test.a), Int32(1) - #AggregateFunction-AVGfalseColumn-test.a AS AVG(test.a)]]\
         \n  Projection: AVG(#test.a) AS AggregateFunction-AVGfalseColumn-test.a, #test.a, #test.b, #test.c\
         \n    TableScan: test projection=None";
 
@@ -757,8 +757,8 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: #BinaryExpr-+Column-test.aLiteral1 AS Int32(1) Plus test.a AS first, #BinaryExpr-+Column-test.aLiteral1 AS Int32(1) Plus test.a AS second\
-        \n  Projection: Int32(1) Plus #test.a AS BinaryExpr-+Column-test.aLiteral1, #test.a, #test.b, #test.c\
+        let expected = "Projection: #BinaryExpr-+Column-test.aLiteral1 AS Int32(1) + test.a AS first, #BinaryExpr-+Column-test.aLiteral1 AS Int32(1) + test.a AS second\
+        \n  Projection: Int32(1) + #test.a AS BinaryExpr-+Column-test.aLiteral1, #test.a, #test.b, #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -777,7 +777,7 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: Int32(1) Plus #test.a, #test.a Plus Int32(1)\
+        let expected = "Projection: Int32(1) + #test.a, #test.a + Int32(1)\
         \n  TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -794,8 +794,8 @@ mod test {
             .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
             .build()?;
 
-        let expected = "Projection: #Int32(1) Plus test.a\
-        \n  Projection: Int32(1) Plus #test.a\
+        let expected = "Projection: #Int32(1) + test.a\
+        \n  Projection: Int32(1) + #test.a\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
