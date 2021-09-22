@@ -61,6 +61,7 @@ The[agenda](https://docs.google.com/document/d/1atCVnoff5SR4eM4Lwf2M1BBJTY6g3_HU
 is available if you would like to add a topic for discussion or see what is planned.
 
 The goals of these calls are:
+
 1. Help "put a face to the name" of some of other contributors we are working with
 2. Discuss / synchronize on the goals and major initiatives from different stakeholders to identify areas where more alignment is needed
 
