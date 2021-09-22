@@ -561,9 +561,9 @@ mod tests {
             .project(vec![col("a"), col("c"), col("b")])?
             .build()?;
         let expected = "Projection: #test.a, #test.c, #test.b\
-        \n  Filter: #test.a Gt Int32(1)\
-        \n    Filter: #test.b Gt Int32(1)\
-        \n      Filter: #test.c Gt Int32(1)\
+        \n  Filter: #test.a > Int32(1)\
+        \n    Filter: #test.b > Int32(1)\
+        \n      Filter: #test.c > Int32(1)\
         \n        TableScan: test projection=Some([0, 1, 2])";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -818,7 +818,7 @@ mod tests {
 
         let expected = "\
         Aggregate: groupBy=[[#test.c]], aggr=[[MAX(#test.a)]]\
-        \n  Filter: #test.c Gt Int32(1)\
+        \n  Filter: #test.c > Int32(1)\
         \n    Projection: #test.c, #test.a\
         \n      TableScan: test projection=Some([0, 2])";
 
@@ -888,7 +888,7 @@ mod tests {
         assert_fields_eq(&plan, vec!["c", "a", "MAX(test.b)"]);
 
         let expected = "Projection: #test.c, #test.a, #MAX(test.b)\
-        \n  Filter: #test.c Gt Int32(1)\
+        \n  Filter: #test.c > Int32(1)\
         \n    Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b)]]\
         \n      TableScan: test projection=Some([0, 1, 2])";
 
