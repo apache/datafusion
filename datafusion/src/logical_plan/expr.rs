@@ -1362,6 +1362,11 @@ pub trait Literal {
     fn lit(&self) -> Expr;
 }
 
+/// Trait for converting a type to a literal timestamp
+pub trait TimestampLiteral {
+    fn lit_timestamp_nano(&self) -> Expr;
+}
+
 impl Literal for &str {
     fn lit(&self) -> Expr {
         Expr::Literal(ScalarValue::Utf8(Some((*self).to_owned())))
@@ -1391,6 +1396,19 @@ macro_rules! make_literal {
     };
 }
 
+macro_rules! make_timestamp_literal {
+    ($TYPE:ty, $SCALAR:ident, $DOC: expr) => {
+        #[doc = $DOC]
+        impl TimestampLiteral for $TYPE {
+            fn lit_timestamp_nano(&self) -> Expr {
+                Expr::Literal(ScalarValue::TimestampNanosecond(Some(
+                    (self.clone()).into(),
+                )))
+            }
+        }
+    };
+}
+
 make_literal!(bool, Boolean, "literal expression containing a bool");
 make_literal!(f32, Float32, "literal expression containing an f32");
 make_literal!(f64, Float64, "literal expression containing an f64");
@@ -1403,9 +1421,22 @@ make_literal!(u16, UInt16, "literal expression containing a u16");
 make_literal!(u32, UInt32, "literal expression containing a u32");
 make_literal!(u64, UInt64, "literal expression containing a u64");
 
+make_timestamp_literal!(i8, Int8, "literal expression containing an i8");
+make_timestamp_literal!(i16, Int16, "literal expression containing an i16");
+make_timestamp_literal!(i32, Int32, "literal expression containing an i32");
+make_timestamp_literal!(i64, Int64, "literal expression containing an i64");
+make_timestamp_literal!(u8, UInt8, "literal expression containing a u8");
+make_timestamp_literal!(u16, UInt16, "literal expression containing a u16");
+make_timestamp_literal!(u32, UInt32, "literal expression containing a u32");
+
 /// Create a literal expression
 pub fn lit<T: Literal>(n: T) -> Expr {
     n.lit()
+}
+
+/// Create a literal timestamp expression
+pub fn lit_timestamp_nano<T: TimestampLiteral>(n: T) -> Expr {
+    n.lit_timestamp_nano()
 }
 
 /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
@@ -1869,6 +1900,21 @@ mod tests {
             .when(col("state").eq(lit("NY")), lit("212"))
             .end();
         assert!(maybe_expr.is_err());
+    }
+
+    #[test]
+    fn test_lit_timestamp_nano() {
+        let expr = col("time").eq(lit_timestamp_nano(10)); // 10 is an implicit i32
+        let expected = col("time").eq(lit(ScalarValue::TimestampNanosecond(Some(10))));
+        assert_eq!(expr, expected);
+
+        let i: i64 = 10;
+        let expr = col("time").eq(lit_timestamp_nano(i));
+        assert_eq!(expr, expected);
+
+        let i: u32 = 10;
+        let expr = col("time").eq(lit_timestamp_nano(i));
+        assert_eq!(expr, expected);
     }
 
     #[test]
