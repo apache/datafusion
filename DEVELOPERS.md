@@ -112,8 +112,10 @@ new specifications as you see fit.
 
 Here is the list current active specifications:
 
-- [Output field name semantic](docs/specification/output-field-name-semantic.md)
-- [Invariants](docs/specification/invariants.md)
+- [Output field name semantic](https://arrow.apache.org/datafusion/specification/output-field-name-semantic.html)
+- [Invariants](https://arrow.apache.org/datafusion/specification/invariants.html)
+
+All specifications are stored in the `docs/source/specification` folder.
 
 ## How to format `.md` document
 
