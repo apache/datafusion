@@ -52,6 +52,23 @@ server ([invite link](https://discord.gg/Qw5gKqHxUM)) in case you are not able
 to join the Slack workspace. If you need an invite to the Slack workspace, you
 can also ask for one in our Discord server.
 
+### Sync up Zoom calls
+
+We have biweekly sync calls every other Thursdays at 16:00 UTC
+(starting September 30, 2021) on Zoom [Meeting Link](https://influxdata.zoom.us/j/94666921249)
+
+The[agenda](https://docs.google.com/document/d/1atCVnoff5SR4eM4Lwf2M1BBJTY6g3_HUNR6qswYJW_U/edit)
+is available if you would like to add a topic for discussion or see what is planned.
+
+The goals of these calls are:
+
+1. Help "put a face to the name" of some of other contributors we are working with
+2. Discuss / synchronize on the goals and major initiatives from different stakeholders to identify areas where more alignment is needed
+
+No decisions are made on the call and anything of substance will be discussed on this mailing list or in github issues / google docs.
+
+We will send a summary of all sync ups to the dev@arrow.apache.org mailing list.
+
 ## Contributing
 
 Our source code is hosted on
