@@ -53,7 +53,7 @@ Usage
 
 .. code-block:: bash
 
-    DataFusion 5.0.0-SNAPSHOT
+    DataFusion 5.1.0-SNAPSHOT
     DataFusion is an in-memory query engine that uses Apache Arrow as the memory model. It supports executing SQL queries
     against CSV and Parquet files as well as querying directly against in-memory data.
 
@@ -68,8 +68,10 @@ Usage
     OPTIONS:
         -c, --batch-size <batch-size>    The batch size of each query, or use DataFusion default
         -p, --data-path <data-path>      Path to your data, default to current directory
-        -f, --file <file>                Execute commands from file, then exit
+        -f, --file <file>...             Execute commands from file(s), then exit
             --format <format>            Output format [default: table]  [possible values: csv, tsv, table, json, ndjson]
+            --host <host>                Ballista scheduler host
+            --port <port>                Ballista scheduler port
 
 Type `exit` or `quit` to exit the CLI.
 
