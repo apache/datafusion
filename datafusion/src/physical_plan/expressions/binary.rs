@@ -545,64 +545,9 @@ impl PhysicalExpr for BinaryExpr {
 
         let scalar_result = match (&left_value, &right_value) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
-                // if left is array and right is literal - use scalar operations
-                match &self.op {
-                    Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), lt),
-                    Operator::LtEq => {
-                        binary_array_op_scalar!(array, scalar.clone(), lt_eq)
-                    }
-                    Operator::Gt => binary_array_op_scalar!(array, scalar.clone(), gt),
-                    Operator::GtEq => {
-                        binary_array_op_scalar!(array, scalar.clone(), gt_eq)
-                    }
-                    Operator::Eq => binary_array_op_scalar!(array, scalar.clone(), eq),
-                    Operator::NotEq => {
-                        binary_array_op_scalar!(array, scalar.clone(), neq)
-                    }
-                    Operator::Like => {
-                        binary_string_array_op_scalar!(array, scalar.clone(), like)
-                    }
-                    Operator::NotLike => {
-                        binary_string_array_op_scalar!(array, scalar.clone(), nlike)
-                    }
-                    Operator::Divide => {
-                        binary_primitive_array_op_scalar!(array, scalar.clone(), divide)
-                    }
-                    Operator::Modulo => {
-                        binary_primitive_array_op_scalar!(array, scalar.clone(), modulus)
-                    }
-                    Operator::RegexMatch => binary_string_array_flag_op_scalar!(
-                        array,
-                        scalar.clone(),
-                        regexp_is_match,
-                        false,
-                        false
-                    ),
-                    Operator::RegexIMatch => binary_string_array_flag_op_scalar!(
-                        array,
-                        scalar.clone(),
-                        regexp_is_match,
-                        false,
-                        true
-                    ),
-                    Operator::RegexNotMatch => binary_string_array_flag_op_scalar!(
-                        array,
-                        scalar.clone(),
-                        regexp_is_match,
-                        true,
-                        false
-                    ),
-                    Operator::RegexNotIMatch => binary_string_array_flag_op_scalar!(
-                        array,
-                        scalar.clone(),
-                        regexp_is_match,
-                        true,
-                        true
-                    ),
-                    // if scalar operation is not supported - fallback to array implementation
-                    _ => None,
-                }
+                self.evaluate_column_scalar(array, scalar)?
             }
+            // if left is array and right is literal - use scalar operations
             (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
                 // if right is literal and left is array - reverse operator and parameters
                 match &self.op {
@@ -634,8 +579,86 @@ impl PhysicalExpr for BinaryExpr {
             left_value.into_array(batch.num_rows()),
             right_value.into_array(batch.num_rows()),
         );
+        self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
+            .map(|a| ColumnarValue::Array(a))
+    }
+}
 
-        let result: Result<ArrayRef> = match &self.op {
+impl BinaryExpr {
+    // if left is array and right is literal - use scalar operations
+    fn evaluate_column_scalar(
+        &self,
+        array: &ArrayRef,
+        scalar: &ScalarValue,
+    ) -> Result<Option<Result<ArrayRef>>> {
+        let scalar_result = match &self.op {
+            Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), lt),
+            Operator::LtEq => {
+                binary_array_op_scalar!(array, scalar.clone(), lt_eq)
+            }
+            Operator::Gt => binary_array_op_scalar!(array, scalar.clone(), gt),
+            Operator::GtEq => {
+                binary_array_op_scalar!(array, scalar.clone(), gt_eq)
+            }
+            Operator::Eq => binary_array_op_scalar!(array, scalar.clone(), eq),
+            Operator::NotEq => {
+                binary_array_op_scalar!(array, scalar.clone(), neq)
+            }
+            Operator::Like => {
+                binary_string_array_op_scalar!(array, scalar.clone(), like)
+            }
+            Operator::NotLike => {
+                binary_string_array_op_scalar!(array, scalar.clone(), nlike)
+            }
+            Operator::Divide => {
+                binary_primitive_array_op_scalar!(array, scalar.clone(), divide)
+            }
+            Operator::Modulo => {
+                binary_primitive_array_op_scalar!(array, scalar.clone(), modulus)
+            }
+            Operator::RegexMatch => binary_string_array_flag_op_scalar!(
+                array,
+                scalar.clone(),
+                regexp_is_match,
+                false,
+                false
+            ),
+            Operator::RegexIMatch => binary_string_array_flag_op_scalar!(
+                array,
+                scalar.clone(),
+                regexp_is_match,
+                false,
+                true
+            ),
+            Operator::RegexNotMatch => binary_string_array_flag_op_scalar!(
+                array,
+                scalar.clone(),
+                regexp_is_match,
+                true,
+                false
+            ),
+            Operator::RegexNotIMatch => binary_string_array_flag_op_scalar!(
+                array,
+                scalar.clone(),
+                regexp_is_match,
+                true,
+                true
+            ),
+            // if scalar operation is not supported - fallback to array implementation
+            _ => None,
+        };
+
+        Ok(scalar_result)
+    }
+
+    fn evaluate_with_resolved_args(
+        &self,
+        left: Arc<dyn Array>,
+        left_data_type: &DataType,
+        right: Arc<dyn Array>,
+        right_data_type: &DataType,
+    ) -> Result<ArrayRef> {
+        match &self.op {
             Operator::Like => binary_string_array_op!(left, right, like),
             Operator::NotLike => binary_string_array_op!(left, right, nlike),
             Operator::Lt => binary_array_op!(left, right, lt),
@@ -650,7 +673,7 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Divide => binary_primitive_array_op!(left, right, divide),
             Operator::Modulo => binary_primitive_array_op!(left, right, modulus),
             Operator::And => {
-                if left_data_type == DataType::Boolean {
+                if left_data_type == &DataType::Boolean {
                     boolean_op!(left, right, and_kleene)
                 } else {
                     return Err(DataFusionError::Internal(format!(
@@ -662,7 +685,7 @@ impl PhysicalExpr for BinaryExpr {
                 }
             }
             Operator::Or => {
-                if left_data_type == DataType::Boolean {
+                if left_data_type == &DataType::Boolean {
                     boolean_op!(left, right, or_kleene)
                 } else {
                     return Err(DataFusionError::Internal(format!(
@@ -683,8 +706,7 @@ impl PhysicalExpr for BinaryExpr {
             Operator::RegexNotIMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, true, true)
             }
-        };
-        result.map(|a| ColumnarValue::Array(a))
+        }
     }
 }
 
