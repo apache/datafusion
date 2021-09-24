@@ -5345,15 +5345,20 @@ async fn query_get_indexed_field() -> Result<()> {
 #[tokio::test]
 async fn query_nested_get_indexed_field() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "some_list",
-        DataType::List(Box::new(Field::new(
-            "item",
-            DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
-            true,
-        ))),
-        false,
-    )]));
+    let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+    // Nested schema of { "some_list": [[i64]] }
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "some_list",
+            DataType::List(Box::new(Field::new("item", nested_dt.clone(), true))),
+            false,
+        ),
+        Field::new(
+            "some_dict",
+            DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8)),
+            false,
+        ),
+    ]));
     let builder = PrimitiveBuilder::<Int64Type>::new(3);
     let nested_lb = ListBuilder::new(builder);
     let mut lb = ListBuilder::new(nested_lb);
@@ -5372,8 +5377,21 @@ async fn query_nested_get_indexed_field() -> Result<()> {
         }
         lb.append(true);
     }
-
-    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(lb.finish())])?;
+    let dictionary_values = StringArray::from(vec![Some("a"), Some("b"), Some("c")]);
+    let mut sb = StringDictionaryBuilder::new_with_dictionary(
+        PrimitiveBuilder::<Int64Type>::new(3),
+        &dictionary_values,
+    )
+    .unwrap();
+    for s in vec!["b", "a", "c"] {
+        sb.append(s);
+    }
+    let array = sb.finish();
+    eprintln!("array.keys() = {:?}", array.keys());
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(lb.finish()), Arc::new(array)],
+    )?;
     let table = MemTable::try_new(schema, vec![vec![data]])?;
     let table_a = Arc::new(table);
 
@@ -5387,6 +5405,10 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     let sql = "SELECT some_list[0][0] as i0 FROM ints LIMIT 3";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["0"], vec!["5"], vec!["11"]];
+    assert_eq!(expected, actual);
+    let sql = r#"SELECT some_dict["b"] as i0 FROM ints LIMIT 3"#;
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["0"], vec!["1"], vec!["0"]];
     assert_eq!(expected, actual);
     Ok(())
 }
