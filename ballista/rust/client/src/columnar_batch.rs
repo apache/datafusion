@@ -51,7 +51,7 @@ impl ColumnarBatch {
             .collect();
 
         Self {
-            schema: batch.schema(),
+            schema: batch.schema().clone(),
             columns,
         }
     }

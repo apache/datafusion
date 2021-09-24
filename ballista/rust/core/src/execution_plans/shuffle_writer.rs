@@ -55,6 +55,7 @@ use futures::StreamExt;
 use hashbrown::HashMap;
 use log::{debug, info};
 use std::cell::RefCell;
+use std::io::BufWriter;
 use uuid::Uuid;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
@@ -432,17 +433,17 @@ fn result_schema() -> SchemaRef {
     ]))
 }
 
-struct ShuffleWriter<'a> {
+struct ShuffleWriter {
     path: String,
-    writer: FileWriter<'a, File>,
+    writer: FileWriter<BufWriter<File>>,
     num_batches: u64,
     num_rows: u64,
     num_bytes: u64,
 }
 
-impl<'a> ShuffleWriter<'a> {
+impl ShuffleWriter {
     fn new(path: &str, schema: &Schema) -> Result<Self> {
-        let mut file = File::create(path)
+        let file = File::create(path)
             .map_err(|e| {
                 BallistaError::General(format!(
                     "Failed to create partition file at {}: {:?}",
@@ -450,12 +451,13 @@ impl<'a> ShuffleWriter<'a> {
                 ))
             })
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+        let buffer_writer = std::io::BufWriter::new(file);
         Ok(Self {
             num_batches: 0,
             num_rows: 0,
             num_bytes: 0,
             path: path.to_owned(),
-            writer: FileWriter::try_new(&mut file, schema)?,
+            writer: FileWriter::try_new(buffer_writer, schema)?,
         })
     }
 
@@ -489,7 +491,26 @@ mod tests {
     use datafusion::physical_plan::expressions::Column;
     use datafusion::physical_plan::limit::GlobalLimitExec;
     use datafusion::physical_plan::memory::MemoryExec;
+    use std::borrow::Borrow;
     use tempfile::TempDir;
+
+    pub trait StructArrayExt {
+        fn column_names(&self) -> Vec<&str>;
+        fn column_by_name(&self, column_name: &str) -> Option<&ArrayRef>;
+    }
+
+    impl StructArrayExt for StructArray {
+        fn column_names(&self) -> Vec<&str> {
+            self.fields().iter().map(|f| f.name.as_str()).collect()
+        }
+
+        fn column_by_name(&self, column_name: &str) -> Option<&ArrayRef> {
+            self.fields()
+                .iter()
+                .position(|c| c.name() == &column_name)
+                .map(|pos| self.values()[pos].borrow())
+        }
+    }
 
     #[tokio::test]
     async fn test() -> Result<()> {

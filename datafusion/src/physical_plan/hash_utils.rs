@@ -595,7 +595,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::TryExtend;
-    use arrow::array::{DictionaryArray, MutableDictionaryArray, MutableUtf8Array};
+    use arrow::array::{MutableDictionaryArray, MutableUtf8Array};
 
     use super::*;
 

@@ -309,7 +309,8 @@ mod tests {
         let expected = Statistics {
             is_exact: true,
             num_rows: Some(3),
-            total_byte_size: Some(36), // this might change a bit if the way we compute the size changes
+            // TODO: fix this once we got https://github.com/jorgecarleitao/arrow2/issues/421
+            total_byte_size: Some(36),
             column_statistics: Some(vec![
                 ColumnStatistics {
                     distinct_count: None,

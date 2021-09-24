@@ -30,6 +30,7 @@ snmalloc = ["snmalloc-rs"]
 
 [dependencies]
 arrow-flight = { version = "0.1" }
+arrow = { package = "arrow2", version="0.5", features = ["io_ipc"] }
 anyhow = "1"
 async-trait = "0.1.36"
 ballista-core = { path = "../core", version = "0.6.0" }

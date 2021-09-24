@@ -28,7 +28,6 @@ use arrow::{
     types::days_ms,
 };
 use ordered_float::OrderedFloat;
-use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::convert::{Infallible, TryInto};
 use std::str::FromStr;
@@ -853,24 +852,12 @@ impl ScalarValue {
                 }
                 dt => panic!("Unexpected DataType for list {:?}", dt),
             },
-            ScalarValue::Date32(e) => match e {
-                Some(value) => dyn_to_array!(self, value, size, i32),
-                None => new_null_array(self.get_datatype(), size).into(),
-            },
-            ScalarValue::Date64(e) => match e {
-                Some(value) => dyn_to_array!(self, value, size, i64),
-                None => new_null_array(self.get_datatype(), size).into(),
-            },
             ScalarValue::IntervalDayTime(e) => match e {
                 Some(value) => {
                     Arc::new(PrimitiveArray::<days_ms>::from_trusted_len_values_iter(
                         std::iter::repeat(*value).take(size),
                     ))
                 }
-                None => new_null_array(self.get_datatype(), size).into(),
-            },
-            ScalarValue::IntervalYearMonth(e) => match e {
-                Some(value) => dyn_to_array!(self, value, size, i32),
                 None => new_null_array(self.get_datatype(), size).into(),
             },
         }

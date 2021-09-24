@@ -22,23 +22,23 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::executor::Executor;
-use arrow_flight::SchemaAsIpc;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::decode_protobuf;
 use ballista_core::serde::scheduler::Action as BallistaAction;
 
+use arrow::io::ipc::read::read_file_metadata;
+use arrow_flight::utils::flight_data_from_arrow_schema;
 use arrow_flight::{
     flight_service_server::FlightService, Action, ActionType, Criteria, Empty,
     FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
     PutResult, SchemaResult, Ticket,
 };
 use datafusion::arrow::{
-    error::ArrowError, ipc::reader::FileReader, ipc::writer::IpcWriteOptions,
+    error::ArrowError, io::ipc::read::FileReader, io::ipc::write::IpcWriteOptions,
     record_batch::RecordBatch,
 };
 use futures::{Stream, StreamExt};
 use log::{info, warn};
-use std::io::{Read, Seek};
 use tokio::sync::mpsc::channel;
 use tokio::{
     sync::mpsc::{Receiver, Sender},
@@ -88,22 +88,12 @@ impl FlightService for BallistaFlightService {
         match &action {
             BallistaAction::FetchPartition { path, .. } => {
                 info!("FetchPartition reading {}", &path);
-                let file = File::open(&path)
-                    .map_err(|e| {
-                        BallistaError::General(format!(
-                            "Failed to open partition file at {}: {:?}",
-                            path, e
-                        ))
-                    })
-                    .map_err(|e| from_ballista_err(&e))?;
-                let reader = FileReader::try_new(file).map_err(|e| from_arrow_err(&e))?;
-
                 let (tx, rx): (FlightDataSender, FlightDataReceiver) = channel(2);
-
+                let path = path.clone();
                 // Arrow IPC reader does not implement Sync + Send so we need to use a channel
                 // to communicate
                 task::spawn(async move {
-                    if let Err(e) = stream_flight_data(reader, tx).await {
+                    if let Err(e) = stream_flight_data(path, tx).await {
                         warn!("Error streaming results: {:?}", e);
                     }
                 });
@@ -199,15 +189,21 @@ fn create_flight_iter(
     )
 }
 
-async fn stream_flight_data<T>(
-    reader: FileReader<T>,
-    tx: FlightDataSender,
-) -> Result<(), Status>
-where
-    T: Read + Seek,
-{
-    let options = arrow::ipc::writer::IpcWriteOptions::default();
-    let schema_flight_data = SchemaAsIpc::new(reader.schema().as_ref(), &options).into();
+async fn stream_flight_data(path: String, tx: FlightDataSender) -> Result<(), Status> {
+    let mut file = File::open(&path)
+        .map_err(|e| {
+            BallistaError::General(format!(
+                "Failed to open partition file at {}: {:?}",
+                path, e
+            ))
+        })
+        .map_err(|e| from_ballista_err(&e))?;
+    let file_meta = read_file_metadata(&mut file).map_err(|e| from_arrow_err(&e))?;
+    let reader = FileReader::new(&mut file, file_meta, None);
+
+    let options = IpcWriteOptions::default();
+    let schema_flight_data =
+        flight_data_from_arrow_schema(reader.schema().as_ref(), &options);
     send_response(&tx, Ok(schema_flight_data)).await?;
 
     let mut row_count = 0;

@@ -109,7 +109,7 @@ impl CsvFile {
 
     /// Attempt to initialize a `CsvRead` from a reader impls `Seek`. The schema can be inferred automatically.
     pub fn try_new_from_reader_infer_schema<R: Read + Seek + Send + Sync + 'static>(
-        mut reader: R,
+        reader: R,
         options: CsvReadOptions,
     ) -> Result<Self> {
         let mut reader = csv::read::ReaderBuilder::new()
