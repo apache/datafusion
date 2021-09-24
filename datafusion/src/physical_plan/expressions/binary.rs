@@ -543,31 +543,17 @@ impl PhysicalExpr for BinaryExpr {
             )));
         }
 
+        // Attempt to use special kernels if one input is scalar and the other is an array
         let scalar_result = match (&left_value, &right_value) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
-                self.evaluate_column_scalar(array, scalar)?
+                // if left is array and right is literal - use scalar operations
+                self.evaluate_array_scalar(array, scalar)?
             }
-            // if left is array and right is literal - use scalar operations
             (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
                 // if right is literal and left is array - reverse operator and parameters
-                match &self.op {
-                    Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), gt),
-                    Operator::LtEq => {
-                        binary_array_op_scalar!(array, scalar.clone(), gt_eq)
-                    }
-                    Operator::Gt => binary_array_op_scalar!(array, scalar.clone(), lt),
-                    Operator::GtEq => {
-                        binary_array_op_scalar!(array, scalar.clone(), lt_eq)
-                    }
-                    Operator::Eq => binary_array_op_scalar!(array, scalar.clone(), eq),
-                    Operator::NotEq => {
-                        binary_array_op_scalar!(array, scalar.clone(), neq)
-                    }
-                    // if scalar operation is not supported - fallback to array implementation
-                    _ => None,
-                }
+                self.evaluate_scalar_array(scalar, array)?
             }
-            (_, _) => None,
+            (_, _) => None, // default to array implementation
         };
 
         if let Some(result) = scalar_result {
@@ -585,8 +571,9 @@ impl PhysicalExpr for BinaryExpr {
 }
 
 impl BinaryExpr {
-    // if left is array and right is literal - use scalar operations
-    fn evaluate_column_scalar(
+    /// Evaluate the expression of the left input is an array and
+    /// right is literal - use scalar operations
+    fn evaluate_array_scalar(
         &self,
         array: &ArrayRef,
         scalar: &ScalarValue,
@@ -648,6 +635,32 @@ impl BinaryExpr {
             _ => None,
         };
 
+        Ok(scalar_result)
+    }
+
+    /// Evaluate the expression if the left input is a literal and the
+    /// right is an array - reverse operator and parameters
+    fn evaluate_scalar_array(
+        &self,
+        scalar: &ScalarValue,
+        array: &ArrayRef,
+    ) -> Result<Option<Result<ArrayRef>>> {
+        let scalar_result = match &self.op {
+            Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), gt),
+            Operator::LtEq => {
+                binary_array_op_scalar!(array, scalar.clone(), gt_eq)
+            }
+            Operator::Gt => binary_array_op_scalar!(array, scalar.clone(), lt),
+            Operator::GtEq => {
+                binary_array_op_scalar!(array, scalar.clone(), lt_eq)
+            }
+            Operator::Eq => binary_array_op_scalar!(array, scalar.clone(), eq),
+            Operator::NotEq => {
+                binary_array_op_scalar!(array, scalar.clone(), neq)
+            }
+            // if scalar operation is not supported - fallback to array implementation
+            _ => None,
+        };
         Ok(scalar_result)
     }
 
