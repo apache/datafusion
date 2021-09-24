@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Utility functions for complex field access
+
 use arrow::datatypes::{DataType, Field};
 
 use crate::error::{DataFusionError, Result};
@@ -27,11 +29,11 @@ use crate::scalar::ScalarValue;
 /// * there is no field key is not of the required index type
 pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Field> {
     match (data_type, key) {
-        (DataType::Dictionary(ref kt, ref vt), ScalarValue::Utf8(Some(k))) => {
+        (DataType::Dictionary(ref kt, ref _vt), ScalarValue::Utf8(Some(k))) => {
             match kt.as_ref() {
                 DataType::Int8 | DataType::Int16 |DataType::Int32 |DataType::Int64 |DataType::UInt8
                 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-                    Ok(Field::new(&k, *kt.clone(), true))
+                    Ok(Field::new(k, *kt.clone(), true))
                 },
                 _ => Err(DataFusionError::Plan(format!("The key for a dictionary has to be a primitive type, was : \"{}\"", key))),
             }

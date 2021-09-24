@@ -5316,16 +5316,12 @@ async fn query_get_indexed_field() -> Result<()> {
     )]));
     let builder = PrimitiveBuilder::<Int64Type>::new(3);
     let mut lb = ListBuilder::new(builder);
-    for int_vec in vec![
-        vec![0 as i64, 1, 2],
-        vec![4 as i64, 5, 6],
-        vec![7 as i64, 8, 9],
-    ] {
+    for int_vec in vec![vec![0, 1, 2], vec![4, 5, 6], vec![7, 8, 9]] {
         let builder = lb.values();
         for int in int_vec {
-            builder.append_value(int);
+            builder.append_value(int).unwrap();
         }
-        lb.append(true);
+        lb.append(true).unwrap();
     }
 
     let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(lb.finish())])?;
@@ -5363,34 +5359,34 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     let nested_lb = ListBuilder::new(builder);
     let mut lb = ListBuilder::new(nested_lb);
     for int_vec_vec in vec![
-        vec![vec![0 as i64, 1], vec![2, 3], vec![3, 4]],
-        vec![vec![5 as i64, 6], vec![7, 8], vec![9, 10]],
-        vec![vec![11 as i64, 12], vec![13, 14], vec![15, 16]],
+        vec![vec![0, 1], vec![2, 3], vec![3, 4]],
+        vec![vec![5, 6], vec![7, 8], vec![9, 10]],
+        vec![vec![11, 12], vec![13, 14], vec![15, 16]],
     ] {
         let nested_builder = lb.values();
         for int_vec in int_vec_vec {
-            let mut builder = nested_builder.values();
+            let builder = nested_builder.values();
             for int in int_vec {
-                builder.append_value(int);
+                builder.append_value(int).unwrap();
             }
-            nested_builder.append(true);
+            nested_builder.append(true).unwrap();
         }
-        lb.append(true);
+        lb.append(true).unwrap();
     }
+
     let dictionary_values = StringArray::from(vec![Some("a"), Some("b"), Some("c")]);
     let mut sb = StringDictionaryBuilder::new_with_dictionary(
         PrimitiveBuilder::<Int64Type>::new(3),
         &dictionary_values,
     )
     .unwrap();
-    for s in vec!["b", "a", "c"] {
-        sb.append(s);
+    for s in &["b", "a", "c"] {
+        sb.append(s).unwrap();
     }
-    let array = sb.finish();
-    eprintln!("array.keys() = {:?}", array.keys());
+
     let data = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(lb.finish()), Arc::new(array)],
+        vec![Arc::new(lb.finish()), Arc::new(sb.finish())],
     )?;
     let table = MemTable::try_new(schema, vec![vec![data]])?;
     let table_a = Arc::new(table);
@@ -5406,9 +5402,9 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["0"], vec!["5"], vec!["11"]];
     assert_eq!(expected, actual);
-    let sql = r#"SELECT some_dict["b"] as i0 FROM ints LIMIT 3"#;
+    let sql = r#"SELECT some_dict["b"], some_dict["a"] FROM ints LIMIT 3"#;
     let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0"], vec!["1"], vec!["0"]];
+    let expected = vec![vec!["0"], vec!["1"]];
     assert_eq!(expected, actual);
     Ok(())
 }

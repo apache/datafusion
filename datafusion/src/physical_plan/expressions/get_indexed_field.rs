@@ -27,15 +27,14 @@ use arrow::{
 use crate::arrow::array::Array;
 use crate::arrow::compute::concat;
 use crate::arrow::datatypes::{
-    ArrowNativeType, Int16Type, Int32Type, Int64Type, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    Int16Type, Int32Type, Int64Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use crate::scalar::ScalarValue;
 use crate::{
     error::DataFusionError,
     error::Result,
+    field_util::get_indexed_field as get_data_type_field,
     physical_plan::{ColumnarValue, PhysicalExpr},
-    utils::get_indexed_field as get_data_type_field,
 };
 use arrow::array::{ArrayRef, DictionaryArray, ListArray};
 use arrow::datatypes::{ArrowPrimitiveType, Int8Type};
@@ -107,12 +106,10 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                         DataType::UInt16 => dict_lookup::<UInt16Type>(array, s),
                         DataType::UInt32 => dict_lookup::<UInt32Type>(array, s),
                         DataType::UInt64 => dict_lookup::<UInt64Type>(array, s),
-                        _ => {
-                            return Err(DataFusionError::NotImplemented(
-                                "dictionary lookup only available for numeric keys"
-                                    .to_string(),
-                            ))
-                        }
+                        _ => Err(DataFusionError::NotImplemented(
+                            "dictionary lookup only available for numeric keys"
+                                .to_string(),
+                        )),
                     }
                 }
                 _ => Err(DataFusionError::NotImplemented(

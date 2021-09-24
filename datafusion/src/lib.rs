@@ -231,10 +231,10 @@ pub mod variable;
 pub use arrow;
 pub use parquet;
 
+pub mod field_util;
 #[cfg(test)]
 pub mod test;
 pub mod test_util;
-pub mod utils;
 
 #[macro_use]
 #[cfg(feature = "regex_expressions")]

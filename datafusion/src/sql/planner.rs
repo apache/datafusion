@@ -89,6 +89,7 @@ fn plan_key(key: Value) -> ScalarValue {
     }
 }
 
+#[allow(clippy::branches_sharing_code)]
 fn plan_indexed(expr: Expr, mut keys: Vec<Value>) -> Expr {
     if keys.len() == 1 {
         let key = keys.pop().unwrap();
@@ -97,7 +98,6 @@ fn plan_indexed(expr: Expr, mut keys: Vec<Value>) -> Expr {
             key: plan_key(key),
         }
     } else {
-        // "table.column[key]..."
         let key = keys.pop().unwrap();
         let expr = Box::new(plan_indexed(expr, keys));
         Expr::GetIndexedField {

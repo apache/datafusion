@@ -20,13 +20,13 @@
 
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
+use crate::field_util::get_indexed_field;
 use crate::logical_plan::{window_frames, DFField, DFSchema, LogicalPlan};
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
     window_functions,
 };
-use crate::utils::get_indexed_field;
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
 use arrow::{compute::can_cast_types, datatypes::DataType};
