@@ -1431,14 +1431,13 @@ mod tests {
         let schema = batch.schema();
 
         // build a left deep tree ((((a + a) + a) + a ....
-        let tree_depth: i32 = 10;
+        let tree_depth: i32 = 100;
         let expr = (0..tree_depth)
             .into_iter()
             .map(|_| col("a", schema.as_ref()).unwrap())
             .reduce(|l, r| binary_simple(l, Operator::Plus, r))
             .unwrap();
 
-        println!("Evaluating expr {:?}", expr);
         let result = expr
             .evaluate(&batch)
             .expect("evaluation")
