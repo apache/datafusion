@@ -33,7 +33,7 @@ mod case;
 mod cast;
 mod coercion;
 mod column;
-mod count
+mod count;
 mod cume_dist;
 mod get_indexed_field;
 mod in_list;

@@ -5404,7 +5404,7 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     assert_eq!(expected, actual);
     let sql = r#"SELECT some_dict["b"], some_dict["a"] FROM ints LIMIT 3"#;
     let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0"], vec!["1"]];
+    let expected = vec![vec!["0", "1"]];
     assert_eq!(expected, actual);
     Ok(())
 }
