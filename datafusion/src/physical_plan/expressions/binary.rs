@@ -1381,4 +1381,38 @@ mod tests {
             ))
         }
     }
+
+    #[test]
+    fn relatively_deeply_nested() {
+        // Reproducer for https://github.com/apache/arrow-datafusion/issues/419
+
+        // where even relatively shallow binary expressions overflowed
+        // the stack in debug builds
+
+        let input: Vec<_> = vec![1, 2, 3, 4, 5].into_iter().map(Some).collect();
+        let a: Int32Array = input.iter().collect();
+
+        let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(a) as _)]).unwrap();
+        let schema = batch.schema();
+
+        // build a left deep tree ((((a + a) + a) + a ....
+        let tree_depth: i32 = 10;
+        let expr = (0..tree_depth)
+            .into_iter()
+            .map(|_| col("a", schema.as_ref()).unwrap())
+            .reduce(|l, r| binary_simple(l, Operator::Plus, r))
+            .unwrap();
+
+        println!("Evaluating expr {:?}", expr);
+        let result = expr
+            .evaluate(&batch)
+            .expect("evaluation")
+            .into_array(batch.num_rows());
+
+        let expected: Int32Array = input
+            .into_iter()
+            .map(|i| i.map(|i| i * tree_depth))
+            .collect();
+        assert_eq!(result.as_ref(), &expected);
+    }
 }
