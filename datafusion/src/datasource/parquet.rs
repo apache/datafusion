@@ -44,18 +44,18 @@ use crate::scalar::ScalarValue;
 pub struct ParquetTable {
     /// Descriptor of the table, including schema, files, etc.
     pub desc: Arc<ParquetTableDescriptor>,
-    max_partitions: usize,
+    target_partitions: usize,
     enable_pruning: bool,
 }
 
 impl ParquetTable {
     /// Attempt to initialize a new `ParquetTable` from a file path.
-    pub fn try_new(path: impl Into<String>, max_partitions: usize) -> Result<Self> {
+    pub fn try_new(path: impl Into<String>, target_partitions: usize) -> Result<Self> {
         let path = path.into();
         let table_desc = ParquetTableDescriptor::new(path.as_str());
         Ok(Self {
             desc: Arc::new(table_desc?),
-            max_partitions,
+            target_partitions,
             enable_pruning: true,
         })
     }
@@ -65,7 +65,7 @@ impl ParquetTable {
     pub fn try_new_with_schema(
         path: impl Into<String>,
         schema: Schema,
-        max_partitions: usize,
+        target_partitions: usize,
         collect_statistics: bool,
     ) -> Result<Self> {
         let path = path.into();
@@ -76,7 +76,7 @@ impl ParquetTable {
         );
         Ok(Self {
             desc: Arc::new(table_desc?),
-            max_partitions,
+            target_partitions,
             enable_pruning: true,
         })
     }
@@ -84,12 +84,12 @@ impl ParquetTable {
     /// Attempt to initialize a new `ParquetTable` from a table descriptor.
     pub fn try_new_with_desc(
         desc: Arc<ParquetTableDescriptor>,
-        max_partitions: usize,
+        target_partitions: usize,
         enable_pruning: bool,
     ) -> Result<Self> {
         Ok(Self {
             desc,
-            max_partitions,
+            target_partitions,
             enable_pruning,
         })
     }
@@ -108,6 +108,11 @@ impl ParquetTable {
     pub fn with_enable_pruning(mut self, enable_pruning: bool) -> Self {
         self.enable_pruning = enable_pruning;
         self
+    }
+
+    /// Get Target partitions
+    pub fn get_target_partitions(&self) -> usize {
+        self.target_partitions
     }
 }
 
@@ -153,7 +158,7 @@ impl TableProvider for ParquetTable {
             limit
                 .map(|l| std::cmp::min(l, batch_size))
                 .unwrap_or(batch_size),
-            self.max_partitions,
+            self.target_partitions,
             limit,
         )?))
     }

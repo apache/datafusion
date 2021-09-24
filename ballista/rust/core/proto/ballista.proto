@@ -296,6 +296,7 @@ message ParquetTableScanNode {
   TableDescriptor table_desc = 2;
   ProjectionColumns projection = 3;
   repeated LogicalExprNode filters = 4;
+  uint32 target_partitions = 5;
 }
 
 message AvroTableScanNode {

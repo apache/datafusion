@@ -443,7 +443,7 @@ fn get_table(
     path: &str,
     table: &str,
     table_format: &str,
-    max_partitions: usize,
+    target_partitions: usize,
 ) -> Result<Arc<dyn TableProvider>> {
     match table_format {
         // dbgen creates .tbl ('|' delimited) files without header
@@ -471,7 +471,7 @@ fn get_table(
             Ok(Arc::new(ParquetTable::try_new_with_schema(
                 &path,
                 schema,
-                max_partitions,
+                target_partitions,
                 false,
             )?))
         }
