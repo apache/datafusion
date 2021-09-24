@@ -758,6 +758,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                                 table_desc: Some(table_desc),
                                 projection,
                                 filters,
+                                target_partitions: parquet.get_target_partitions() as u32,
                             },
                         )),
                     })

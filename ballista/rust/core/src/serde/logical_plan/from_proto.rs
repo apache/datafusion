@@ -161,14 +161,14 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
 
                 let parquet_table = ParquetTable::try_new_with_desc(
                     Arc::new(ParquetTableDescriptor { descriptor }),
-                    24,
+                    scan.target_partitions as usize,
                     true,
                 )?;
                 LogicalPlanBuilder::scan(
                     &scan.table_name,
                     Arc::new(parquet_table),
                     projection,
-                )? //TODO remove hard-coded max_partitions
+                )?
                 .build()
                 .map_err(|e| e.into())
             }

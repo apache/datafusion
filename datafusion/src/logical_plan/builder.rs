@@ -139,20 +139,20 @@ impl LogicalPlanBuilder {
     pub fn scan_parquet(
         path: impl Into<String>,
         projection: Option<Vec<usize>>,
-        max_partitions: usize,
+        target_partitions: usize,
     ) -> Result<Self> {
         let path = path.into();
-        Self::scan_parquet_with_name(path.clone(), projection, max_partitions, path)
+        Self::scan_parquet_with_name(path.clone(), projection, target_partitions, path)
     }
 
     /// Scan a Parquet data source and register it with a given table name
     pub fn scan_parquet_with_name(
         path: impl Into<String>,
         projection: Option<Vec<usize>>,
-        max_partitions: usize,
+        target_partitions: usize,
         table_name: impl Into<String>,
     ) -> Result<Self> {
-        let provider = Arc::new(ParquetTable::try_new(path, max_partitions)?);
+        let provider = Arc::new(ParquetTable::try_new(path, target_partitions)?);
         Self::scan(table_name, provider, projection)
     }
 
