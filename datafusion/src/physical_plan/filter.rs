@@ -30,7 +30,7 @@ use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
 
-use arrow::array::BooleanArray;
+use arrow::array::{BooleanArray, Array};
 use arrow::compute::filter::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
@@ -39,6 +39,7 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 
 use futures::stream::{Stream, StreamExt};
+use arrow::compute::boolean::{and, is_not_null};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
@@ -184,7 +185,11 @@ fn batch_filter(
                     .into_arrow_external_error()
                 })
                 // apply filter array to record batch
-                .and_then(|filter_array| filter_record_batch(batch, filter_array))
+                .and_then(|filter_array| {
+                    let is_not_null = is_not_null(filter_array as &dyn Array);
+                    let and_filter = and(&is_not_null, filter_array)?;
+                    filter_record_batch(batch, &and_filter)
+                })
         })
 }
 

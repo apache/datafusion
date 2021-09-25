@@ -617,7 +617,6 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
     };
 
     let schema = batches[0].schema();
-    eprintln!("----------- schema {:?}", schema);
 
     let options = WriteOptions {
         compression: Compression::Uncompressed,
