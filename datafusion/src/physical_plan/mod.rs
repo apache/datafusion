@@ -390,7 +390,7 @@ pub enum Distribution {
 }
 
 /// Represents the result from an expression
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ColumnarValue {
     /// Array of values
     Array(ArrayRef),

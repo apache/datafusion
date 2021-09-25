@@ -28,6 +28,7 @@ use arrow::{
     array::*,
     compute::cast,
     datatypes::{DataType, TimeUnit},
+    scalar::PrimitiveScalar,
     types::NativeType,
 };
 use arrow::{compute::temporal, temporal_conversions::timestamp_ns_to_datetime};
@@ -35,6 +36,7 @@ use chrono::prelude::{DateTime, Utc};
 use chrono::Datelike;
 use chrono::Duration;
 use chrono::Timelike;
+use std::convert::TryInto;
 
 /// given a function `op` that maps a `&str` to a Result of an arrow native type,
 /// returns a `PrimitiveArray` after the application
@@ -81,7 +83,7 @@ where
 // given an function that maps a `&str` to a arrow native type,
 // returns a `ColumnarValue` where the function is applied to either a `ArrayRef` or `ScalarValue`
 // depending on the `args`'s variant.
-fn handle<'a, O, F, S>(
+fn handle<'a, O, F>(
     args: &'a [ColumnarValue],
     op: F,
     name: &str,
@@ -90,7 +92,6 @@ fn handle<'a, O, F, S>(
 where
     O: NativeType,
     ScalarValue: From<Option<O>>,
-    S: NativeType,
     F: Fn(&'a str) -> Result<O>,
 {
     match &args[0] {
@@ -117,14 +118,13 @@ where
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x)).transpose()?;
-                Ok(ColumnarValue::Scalar(result.into()))
-            }
-            ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x)).transpose()?;
-                Ok(ColumnarValue::Scalar(result.into()))
-            }
+            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(match a {
+                Some(s) => {
+                    let s = PrimitiveScalar::<O>::new(data_type, Some((op)(s)?));
+                    ColumnarValue::Scalar(s.try_into()?)
+                }
+                None => ColumnarValue::Scalar(ScalarValue::new_null(data_type)),
+            }),
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
                 other, name
@@ -140,7 +140,7 @@ fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
 
 /// to_timestamp SQL function
 pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle::<i64, _, i64>(
+    handle::<i64, _>(
         args,
         string_to_timestamp_nanos_shim,
         "to_timestamp",
@@ -150,7 +150,7 @@ pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 /// to_timestamp_millis SQL function
 pub fn to_timestamp_millis(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle::<i64, _, i64>(
+    handle::<i64, _>(
         args,
         |s| string_to_timestamp_nanos_shim(s).map(|n| n / 1_000_000),
         "to_timestamp_millis",
@@ -160,7 +160,7 @@ pub fn to_timestamp_millis(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 /// to_timestamp_micros SQL function
 pub fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle::<i64, _, i64>(
+    handle::<i64, _>(
         args,
         |s| string_to_timestamp_nanos_shim(s).map(|n| n / 1_000),
         "to_timestamp_micros",
@@ -170,7 +170,7 @@ pub fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 /// to_timestamp_seconds SQL function
 pub fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle::<i64, _, i64>(
+    handle::<i64, _>(
         args,
         |s| string_to_timestamp_nanos_shim(s).map(|n| n / 1_000_000_000),
         "to_timestamp_seconds",

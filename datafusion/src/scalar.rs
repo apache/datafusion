@@ -20,12 +20,12 @@
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 use crate::error::{DataFusionError, Result};
-use arrow::scalar::Scalar;
 use arrow::{
     array::*,
     buffer::MutableBuffer,
     datatypes::{DataType, Field, IntervalUnit, TimeUnit},
-    types::days_ms,
+    scalar::{PrimitiveScalar, Scalar},
+    types::{days_ms, NativeType},
 };
 use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
@@ -421,6 +421,25 @@ macro_rules! eq_array_primitive {
 }
 
 impl ScalarValue {
+    /// Create null scalar value for specific data type.
+    pub fn new_null(dt: DataType) -> Self {
+        match dt {
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                ScalarValue::TimestampSecond(None)
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                ScalarValue::TimestampMillisecond(None)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                ScalarValue::TimestampMicrosecond(None)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                ScalarValue::TimestampNanosecond(None)
+            }
+            _ => todo!("Create null scalar value for datatype: {:?}", dt),
+        }
+    }
+
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {
         match self {
@@ -1268,6 +1287,35 @@ impl TryInto<Box<dyn Scalar>> for &ScalarValue {
             _ => Err(DataFusionError::Internal(
                 "Conversion not possible in arrow2".to_owned(),
             )),
+        }
+    }
+}
+
+impl<T: NativeType> TryFrom<PrimitiveScalar<T>> for ScalarValue {
+    type Error = DataFusionError;
+
+    fn try_from(s: PrimitiveScalar<T>) -> Result<ScalarValue> {
+        match s.data_type() {
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                let s = s.as_any().downcast_ref::<PrimitiveScalar<i64>>().unwrap();
+                Ok(ScalarValue::TimestampSecond(Some(s.value())))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                let s = s.as_any().downcast_ref::<PrimitiveScalar<i64>>().unwrap();
+                Ok(ScalarValue::TimestampMicrosecond(Some(s.value())))
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                let s = s.as_any().downcast_ref::<PrimitiveScalar<i64>>().unwrap();
+                Ok(ScalarValue::TimestampMillisecond(Some(s.value())))
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let s = s.as_any().downcast_ref::<PrimitiveScalar<i64>>().unwrap();
+                Ok(ScalarValue::TimestampNanosecond(Some(s.value())))
+            }
+            _ => Err(DataFusionError::Internal(
+                format!(
+                    "Conversion from arrow Scalar to Datafusion ScalarValue not implemented for: {:?}", s))
+            ),
         }
     }
 }
