@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
         .build()?;
     let ctx = BallistaContext::remote("localhost", 50050, &config);
 
-    let testdata = datafusion::arrow::util::test_util::parquet_test_data();
+    let testdata = datafusion::test_util::parquet_test_data();
 
     let filename = &format!("{}/alltypes_plain.parquet", testdata);
 

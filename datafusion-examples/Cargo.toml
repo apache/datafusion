@@ -34,6 +34,7 @@ required-features = ["datafusion/avro"]
 
 [dev-dependencies]
 arrow-flight = { version = "0.1" }
+arrow = { package = "arrow2", version="0.5", features = ["io_ipc"] }
 datafusion = { path = "../datafusion" }
 prost = "0.8"
 tonic = "0.5"

@@ -78,6 +78,7 @@ fn print_batches_to_json<J: JsonFormat>(batches: &[RecordBatch]) -> Result<Strin
     {
         let mut writer = Writer::<_, J>::new(&mut bytes);
         writer.write_batches(batches)?;
+        writer.finish()?;
     }
     let formatted = String::from_utf8(bytes)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
@@ -91,7 +92,12 @@ fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<Stri
             .has_headers(true)
             .delimiter(delimiter)
             .from_writer(&mut bytes);
+        let mut is_first = true;
         for batch in batches {
+            if is_first {
+                write::write_header(&mut writer, batches[0].schema())?;
+                is_first = false;
+            }
             write::write_batch(&mut writer, batch, &write::SerializeOptions::default())?;
         }
     }

@@ -25,6 +25,8 @@ use datafusion::datasource::parquet::ParquetTable;
 use datafusion::datasource::TableProvider;
 use datafusion::prelude::*;
 
+use arrow::io::ipc::write::IpcWriteOptions;
+use arrow_flight::utils::flight_data_from_arrow_schema;
 use arrow_flight::{
     flight_service_server::FlightService, flight_service_server::FlightServiceServer,
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
@@ -106,9 +108,9 @@ impl FlightService for FlightServiceImpl {
                 }
 
                 // add an initial FlightData message that sends schema
-                let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
+                let options = IpcWriteOptions::default();
                 let schema_flight_data =
-                    SchemaAsIpc::new(&df.schema().clone().into(), &options).into();
+                    flight_data_from_arrow_schema(&df.schema().clone().into(), &options);
 
                 let mut flights: Vec<Result<FlightData, Status>> =
                     vec![Ok(schema_flight_data)];

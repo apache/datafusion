@@ -24,6 +24,7 @@ use datafusion::arrow::{
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use std::sync::Arc;
+use arrow::array::Array;
 
 // create local execution context with an in-memory table
 fn create_context() -> Result<ExecutionContext> {
@@ -39,8 +40,8 @@ fn create_context() -> Result<ExecutionContext> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1])),
-            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+            Arc::new(Float32Array::from_values(vec![2.1, 3.1, 4.1, 5.1])),
+            Arc::new(Float64Array::from_values(vec![1.0, 2.0, 3.0, 4.0])),
         ],
     )?;
 
@@ -88,7 +89,7 @@ async fn main() -> Result<()> {
                 match (base, exponent) {
                     // in arrow, any value can be null.
                     // Here we decide to make our UDF to return null when either base or exponent is null.
-                    (Some(base), Some(exponent)) => Some(base.powf(exponent)),
+                    (Some(base), Some(exponent)) => Some(base.powf(*exponent)),
                     _ => None,
                 }
             })

@@ -57,7 +57,7 @@
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
+//! let pretty_results = datafusion::arrow::io::print::write(&results);
 //!
 //! let expected = vec![
 //!     "+---+--------------------------+",
@@ -92,7 +92,7 @@
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
+//! let pretty_results = datafusion::arrow::io::print::write(&results);
 //!
 //! let expected = vec![
 //!     "+---+----------------+",

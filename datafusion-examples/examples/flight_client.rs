@@ -24,14 +24,14 @@ use arrow_flight::flight_descriptor;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::utils::flight_data_to_arrow_batch;
 use arrow_flight::{FlightDescriptor, Ticket};
-use datafusion::arrow::util::pretty;
+use datafusion::arrow::io::print;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
 /// Parquet files and executing SQL queries against them on a remote server.
 /// This example is run along-side the example `flight_server`.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let testdata = datafusion::crate::test::parquet_test_data();
+    let testdata = datafusion::test_util::parquet_test_data();
 
     // Create Flight client
     let mut client = FlightServiceClient::connect("http://localhost:50051").await?;
@@ -67,13 +67,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let record_batch = flight_data_to_arrow_batch(
             &flight_data,
             schema.clone(),
+            true,
             &dictionaries_by_field,
         )?;
         results.push(record_batch);
     }
 
     // print the results
-    pretty::print_batches(&results)?;
+    print::print(&results);
 
     Ok(())
 }

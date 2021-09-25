@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::util::pretty;
+use datafusion::arrow::io::print;
 
 use datafusion::error::Result;
 use datafusion::physical_plan::avro::AvroReadOptions;
@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
     let results = df.collect().await?;
 
     // print the results
-    pretty::print_batches(&results)?;
+    print::print(&results);
 
     Ok(())
 }

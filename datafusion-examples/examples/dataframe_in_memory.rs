@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Int32Array, StringArray};
+use datafusion::arrow::array::{Int32Array, Utf8Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 
@@ -38,8 +38,8 @@ async fn main() -> Result<()> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Utf8Array::<i32>::from_slice(&["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from_values(vec![1, 10, 10, 100])),
         ],
     )?;
 

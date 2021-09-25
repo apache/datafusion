@@ -18,13 +18,13 @@
 //! This module contains end to end tests of running SQL queries using
 //! DataFusion
 
-use std::convert::TryFrom;
 use std::sync::Arc;
 
-use chrono::Duration;
+use chrono::{Duration, TimeZone};
 
 use arrow::{array::*, datatypes::*, record_batch::RecordBatch};
 
+use datafusion::arrow::io::print;
 use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::logical_plan::LogicalPlan;
@@ -1169,7 +1169,7 @@ async fn query_cast_timestamp_millis() -> Result<()> {
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![
+        vec![Arc::new(Int64Array::from_values(vec![
             1235865600000,
             1235865660000,
             1238544000000,
@@ -1196,7 +1196,7 @@ async fn query_cast_timestamp_micros() -> Result<()> {
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![
+        vec![Arc::new(Int64Array::from_values(vec![
             1235865600000000,
             1235865660000000,
             1238544000000000,
@@ -1223,7 +1223,7 @@ async fn query_cast_timestamp_seconds() -> Result<()> {
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![
+        vec![Arc::new(Int64Array::from_values(vec![
             1235865600, 1235865660, 1238544000,
         ]))],
     )?;
@@ -2213,8 +2213,8 @@ fn create_join_context_unbalanced(
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44, 77])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(UInt32Array::from_values(vec![11, 22, 33, 44, 77])),
+            Arc::new(Utf8Array::<i32>::from(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
@@ -2233,8 +2233,8 @@ fn create_join_context_unbalanced(
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(UInt32Array::from_values(vec![11, 22, 44, 55])),
+            Arc::new(Utf8Array::<i32>::from(vec![
                 Some("z"),
                 Some("y"),
                 Some("x"),
@@ -2288,7 +2288,7 @@ async fn csv_explain_analyze() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = print::write(&actual);
     let formatted = normalize_for_explain(&formatted);
 
     // Only test basic plumbing and try to avoid having to change too
@@ -2309,7 +2309,7 @@ async fn csv_explain_analyze_verbose() {
     let sql =
         "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = print::write(&actual);
     let formatted = normalize_for_explain(&formatted);
 
     let verbose_needle = "Output Rows";
@@ -2354,7 +2354,7 @@ async fn explain_analyze_baseline_metrics() {
     let plan = ctx.optimize(&plan).unwrap();
     let physical_plan = ctx.create_physical_plan(&plan).unwrap();
     let results = collect(physical_plan.clone()).await.unwrap();
-    let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
+    let formatted = print::write(&results);
     println!("Query Output:\n\n{}", formatted);
     let formatted = normalize_for_explain(&formatted);
 
@@ -2842,13 +2842,13 @@ async fn explain_analyze_runs_optimizers() {
 
     let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let actual = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let actual = print::write(&actual);
     assert_contains!(actual, expected);
 
     // EXPLAIN ANALYZE should work the same
     let sql = "EXPLAIN  ANALYZE SELECT count(*) from alltypes_plain";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let actual = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let actual = print::write(&actual);
     assert_contains!(actual, expected);
 }
 
@@ -2992,10 +2992,7 @@ fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
         let display_col = batch
             .columns()
             .iter()
-            .map(|x| {
-                get_display(x.as_ref())
-                    .unwrap_or_else(|_| Box::new(|_| "???".to_string()))
-            })
+            .map(|x| get_display(x.as_ref()))
             .collect::<Vec<_>>();
         for row_index in 0..batch.num_rows() {
             let row_vec = display_col
@@ -3199,11 +3196,12 @@ fn make_timestamp_table(time_unit: TimeUnit) -> Result<Arc<MemTable>> {
         1599568949190855000, // 2020-09-08T12:42:29.190855+00:00
         1599565349190855000, //2020-09-08T11:42:29.190855+00:00
     ];
-    let values = nanotimestamps.into_iter().map(|x| x / divisor);
+    let values = nanotimestamps
+        .into_iter()
+        .map(|x| x / divisor)
+        .collect::<Vec<_>>();
 
-    let array = values
-        .collect::<Int64Array>()
-        .to(DataType::Timestamp(time_unit, None));
+    let array = Int64Array::from_values(values).to(DataType::Timestamp(time_unit, None));
 
     let data = RecordBatch::try_new(
         schema.clone(),
@@ -3420,7 +3418,7 @@ async fn query_group_on_null_multi_col() -> Result<()> {
                 None,
                 Some(3),
             ])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(Utf8Array::<i32>::from(vec![
                 None,
                 None,
                 Some("foo"),
@@ -3467,14 +3465,15 @@ async fn query_group_on_null_multi_col() -> Result<()> {
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
-    let array = vec![Some("one"), None, Some("three")]
-        .into_iter()
-        .collect::<DictionaryArray<Int32Type>>();
+    let original_data = vec![Some("one"), None, Some("three")];
+    let mut array = MutableDictionaryArray::<i32, MutableUtf8Array<i32>>::new();
+    array.try_extend(original_data)?;
+    let array: DictionaryArray<i32> = array.into();
 
     let batch =
         RecordBatch::try_from_iter(vec![("d1", Arc::new(array) as ArrayRef)]).unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
@@ -4540,13 +4539,12 @@ async fn test_partial_qualified_name() -> Result<()> {
 
 #[tokio::test]
 async fn like_on_strings() -> Result<()> {
-    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
-        .into_iter()
-        .collect::<StringArray>();
+    let input =
+        Utf8Array::<i32>::from(vec![Some("foo"), Some("bar"), None, Some("fazzz")]);
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
@@ -4567,13 +4565,14 @@ async fn like_on_strings() -> Result<()> {
 
 #[tokio::test]
 async fn like_on_string_dictionaries() -> Result<()> {
-    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
-        .into_iter()
-        .collect::<DictionaryArray<Int32Type>>();
+    let original_data = vec![Some("foo"), Some("bar"), None, Some("fazzz")];
+    let mut input = MutableDictionaryArray::<i32, MutableUtf8Array<i32>>::new();
+    input.try_extend(original_data)?;
+    let input: DictionaryArray<i32> = input.into();
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
@@ -4594,13 +4593,16 @@ async fn like_on_string_dictionaries() -> Result<()> {
 
 #[tokio::test]
 async fn test_regexp_is_match() -> Result<()> {
-    let input = vec![Some("foo"), Some("Barrr"), Some("Bazzz"), Some("ZZZZZ")]
-        .into_iter()
-        .collect::<StringArray>();
+    let input = Utf8Array::<i32>::from(vec![
+        Some("foo"),
+        Some("Barrr"),
+        Some("Bazzz"),
+        Some("ZZZZZ"),
+    ]);
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 

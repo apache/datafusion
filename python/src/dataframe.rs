@@ -28,7 +28,7 @@ use datafusion::{execution::context::ExecutionContextState, logical_plan};
 
 use crate::{errors, to_py};
 use crate::{errors::DataFusionError, expression};
-use datafusion::arrow::util::pretty;
+use datafusion::arrow::io::print;
 
 /// A DataFrame is a representation of a logical plan and an API to compose statements.
 /// Use it to build a plan and `.collect()` to execute the plan and collect the result.
@@ -158,7 +158,7 @@ impl DataFrame {
             })
         })?;
 
-        Ok(pretty::print_batches(&batches).unwrap())
+        Ok(print::print(&batches))
     }
 
     /// Returns the join of two DataFrames `on`.

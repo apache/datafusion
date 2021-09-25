@@ -124,7 +124,7 @@ async fn execute_sql(ctx: &mut ExecutionContext, sql: &str, debug: bool) -> Resu
     let physical_plan = ctx.create_physical_plan(&plan)?;
     let result = collect(physical_plan).await?;
     if debug {
-        print::print(&result)?;
+        print::print(&result);
     }
     Ok(())
 }

@@ -25,26 +25,18 @@ use std::{
     time::Instant,
 };
 
-use futures::StreamExt;
-
-//use ballista::context::BallistaContext;
-use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
-
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::io::parquet::write::{CompressionCodec, WriteOptions};
 use datafusion::arrow::io::print;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::arrow::util::pretty;
 use datafusion::datasource::parquet::ParquetTable;
 use datafusion::datasource::{CsvFile, MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
-use datafusion::parquet::basic::Compression;
-use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 
+use arrow::io::parquet::write::{Compression, Version, WriteOptions};
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -315,7 +307,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
         millis.push(elapsed as f64);
         println!("Query {} iteration {} took {:.1} ms", opt.query, i, elapsed);
         if opt.debug {
-            pretty::print_batches(&batches)?;
+            print::print(&batches);
         }
     }
 
@@ -369,7 +361,7 @@ async fn execute_query(
                 .indent()
                 .to_string()
         );
-        print::print(&result)?;
+        print::print(&result);
     }
     Ok(result)
 }
@@ -413,13 +405,13 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
             "csv" => ctx.write_csv(csv, output_path).await?,
             "parquet" => {
                 let compression = match opt.compression.as_str() {
-                    "none" => CompressionCodec::Uncompressed,
-                    "snappy" => CompressionCodec::Snappy,
-                    "brotli" => CompressionCodec::Brotli,
-                    "gzip" => CompressionCodec::Gzip,
-                    "lz4" => CompressionCodec::Lz4,
-                    "lz0" => CompressionCodec::Lzo,
-                    "zstd" => CompressionCodec::Zstd,
+                    "none" => Compression::Uncompressed,
+                    "snappy" => Compression::Snappy,
+                    "brotli" => Compression::Brotli,
+                    "gzip" => Compression::Gzip,
+                    "lz4" => Compression::Lz4,
+                    "lz0" => Compression::Lzo,
+                    "zstd" => Compression::Zstd,
                     other => {
                         return Err(DataFusionError::NotImplemented(format!(
                             "Invalid compression format: {}",
@@ -431,8 +423,9 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
                 let options = WriteOptions {
                     compression,
                     write_statistics: false,
+                    version: Version::V1,
                 };
-                ctx.write_parquet(csv, options, output_path).await?
+                ctx.write_parquet(csv, output_path, options).await?
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -590,8 +583,8 @@ mod tests {
     use std::env;
     use std::sync::Arc;
 
+    use arrow::array::get_display;
     use datafusion::arrow::array::*;
-    use datafusion::arrow::util::display::array_value_to_string;
     use datafusion::logical_plan::Expr;
     use datafusion::logical_plan::Expr::Cast;
 
@@ -786,7 +779,7 @@ mod tests {
             return format!("[{}]", r.join(","));
         }
 
-        array_value_to_string(column, row_index).unwrap()
+        get_display(column)(row_index)
     }
 
     /// Converts the results into a 2d array of strings, `result[row][column]`
@@ -798,7 +791,7 @@ mod tests {
                 let row_vec = batch
                     .columns()
                     .iter()
-                    .map(|column| col_str(column, row_index))
+                    .map(|column| col_str(column.as_ref(), row_index))
                     .collect();
                 result.push(row_vec);
             }
