@@ -197,13 +197,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // semantic checks
         match *file_type {
-            FileType::CSV => {
-                if columns.is_empty() {
-                    return Err(DataFusionError::Plan(
-                        "Column definitions required for CSV files. None found".into(),
-                    ));
-                }
-            }
+            FileType::CSV => {}
             FileType::Parquet => {
                 if !columns.is_empty() {
                     return Err(DataFusionError::Plan(
@@ -2901,11 +2895,8 @@ mod tests {
     #[test]
     fn create_external_table_csv_no_schema() {
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv'";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Plan(\"Column definitions required for CSV files. None found\")",
-            format!("{:?}", err)
-        );
+        let expected = "CreateExternalTable: \"t\"";
+        quick_test(sql, expected);
     }
 
     #[test]

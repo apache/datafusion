@@ -186,13 +186,12 @@ impl ExecutionContext {
                 ref has_header,
             } => match file_type {
                 FileType::CSV => {
-                    self.register_csv(
-                        name,
-                        location,
-                        CsvReadOptions::new()
-                            .schema(&schema.as_ref().to_owned().into())
-                            .has_header(*has_header),
-                    )?;
+                    let mut options = CsvReadOptions::new().has_header(*has_header);
+                    let tmp_schema = schema.as_ref().to_owned().into();
+                    if !schema.fields().is_empty() {
+                        options = options.schema(&tmp_schema);
+                    }
+                    self.register_csv(name, location, options)?;
                     let plan = LogicalPlanBuilder::empty(false).build()?;
                     Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
                 }

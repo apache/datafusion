@@ -109,6 +109,22 @@ async fn setup_table(mut ctx: ExecutionContext) -> Result<ExecutionContext> {
     Ok(ctx)
 }
 
+async fn setup_table_without_schemas(
+    mut ctx: ExecutionContext,
+) -> Result<ExecutionContext> {
+    let sql = "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/customer.csv'";
+
+    let expected = vec!["++", "++"];
+
+    let s = exec_sql(&mut ctx, sql).await?;
+    let actual = s.lines().collect::<Vec<_>>();
+
+    assert_eq!(expected, actual, "Creating table");
+    Ok(ctx)
+}
+
+const QUERY1: &str = "SELECT * FROM sales limit 3";
+
 const QUERY: &str =
     "SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3";
 
@@ -140,6 +156,43 @@ async fn run_and_compare_query(
         s
     );
     Ok(())
+}
+
+// Run the query using the specified execution context and compare it
+// to the known result
+async fn run_and_compare_query_with_auto_schemas(
+    mut ctx: ExecutionContext,
+    description: &str,
+) -> Result<()> {
+    let expected = vec![
+        "+----------+----------+",
+        "| column_1 | column_2 |",
+        "+----------+----------+",
+        "| andrew   | 100      |",
+        "| jorge    | 200      |",
+        "| andy     | 150      |",
+        "+----------+----------+",
+    ];
+
+    let s = exec_sql(&mut ctx, QUERY1).await?;
+    let actual = s.lines().collect::<Vec<_>>();
+
+    assert_eq!(
+        expected,
+        actual,
+        "output mismatch for {}. Expectedn\n{}Actual:\n{}",
+        description,
+        expected.join("\n"),
+        s
+    );
+    Ok(())
+}
+
+#[tokio::test]
+// Run the query using default planners and optimizer
+async fn normal_query_without_schemas() -> Result<()> {
+    let ctx = setup_table_without_schemas(ExecutionContext::new()).await?;
+    run_and_compare_query_with_auto_schemas(ctx, "Default context").await
 }
 
 #[tokio::test]
