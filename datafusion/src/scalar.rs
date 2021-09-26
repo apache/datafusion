@@ -320,20 +320,19 @@ macro_rules! typed_cast {
 
 macro_rules! build_list {
     ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
+        let dt = DataType::List(Box::new(Field::new("item", DataType::$SCALAR_TY, true)));
         match $VALUES {
             // the return on the macro is necessary, to short-circuit and return ArrayRef
             None => {
-                return Arc::from(new_null_array(
-                    DataType::List(Box::new(Field::new(
-                        "item",
-                        DataType::$SCALAR_TY,
-                        true,
-                    ))),
-                    $SIZE,
-                ));
+                return Arc::from(new_null_array(dt, $SIZE));
             }
             Some(values) => {
-                build_values_list!($VALUE_BUILDER_TY, $SCALAR_TY, values.as_ref(), $SIZE)
+                let mut array = MutableListArray::<i32, $VALUE_BUILDER_TY>::new_from(
+                    <$VALUE_BUILDER_TY>::default(),
+                    dt,
+                    $SIZE,
+                );
+                build_values_list!(array, $SCALAR_TY, values.as_ref(), $SIZE)
             }
         }
     }};
@@ -341,15 +340,12 @@ macro_rules! build_list {
 
 macro_rules! build_timestamp_list {
     ($TIME_UNIT:expr, $TIME_ZONE:expr, $VALUES:expr, $SIZE:expr) => {{
+        let child_dt = DataType::Timestamp($TIME_UNIT, $TIME_ZONE);
         match $VALUES {
             // the return on the macro is necessary, to short-circuit and return ArrayRef
             None => {
                 let null_array: ArrayRef = new_null_array(
-                    DataType::List(Box::new(Field::new(
-                        "item",
-                        DataType::Timestamp($TIME_UNIT, $TIME_ZONE),
-                        true,
-                    ))),
+                    DataType::List(Box::new(Field::new("item", child_dt, true))),
                     $SIZE,
                 )
                 .into();
@@ -357,18 +353,25 @@ macro_rules! build_timestamp_list {
             }
             Some(values) => {
                 let values = values.as_ref();
+                let empty_arr = <Int64Vec>::default().to(child_dt.clone());
+                let mut array = MutableListArray::<i32, Int64Vec>::new_from(
+                    empty_arr,
+                    DataType::List(Box::new(Field::new("item", child_dt, true))),
+                    $SIZE,
+                );
+
                 match $TIME_UNIT {
                     TimeUnit::Second => {
-                        build_values_list!(Int64Vec, TimestampSecond, values, $SIZE)
+                        build_values_list!(array, TimestampSecond, values, $SIZE)
                     }
                     TimeUnit::Microsecond => {
-                        build_values_list!(Int64Vec, TimestampMillisecond, values, $SIZE)
+                        build_values_list!(array, TimestampMillisecond, values, $SIZE)
                     }
                     TimeUnit::Millisecond => {
-                        build_values_list!(Int64Vec, TimestampMicrosecond, values, $SIZE)
+                        build_values_list!(array, TimestampMicrosecond, values, $SIZE)
                     }
                     TimeUnit::Nanosecond => {
-                        build_values_list!(Int64Vec, TimestampNanosecond, values, $SIZE)
+                        build_values_list!(array, TimestampNanosecond, values, $SIZE)
                     }
                 }
             }
@@ -377,9 +380,7 @@ macro_rules! build_timestamp_list {
 }
 
 macro_rules! build_values_list {
-    ($MUTABLE_TY:ty, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
-        let mut array = MutableListArray::<i32, $MUTABLE_TY>::new();
-
+    ($MUTABLE_ARR:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
         for _ in 0..$SIZE {
             let mut vec = vec![];
             for scalar_value in $VALUES {
@@ -390,10 +391,10 @@ macro_rules! build_values_list {
                     _ => panic!("Incompatible ScalarValue for list"),
                 };
             }
-            array.try_push(Some(vec)).unwrap();
+            $MUTABLE_ARR.try_push(Some(vec)).unwrap();
         }
 
-        let array: ListArray<i32> = array.into();
+        let array: ListArray<i32> = $MUTABLE_ARR.into();
         Arc::new(array)
     }};
 }
@@ -1472,7 +1473,7 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::Binary(Some(_)) => write!(f, "Binary(\"{}\")", self),
             ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({})", self),
             ScalarValue::LargeBinary(Some(_)) => write!(f, "LargeBinary(\"{}\")", self),
-            ScalarValue::List(_, _) => write!(f, "List([{}])", self),
+            ScalarValue::List(_, dt) => write!(f, "List[{}]([{}])", dt, self),
             ScalarValue::Date32(_) => write!(f, "Date32(\"{}\")", self),
             ScalarValue::Date64(_) => write!(f, "Date64(\"{}\")", self),
             ScalarValue::IntervalDayTime(_) => {
