@@ -2144,36 +2144,21 @@ async fn test_join_float32() -> Result<()> {
         MemTable::try_new(population_schema, vec![vec![population_data]])?;
     ctx.register_table("population", Arc::new(population_table))?;
 
-    // register area table
-    let area_schema = Arc::new(Schema::new(vec![
-        Field::new("city", DataType::Utf8, true),
-        Field::new("area", DataType::Float32, true),
-    ]));
-    let area_data = RecordBatch::try_new(
-        area_schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
-            Arc::new(Float32Array::from(vec![164.159, 143.352, 264.366])),
-        ],
-    )?;
-    let area_table = MemTable::try_new(area_schema, vec![vec![area_data]])?;
-    ctx.register_table("area", Arc::new(area_table))?;
-
-    let sql = "SELECT population.city, population.population, area.area \
-                     FROM population \
-                     JOIN (SELECT * FROM area) \
-                     ON population.city = area.city \
-                     ORDER BY population.population";
+    let sql = "SELECT * \
+                     FROM population as a \
+                     JOIN (SELECT * FROM population as b) \
+                     ON a.population = b.population \
+                     ORDER BY a.population";
     let actual = execute_to_batches(&mut ctx, sql).await;
 
     let expected = vec![
-        "+------+------------+---------+",
-        "| city | population | area    |",
-        "+------+------------+---------+",
-        "| c    | 626.443    | 264.366 |",
-        "| a    | 838.698    | 164.159 |",
-        "| b    | 1778.934   | 143.352 |",
-        "+------+------------+---------+",
+        "+------+------------+------+------------+",
+        "| city | population | city | population |",
+        "+------+------------+------+------------+",
+        "| c    | 626.443    | c    | 626.443    |",
+        "| a    | 838.698    | a    | 838.698    |",
+        "| b    | 1778.934   | b    | 1778.934   |",
+        "+------+------------+------+------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -2200,36 +2185,21 @@ async fn test_join_float64() -> Result<()> {
         MemTable::try_new(population_schema, vec![vec![population_data]])?;
     ctx.register_table("population", Arc::new(population_table))?;
 
-    // register area table
-    let area_schema = Arc::new(Schema::new(vec![
-        Field::new("city", DataType::Utf8, true),
-        Field::new("area", DataType::Float64, true),
-    ]));
-    let area_data = RecordBatch::try_new(
-        area_schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
-            Arc::new(Float64Array::from(vec![164.159, 143.352, 264.366])),
-        ],
-    )?;
-    let area_table = MemTable::try_new(area_schema, vec![vec![area_data]])?;
-    ctx.register_table("area", Arc::new(area_table))?;
-
-    let sql = "SELECT population.city, population.population, area.area \
-                     FROM population \
-                     JOIN (SELECT * FROM area) \
-                     ON population.city = area.city \
-                     ORDER BY population.population";
+    let sql = "SELECT * \
+                     FROM population as a \
+                     JOIN (SELECT * FROM population as b) \
+                     ON a.population = b.population \
+                     ORDER BY a.population";
     let actual = execute_to_batches(&mut ctx, sql).await;
 
     let expected = vec![
-        "+------+------------+---------+",
-        "| city | population | area    |",
-        "+------+------------+---------+",
-        "| c    | 626.443    | 264.366 |",
-        "| a    | 838.698    | 164.159 |",
-        "| b    | 1778.934   | 143.352 |",
-        "+------+------------+---------+",
+        "+------+------------+------+------------+",
+        "| city | population | city | population |",
+        "+------+------------+------+------------+",
+        "| c    | 626.443    | c    | 626.443    |",
+        "| a    | 838.698    | a    | 838.698    |",
+        "| b    | 1778.934   | b    | 1778.934   |",
+        "+------+------------+------+------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
