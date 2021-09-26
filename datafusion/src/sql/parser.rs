@@ -362,9 +362,10 @@ mod tests {
     fn create_external_table() -> Result<(), ParserError> {
         // positive case
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
+        let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
-            columns: vec![make_column_def("c1", DataType::Int)],
+            columns: vec![make_column_def("c1", DataType::Int(display))],
             file_type: FileType::CSV,
             has_header: false,
             location: "foo.csv".into(),
