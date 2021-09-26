@@ -44,8 +44,9 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 use arrow::array::{
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray, TimestampNanosecondArray,
-    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
 };
 
 use hashbrown::raw::RawTable;
@@ -780,7 +781,9 @@ fn equal_rows(
             DataType::UInt64 => equal_rows_elem!(UInt64Array, l, r, left, right),
             DataType::Float32 => equal_rows_elem!(Float32Array, l, r, left, right),
             DataType::Float64 => equal_rows_elem!(Float64Array, l, r, left, right),
-            DataType::Timestamp(_, None) => equal_rows_elem!(TimestampNanosecondArray, l, r, left, right),
+            DataType::Timestamp(_, None) => {
+                equal_rows_elem!(TimestampNanosecondArray, l, r, left, right)
+            }
             DataType::Utf8 => equal_rows_elem!(StringArray, l, r, left, right),
             DataType::LargeUtf8 => equal_rows_elem!(LargeStringArray, l, r, left, right),
             _ => {
