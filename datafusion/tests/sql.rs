@@ -2140,7 +2140,8 @@ async fn test_join_float32() -> Result<()> {
             Arc::new(Float32Array::from(vec![838.698, 1778.934, 626.443])),
         ],
     )?;
-    let population_table = MemTable::try_new(population_schema, vec![vec![population_data]])?;
+    let population_table =
+        MemTable::try_new(population_schema, vec![vec![population_data]])?;
     ctx.register_table("population", Arc::new(population_table))?;
 
     // register area table
