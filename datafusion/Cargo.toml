@@ -46,6 +46,8 @@ unicode_expressions = ["unicode-segmentation"]
 force_hash_collisions = []
 # Used to enable the avro format
 avro = ["avro-rs", "num-traits"]
+# Used to enable hdfs as remote object store
+hdfs = ["fs-hdfs"]
 
 [dependencies]
 ahash = "0.7"
@@ -72,6 +74,8 @@ smallvec = { version = "1.6", features = ["union"] }
 rand = "0.8"
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 num-traits = { version = "0.2", optional = true }
+fs-hdfs = { version = "^0.1.2", optional = true }
+uuid = {version = "^0.8", features = ["v4"]}
 
 [dev-dependencies]
 criterion = "0.3"

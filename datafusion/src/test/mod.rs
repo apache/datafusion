@@ -17,9 +17,11 @@
 
 //! Common unit test utility methods
 
-use crate::datasource::{MemTable, TableProvider};
-use crate::error::Result;
-use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::{BufReader, BufWriter};
+use std::sync::Arc;
+
 use array::{
     Array, ArrayRef, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray,
@@ -27,11 +29,11 @@ use array::{
 use arrow::array::{self, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::{BufReader, BufWriter};
-use std::sync::Arc;
 use tempfile::TempDir;
+
+use crate::datasource::{MemTable, TableProvider};
+use crate::error::Result;
+use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 
 pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let dual_schema = Arc::new(Schema::new(vec![

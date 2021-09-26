@@ -29,6 +29,8 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 use super::datasource::TableProviderFilterPushDown;
 use crate::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use crate::datasource::object_store::get_object_store;
+#[cfg(feature = "hdfs")]
+use crate::datasource::object_store::hdfs::os_parquet::HadoopParquetFileReader;
 use crate::datasource::object_store::local::os_parquet::LocalParquetFileReader;
 use crate::datasource::parquet::dynamic_reader::DynChunkReader;
 use crate::datasource::{
@@ -43,6 +45,7 @@ use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 use crate::scalar::ScalarValue;
 
 pub mod dynamic_reader;
+
 /// Table-based representation of a `ParquetFile`.
 pub struct ParquetTable {
     /// Descriptor of the table, including schema, files, etc.
@@ -423,6 +426,11 @@ fn get_chunk_reader(path: &str) -> Result<DynChunkReader> {
             let obj_reader = os.file_reader_from_path(path)?;
             Ok(LocalParquetFileReader::get_dyn_chunk_reader(obj_reader)?)
         }
+        #[cfg(feature = "hdfs")]
+        "hdfs" => {
+            let obj_reader = os.file_reader_from_path(path)?;
+            Ok(HadoopParquetFileReader::get_dyn_chunk_reader(obj_reader)?)
+        }
         _ => Err(DataFusionError::Internal(format!(
             "No suitable object store found for {}",
             os.get_schema()
@@ -696,5 +704,39 @@ mod tests {
         let result =
             combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
         assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
+    }
+
+    #[cfg(feature = "hdfs")]
+    mod test_hdfs {
+        use super::*;
+        use crate::test_util::hdfs::run_hdfs_test;
+
+        #[tokio::test]
+        async fn read_small_batches_from_hdfs() -> Result<()> {
+            run_hdfs_test("alltypes_plain.parquet".to_string(), |filename_hdfs| {
+                Box::pin(async move {
+                    let table = ParquetTable::try_new(filename_hdfs, 2)?;
+                    let projection = None;
+                    let exec = table.scan(&projection, 2, &[], None).await?;
+                    let stream = exec.execute(0).await?;
+
+                    let _ = stream
+                        .map(|batch| {
+                            let batch = batch.unwrap();
+                            assert_eq!(11, batch.num_columns());
+                            assert_eq!(2, batch.num_rows());
+                        })
+                        .fold(0, |acc, _| async move { acc + 1i32 })
+                        .await;
+
+                    // test metadata
+                    assert_eq!(exec.statistics().num_rows, Some(8));
+                    assert_eq!(exec.statistics().total_byte_size, Some(671));
+
+                    Ok(())
+                })
+            })
+            .await
+        }
     }
 }

@@ -19,6 +19,9 @@
 
 use std::{env, error::Error, path::PathBuf};
 
+#[cfg(feature = "hdfs")]
+pub mod hdfs;
+
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
 /// batches. This is a macro so errors appear on the correct line
@@ -181,8 +184,9 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::env;
+
+    use super::*;
 
     #[test]
     fn test_data_dir() {

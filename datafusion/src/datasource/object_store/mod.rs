@@ -28,8 +28,13 @@ use futures::executor::block_on;
 use futures::{AsyncRead, Stream, StreamExt};
 use local::{LocalFileSystem, LOCAL_SCHEME};
 
+#[cfg(feature = "hdfs")]
+use self::hdfs::{HadoopFileSystem, HDFS_SCHEME};
 use crate::error::{DataFusionError, Result};
 
+#[cfg(feature = "hdfs")]
+#[allow(unused_variables)]
+pub mod hdfs;
 pub mod local;
 
 /// Object Reader for one file in a object store
@@ -168,6 +173,15 @@ impl ObjectStoreRegistry {
 
 /// Get object store based on the path uri
 pub fn get_object_store(path: &str) -> Result<Arc<dyn ObjectStore>> {
+    #[cfg(feature = "hdfs")]
+    if let Some((scheme, _)) = path.split_once(':') {
+        if scheme == HDFS_SCHEME {
+            OBJECT_STORES.register_store(
+                String::from(HDFS_SCHEME),
+                Arc::new(HadoopFileSystem::new(path)?),
+            );
+        }
+    }
     OBJECT_STORES.get_by_uri(path)
 }
 
