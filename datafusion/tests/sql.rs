@@ -2191,15 +2191,12 @@ async fn test_join_float64() -> Result<()> {
     let population_data = RecordBatch::try_new(
         population_schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec![
-                Some("a"),
-                Some("b"),
-                Some("c"),
-            ])),
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
             Arc::new(Float64Array::from(vec![838.698, 1778.934, 626.443])),
         ],
     )?;
-    let population_table = MemTable::try_new(population_schema, vec![vec![population_data]])?;
+    let population_table =
+        MemTable::try_new(population_schema, vec![vec![population_data]])?;
     ctx.register_table("population", Arc::new(population_table))?;
 
     // register area table
@@ -2386,7 +2383,7 @@ async fn csv_explain() {
             "logical_plan",
             "Projection: #aggregate_test_100.c1\
              \n  Filter: #aggregate_test_100.c2 > Int64(10)\
-             \n    TableScan: aggregate_test_100 projection=Some([0, 1])",
+             \n    TableScan: aggregate_test_100 projection=Some([0, 1])"
         ],
         vec!["physical_plan",
              "ProjectionExec: expr=[c1@0 as c1]\
@@ -2394,8 +2391,8 @@ async fn csv_explain() {
               \n    FilterExec: CAST(c2@1 AS Int64) > 10\
               \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
               \n        CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true\
-              \n",
-        ]];
+              \n"
+    ]];
     assert_eq!(expected, actual);
 
     // Also, expect same result with lowercase explain
