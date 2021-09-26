@@ -544,7 +544,7 @@ impl ScalarValue {
     /// Example
     /// ```
     /// use datafusion::scalar::ScalarValue;
-    /// use arrow::array::BooleanArray;
+    /// use arrow::array::{BooleanArray, Array};
     ///
     /// let scalars = vec![
     ///   ScalarValue::Boolean(Some(true)),

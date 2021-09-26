@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use super::ColumnarValue;
 
-fn array_array(arrays: &[&dyn Array]) -> Result<FixedSizeListArray> {
+fn array_array(arrays: &[&dyn Array]) -> Result<ArrayRef> {
     assert!(!arrays.is_empty());
     let first = arrays[0];
     assert!(arrays.iter().all(|x| x.len() == first.len()));
@@ -33,13 +33,83 @@ fn array_array(arrays: &[&dyn Array]) -> Result<FixedSizeListArray> {
 
     let size = arrays.len();
 
-    let values = concat::concatenate(arrays)?;
-    let data_type = FixedSizeListArray::default_datatype(first.data_type().clone(), size);
-    Ok(FixedSizeListArray::from_data(
-        data_type,
-        values.into(),
-        None,
-    ))
+    macro_rules! array {
+        ($PRIMITIVE: ty, $ARRAY: ty, $DATA_TYPE: path) => {{
+            let array = MutablePrimitiveArray::<$PRIMITIVE>::with_capacity_from(first.len() * size, $DATA_TYPE);
+            let mut array = MutableFixedSizeListArray::new(array, size);
+            // for each entry in the array
+            for index in 0..first.len() {
+                let values = array.mut_values();
+                for arg in arrays {
+                    let arg = arg.as_any().downcast_ref::<$ARRAY>().unwrap();
+                    if arg.is_null(index) {
+                        values.push(None);
+                    } else {
+                        values.push(Some(arg.value(index)));
+                    }
+                }
+            }
+            Ok(array.as_arc())
+        }};
+    }
+
+    macro_rules! array_string {
+        ($OFFSET: ty) => {{
+            let array = MutableUtf8Array::<$OFFSET>::with_capacity(first.len() * size);
+            let mut array = MutableFixedSizeListArray::new(array, size);
+            // for each entry in the array
+            for index in 0..first.len() {
+                let values = array.mut_values();
+                for arg in arrays {
+                    let arg = arg.as_any().downcast_ref::<Utf8Array<$OFFSET>>().unwrap();
+                    if arg.is_null(index) {
+                        values.push::<&str>(None);
+                    } else {
+                        values.push(Some(arg.value(index)));
+                    }
+                }
+            }
+            Ok(array.as_arc())
+        }};
+    }
+
+
+    match first.data_type() {
+        DataType::Boolean => {
+            let array = MutableBooleanArray::with_capacity(first.len() * size);
+            let mut array = MutableFixedSizeListArray::new(array, size);
+            // for each entry in the array
+            for index in 0..first.len() {
+                let values = array.mut_values();
+                for arg in arrays {
+                    let arg = arg.as_any().downcast_ref::<BooleanArray>().unwrap();
+                    if arg.is_null(index) {
+                        values.push(None);
+                    } else {
+                        values.push(Some(arg.value(index)));
+                    }
+                }
+            }
+            Ok(array.as_arc())
+        },
+        DataType::UInt8 => array!(u8, PrimitiveArray<u8>, DataType::UInt8),
+        DataType::UInt16 => array!(u16, PrimitiveArray<u16>, DataType::UInt16),
+        DataType::UInt32 => array!(u32, PrimitiveArray<u32>, DataType::UInt32),
+        DataType::UInt64 => array!(u64, PrimitiveArray<u64>, DataType::UInt64),
+        DataType::Int8 => array!(i8, PrimitiveArray<i8>, DataType::Int8),
+        DataType::Int16 => array!(i16, PrimitiveArray<i16>, DataType::Int16),
+        DataType::Int32 => array!(i32, PrimitiveArray<i32>, DataType::Int32),
+        DataType::Int64 => array!(i64, PrimitiveArray<i64>, DataType::Int64),
+        DataType::Float32 => array!(f32, PrimitiveArray<f32>, DataType::Float32),
+        DataType::Float64 => array!(f64, PrimitiveArray<f64>, DataType::Float64),
+        DataType::Utf8 => array_string!(i32),
+        DataType::LargeUtf8 => array_string!(i64),
+        data_type => Err(DataFusionError::NotImplemented(format!(
+            "Array is not implemented for type '{:?}'.",
+            data_type
+        ))),
+    }
+
 }
 
 /// put values in an array.
@@ -57,7 +127,7 @@ pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
         })
         .collect::<Result<_>>()?;
 
-    Ok(ColumnarValue::Array(array_array(&arrays).map(Arc::new)?))
+    Ok(ColumnarValue::Array(array_array(&arrays)?))
 }
 
 /// Currently supported types by the array function.

@@ -441,7 +441,7 @@ impl ExecutionPlan for CsvExec {
                 });
 
                 Ok(Box::pin(CsvStream::new(
-                    self.schema.clone(),
+                    self.projected_schema.clone(),
                     ReceiverStream::new(response_rx),
                 )))
             }

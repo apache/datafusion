@@ -82,7 +82,7 @@ data set.
 
 ```rust,no_run
 use ballista::prelude::*;
-use datafusion::arrow::util::pretty;
+use datafusion::arrow::io::print;
 use datafusion::prelude::CsvReadOptions;
 
 #[tokio::main]
@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
 
    // collect the results and print them to stdout
    let results = df.collect().await?;
-   pretty::print_batches(&results)?;
+   print::print(&results);
    Ok(())
 }
 ```
