@@ -2124,6 +2124,88 @@ async fn cross_join_unbalanced() {
     );
 }
 
+#[tokio::test]
+async fn test_join_float32() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    // register population table
+    let population_schema = Arc::new(Schema::new(vec![
+        Field::new("city", DataType::Utf8, true),
+        Field::new("population", DataType::Float32, true),
+    ]));
+    let population_data = RecordBatch::try_new(
+        population_schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            Arc::new(Float32Array::from(vec![838.698, 1778.934, 626.443])),
+        ],
+    )?;
+    let population_table =
+        MemTable::try_new(population_schema, vec![vec![population_data]])?;
+    ctx.register_table("population", Arc::new(population_table))?;
+
+    let sql = "SELECT * \
+                     FROM population as a \
+                     JOIN (SELECT * FROM population as b) \
+                     ON a.population = b.population \
+                     ORDER BY a.population";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    let expected = vec![
+        "+------+------------+------+------------+",
+        "| city | population | city | population |",
+        "+------+------------+------+------------+",
+        "| c    | 626.443    | c    | 626.443    |",
+        "| a    | 838.698    | a    | 838.698    |",
+        "| b    | 1778.934   | b    | 1778.934   |",
+        "+------+------------+------+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_join_float64() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    // register population table
+    let population_schema = Arc::new(Schema::new(vec![
+        Field::new("city", DataType::Utf8, true),
+        Field::new("population", DataType::Float64, true),
+    ]));
+    let population_data = RecordBatch::try_new(
+        population_schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            Arc::new(Float64Array::from(vec![838.698, 1778.934, 626.443])),
+        ],
+    )?;
+    let population_table =
+        MemTable::try_new(population_schema, vec![vec![population_data]])?;
+    ctx.register_table("population", Arc::new(population_table))?;
+
+    let sql = "SELECT * \
+                     FROM population as a \
+                     JOIN (SELECT * FROM population as b) \
+                     ON a.population = b.population \
+                     ORDER BY a.population";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    let expected = vec![
+        "+------+------------+------+------------+",
+        "| city | population | city | population |",
+        "+------+------------+------+------------+",
+        "| c    | 626.443    | c    | 626.443    |",
+        "| a    | 838.698    | a    | 838.698    |",
+        "| b    | 1778.934   | b    | 1778.934   |",
+        "+------+------------+------+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
 fn create_join_context(
     column_left: &str,
     column_right: &str,
