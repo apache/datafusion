@@ -36,25 +36,21 @@ use arrow::{
 use super::{string_expressions::unary_string_function, ColumnarValue};
 
 /// Computes the md5 of a string.
+#[inline]
 fn md5_process(input: &str) -> String {
     let mut digest = Md5::default();
     digest.update(&input);
-
-    let mut result = String::new();
-
-    for byte in &digest.finalize() {
-        result.push_str(&format!("{:02x}", byte));
-    }
-
-    result
+    digest
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
 }
 
 // It's not possible to return &[u8], because trait in trait without short lifetime
+#[inline]
 fn sha_process<D: SHA2Digest + Default>(input: &str) -> SHA2DigestOutput<D> {
-    let mut digest = D::default();
-    digest.update(&input);
-
-    digest.finalize()
+    D::digest(input.as_bytes())
 }
 
 /// # Errors

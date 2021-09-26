@@ -3114,12 +3114,7 @@ async fn query_array() -> Result<()> {
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT array(c1, cast(c2 as varchar)) FROM test";
     let actual = execute(&mut ctx, sql).await;
-    let expected = vec![
-        vec!["[,0]"],
-        vec!["[a,1]"],
-        vec!["[aa,]"],
-        vec!["[aaa,3]"],
-    ];
+    let expected = vec![vec!["[,0]"], vec!["[a,1]"], vec!["[aa,]"], vec!["[aaa,3]"]];
     assert_eq!(expected, actual);
     Ok(())
 }
@@ -3767,6 +3762,39 @@ macro_rules! test_expression {
     };
 }
 
+macro_rules! test_expression_in_hex {
+    ($SQL:expr, $EXPECTED:expr) => {
+        let mut ctx = ExecutionContext::new();
+        let sql = format!("SELECT {}", $SQL);
+        let batches = &execute_to_batches(&mut ctx, sql.as_str()).await;
+        let actual = batches[0]
+            .columns()
+            .iter()
+            .map(|x| match x.data_type() {
+                DataType::Binary => {
+                    let a = x.as_any().downcast_ref::<BinaryArray<i32>>().unwrap();
+                    let value = a.value(0);
+                    value.iter().fold("".to_string(), |mut acc, x| {
+                        acc.push_str(&format!("{:02x}", x));
+                        acc
+                    })
+                }
+                DataType::LargeBinary => {
+                    let a = x.as_any().downcast_ref::<BinaryArray<i64>>().unwrap();
+                    let value = a.value(0);
+                    value.iter().fold("".to_string(), |mut acc, x| {
+                        acc.push_str(&format!("{:02x}", x));
+                        acc
+                    })
+                }
+                _ => todo!("Expect binary value type"),
+            })
+            .nth(0)
+            .unwrap();
+        assert_eq!(actual.as_str(), $EXPECTED);
+    };
+}
+
 #[tokio::test]
 async fn test_boolean_expressions() -> Result<()> {
     test_expression!("true", "true");
@@ -3780,95 +3808,51 @@ async fn test_crypto_expressions() -> Result<()> {
     test_expression!("md5('tom')", "34b7da764b21d298ef307d04d8152dc5");
     test_expression!("md5('')", "d41d8cd98f00b204e9800998ecf8427e");
     test_expression!("md5(NULL)", "");
-    test_expression!(
+
+    test_expression_in_hex!(
         "sha224('tom')",
         "0bf6cb62649c42a9ae3876ab6f6d92ad36cb5414e495f8873292be4d"
     );
-    test_expression!(
+    test_expression_in_hex!(
         "sha224('')",
         "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f"
     );
-    test_expression!("sha224(NULL)", "");
-    test_expression!(
+    test_expression_in_hex!("sha224(NULL)", "");
+    test_expression_in_hex!(
         "sha256('tom')",
         "e1608f75c5d7813f3d4031cb30bfb786507d98137538ff8e128a6ff74e84e643"
     );
-    test_expression!(
+    test_expression_in_hex!(
         "sha256('')",
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     );
-    test_expression!("sha256(NULL)", "");
-    test_expression!("sha384('tom')", "096f5b68aa77848e4fdf5c1c0b350de2dbfad60ffd7c25d9ea07c6c19b8a4d55a9187eb117c557883f58c16dfac3e343");
-    test_expression!("sha384('')", "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b");
-    test_expression!("sha384(NULL)", "");
-    test_expression!("sha512('tom')", "6e1b9b3fe840680e37051f7ad5e959d6f39ad0f8885d855166f55c659469d3c8b78118c44a2a49c72ddb481cd6d8731034e11cc030070ba843a90b3495cb8d3e");
-    test_expression!("sha512('')", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
-    test_expression!("sha512(NULL)", "");
+    test_expression_in_hex!("sha256(NULL)", "");
+    test_expression_in_hex!("sha384('tom')", "096f5b68aa77848e4fdf5c1c0b350de2dbfad60ffd7c25d9ea07c6c19b8a4d55a9187eb117c557883f58c16dfac3e343");
+    test_expression_in_hex!("sha384('')", "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b");
+    test_expression_in_hex!("sha384(NULL)", "");
+    test_expression_in_hex!("sha512('tom')", "6e1b9b3fe840680e37051f7ad5e959d6f39ad0f8885d855166f55c659469d3c8b78118c44a2a49c72ddb481cd6d8731034e11cc030070ba843a90b3495cb8d3e");
+    test_expression_in_hex!("sha512('')", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
+    test_expression_in_hex!("sha512(NULL)", "");
     Ok(())
 }
 
 #[tokio::test]
 async fn test_interval_expressions() -> Result<()> {
-    test_expression!(
-        "interval '1'",
-        "0d1000ms"
-    );
-    test_expression!(
-        "interval '1 second'",
-        "0d1000ms"
-    );
-    test_expression!(
-        "interval '500 milliseconds'",
-        "0d500ms"
-    );
-    test_expression!(
-        "interval '5 second'",
-        "0d5000ms"
-    );
-    test_expression!(
-        "interval '0.5 minute'",
-        "0d30000ms"
-    );
-    test_expression!(
-        "interval '.5 minute'",
-        "0d30000ms"
-    );
-    test_expression!(
-        "interval '5 minute'",
-        "0d300000ms"
-    );
-    test_expression!(
-        "interval '5 minute 1 second'",
-        "0d301000ms"
-    );
-    test_expression!(
-        "interval '1 hour'",
-        "0d3600000ms"
-    );
-    test_expression!(
-        "interval '5 hour'",
-        "0d18000000ms"
-    );
-    test_expression!(
-        "interval '1 day'",
-        "1d0ms"
-    );
-    test_expression!(
-        "interval '1 day 1'",
-        "1d1000ms"
-    );
-    test_expression!(
-        "interval '0.5'",
-        "0d500ms"
-    );
-    test_expression!(
-        "interval '0.5 day 1'",
-        "0d43201000ms"
-    );
-    test_expression!(
-        "interval '0.49 day'",
-        "0d42336000ms"
-    );
+    test_expression!("interval '1'", "0d1000ms");
+    test_expression!("interval '1 second'", "0d1000ms");
+    test_expression!("interval '500 milliseconds'", "0d500ms");
+    test_expression!("interval '5 second'", "0d5000ms");
+    test_expression!("interval '0.5 minute'", "0d30000ms");
+    test_expression!("interval '.5 minute'", "0d30000ms");
+    test_expression!("interval '5 minute'", "0d300000ms");
+    test_expression!("interval '5 minute 1 second'", "0d301000ms");
+    test_expression!("interval '1 hour'", "0d3600000ms");
+    test_expression!("interval '5 hour'", "0d18000000ms");
+    test_expression!("interval '1 day'", "1d0ms");
+    test_expression!("interval '1 day 1'", "1d1000ms");
+    test_expression!("interval '0.5'", "0d500ms");
+    test_expression!("interval '0.5 day 1'", "0d43201000ms");
+    test_expression!("interval '0.49 day'", "0d42336000ms");
     // TODO: precision here.
     // test_expression!(
     //     "interval '0.499 day'",
@@ -3886,59 +3870,23 @@ async fn test_interval_expressions() -> Result<()> {
     //     "interval '0.49999999999 day'",
     //     "0d43199999.999136ms"
     // );
-    test_expression!(
-        "interval '5 day'",
-        "5d0ms"
-    );
+    test_expression!("interval '5 day'", "5d0ms");
     // Hour is ignored, this matches PostgreSQL
-    test_expression!(
-        "interval '5 day' hour",
-        "5d0ms"
-    );
+    test_expression!("interval '5 day' hour", "5d0ms");
     test_expression!(
         "interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'",
         "5d14582100ms"
     );
-    test_expression!(
-        "interval '0.5 month'",
-        "15d0ms"
-    );
-    test_expression!(
-        "interval '0.5' month",
-        "15d0ms"
-    );
-    test_expression!(
-        "interval '1 month'",
-        "1m"
-    );
-    test_expression!(
-        "interval '1' MONTH",
-        "1m"
-    );
-    test_expression!(
-        "interval '5 month'",
-        "5m"
-    );
-    test_expression!(
-        "interval '13 month'",
-        "13m"
-    );
-    test_expression!(
-        "interval '0.5 year'",
-        "6m"
-    );
-    test_expression!(
-        "interval '1 year'",
-        "12m"
-    );
-    test_expression!(
-        "interval '2 year'",
-        "24m"
-    );
-    test_expression!(
-        "interval '2' year",
-        "24m"
-    );
+    test_expression!("interval '0.5 month'", "15d0ms");
+    test_expression!("interval '0.5' month", "15d0ms");
+    test_expression!("interval '1 month'", "1m");
+    test_expression!("interval '1' MONTH", "1m");
+    test_expression!("interval '5 month'", "5m");
+    test_expression!("interval '13 month'", "13m");
+    test_expression!("interval '0.5 year'", "6m");
+    test_expression!("interval '1 year'", "12m");
+    test_expression!("interval '2 year'", "24m");
+    test_expression!("interval '2' year", "24m");
     Ok(())
 }
 
@@ -4116,10 +4064,7 @@ async fn test_regex_expressions() -> Result<()> {
         "regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g')",
         "fooXarYXazY"
     );
-    test_expression!(
-        "regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', NULL)",
-        ""
-    );
+    test_expression!("regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', NULL)", "");
     test_expression!("regexp_replace('foobarbaz', 'b(..)', NULL, 'g')", "");
     test_expression!("regexp_replace('foobarbaz', NULL, 'X\\1Y', 'g')", "");
     test_expression!("regexp_replace('Thomas', '.[mN]a.', 'M')", "ThM");
