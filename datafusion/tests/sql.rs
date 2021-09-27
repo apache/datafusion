@@ -5023,3 +5023,70 @@ async fn avro_explain() {
     ];
     assert_eq!(expected, actual);
 }
+
+#[cfg(test)]
+#[cfg(feature = "hdfs")]
+mod hdfs {
+    use super::*;
+    use datafusion::test_util::hdfs::run_hdfs_test;
+    use futures::Future;
+    use std::pin::Pin;
+
+    #[tokio::test]
+    async fn parquet_query() {
+        run_with_register_alltypes_parquet(|mut ctx| {
+            Box::pin(async move {
+                // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
+                // so we need an explicit cast
+                let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
+                let actual = execute_to_batches(&mut ctx, sql).await;
+                let expected = vec![
+                    "+----+-----------------------------------------+",
+                    "| id | CAST(alltypes_plain.string_col AS Utf8) |",
+                    "+----+-----------------------------------------+",
+                    "| 4  | 0                                       |",
+                    "| 5  | 1                                       |",
+                    "| 6  | 0                                       |",
+                    "| 7  | 1                                       |",
+                    "| 2  | 0                                       |",
+                    "| 3  | 1                                       |",
+                    "| 0  | 0                                       |",
+                    "| 1  | 1                                       |",
+                    "+----+-----------------------------------------+",
+                ];
+
+                assert_batches_eq!(expected, &actual);
+
+                Ok(())
+            })
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Run query after table registered with parquet file on hdfs
+    pub async fn run_with_register_alltypes_parquet<F>(test_query: F) -> Result<()>
+    where
+        F: FnOnce(
+                ExecutionContext,
+            )
+                -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>
+            + Send
+            + 'static,
+    {
+        run_hdfs_test("alltypes_plain.parquet".to_string(), |filename_hdfs| {
+            Box::pin(async move {
+                let mut ctx = ExecutionContext::new();
+                let table_name = "alltypes_plain";
+                println!(
+                    "Register table {} with parquet file {}",
+                    table_name, filename_hdfs
+                );
+                ctx.register_parquet(table_name, &filename_hdfs).unwrap();
+
+                test_query(ctx).await
+            })
+        })
+        .await
+    }
+}
