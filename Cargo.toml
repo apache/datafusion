@@ -31,6 +31,5 @@ members = [
 exclude = ["python"]
 
 [patch.crates-io]
-arrow2 = { path = "/home/houqp/Documents/code/arrow/arrow2" }
-arrow-flight = { path = "/home/houqp/Documents/code/arrow/arrow2/arrow-flight" }
-parquet2 = { path = "/home/houqp/Documents/code/arrow/parquet2" }
+arrow2 = { git = "https://github.com/houqp/arrow2.git", branch = "qp_ord" }
+arrow-flight = { git = "https://github.com/houqp/arrow2.git", branch = "qp_ord" }

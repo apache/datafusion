@@ -211,7 +211,7 @@ mod tests {
         // Note: Use chrono APIs that are different than
         // naive_datetime_to_timestamp to compute the utc offset to
         // try and double check the logic
-        let utc_offset_secs = match Local.offset_from_local_datetime(&naive_datetime) {
+        let utc_offset_secs = match Local.offset_from_local_datetime(naive_datetime) {
             LocalResult::Single(local_offset) => {
                 local_offset.fix().local_minus_utc() as i64
             }

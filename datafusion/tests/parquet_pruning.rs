@@ -24,7 +24,10 @@ use arrow::datatypes::TimeUnit;
 use arrow::{
     array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array, Utf8Array},
     datatypes::{DataType, Field, Schema},
-    io::parquet::write::{WriteOptions, Version, to_parquet_schema, Encoding, array_to_pages, DynIter, write_file, Compression},
+    io::parquet::write::{
+        array_to_pages, to_parquet_schema, write_file, Compression, DynIter, Encoding,
+        Version, WriteOptions,
+    },
     record_batch::RecordBatch,
 };
 use chrono::{Datelike, Duration};
@@ -627,18 +630,19 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
     let descritors = parquet_schema.columns().to_vec().into_iter();
 
     let row_groups = batches.iter().map(|batch| {
-        let iterator = batch
-            .columns()
-            .iter()
-            .zip(descritors.clone())
-            .map(|(array, type_)| {
-                let encoding = if let DataType::Dictionary(_, _) = array.data_type() {
-                    Encoding::RleDictionary
-                } else {
-                    Encoding::Plain
-                };
-                array_to_pages(array.clone(), type_, options, encoding)
-            });
+        let iterator =
+            batch
+                .columns()
+                .iter()
+                .zip(descritors.clone())
+                .map(|(array, type_)| {
+                    let encoding = if let DataType::Dictionary(_, _) = array.data_type() {
+                        Encoding::RleDictionary
+                    } else {
+                        Encoding::Plain
+                    };
+                    array_to_pages(array.clone(), type_, options, encoding)
+                });
         let iterator = DynIter::new(iterator);
         Ok(iterator)
     });
@@ -652,7 +656,8 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
         parquet_schema,
         options,
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     output_file
 }

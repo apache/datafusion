@@ -587,7 +587,7 @@ pub fn create_physical_fun(
             ))),
         }),
         BuiltinScalarFunction::BitLength => Arc::new(|args| match &args[0] {
-            ColumnarValue::Array(v) => todo!(),
+            ColumnarValue::Array(_v) => todo!(),
             ColumnarValue::Scalar(v) => match v {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
                     v.as_ref().map(|x| (x.len() * 8) as i32),

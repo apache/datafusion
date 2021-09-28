@@ -21,10 +21,10 @@ use datafusion::arrow::{
     record_batch::RecordBatch,
 };
 
+use arrow::array::Array;
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use std::sync::Arc;
-use arrow::array::Array;
 
 // create local execution context with an in-memory table
 fn create_context() -> Result<ExecutionContext> {

@@ -17,6 +17,7 @@
 
 //! Execution plan for reading Parquet files
 
+/// FIXME: https://github.com/apache/arrow-datafusion/issues/1058
 use fmt::Debug;
 use std::fmt;
 use std::fs::File;
@@ -47,7 +48,7 @@ use log::debug;
 use parquet::statistics::{
     BinaryStatistics as ParquetBinaryStatistics,
     BooleanStatistics as ParquetBooleanStatistics,
-    PrimitiveStatistics as ParquetPrimitiveStatistics, Statistics as ParquetStatistics,
+    PrimitiveStatistics as ParquetPrimitiveStatistics,
 };
 
 use tokio::{
@@ -294,6 +295,7 @@ impl ParquetFileMetrics {
 
 type Payload = ArrowResult<RecordBatch>;
 
+#[allow(dead_code)]
 fn producer_task(
     path: &str,
     response_tx: Sender<Payload>,
@@ -416,6 +418,7 @@ impl ExecutionPlan for ParquetExec {
     }
 }
 
+#[allow(dead_code)]
 fn send_result(
     response_tx: &Sender<ArrowResult<RecordBatch>>,
     result: ArrowResult<RecordBatch>,
@@ -520,7 +523,7 @@ macro_rules! get_min_max_values {
             .collect();
 
         // ignore errors converting to arrays (e.g. different types)
-        ScalarValue::iter_to_array(scalar_values).ok().map(|v| Arc::from(v))
+        ScalarValue::iter_to_array(scalar_values).ok().map(Arc::from)
     }}
 }
 
@@ -575,7 +578,7 @@ fn read_partition(
     metrics: ExecutionPlanMetricsSet,
     projection: &[usize],
     predicate_builder: &Option<PruningPredicate>,
-    batch_size: usize,
+    _batch_size: usize,
     response_tx: Sender<ArrowResult<RecordBatch>>,
     limit: Option<usize>,
 ) -> Result<()> {
@@ -593,7 +596,7 @@ fn read_partition(
         )?;
 
         if let Some(predicate_builder) = predicate_builder {
-            let file_metadata = reader.metadata();
+            let _file_metadata = reader.metadata();
             reader.set_groups_filter(Arc::new(build_row_group_predicate(
                 predicate_builder,
                 file_metrics,

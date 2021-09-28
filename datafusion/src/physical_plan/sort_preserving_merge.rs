@@ -898,11 +898,11 @@ mod tests {
         let schema = partitions[0][0].schema();
         let sort = vec![
             PhysicalSortExpr {
-                expr: col("b", &schema).unwrap(),
+                expr: col("b", schema).unwrap(),
                 options: Default::default(),
             },
             PhysicalSortExpr {
-                expr: col("c", &schema).unwrap(),
+                expr: col("c", schema).unwrap(),
                 options: Default::default(),
             },
         ];

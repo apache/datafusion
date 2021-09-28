@@ -864,7 +864,7 @@ impl ScalarValue {
                 DataType::Float32 => build_list!(Float32Vec, Float32, values, size),
                 DataType::Float64 => build_list!(Float64Vec, Float64, values, size),
                 DataType::Timestamp(unit, tz) => {
-                    build_timestamp_list!(unit.clone(), tz.clone(), values, size)
+                    build_timestamp_list!(*unit, tz.clone(), values, size)
                 }
                 DataType::Utf8 => build_list!(MutableStringArray, Utf8, values, size),
                 DataType::LargeUtf8 => {
@@ -1861,12 +1861,7 @@ mod tests {
             make_ts_test_case!(&i64_vals, Int64Array, Microsecond, TimestampMicrosecond),
             make_ts_test_case!(&i64_vals, Int64Array, Nanosecond, TimestampNanosecond),
             make_temporal_test_case!(&i32_vals, Int32Array, YearMonth, IntervalYearMonth),
-            make_temporal_test_case!(
-                &days_ms_vals,
-                DaysMsArray,
-                DayTime,
-                IntervalDayTime
-            ),
+            make_temporal_test_case!(days_ms_vals, DaysMsArray, DayTime, IntervalDayTime),
             make_str_dict_test_case!(str_vals, i8, Utf8),
             make_str_dict_test_case!(str_vals, i16, Utf8),
             make_str_dict_test_case!(str_vals, i32, Utf8),

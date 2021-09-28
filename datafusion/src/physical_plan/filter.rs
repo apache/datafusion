@@ -30,7 +30,7 @@ use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
 
-use arrow::array::{BooleanArray, Array};
+use arrow::array::{Array, BooleanArray};
 use arrow::compute::filter::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
@@ -38,8 +38,8 @@ use arrow::record_batch::RecordBatch;
 
 use async_trait::async_trait;
 
-use futures::stream::{Stream, StreamExt};
 use arrow::compute::boolean::{and, is_not_null};
+use futures::stream::{Stream, StreamExt};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.

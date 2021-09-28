@@ -308,17 +308,18 @@ impl CsvExec {
         filenames: &[String],
         options: &CsvReadOptions,
     ) -> Result<Schema> {
-        Ok(infer_schema_from_files(
+        infer_schema_from_files(
             filenames,
             options.delimiter,
             Some(options.schema_infer_max_records),
             options.has_header,
-        )?)
+        )
     }
 }
 
 type Payload = ArrowResult<RecordBatch>;
 
+#[allow(clippy::too_many_arguments)]
 fn producer_task<R: Read>(
     reader: R,
     response_tx: Sender<Payload>,

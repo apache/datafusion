@@ -1006,6 +1006,7 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
 async fn csv_query_window_with_partition_by() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx)?;
@@ -3114,7 +3115,12 @@ async fn query_array() -> Result<()> {
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT array(c1, cast(c2 as varchar)) FROM test";
     let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["[, 0]"], vec!["[a, 1]"], vec!["[aa, ]"], vec!["[aaa, 3]"]];
+    let expected = vec![
+        vec!["[, 0]"],
+        vec!["[a, 1]"],
+        vec!["[aa, ]"],
+        vec!["[aaa, 3]"],
+    ];
     assert_eq!(expected, actual);
     Ok(())
 }
@@ -4320,9 +4326,6 @@ async fn test_cast_expressions_error() -> Result<()> {
     let mut ctx = create_ctx()?;
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).unwrap();
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec![""]; 100];
     assert_eq!(expected, actual);

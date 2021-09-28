@@ -21,10 +21,10 @@ use criterion::{BatchSize, Criterion};
 extern crate arrow;
 extern crate datafusion;
 
-use std::{iter::FromIterator, sync::Arc};
+use std::sync::Arc;
 
 use arrow::{
-    array::{ArrayRef, Int64Array, StringArray},
+    array::{ArrayRef, Int64Array, Utf8Array},
     record_batch::RecordBatch,
 };
 use tokio::runtime::Runtime;
@@ -39,7 +39,7 @@ use datafusion::physical_plan::{
 // Initialise the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.
 fn sort_preserving_merge_operator(batches: Vec<RecordBatch>, sort: &[&str]) {
-    let schema = batches[0].schema();
+    let schema = batches[0].schema().clone();
 
     let sort = sort
         .iter()
@@ -51,7 +51,7 @@ fn sort_preserving_merge_operator(batches: Vec<RecordBatch>, sort: &[&str]) {
 
     let exec = MemoryExec::try_new(
         &batches.into_iter().map(|rb| vec![rb]).collect::<Vec<_>>(),
-        schema.clone(),
+        schema,
         None,
     )
     .unwrap();
@@ -104,9 +104,9 @@ fn batches(
         col_b.sort();
         col_c.sort();
 
-        let col_a: ArrayRef = Arc::new(StringArray::from_iter(col_a));
-        let col_b: ArrayRef = Arc::new(StringArray::from_iter(col_b));
-        let col_c: ArrayRef = Arc::new(StringArray::from_iter(col_c));
+        let col_a: ArrayRef = Arc::new(Utf8Array::<i32>::from(col_a));
+        let col_b: ArrayRef = Arc::new(Utf8Array::<i32>::from(col_b));
+        let col_c: ArrayRef = Arc::new(Utf8Array::<i32>::from(col_c));
         let col_d: ArrayRef = Arc::new(Int64Array::from(col_d));
 
         let rb = RecordBatch::try_from_iter(vec![

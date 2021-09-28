@@ -507,7 +507,7 @@ mod tests {
         fn column_by_name(&self, column_name: &str) -> Option<&ArrayRef> {
             self.fields()
                 .iter()
-                .position(|c| c.name() == &column_name)
+                .position(|c| c.name() == column_name)
                 .map(|pos| self.values()[pos].borrow())
         }
     }

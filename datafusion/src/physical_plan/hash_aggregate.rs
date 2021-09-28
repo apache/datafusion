@@ -880,6 +880,7 @@ impl RecordBatchStream for HashAggregateStream {
 
 /// Given Vec<Vec<ArrayRef>>, concatenates the inners `Vec<ArrayRef>` into `ArrayRef`, returning `Vec<ArrayRef>`
 /// This assumes that `arrays` is not empty.
+#[allow(dead_code)]
 fn concatenate(arrays: Vec<Vec<ArrayRef>>) -> ArrowResult<Vec<ArrayRef>> {
     (0..arrays[0].len())
         .map(|column| {
@@ -968,7 +969,7 @@ fn create_batch_from_map(
         .zip(output_schema.fields().iter())
         .map(|(col, desired_field)| {
             arrow::compute::cast::cast(col.as_ref(), desired_field.data_type())
-                .map(|v| Arc::from(v))
+                .map(Arc::from)
         })
         .collect::<ArrowResult<Vec<_>>>()?;
 

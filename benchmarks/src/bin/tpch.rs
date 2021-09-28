@@ -37,6 +37,9 @@ use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 
 use arrow::io::parquet::write::{Compression, Version, WriteOptions};
+use ballista::prelude::{
+    BallistaConfig, BallistaContext, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
+};
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -179,7 +182,7 @@ async fn main() -> Result<()> {
     env_logger::init();
     match TpchOpt::from_args() {
         TpchOpt::Benchmark(BallistaBenchmark(opt)) => {
-            todo!() //benchmark_ballista(opt).await.map(|_| ())
+            benchmark_ballista(opt).await.map(|_| ())
         }
         TpchOpt::Benchmark(DataFusionBenchmark(opt)) => {
             benchmark_datafusion(opt).await.map(|_| ())
@@ -239,7 +242,6 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     Ok(result)
 }
 
-/*
 async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     println!("Running benchmarks with the following options: {:?}", opt);
 
@@ -316,7 +318,6 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
 
     Ok(())
 }
-*/
 
 fn get_query_sql(query: usize) -> Result<String> {
     if query > 0 && query < 23 {

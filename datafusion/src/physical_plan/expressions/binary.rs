@@ -259,11 +259,8 @@ fn evaluate_scalar(
                 Ok(None)
             }
         }
-    } else if matches!(op, Or) {
-        // TODO: optimize scalar Or
-        Ok(None)
-    } else if matches!(op, And) {
-        // TODO: optimize scalar And
+    } else if matches!(op, Or | And) {
+        // TODO: optimize scalar Or | And
         Ok(None)
     } else {
         match (lhs.data_type(), op) {

@@ -28,7 +28,7 @@ use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 use arrow::record_batch::RecordBatch;
 use arrow::{
-    array::{Array, ArrayRef, UInt32Array, UInt64Array, Utf8Array},
+    array::{Array, UInt64Array},
     error::Result as ArrowResult,
 };
 use arrow::{compute::take, datatypes::SchemaRef};
@@ -462,6 +462,7 @@ mod tests {
         physical_plan::{expressions::col, memory::MemoryExec},
         test::exec::{BarrierExec, ErrorExec, MockExec},
     };
+    use arrow::array::{ArrayRef, UInt32Array, Utf8Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::error::ArrowError;
     use arrow::record_batch::RecordBatch;

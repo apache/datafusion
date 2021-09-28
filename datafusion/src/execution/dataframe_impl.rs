@@ -160,13 +160,15 @@ impl DataFrame for DataFrameImpl {
     /// Print results.
     async fn show(&self) -> Result<()> {
         let results = self.collect().await?;
-        Ok(print::print(&results))
+        print::print(&results);
+        Ok(())
     }
 
     /// Print results and limit rows.
     async fn show_limit(&self, num: usize) -> Result<()> {
         let results = self.limit(num)?.collect().await?;
-        Ok(print::print(&results))
+        print::print(&results);
+        Ok(())
     }
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and

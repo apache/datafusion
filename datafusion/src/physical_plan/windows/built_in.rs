@@ -99,7 +99,7 @@ impl WindowExpr for BuiltInWindowExpr {
         };
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
         concat::concatenate(&results)
-            .map(|x| ArrayRef::from(x))
+            .map(ArrayRef::from)
             .map_err(DataFusionError::ArrowError)
     }
 }

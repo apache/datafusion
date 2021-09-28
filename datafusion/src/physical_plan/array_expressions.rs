@@ -19,9 +19,7 @@
 
 use crate::error::{DataFusionError, Result};
 use arrow::array::*;
-use arrow::compute::concat;
 use arrow::datatypes::DataType;
-use std::sync::Arc;
 
 use super::ColumnarValue;
 
@@ -35,7 +33,10 @@ fn array_array(arrays: &[&dyn Array]) -> Result<ArrayRef> {
 
     macro_rules! array {
         ($PRIMITIVE: ty, $ARRAY: ty, $DATA_TYPE: path) => {{
-            let array = MutablePrimitiveArray::<$PRIMITIVE>::with_capacity_from(first.len() * size, $DATA_TYPE);
+            let array = MutablePrimitiveArray::<$PRIMITIVE>::with_capacity_from(
+                first.len() * size,
+                $DATA_TYPE,
+            );
             let mut array = MutableFixedSizeListArray::new(array, size);
             // for each entry in the array
             for index in 0..first.len() {
@@ -73,7 +74,6 @@ fn array_array(arrays: &[&dyn Array]) -> Result<ArrayRef> {
         }};
     }
 
-
     match first.data_type() {
         DataType::Boolean => {
             let array = MutableBooleanArray::with_capacity(first.len() * size);
@@ -91,7 +91,7 @@ fn array_array(arrays: &[&dyn Array]) -> Result<ArrayRef> {
                 }
             }
             Ok(array.as_arc())
-        },
+        }
         DataType::UInt8 => array!(u8, PrimitiveArray<u8>, DataType::UInt8),
         DataType::UInt16 => array!(u16, PrimitiveArray<u16>, DataType::UInt16),
         DataType::UInt32 => array!(u32, PrimitiveArray<u32>, DataType::UInt32),
@@ -109,7 +109,6 @@ fn array_array(arrays: &[&dyn Array]) -> Result<ArrayRef> {
             data_type
         ))),
     }
-
 }
 
 /// put values in an array.
