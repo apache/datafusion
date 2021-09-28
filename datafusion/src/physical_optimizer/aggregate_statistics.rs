@@ -57,7 +57,13 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let stats = partial_agg_exec.input().statistics();
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
-                if let Some((num_rows, name)) = take_optimizable_count(&**expr, &stats) {
+                if let Some((non_null_rows, name)) =
+                    take_optimizable_count_with_nulls(&**expr, &stats)
+                {
+                    projections.push((expressions::lit(non_null_rows), name.to_owned()));
+                } else if let Some((num_rows, name)) =
+                    take_optimizable_count(&**expr, &stats)
+                {
                     projections.push((expressions::lit(num_rows), name.to_owned()));
                 } else if let Some((min, name)) = take_optimizable_min(&**expr, &stats) {
                     projections.push((expressions::lit(min), name.to_owned()));
@@ -131,41 +137,52 @@ fn take_optimizable_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, &'static str)> {
-    println!("{:?}", agg_expr);
-    println!("{:?}", agg_expr.expressions());
     if let (Some(num_rows), Some(col_stats), Some(casted_expr)) = (
         stats.num_rows,
         &stats.column_statistics,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         // TODO implementing Eq on PhysicalExpr would help a lot here
-        println!("{:?}", num_rows);
-        println!("{:?}", col_stats);
-        println!("{:?}", casted_expr);
         if casted_expr.expressions().len() == 1 {
             if let Some(lit_expr) = casted_expr.expressions()[0]
                 .as_any()
                 .downcast_ref::<expressions::Literal>()
             {
-                // if let Some(col_expr) = casted_expr.expressions()[0]
-                //     .as_any()
-                //     .downcast_ref::<expressions::Column>()
-                // {
-                //     if let ColumnStatistics {
-                //         null_count: Some(null_count),
-                //         ..
-                //     } = &col_stats[col_expr.index()]
-                //     {
-                //         return Some((
-                //             ScalarValue::UInt64(Some(num_rows as u64 - *null_count as u64)),
-                //             "COUNT(Uint8(1)",
-                //         ));
-                //     }
                 if lit_expr.value() == &ScalarValue::UInt8(Some(1)) {
-                    println!("{:?}", lit_expr);
                     return Some((
                         ScalarValue::UInt64(Some(num_rows as u64)),
                         "COUNT(Uint8(1))",
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn take_optimizable_count_with_nulls(
+    agg_expr: &dyn AggregateExpr,
+    stats: &Statistics,
+) -> Option<(ScalarValue, String)> {
+    if let (Some(num_rows), Some(col_stats), Some(casted_expr)) = (
+        stats.num_rows,
+        &stats.column_statistics,
+        agg_expr.as_any().downcast_ref::<expressions::Min>(),
+    ) {
+        if casted_expr.expressions().len() == 1 {
+            // TODO optimize with exprs other than Column
+            if let Some(col_expr) = casted_expr.expressions()[0]
+                .as_any()
+                .downcast_ref::<expressions::Column>()
+            {
+                if let ColumnStatistics {
+                    null_count: Some(val),
+                    ..
+                } = &col_stats[col_expr.index()]
+                {
+                    return Some((
+                        ScalarValue::UInt64(Some((num_rows - val) as u64)),
+                        "COUNT(Uint8(1))".to_string(),
                     ));
                 }
             }
