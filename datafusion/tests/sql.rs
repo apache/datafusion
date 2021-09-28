@@ -2154,6 +2154,49 @@ async fn cross_join_unbalanced() {
 }
 
 #[tokio::test]
+async fn test_join_timestamp() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    // register time table
+    let timestamp_schema = Arc::new(Schema::new(vec![Field::new(
+        "time",
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        true,
+    )]));
+    let timestamp_data = RecordBatch::try_new(
+        timestamp_schema.clone(),
+        vec![Arc::new(TimestampNanosecondArray::from(vec![
+            131964190213133,
+            131964190213134,
+            131964190213135,
+        ]))],
+    )?;
+    let timestamp_table =
+        MemTable::try_new(timestamp_schema, vec![vec![timestamp_data]])?;
+    ctx.register_table("timestamp", Arc::new(timestamp_table))?;
+
+    let sql = "SELECT * \
+                     FROM timestamp as a \
+                     JOIN (SELECT * FROM timestamp as b) \
+                     ON a.time = b.time \
+                     ORDER BY a.time";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    let expected = vec![
+        "+-------------------------------+-------------------------------+",
+        "| time                          | time                          |",
+        "+-------------------------------+-------------------------------+",
+        "| 1970-01-02 12:39:24.190213133 | 1970-01-02 12:39:24.190213133 |",
+        "| 1970-01-02 12:39:24.190213134 | 1970-01-02 12:39:24.190213134 |",
+        "| 1970-01-02 12:39:24.190213135 | 1970-01-02 12:39:24.190213135 |",
+        "+-------------------------------+-------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_join_float32() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 

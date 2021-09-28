@@ -1041,7 +1041,6 @@ impl FunctionRegistry for ExecutionContextState {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::make_scalar_function;
@@ -1501,7 +1500,7 @@ mod tests {
             "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 USING (c2) ORDER BY t2.c2",
             1,
         )
-        .await?;
+            .await?;
         assert_eq!(results.len(), 1);
 
         let expected = vec![
@@ -1531,7 +1530,7 @@ mod tests {
             "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 ON t1.c2 = t2.c2 ORDER BY t1.c2",
             1,
         )
-        .await?;
+            .await?;
         assert_eq!(results.len(), 1);
 
         let expected = vec![
@@ -2057,6 +2056,56 @@ mod tests {
             results.iter().map(|b| b.num_rows()).sum::<usize>(),
             4 * 10 * 10
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_timestamp() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let mut ctx = create_ctx(&tmp_dir, 1)?;
+        ctx.register_table("t", test::table_with_timestamps())
+            .unwrap();
+
+        let expected = vec![
+            "+-------------------------------+----------------------------+-------------------------+---------------------+-------+-------------------------------+----------------------------+-------------------------+---------------------+-------+",
+            "| nanos                         | micros                     | millis                  | secs                | name  | nanos                         | micros                     | millis                  | secs                | name  |",
+            "+-------------------------------+----------------------------+-------------------------+---------------------+-------+-------------------------------+----------------------------+-------------------------+---------------------+-------+",
+            "| 2011-12-13 11:13:10.123450    | 2011-12-13 11:13:10.123450 | 2011-12-13 11:13:10.123 | 2011-12-13 11:13:10 | Row 1 | 2011-12-13 11:13:10.123450    | 2011-12-13 11:13:10.123450 | 2011-12-13 11:13:10.123 | 2011-12-13 11:13:10 | Row 1 |",
+            "| 2018-11-13 17:11:10.011375885 | 2018-11-13 17:11:10.011375 | 2018-11-13 17:11:10.011 | 2018-11-13 17:11:10 | Row 0 | 2018-11-13 17:11:10.011375885 | 2018-11-13 17:11:10.011375 | 2018-11-13 17:11:10.011 | 2018-11-13 17:11:10 | Row 0 |",
+            "| 2021-01-01 05:11:10.432       | 2021-01-01 05:11:10.432    | 2021-01-01 05:11:10.432 | 2021-01-01 05:11:10 | Row 3 | 2021-01-01 05:11:10.432       | 2021-01-01 05:11:10.432    | 2021-01-01 05:11:10.432 | 2021-01-01 05:11:10 | Row 3 |",
+            "+-------------------------------+----------------------------+-------------------------+---------------------+-------+-------------------------------+----------------------------+-------------------------+---------------------+-------+",
+        ];
+
+        let results = plan_and_collect(
+            &mut ctx,
+            "SELECT * FROM t as t1  \
+             JOIN (SELECT * FROM t as t2) \
+             ON t1.nanos = t2.nanos",
+        )
+        .await
+        .unwrap();
+        assert_batches_sorted_eq!(expected, &results);
+
+        let results = plan_and_collect(
+            &mut ctx,
+            "SELECT * FROM t as t1  \
+             JOIN (SELECT * FROM t as t2) \
+             ON t1.micros = t2.micros",
+        )
+        .await
+        .unwrap();
+        assert_batches_sorted_eq!(expected, &results);
+
+        let results = plan_and_collect(
+            &mut ctx,
+            "SELECT * FROM t as t1  \
+             JOIN (SELECT * FROM t as t2) \
+             ON t1.millis = t2.millis",
+        )
+        .await
+        .unwrap();
+        assert_batches_sorted_eq!(expected, &results);
 
         Ok(())
     }
