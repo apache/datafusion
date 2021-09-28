@@ -23,6 +23,7 @@ use ahash::RandomState;
 use arrow::{
     array::{
         ArrayData, ArrayRef, BooleanArray, LargeStringArray, PrimitiveArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
         UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder,
     },
     compute,
@@ -45,7 +46,8 @@ use arrow::record_batch::RecordBatch;
 
 use arrow::array::{
     Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
 };
 
 use hashbrown::raw::RawTable;
@@ -66,6 +68,7 @@ use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream,
 };
+use crate::arrow::datatypes::TimeUnit;
 use crate::physical_plan::coalesce_batches::concat_batches;
 use crate::physical_plan::PhysicalExpr;
 use log::debug;
@@ -488,7 +491,8 @@ struct HashJoinStream {
     /// Random state used for hashing initialization
     random_state: RandomState,
     /// Keeps track of the left side rows whether they are visited
-    visited_left_side: Vec<bool>, // TODO: use a more memory efficient data structure, https://github.com/apache/arrow-datafusion/issues/240
+    visited_left_side: Vec<bool>,
+    // TODO: use a more memory efficient data structure, https://github.com/apache/arrow-datafusion/issues/240
     /// There is nothing to process anymore and left side is processed in case of left join
     is_exhausted: bool,
     /// Metrics
@@ -780,9 +784,20 @@ fn equal_rows(
             DataType::UInt64 => equal_rows_elem!(UInt64Array, l, r, left, right),
             DataType::Float32 => equal_rows_elem!(Float32Array, l, r, left, right),
             DataType::Float64 => equal_rows_elem!(Float64Array, l, r, left, right),
-            DataType::Timestamp(_, None) => {
-                equal_rows_elem!(Int64Array, l, r, left, right)
-            }
+            DataType::Timestamp(time_unit, None) => match time_unit {
+                TimeUnit::Second => {
+                    equal_rows_elem!(TimestampSecondArray, l, r, left, right)
+                }
+                TimeUnit::Millisecond => {
+                    equal_rows_elem!(TimestampMillisecondArray, l, r, left, right)
+                }
+                TimeUnit::Microsecond => {
+                    equal_rows_elem!(TimestampMicrosecondArray, l, r, left, right)
+                }
+                TimeUnit::Nanosecond => {
+                    equal_rows_elem!(TimestampNanosecondArray, l, r, left, right)
+                }
+            },
             DataType::Utf8 => equal_rows_elem!(StringArray, l, r, left, right),
             DataType::LargeUtf8 => equal_rows_elem!(LargeStringArray, l, r, left, right),
             _ => {
