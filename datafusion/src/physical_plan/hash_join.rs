@@ -23,6 +23,7 @@ use ahash::RandomState;
 use arrow::{
     array::{
         ArrayData, ArrayRef, BooleanArray, LargeStringArray, PrimitiveArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
         UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder,
     },
     compute,
@@ -37,9 +38,7 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
 use tokio::sync::Mutex;
 
-use arrow::array::{
-    Array, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
-};
+use arrow::array::Array;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
