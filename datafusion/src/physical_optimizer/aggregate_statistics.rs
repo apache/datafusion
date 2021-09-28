@@ -181,7 +181,7 @@ fn take_optimizable_count_with_nulls(
                 {
                     return Some((
                         ScalarValue::UInt64(Some((num_rows - val) as u64)),
-                        "COUNT(Uint8(1))".to_string(),
+                        "COUNT(UInt8(1))".to_string(),
                     ));
                 }
             }
