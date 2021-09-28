@@ -137,9 +137,8 @@ fn take_optimizable_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, &'static str)> {
-    if let (Some(num_rows), Some(col_stats), Some(casted_expr)) = (
+    if let (Some(num_rows), Some(casted_expr)) = (
         stats.num_rows,
-        &stats.column_statistics,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         // TODO implementing Eq on PhysicalExpr would help a lot here
