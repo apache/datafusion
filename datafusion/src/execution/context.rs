@@ -1041,7 +1041,6 @@ impl FunctionRegistry for ExecutionContextState {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::make_scalar_function;
@@ -1501,7 +1500,7 @@ mod tests {
             "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 USING (c2) ORDER BY t2.c2",
             1,
         )
-        .await?;
+            .await?;
         assert_eq!(results.len(), 1);
 
         let expected = vec![
@@ -1531,7 +1530,7 @@ mod tests {
             "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 ON t1.c2 = t2.c2 ORDER BY t1.c2",
             1,
         )
-        .await?;
+            .await?;
         assert_eq!(results.len(), 1);
 
         let expected = vec![
@@ -2068,17 +2067,6 @@ mod tests {
         ctx.register_table("t", test::table_with_timestamps())
             .unwrap();
 
-        let results = plan_and_collect(
-            &mut ctx,
-            "SELECT * \
-                     FROM t as t1  \
-                     JOIN (SELECT * FROM t as t2) \
-                     ON t1.nanos = t2.nanos \
-                     ORDER BY t1.nanos",
-        )
-        .await
-        .unwrap();
-
         let expected = vec![
             "+-------------------------------+----------------------------+-------------------------+---------------------+-------+-------------------------------+----------------------------+-------------------------+---------------------+-------+",
             "| nanos                         | micros                     | millis                  | secs                | name  | nanos                         | micros                     | millis                  | secs                | name  |",
@@ -2088,6 +2076,35 @@ mod tests {
             "| 2021-01-01 05:11:10.432       | 2021-01-01 05:11:10.432    | 2021-01-01 05:11:10.432 | 2021-01-01 05:11:10 | Row 3 | 2021-01-01 05:11:10.432       | 2021-01-01 05:11:10.432    | 2021-01-01 05:11:10.432 | 2021-01-01 05:11:10 | Row 3 |",
             "+-------------------------------+----------------------------+-------------------------+---------------------+-------+-------------------------------+----------------------------+-------------------------+---------------------+-------+",
         ];
+
+        let results = plan_and_collect(
+            &mut ctx,
+            "SELECT * FROM t as t1  \
+             JOIN (SELECT * FROM t as t2) \
+             ON t1.nanos = t2.nanos",
+        )
+        .await
+        .unwrap();
+        assert_batches_sorted_eq!(expected, &results);
+
+        let results = plan_and_collect(
+            &mut ctx,
+            "SELECT * FROM t as t1  \
+             JOIN (SELECT * FROM t as t2) \
+             ON t1.micros = t2.micros",
+        )
+        .await
+        .unwrap();
+        assert_batches_sorted_eq!(expected, &results);
+
+        let results = plan_and_collect(
+            &mut ctx,
+            "SELECT * FROM t as t1  \
+             JOIN (SELECT * FROM t as t2) \
+             ON t1.millis = t2.millis",
+        )
+        .await
+        .unwrap();
         assert_batches_sorted_eq!(expected, &results);
 
         Ok(())
