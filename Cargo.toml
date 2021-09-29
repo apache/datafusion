@@ -31,5 +31,5 @@ members = [
 exclude = ["python"]
 
 [patch.crates-io]
-arrow2 = { git = "https://github.com/houqp/arrow2.git", branch = "qp_ord" }
-arrow-flight = { git = "https://github.com/houqp/arrow2.git", branch = "qp_ord" }
+arrow2 = { git = "https://github.com/jorgecarleitao/arrow2.git", rev = "94fd267a07a57e80915f17f75a2dad4f58886645" }
+arrow-flight = { git = "https://github.com/jorgecarleitao/arrow2.git", rev = "94fd267a07a57e80915f17f75a2dad4f58886645" }

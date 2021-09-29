@@ -230,9 +230,9 @@ impl PartialOrd for ScalarValue {
             (TimestampMicrosecond(_), _) => None,
             (TimestampNanosecond(v1), TimestampNanosecond(v2)) => v1.partial_cmp(v2),
             (TimestampNanosecond(_), _) => None,
-            (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.partial_cmp(v2),
+            (_, IntervalYearMonth(_)) => None,
             (IntervalYearMonth(_), _) => None,
-            (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.partial_cmp(v2),
+            (_, IntervalDayTime(_)) => None,
             (IntervalDayTime(_), _) => None,
         }
     }

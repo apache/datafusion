@@ -40,7 +40,7 @@ macro_rules! compare_op_scalar {
         Ok(BooleanArray::from_data(
             DataType::Boolean,
             values,
-            validity.clone(),
+            validity.cloned(),
         ))
     }};
 }
@@ -55,7 +55,7 @@ macro_rules! compare_primitive_op_scalar {
         Ok(BooleanArray::from_data(
             DataType::Boolean,
             values,
-            validity.clone(),
+            validity.cloned(),
         ))
     }};
 }
