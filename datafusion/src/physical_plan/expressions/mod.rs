@@ -55,7 +55,7 @@ pub mod helpers {
 }
 
 pub use average::{avg_return_type, Avg, AvgAccumulator};
-pub use binary::{binary, binary_operator_data_type, BinaryExpr};
+pub use binary::{binary, binary_operator_data_type, BinaryExpr, common_binary_type};
 pub use case::{case, CaseExpr};
 pub use cast::{
     cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,

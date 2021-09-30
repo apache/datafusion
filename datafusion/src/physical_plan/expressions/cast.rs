@@ -95,6 +95,18 @@ impl PhysicalExpr for CastExpr {
     }
 }
 
+
+impl CastExpr{
+    pub(crate) fn cast_scalar_default_options(scalar: ScalarValue, cast_type: &DataType)->Result<ScalarValue>{
+        CastExpr::cast_scalar_type(scalar, cast_type, &DEFAULT_DATAFUSION_CAST_OPTIONS)
+    }
+    pub(crate) fn cast_scalar_type(scalar: ScalarValue, cast_type: &DataType, cast_options: &CastOptions)->Result<ScalarValue>{
+        let col = ColumnarValue::Scalar(scalar);
+        let cast_array = cast_column(&col, cast_type, &cast_options)?;
+        ScalarValue::try_from_columnar_value(cast_array)
+    }
+}
+
 /// Internal cast function for casting ColumnarValue -> ColumnarValue for cast_type
 pub fn cast_column(
     value: &ColumnarValue,

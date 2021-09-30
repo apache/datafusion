@@ -402,7 +402,7 @@ pub enum ColumnarValue {
 }
 
 impl ColumnarValue {
-    fn data_type(&self) -> DataType {
+    pub fn data_type(&self) -> DataType {
         match self {
             ColumnarValue::Array(array_value) => array_value.data_type().clone(),
             ColumnarValue::Scalar(scalar_value) => scalar_value.get_datatype(),

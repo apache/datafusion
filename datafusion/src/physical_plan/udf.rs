@@ -25,6 +25,7 @@ use arrow::datatypes::Schema;
 use crate::error::Result;
 use crate::{logical_plan::Expr, physical_plan::PhysicalExpr};
 
+use super::functions::FunctionVolatility;
 use super::{
     functions::{
         ReturnTypeFunction, ScalarFunctionExpr, ScalarFunctionImplementation, Signature,
@@ -42,6 +43,8 @@ pub struct ScalarUDF {
     pub signature: Signature,
     /// Return type
     pub return_type: ReturnTypeFunction,
+    /// Volatility of the UDF
+    pub volatility: FunctionVolatility,
     /// actual implementation
     ///
     /// The fn param is the wrapped function but be aware that the function will
@@ -81,7 +84,7 @@ impl PartialOrd for ScalarUDF {
 }
 
 impl ScalarUDF {
-    /// Create a new ScalarUDF
+    /// Create a new ScalarUDF, the function is assumed to be volatile
     pub fn new(
         name: &str,
         signature: &Signature,
@@ -92,6 +95,22 @@ impl ScalarUDF {
             name: name.to_owned(),
             signature: signature.clone(),
             return_type: return_type.clone(),
+            volatility: Default::default(),
+            fun: fun.clone(),
+        }
+    }
+    /// Create a new ScalarUDF with the specified volatility
+    pub fn with_volatility(name: &str,
+        signature: &Signature,
+        return_type: &ReturnTypeFunction,
+        fun: &ScalarFunctionImplementation, 
+        volatility: FunctionVolatility,
+    )->Self{
+        Self {
+            name: name.to_owned(),
+            signature: signature.clone(),
+            return_type: return_type.clone(),
+            volatility,
             fun: fun.clone(),
         }
     }

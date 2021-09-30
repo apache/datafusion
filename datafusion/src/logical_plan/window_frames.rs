@@ -34,7 +34,7 @@ use std::fmt;
 /// The ending frame boundary can be omitted (if the BETWEEN and AND keywords that surround the
 /// starting frame boundary are also omitted), in which case the ending frame boundary defaults to
 /// CURRENT ROW.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WindowFrame {
     /// A frame type - either ROWS, RANGE or GROUPS
     pub units: WindowFrameUnits,
@@ -126,7 +126,7 @@ impl Default for WindowFrame {
 /// 5. UNBOUNDED FOLLOWING
 ///
 /// in this implementation we'll only allow <expr> to be u64 (i.e. no dynamic boundary)
-#[derive(Debug, Clone, Copy, Eq)]
+#[derive(Debug, Clone, Copy, Eq, Hash)]
 pub enum WindowFrameBound {
     /// 1. UNBOUNDED PRECEDING
     /// The frame boundary is the first row in the partition.
@@ -211,7 +211,7 @@ impl WindowFrameBound {
 
 /// There are three frame types: ROWS, GROUPS, and RANGE. The frame type determines how the
 /// starting and ending boundaries of the frame are measured.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WindowFrameUnits {
     /// The ROWS frame type means that the starting and ending boundaries for the frame are
     /// determined by counting individual rows relative to the current row.

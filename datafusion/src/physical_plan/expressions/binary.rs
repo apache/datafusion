@@ -429,7 +429,7 @@ macro_rules! compute_utf8_flag_op_scalar {
 
 /// Coercion rules for all binary operators. Returns the output type
 /// of applying `op` to an argument of `lhs_type` and `rhs_type`.
-fn common_binary_type(
+pub fn common_binary_type(
     lhs_type: &DataType,
     op: &Operator,
     rhs_type: &DataType,
@@ -512,6 +512,45 @@ pub fn binary_operator_data_type(
     }
 }
 
+
+impl BinaryExpr{
+    pub (crate) fn evaluate_values(left_value: ColumnarValue, right_value: ColumnarValue, op: &Operator, num_rows:usize)->Result<ColumnarValue>{
+        let left_data_type = left_value.data_type();
+        let right_data_type = right_value.data_type();
+
+        if left_data_type != right_data_type {
+            return Err(DataFusionError::Internal(format!(
+                "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
+                op, left_data_type, right_data_type
+            )));
+        }
+
+        // Attempt to use special kernels if one input is scalar and the other is an array
+        let scalar_result = match (&left_value, &right_value) {
+            (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
+                // if left is array and right is literal - use scalar operations
+                BinaryExpr::evaluate_array_scalar(array, scalar, op)?
+            }
+            (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
+                // if right is literal and left is array - reverse operator and parameters
+                BinaryExpr::evaluate_array_scalar(array, scalar, op)?
+            }
+            (_, _) => None, // default to array implementation
+        };
+
+        if let Some(result) = scalar_result {
+            return result.map(|a| ColumnarValue::Array(a));
+        }
+
+        // if both arrays or both literals - extract arrays and continue execution
+        let (left, right) = (
+            left_value.into_array(num_rows),
+            right_value.into_array(num_rows),
+        );
+        BinaryExpr::evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type, op)
+            .map(|a| ColumnarValue::Array(a))
+    }
+}
 impl PhysicalExpr for BinaryExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -533,40 +572,7 @@ impl PhysicalExpr for BinaryExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let left_value = self.left.evaluate(batch)?;
         let right_value = self.right.evaluate(batch)?;
-        let left_data_type = left_value.data_type();
-        let right_data_type = right_value.data_type();
-
-        if left_data_type != right_data_type {
-            return Err(DataFusionError::Internal(format!(
-                "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                self.op, left_data_type, right_data_type
-            )));
-        }
-
-        // Attempt to use special kernels if one input is scalar and the other is an array
-        let scalar_result = match (&left_value, &right_value) {
-            (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
-                // if left is array and right is literal - use scalar operations
-                self.evaluate_array_scalar(array, scalar)?
-            }
-            (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
-                // if right is literal and left is array - reverse operator and parameters
-                self.evaluate_scalar_array(scalar, array)?
-            }
-            (_, _) => None, // default to array implementation
-        };
-
-        if let Some(result) = scalar_result {
-            return result.map(|a| ColumnarValue::Array(a));
-        }
-
-        // if both arrays or both literals - extract arrays and continue execution
-        let (left, right) = (
-            left_value.into_array(batch.num_rows()),
-            right_value.into_array(batch.num_rows()),
-        );
-        self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
-            .map(|a| ColumnarValue::Array(a))
+        BinaryExpr::evaluate_values(left_value, right_value, &self.op, batch.num_rows())
     }
 }
 
@@ -574,11 +580,12 @@ impl BinaryExpr {
     /// Evaluate the expression of the left input is an array and
     /// right is literal - use scalar operations
     fn evaluate_array_scalar(
-        &self,
+        //&self,
         array: &ArrayRef,
         scalar: &ScalarValue,
+        op: &Operator
     ) -> Result<Option<Result<ArrayRef>>> {
-        let scalar_result = match &self.op {
+        let scalar_result = match op {
             Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), lt),
             Operator::LtEq => {
                 binary_array_op_scalar!(array, scalar.clone(), lt_eq)
@@ -641,11 +648,12 @@ impl BinaryExpr {
     /// Evaluate the expression if the left input is a literal and the
     /// right is an array - reverse operator and parameters
     fn evaluate_scalar_array(
-        &self,
+        //&self,
         scalar: &ScalarValue,
         array: &ArrayRef,
+        op: &Operator
     ) -> Result<Option<Result<ArrayRef>>> {
-        let scalar_result = match &self.op {
+        let scalar_result = match op {
             Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), gt),
             Operator::LtEq => {
                 binary_array_op_scalar!(array, scalar.clone(), gt_eq)
@@ -665,13 +673,14 @@ impl BinaryExpr {
     }
 
     fn evaluate_with_resolved_args(
-        &self,
+        //&self,
         left: Arc<dyn Array>,
         left_data_type: &DataType,
         right: Arc<dyn Array>,
         right_data_type: &DataType,
+        op: &Operator
     ) -> Result<ArrayRef> {
-        match &self.op {
+        match op {
             Operator::Like => binary_string_array_op!(left, right, like),
             Operator::NotLike => binary_string_array_op!(left, right, nlike),
             Operator::Lt => binary_array_op!(left, right, lt),
@@ -691,7 +700,7 @@ impl BinaryExpr {
                 } else {
                     return Err(DataFusionError::Internal(format!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                        self.op,
+                        op,
                         left.data_type(),
                         right.data_type()
                     )));
@@ -703,7 +712,7 @@ impl BinaryExpr {
                 } else {
                     return Err(DataFusionError::Internal(format!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                        self.op, left_data_type, right_data_type
+                        op, left_data_type, right_data_type
                     )));
                 }
             }

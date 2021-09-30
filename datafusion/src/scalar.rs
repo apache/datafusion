@@ -17,7 +17,7 @@
 
 //! This module provides ScalarValue, an enum that can be used for storage of single elements
 
-use crate::error::{DataFusionError, Result};
+use crate::{error::{DataFusionError, Result}, physical_plan::ColumnarValue};
 use arrow::{
     array::*,
     datatypes::{
@@ -907,7 +907,12 @@ impl ScalarValue {
             ),
         }
     }
-
+    pub (crate) fn try_from_columnar_value(val: ColumnarValue)->Result<Self>{
+        match val{
+            ColumnarValue::Array(s) => ScalarValue::try_from_array(&s, 0),
+            ColumnarValue::Scalar(s) => Ok(s),
+        }
+    }
     /// Converts a value in `array` at `index` into a ScalarValue
     pub fn try_from_array(array: &ArrayRef, index: usize) -> Result<Self> {
         // handle NULL value
