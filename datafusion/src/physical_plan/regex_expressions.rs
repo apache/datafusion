@@ -47,8 +47,17 @@ macro_rules! downcast_string_arg {
 /// extract a specific group from a string column, using a regular expression
 pub fn regexp_match<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
-        2 => regexp_matches(downcast_string_arg!(args[0], "string", T), downcast_string_arg!(args[1], "pattern", T), None).map(|x| Arc::new(x) as Arc<dyn Array>),
-        3 => regexp_matches(downcast_string_arg!(args[0], "string", T), downcast_string_arg!(args[1], "pattern", T), Some(downcast_string_arg!(args[1], "flags", T))).map(|x| Arc::new(x) as Arc<dyn Array>),
+        2 => {
+            let values = downcast_string_arg!(args[0], "string", T);
+            let regex = downcast_string_arg!(args[1], "pattern", T);
+            Ok(regexp_matches(values, regex, None).map(|x| Arc::new(x) as Arc<dyn Array>)?)
+        },
+        3 => {
+            let values = downcast_string_arg!(args[0], "string", T);
+            let regex = downcast_string_arg!(args[1], "pattern", T);
+            let flags = Some(downcast_string_arg!(args[2], "flags", T));
+            Ok(regexp_matches(values, regex, flags).map(|x| Arc::new(x) as Arc<dyn Array>)?)
+        },
         other => Err(DataFusionError::Internal(format!(
             "regexp_match was called with {} arguments. It requires at least 2 and at most 3.",
             other

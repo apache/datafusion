@@ -119,6 +119,25 @@ fn evaluate_regex<O: Offset>(lhs: &dyn Array, rhs: &dyn Array) -> Result<Boolean
     )?)
 }
 
+#[inline]
+fn evaluate_regex_case_insensitive<O: Offset>(
+    lhs: &dyn Array,
+    rhs: &dyn Array,
+) -> Result<BooleanArray> {
+    let patterns_arr = rhs.as_any().downcast_ref::<Utf8Array<O>>().unwrap();
+    // TODO: avoid this pattern array iteration by building the new regex pattern in the match
+    // loop. We need to roll our own regex compute kernel instead of using the ones from arrow for
+    // postgresql compatibility.
+    let patterns = patterns_arr
+        .iter()
+        .map(|pattern| pattern.map(|s| format!("(?i){}", s)))
+        .collect::<Vec<_>>();
+    Ok(compute::regex_match::regex_match::<O>(
+        lhs.as_any().downcast_ref().unwrap(),
+        &Utf8Array::<O>::from(patterns),
+    )?)
+}
+
 fn evaluate(lhs: &dyn Array, op: &Operator, rhs: &dyn Array) -> Result<Arc<dyn Array>> {
     use Operator::*;
     if matches!(op, Plus | Minus | Divide | Multiply | Modulo) {
@@ -165,27 +184,29 @@ fn evaluate(lhs: &dyn Array, op: &Operator, rhs: &dyn Array) -> Result<Arc<dyn A
                 Ok(Arc::new(evaluate_regex::<i32>(lhs, rhs)?))
             }
             (DataType::Utf8, RegexIMatch, DataType::Utf8) => {
-                todo!();
+                Ok(Arc::new(evaluate_regex_case_insensitive::<i32>(lhs, rhs)?))
             }
             (DataType::Utf8, RegexNotMatch, DataType::Utf8) => {
                 let re = evaluate_regex::<i32>(lhs, rhs)?;
                 Ok(Arc::new(compute::boolean::not(&re)))
             }
             (DataType::Utf8, RegexNotIMatch, DataType::Utf8) => {
-                todo!();
+                let re = evaluate_regex_case_insensitive::<i32>(lhs, rhs)?;
+                Ok(Arc::new(compute::boolean::not(&re)))
             }
             (DataType::LargeUtf8, RegexMatch, DataType::LargeUtf8) => {
                 Ok(Arc::new(evaluate_regex::<i64>(lhs, rhs)?))
             }
             (DataType::LargeUtf8, RegexIMatch, DataType::LargeUtf8) => {
-                todo!();
+                Ok(Arc::new(evaluate_regex_case_insensitive::<i64>(lhs, rhs)?))
             }
             (DataType::LargeUtf8, RegexNotMatch, DataType::LargeUtf8) => {
                 let re = evaluate_regex::<i64>(lhs, rhs)?;
                 Ok(Arc::new(compute::boolean::not(&re)))
             }
             (DataType::LargeUtf8, RegexNotIMatch, DataType::LargeUtf8) => {
-                todo!();
+                let re = evaluate_regex_case_insensitive::<i64>(lhs, rhs)?;
+                Ok(Arc::new(compute::boolean::not(&re)))
             }
             (lhs, op, rhs) => Err(DataFusionError::Internal(format!(
                 "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -222,6 +243,27 @@ fn evaluate_regex_scalar<O: Offset>(
     };
     Ok(compute::regex_match::regex_match_scalar::<O>(
         values, regex,
+    )?)
+}
+
+#[inline]
+fn evaluate_regex_scalar_case_insensitive<O: Offset>(
+    values: &dyn Array,
+    regex: &ScalarValue,
+) -> Result<BooleanArray> {
+    let values = values.as_any().downcast_ref().unwrap();
+    let regex = match regex {
+        ScalarValue::Utf8(Some(s)) | ScalarValue::LargeUtf8(Some(s)) => s.as_str(),
+        _ => {
+            return Err(DataFusionError::Plan(format!(
+                "Regex pattern is not a valid string, got: {:?}",
+                regex,
+            )));
+        }
+    };
+    Ok(compute::regex_match::regex_match_scalar::<O>(
+        values,
+        &format!("(?i){}", regex),
     )?)
 }
 
@@ -267,28 +309,31 @@ fn evaluate_scalar(
             (DataType::Utf8, RegexMatch) => {
                 Ok(Some(Arc::new(evaluate_regex_scalar::<i32>(lhs, rhs)?)))
             }
-            (DataType::Utf8, RegexIMatch) => {
-                todo!();
-            }
+            (DataType::Utf8, RegexIMatch) => Ok(Some(Arc::new(
+                evaluate_regex_scalar_case_insensitive::<i32>(lhs, rhs)?,
+            ))),
             (DataType::Utf8, RegexNotMatch) => Ok(Some(Arc::new(compute::boolean::not(
                 &evaluate_regex_scalar::<i32>(lhs, rhs)?,
             )))),
             (DataType::Utf8, RegexNotIMatch) => {
-                todo!();
+                Ok(Some(Arc::new(compute::boolean::not(
+                    &evaluate_regex_scalar_case_insensitive::<i32>(lhs, rhs)?,
+                ))))
             }
             (DataType::LargeUtf8, RegexMatch) => {
                 Ok(Some(Arc::new(evaluate_regex_scalar::<i64>(lhs, rhs)?)))
             }
-            (DataType::LargeUtf8, RegexIMatch) => {
-                todo!();
-            }
+            (DataType::LargeUtf8, RegexIMatch) => Ok(Some(Arc::new(
+                evaluate_regex_scalar_case_insensitive::<i64>(lhs, rhs)?,
+            ))),
             (DataType::LargeUtf8, RegexNotMatch) => Ok(Some(Arc::new(
                 compute::boolean::not(&evaluate_regex_scalar::<i64>(lhs, rhs)?),
             ))),
             (DataType::LargeUtf8, RegexNotIMatch) => {
-                todo!();
+                Ok(Some(Arc::new(compute::boolean::not(
+                    &evaluate_regex_scalar_case_insensitive::<i64>(lhs, rhs)?,
+                ))))
             }
-
             _ => Ok(None),
         }
     }
@@ -662,44 +707,40 @@ mod tests {
         let c = BooleanArray::from_slice(&[true, false, true, false, false]);
         test_coercion!(a, b, Operator::RegexMatch, c);
 
-        // FIXME: https://github.com/apache/arrow-datafusion/issues/1035
-        // let a = Utf8Array::<i32>::from_slice(["abc"; 5]);
-        // let b = Utf8Array::<i32>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
-        // let c = BooleanArray::from_slice(&[true, true, true, true, false]);
-        // test_coercion!(a, b, Operator::RegexIMatch, c);
+        let a = Utf8Array::<i32>::from_slice(["abc"; 5]);
+        let b = Utf8Array::<i32>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
+        let c = BooleanArray::from_slice(&[true, true, true, true, false]);
+        test_coercion!(a, b, Operator::RegexIMatch, c);
 
         let a = Utf8Array::<i32>::from_slice(["abc"; 5]);
         let b = Utf8Array::<i32>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
         let c = BooleanArray::from_slice(&[false, true, false, true, true]);
         test_coercion!(a, b, Operator::RegexNotMatch, c);
 
-        // FIXME: https://github.com/apache/arrow-datafusion/issues/1035
-        // let a = Utf8Array::<i32>::from_slice(["abc"; 5]);
-        // let b = Utf8Array::<i32>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
-        // let c = BooleanArray::from_slice(&[false, false, false, false, true]);
-        // test_coercion!(a, b, Operator::RegexNotIMatch, c);
+        let a = Utf8Array::<i32>::from_slice(["abc"; 5]);
+        let b = Utf8Array::<i32>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
+        let c = BooleanArray::from_slice(&[false, false, false, false, true]);
+        test_coercion!(a, b, Operator::RegexNotIMatch, c);
 
         let a = Utf8Array::<i64>::from_slice(["abc"; 5]);
         let b = Utf8Array::<i64>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
         let c = BooleanArray::from_slice(&[true, false, true, false, false]);
         test_coercion!(a, b, Operator::RegexMatch, c);
 
-        // FIXME: https://github.com/apache/arrow-datafusion/issues/1035
-        // let a = Utf8Array::<i64>::from_slice(["abc"; 5]);
-        // let b = Utf8Array::<i64>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
-        // let c = BooleanArray::from_slice(&[true, true, true, true, false]);
-        // test_coercion!(a, b, Operator::RegexIMatch, c);
+        let a = Utf8Array::<i64>::from_slice(["abc"; 5]);
+        let b = Utf8Array::<i64>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
+        let c = BooleanArray::from_slice(&[true, true, true, true, false]);
+        test_coercion!(a, b, Operator::RegexIMatch, c);
 
         let a = Utf8Array::<i64>::from_slice(["abc"; 5]);
         let b = Utf8Array::<i64>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
         let c = BooleanArray::from_slice(&[false, true, false, true, true]);
         test_coercion!(a, b, Operator::RegexNotMatch, c);
 
-        // FIXME: https://github.com/apache/arrow-datafusion/issues/1035
-        // let a = Utf8Array::<i64>::from_slice(["abc"; 5]);
-        // let b = Utf8Array::<i64>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
-        // let c = BooleanArray::from_slice(&[false, false, false, false, true]);
-        // test_coercion!(a, b, Operator::RegexNotIMatch, c);
+        let a = Utf8Array::<i64>::from_slice(["abc"; 5]);
+        let b = Utf8Array::<i64>::from_slice(["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"]);
+        let c = BooleanArray::from_slice(&[false, false, false, false, true]);
+        test_coercion!(a, b, Operator::RegexNotIMatch, c);
         Ok(())
     }
 

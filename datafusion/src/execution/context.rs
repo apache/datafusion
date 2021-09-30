@@ -1068,7 +1068,7 @@ mod tests {
         physical_plan::expressions::AvgAccumulator,
     };
     use arrow::array::*;
-    use arrow::compute::arithmetics::basic::add::add;
+    use arrow::compute::arithmetics::basic::add;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use std::fs::File;

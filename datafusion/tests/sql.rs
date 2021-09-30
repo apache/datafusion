@@ -4534,8 +4534,6 @@ async fn like_on_string_dictionaries() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
-// FIXME: https://github.com/apache/arrow-datafusion/issues/1035
 async fn test_regexp_is_match() -> Result<()> {
     let input = Utf8Array::<i32>::from(vec![
         Some("foo"),
