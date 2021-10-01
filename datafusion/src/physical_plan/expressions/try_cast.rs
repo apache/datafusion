@@ -53,6 +53,21 @@ impl TryCastExpr {
     pub fn cast_type(&self) -> &DataType {
         &self.cast_type
     }
+
+    pub(crate) fn evaluate(value: ColumnarValue, cast_type: &DataType)->Result<ColumnarValue>{
+        match value {
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(kernels::cast::cast(
+                &array,
+                cast_type,
+            )?)),
+            ColumnarValue::Scalar(scalar) => {
+                let scalar_array = scalar.to_array();
+                let cast_array = kernels::cast::cast(&scalar_array, cast_type)?;
+                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
+                Ok(ColumnarValue::Scalar(cast_scalar))
+            }
+        }
+    }
 }
 
 impl fmt::Display for TryCastExpr {
@@ -77,18 +92,7 @@ impl PhysicalExpr for TryCastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        match value {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(kernels::cast::cast(
-                &array,
-                &self.cast_type,
-            )?)),
-            ColumnarValue::Scalar(scalar) => {
-                let scalar_array = scalar.to_array();
-                let cast_array = kernels::cast::cast(&scalar_array, &self.cast_type)?;
-                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::Scalar(cast_scalar))
-            }
-        }
+        TryCastExpr::evaluate(value, &self.cast_type)
     }
 }
 

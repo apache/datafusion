@@ -1,18 +1,25 @@
 
-use crate::{error::DataFusionError, logical_plan::Operator, physical_plan::expressions::{BinaryExpr, CastExpr, common_binary_type}, scalar::ScalarValue};
+use crate::{error::DataFusionError};
 
 use super::super::{Tokomak, TokomakExpr};
-use arrow::datatypes::DataType;
+
 use egg::{rewrite as rw, *};
-use std::convert::{TryFrom, TryInto};
+use super::utils::*;
+
 
 pub fn add_simplification_rules(optimizer: &mut Tokomak){
+    for rule in rules(){
+        optimizer.add_rule(rule)
+    }
+}
+
+fn rules()->Vec<Rewrite<TokomakExpr,()>>{
     let a:Var = "?a".parse().unwrap();
     let b: Var = "?b".parse().unwrap();
     let c: Var = "?c".parse().unwrap();
     let d: Var = "?d".parse().unwrap();
     let x: Var ="?x".parse().unwrap();
-    let rules= vec![
+    vec![
         rw!("commute-add"; "(+ ?x ?y)" => "(+ ?y ?x)"),
         rw!("commute-mul"; "(* ?x ?y)" => "(* ?y ?x)"),
         rw!("commute-and"; "(and ?x ?y)" => "(and ?y ?x)"),
@@ -50,10 +57,7 @@ pub fn add_simplification_rules(optimizer: &mut Tokomak){
             rhs_upper: d,
             rhs_lower: c,
         }}),
-    ];
-    for rule in rules{
-        optimizer.add_rule(rule)
-    }
+    ]
 }
 
 
@@ -87,82 +91,11 @@ impl BetweenMergeApplier{
 }
 
 
-fn convert_to_scalar_value(var: Var, egraph: &mut EGraph<TokomakExpr,()>, _id: Id, subst: &Subst)->Result<ScalarValue, DataFusionError>{
-    let expr = egraph[subst[var]].nodes.iter().find(|e| e.can_convert_to_scalar_value()).ok_or_else(|| DataFusionError::Internal("Could not find a node that was convertable to scalar value".to_string()))?;
-    expr.try_into()
-}
 
 
-fn min(x: ScalarValue, y: ScalarValue)->Result<ScalarValue, DataFusionError>{
-    let ret_val = if lt(x.clone(), y.clone())?{
-        x
-    }else{
-        y
-    };
-    Ok(ret_val)
-}
-
-fn max(x: ScalarValue, y: ScalarValue)->Result<ScalarValue, DataFusionError>{
-    let ret_val = if gt(x.clone(), y.clone())?{
-        x
-    }else{
-        y
-    };
-    Ok(ret_val)
-}
-
-fn lt(lhs: ScalarValue, rhs:ScalarValue)->Result<bool, DataFusionError>{
-    let res = scalar_binop(lhs, rhs, &Operator::Lt)?;
-    res.try_into()
-}
-
-fn lte(lhs: ScalarValue, rhs:ScalarValue)->Result<bool, DataFusionError>{
-    let res = scalar_binop(lhs, rhs, &Operator::LtEq)?;
-    res.try_into()
-}
-
-fn gt(lhs: ScalarValue, rhs:ScalarValue)->Result<bool, DataFusionError>{
-    let res = scalar_binop(lhs, rhs, &Operator::Gt)?;
-    res.try_into()
-}
-
-fn gte(lhs: ScalarValue, rhs:ScalarValue)->Result<bool, DataFusionError>{
-    let res = scalar_binop(lhs, rhs, &Operator::GtEq)?;
-    res.try_into()
-}
-
-fn cast(val: ScalarValue, cast_type: &DataType)->Result<ScalarValue, DataFusionError>{
-    CastExpr::cast_scalar_default_options(val, cast_type)
-}
 
 
-fn scalar_binop(lhs: ScalarValue, rhs:ScalarValue, op: &Operator)->Result<ScalarValue, DataFusionError>{
-    let (lhs, rhs) = binop_type_coercion(lhs, rhs, &op)?;
-    let res = BinaryExpr::evaluate_values(crate::physical_plan::ColumnarValue::Scalar(lhs),crate::physical_plan::ColumnarValue::Scalar(rhs),&op, 1)?;
-    match res{
-        crate::physical_plan::ColumnarValue::Scalar(s)=> Ok(s),
-        crate::physical_plan::ColumnarValue::Array(arr)=>{
-            if arr.len() == 1 {
-                ScalarValue::try_from_array(&arr, 0)
-            }else{
-                Err(DataFusionError::Internal(format!("Could not convert an array of length {} to a scalar", arr.len())))
-            }
-        }
-    }
-}
 
-fn binop_type_coercion(mut lhs: ScalarValue,mut rhs:ScalarValue, op: &Operator)->Result<(ScalarValue, ScalarValue), DataFusionError>{
-    let lhs_dt = lhs.get_datatype();
-    let rhs_dt = rhs.get_datatype();
-    let common_datatype = common_binary_type(&lhs_dt, &op, &rhs_dt)?;
-    if lhs_dt != common_datatype{
-        lhs = cast(lhs, &common_datatype)?;
-    }
-    if rhs_dt != common_datatype{
-        rhs = cast(rhs, &common_datatype)?;
-    }
-    Ok((lhs, rhs))
-}
 
 impl Applier<TokomakExpr, ()> for BetweenMergeApplier{
     fn apply_one(&self, egraph: &mut EGraph<TokomakExpr, ()>, eclass: Id, subst: &Subst) -> Vec<Id> {
@@ -176,5 +109,47 @@ impl Applier<TokomakExpr, ()> for BetweenMergeApplier{
         let new_between = TokomakExpr::Between([common_compare, lower_id, upper_id]);
         let new_between_id = egraph.add(new_between);
         vec![new_between_id]
+    }
+}
+
+
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use egg::Runner;
+
+    #[test]
+    fn test_add_0() {
+        let expr = "(+ 0 (x))".parse().unwrap();
+        let runner = Runner::<TokomakExpr, (), ()>::default()
+            .with_expr(&expr)
+            .run(&rules());
+
+        let mut extractor = Extractor::new(&runner.egraph, AstSize);
+
+        let (_best_cost, best_expr) = extractor.find_best(runner.roots[0]);
+
+        assert_eq!(format!("{}", best_expr), "x")
+    }
+
+    #[test]
+    fn test_dist_and_or() {
+        let expr = "(or (or (and (= 1 2) ?foo) (and (= 1 2) ?bar)) (and (= 1 2) ?boo))"
+            .parse()
+            .unwrap();
+        let runner = Runner::<TokomakExpr, (), ()>::default()
+            .with_expr(&expr)
+            .run(&rules());
+
+        let mut extractor = Extractor::new(&runner.egraph, AstSize);
+
+        let (_, best_expr) = extractor.find_best(runner.roots[0]);
+
+        assert_eq!(
+            format!("{}", best_expr),
+            "(and (= 1 2) (or ?boo (or ?foo ?bar)))"
+        )
     }
 }

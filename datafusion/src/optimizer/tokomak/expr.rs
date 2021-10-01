@@ -1,14 +1,13 @@
-use crate::{error::DataFusionError, logical_plan::window_frames::WindowFrame, optimizer::tokomak::{SortSpec, UDFName}, physical_plan::{
+use crate::{error::DataFusionError, logical_plan::window_frames::WindowFrame, optimizer::tokomak::{ScalarUDFName, SortSpec, UDAFName, UDFName}, physical_plan::{
         aggregates::AggregateFunction, functions::BuiltinScalarFunction,
         window_functions::WindowFunction,
     }, scalar::ScalarValue};
-use egg::{rewrite as rw, *};
-use ordered_float::OrderedFloat;
+use egg:: *;
 
 use super::datatype::TokomakDataType;
 use super::scalar::TokomakScalar;
 use std::str::FromStr;
-use std::convert::{TryFrom, TryInto};
+use std::convert::{ TryInto};
 define_language! {
 pub enum TokomakExpr {
     "+" = Plus([Id; 2]),
@@ -44,11 +43,12 @@ pub enum TokomakExpr {
 
     //ScalarValue types
 
-    Scalar(TokomakScalar),
     Type(TokomakDataType),
     ScalarBuiltin(BuiltinScalarFunction),
     AggregateBuiltin(AggregateFunction),
     WindowBuiltin(WindowFunction),
+    Scalar(TokomakScalar),
+
     //THe fist expression for all of the function call types must be the corresponding function type
     //For UDFs this is a string, which is looked up in the ExecutionProps
     //The last expression must be a List and is the arguments for the function.
@@ -65,8 +65,8 @@ pub enum TokomakExpr {
     //Last Id of the Sort node MUST be a SortSpec
     "sort" = Sort([Id;2]),
     SortSpec(SortSpec),
-    ScalarUDF(UDFName),
-    AggregateUDF(UDFName),
+    ScalarUDF(ScalarUDFName),
+    AggregateUDF(UDAFName),
     Column(Symbol),
     WindowFrame(WindowFrame),
 

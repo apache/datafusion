@@ -226,6 +226,7 @@ pub enum BuiltinScalarFunction {
 }
 
 impl BuiltinScalarFunction {
+    ///Returns the volatility of the function see [FunctionVolatility] for more information about the categories of volatiltiy
     pub fn function_volatility(&self)->FunctionVolatility{
         match self{
             BuiltinScalarFunction::Random | BuiltinScalarFunction::Now => FunctionVolatility::Volatile,
