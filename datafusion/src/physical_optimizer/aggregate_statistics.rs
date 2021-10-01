@@ -159,6 +159,7 @@ fn take_optimizable_count(
     None
 }
 
+/// If this agg_expr is a count that can be derived from the statistics, return it
 fn take_optimizable_count_with_nulls(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
@@ -179,9 +180,10 @@ fn take_optimizable_count_with_nulls(
                     ..
                 } = &col_stats[col_expr.index()]
                 {
+                    let expr = format!("COUNT({})", col_expr.name());
                     return Some((
                         ScalarValue::UInt64(Some((num_rows - val) as u64)),
-                        "COUNT(UInt8(1))".to_string(),
+                        expr,
                     ));
                 }
             }
