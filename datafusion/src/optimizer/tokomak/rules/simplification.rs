@@ -152,4 +152,39 @@ mod tests {
             "(and (= 1 2) (or ?boo (or ?foo ?bar)))"
         )
     }
+    #[test]
+    fn test_between_same(){
+        let expr = "(between ?x ?same ?same)".parse().unwrap();
+        let runner = Runner::<TokomakExpr, (), ()>::default()
+        .with_expr(&expr)
+        .run(&rules());
+
+        let mut extractor = Extractor::new(&runner.egraph, AstSize);
+
+        let (_, best_expr) = extractor.find_best(runner.roots[0]);
+        
+
+        assert_eq!(
+            format!("{}", best_expr),
+            "(= ?x ?same)"
+        ) 
+    }
+
+    #[test]
+    fn test_between_inverted_same(){
+        let expr = "(between_inverted ?x ?same ?same)".parse().unwrap();
+        let runner = Runner::<TokomakExpr, (), ()>::default()
+        .with_expr(&expr)
+        .run(&rules());
+
+        let mut extractor = Extractor::new(&runner.egraph, AstSize);
+
+        let (_, best_expr) = extractor.find_best(runner.roots[0]);
+        
+
+        assert_eq!(
+            format!("{}", best_expr),
+            "(<> ?x ?same)"
+        ) 
+    }
 }

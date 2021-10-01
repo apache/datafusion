@@ -236,13 +236,13 @@ mod test{
 
     fn rewrite_expr(expr: &str)->Result<String, Box<dyn std::error::Error>>{
         let expr: RecExpr<TokomakExpr> = expr.parse()?;
-        println!("unoptomized expr {:?}", expr);
+        //println!("unoptomized expr {:?}", expr);
         let runner = Runner::<TokomakExpr, (), ()>::default()
         .with_expr(&expr)
         .run(&rules());
         let mut extractor = Extractor::new(&runner.egraph, AstSize);
         let (_, best_expr) = extractor.find_best(runner.roots[0]);
-        println!("optimized expr {:?}", best_expr);
+        //println!("optimized expr {:?}", best_expr);
         Ok(format!("{}", best_expr))
     }
     #[test]
@@ -250,12 +250,12 @@ mod test{
 
      
     let expr_expected: Vec<(&'static str, &'static str)> =  vec![ 
-        //("(cast (cast 2  utf8) float32)", "2"),
+        ("(cast (cast 2  utf8) float32)", "2"),
         ("(try_cast 'gibberish' float32)", "NULL"), //Test try cast
         ("(try_cast 4.5 utf8)", "4.5"),
         ("(* 4 (call abs (list -1)))", "4"), //Test function inlining 
-        ("(call_udf udf[pow] (list (+ 2.5 1.5) (- 1 1.5)))","(call_udf udf[pow] (list 4 -0.5))"), //Test const propagation within udf arguments
-        //("(call_udf pow_vol (list (+ 2.5 1.5) (- 1 1.5)))", "(call_udf pow_vol (list 4 -0.5))")
+        ("(call_udf udf[pow] (list (cast (+ 2.5 1.5) uint8) (- 1 1.5)))","(call_udf udf[pow] (list 4 -0.5))"), //Test const propagation within udf arguments
+        //("(call_udf pow_vol (list (+ 2.5 1.5) (- 1 1.5)))", "(call_udf pow_vol (list 4 -0.5))") //FOr testing volatile udf argument optimzation without inlining. requires UDF registry to be availble at the optimize call
     ];
 
     for (expr, expected) in expr_expected{
