@@ -1,13 +1,19 @@
-use crate::{error::DataFusionError, logical_plan::window_frames::WindowFrame, optimizer::tokomak::{ScalarUDFName, SortSpec, UDAFName, UDFName}, physical_plan::{
+use crate::{
+    error::DataFusionError,
+    logical_plan::window_frames::WindowFrame,
+    optimizer::tokomak::{ScalarUDFName, SortSpec, UDAFName, UDFName},
+    physical_plan::{
         aggregates::AggregateFunction, functions::BuiltinScalarFunction,
         window_functions::WindowFunction,
-    }, scalar::ScalarValue};
-use egg:: *;
+    },
+    scalar::ScalarValue,
+};
+use egg::*;
 
 use super::datatype::TokomakDataType;
 use super::scalar::TokomakScalar;
+use std::convert::TryInto;
 use std::str::FromStr;
-use std::convert::{ TryInto};
 define_language! {
 pub enum TokomakExpr {
     "+" = Plus([Id; 2]),
@@ -76,28 +82,27 @@ pub enum TokomakExpr {
 }
 }
 
-
-impl TokomakExpr{
-   pub(crate) fn can_convert_to_scalar_value(&self)->bool{
+impl TokomakExpr {
+    pub(crate) fn can_convert_to_scalar_value(&self) -> bool {
         matches!(self, TokomakExpr::Scalar(_))
     }
 }
 
-impl TryInto<ScalarValue> for &TokomakExpr{
+impl TryInto<ScalarValue> for &TokomakExpr {
     type Error = DataFusionError;
 
     fn try_into(self) -> Result<ScalarValue, Self::Error> {
-        match self{
-            TokomakExpr::Scalar(s)=>Ok(s.clone().into()),
-            e => Err(DataFusionError::Internal(format!("Could not convert {:?} to scalar", e)))
+        match self {
+            TokomakExpr::Scalar(s) => Ok(s.clone().into()),
+            e => Err(DataFusionError::Internal(format!(
+                "Could not convert {:?} to scalar",
+                e
+            ))),
         }
     }
-
 }
 
-
-
-impl From<ScalarValue> for TokomakExpr{
+impl From<ScalarValue> for TokomakExpr {
     fn from(v: ScalarValue) -> Self {
         TokomakExpr::Scalar(v.into())
     }

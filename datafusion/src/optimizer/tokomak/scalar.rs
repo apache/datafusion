@@ -90,18 +90,19 @@ impl std::str::FromStr for TokomakScalar {
             if (first_char == '?'
                 || first_char.is_numeric()
                 || first_char.is_ascii_graphic())
-                && (first_char.is_ascii_punctuation() && !(first_char == '\'' || first_char == '"'))
+                && (first_char.is_ascii_punctuation()
+                    && !(first_char == '\'' || first_char == '"'))
             {
                 //println!("Could not parse: {}",first_char.is_ascii_punctuation() && !(first_char == '\'' || first_char == '"'));
                 return Err(DataFusionError::Internal(String::new()));
             }
             let mut str_in = s;
             if first_char == '"' || first_char == '\'' {
-                str_in = match &str_in[1..].strip_suffix(first_char){
+                str_in = match &str_in[1..].strip_suffix(first_char) {
                     Some(v) => v,
                     None => return Err(DataFusionError::Internal(String::new())),
                 };
-            }else{
+            } else {
                 return Err(DataFusionError::Internal(String::new()));
             }
             TokomakScalar::Utf8(Some(str_in.to_string()))

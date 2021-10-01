@@ -3,19 +3,15 @@
 //!
 //! This saves time in planning and executing the query.
 
-use arrow::datatypes::{DataType};
-use std::convert::{TryInto};
+use arrow::datatypes::DataType;
+use std::convert::TryInto;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::str::FromStr;
 
-
-
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
-use crate::{
-    logical_plan::LogicalPlan, optimizer::optimizer::OptimizerRule,
-};
+use crate::{logical_plan::LogicalPlan, optimizer::optimizer::OptimizerRule};
 use log::debug;
 
 use crate::error::{DataFusionError, Result as DFResult};
@@ -607,8 +603,9 @@ impl<'a> ExprConverter<'a> {
                 let args_id = self.add_list(args)?;
                 self.udf_registry.add_sudf(fun.clone());
                 let fun_name: Symbol = fun.name.clone().into();
-                let fun_name_id =
-                    self.rec_expr.add(TokomakExpr::ScalarUDF(ScalarUDFName(fun_name)));
+                let fun_name_id = self
+                    .rec_expr
+                    .add(TokomakExpr::ScalarUDF(ScalarUDFName(fun_name)));
                 self.rec_expr
                     .add(TokomakExpr::ScalarUDFCall([fun_name_id, args_id]))
             }
@@ -728,7 +725,11 @@ impl FromStr for UDFName {
         //    println!("{} - {}", pos, c);
         //}
         //println!("The first char was of the string '{}' was '{}'",s, first_char);
-        if first_char == '?' || first_char.is_numeric() || first_char=='"' || first_char == '\'' {
+        if first_char == '?'
+            || first_char.is_numeric()
+            || first_char == '"'
+            || first_char == '\''
+        {
             //println!("Could not parse {} as udf name ", s);
             return Err(DataFusionError::Internal(
                 "Found ? or number as first char".to_string(),
@@ -740,28 +741,29 @@ impl FromStr for UDFName {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 
 pub struct ScalarUDFName(pub Symbol);
-impl FromStr for ScalarUDFName{
-    type Err=();
+impl FromStr for ScalarUDFName {
+    type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 7{
+        if s.len() < 7 {
             return Err(());
         }
-        match &s[0..4]{
+        match &s[0..4] {
             "udf[" => {
-                if &s[s.len()-1..s.len()]=="]"{
-                    Ok( ScalarUDFName(Symbol::from_str(&s[4..(s.len()-1)]).unwrap()))
-                }else{
+                if &s[s.len() - 1..s.len()] == "]" {
+                    Ok(ScalarUDFName(
+                        Symbol::from_str(&s[4..(s.len() - 1)]).unwrap(),
+                    ))
+                } else {
                     Err(())
                 }
-                
             }
-            _ => Err(())
+            _ => Err(()),
         }
     }
 }
 
-impl Display for ScalarUDFName{
+impl Display for ScalarUDFName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "udf[{}]", self.0)
     }
@@ -770,34 +772,31 @@ impl Display for ScalarUDFName{
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 
 pub struct UDAFName(pub Symbol);
-impl FromStr for UDAFName{
-    type Err=();
+impl FromStr for UDAFName {
+    type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 8{
+        if s.len() < 8 {
             return Err(());
         }
-        match &s[0..5]{
+        match &s[0..5] {
             "udaf[" => {
-                if &s[s.len()-1..s.len()]=="]"{
-                    Ok( UDAFName(Symbol::from_str(&s[5..(s.len()-1)]).unwrap()))
-                }else{
+                if &s[s.len() - 1..s.len()] == "]" {
+                    Ok(UDAFName(Symbol::from_str(&s[5..(s.len() - 1)]).unwrap()))
+                } else {
                     Err(())
                 }
-                
             }
-            _ => Err(())
+            _ => Err(()),
         }
     }
 }
 
-impl Display for UDAFName{
+impl Display for UDAFName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "udaf[{}]", self.0)
     }
 }
-
-
 
 impl OptimizerRule for Tokomak {
     fn optimize(

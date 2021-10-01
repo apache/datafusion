@@ -100,12 +100,13 @@ impl ScalarUDF {
         }
     }
     /// Create a new ScalarUDF with the specified volatility
-    pub fn with_volatility(name: &str,
+    pub fn with_volatility(
+        name: &str,
         signature: &Signature,
         return_type: &ReturnTypeFunction,
-        fun: &ScalarFunctionImplementation, 
+        fun: &ScalarFunctionImplementation,
         volatility: FunctionVolatility,
-    )->Self{
+    ) -> Self {
         Self {
             name: name.to_owned(),
             signature: signature.clone(),

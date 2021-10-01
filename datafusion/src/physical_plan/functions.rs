@@ -227,12 +227,13 @@ pub enum BuiltinScalarFunction {
 
 impl BuiltinScalarFunction {
     ///Returns the volatility of the function see [FunctionVolatility] for more information about the categories of volatiltiy
-    pub fn function_volatility(&self)->FunctionVolatility{
-        match self{
-            BuiltinScalarFunction::Random | BuiltinScalarFunction::Now => FunctionVolatility::Volatile,
-            _=>FunctionVolatility::Immutable,
+    pub fn function_volatility(&self) -> FunctionVolatility {
+        match self {
+            BuiltinScalarFunction::Random | BuiltinScalarFunction::Now => {
+                FunctionVolatility::Volatile
+            }
+            _ => FunctionVolatility::Immutable,
         }
-            
     }
 
     /// an allowlist of functions to take zero arguments, so that they will get special treatment
@@ -492,11 +493,6 @@ pub fn return_type(
     }
 }
 
-
-
-
-
-
 #[cfg(feature = "crypto_expressions")]
 macro_rules! invoke_if_crypto_expressions_feature_flag {
     ($FUNC:ident, $NAME:expr) => {{
@@ -558,23 +554,22 @@ macro_rules! invoke_if_unicode_expressions_feature_flag {
 }
 
 ///Function volatility determines when a function can be inlined or in the future have evaluations elided when the arguments are the same
-///Immutable - a pure function which always remains the same 
+///Immutable - a pure function which always remains the same
 ///Stable - Maybe not required?. Used for functions which can modify the db but are stable for multiple calls in statement
 ///Volatile - Functions where output can vary for each call.
 ///For more information see https://www.postgresql.org/docs/current/xfunc-volatility.html
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum FunctionVolatility{
-    ///Immutable - a pure function which always remains the same 
-    Immutable=0, 
+pub enum FunctionVolatility {
+    ///Immutable - a pure function which always remains the same
+    Immutable = 0,
     ///Stable - Maybe not required?. Used for functions which can modify the db but are stable for multiple calls in statement is this relevant for datafusion as in mem?
-    Stable=1,
+    Stable = 1,
     ///Volatile - Functions where output can vary for each call.
-    Volatile=2
+    Volatile = 2,
 }
 
-
-impl Default for FunctionVolatility{
+impl Default for FunctionVolatility {
     fn default() -> Self {
         FunctionVolatility::Volatile
     }
@@ -1465,7 +1460,9 @@ where
     })
 }
 
-pub(crate) fn create_immutable_impl(fun : &BuiltinScalarFunction)->Result<ScalarFunctionImplementation>{
+pub(crate) fn create_immutable_impl(
+    fun: &BuiltinScalarFunction,
+) -> Result<ScalarFunctionImplementation> {
     let fun_expr: ScalarFunctionImplementation = Arc::new(match fun {
         // math functions
         BuiltinScalarFunction::Abs => math_expressions::abs,
@@ -1870,13 +1867,15 @@ pub(crate) fn create_immutable_impl(fun : &BuiltinScalarFunction)->Result<Scalar
             ))),
         },
         BuiltinScalarFunction::Upper => string_expressions::upper,
-        f => return Err(DataFusionError::Internal(format!("The function {} is not immutable", f )))
+        f => {
+            return Err(DataFusionError::Internal(format!(
+                "The function {} is not immutable",
+                f
+            )))
+        }
     });
     Ok(fun_expr)
 }
-
-
-
 
 #[cfg(test)]
 mod tests {

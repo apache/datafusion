@@ -512,9 +512,13 @@ pub fn binary_operator_data_type(
     }
 }
 
-
-impl BinaryExpr{
-    pub (crate) fn evaluate_values(left_value: ColumnarValue, right_value: ColumnarValue, op: &Operator, num_rows:usize)->Result<ColumnarValue>{
+impl BinaryExpr {
+    pub(crate) fn evaluate_values(
+        left_value: ColumnarValue,
+        right_value: ColumnarValue,
+        op: &Operator,
+        num_rows: usize,
+    ) -> Result<ColumnarValue> {
         let left_data_type = left_value.data_type();
         let right_data_type = right_value.data_type();
 
@@ -547,8 +551,14 @@ impl BinaryExpr{
             left_value.into_array(num_rows),
             right_value.into_array(num_rows),
         );
-        BinaryExpr::evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type, op)
-            .map(|a| ColumnarValue::Array(a))
+        BinaryExpr::evaluate_with_resolved_args(
+            left,
+            &left_data_type,
+            right,
+            &right_data_type,
+            op,
+        )
+        .map(|a| ColumnarValue::Array(a))
     }
 }
 impl PhysicalExpr for BinaryExpr {
@@ -583,7 +593,7 @@ impl BinaryExpr {
         //&self,
         array: &ArrayRef,
         scalar: &ScalarValue,
-        op: &Operator
+        op: &Operator,
     ) -> Result<Option<Result<ArrayRef>>> {
         let scalar_result = match op {
             Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), lt),
@@ -651,7 +661,7 @@ impl BinaryExpr {
         //&self,
         scalar: &ScalarValue,
         array: &ArrayRef,
-        op: &Operator
+        op: &Operator,
     ) -> Result<Option<Result<ArrayRef>>> {
         let scalar_result = match op {
             Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), gt),
@@ -678,7 +688,7 @@ impl BinaryExpr {
         left_data_type: &DataType,
         right: Arc<dyn Array>,
         right_data_type: &DataType,
-        op: &Operator
+        op: &Operator,
     ) -> Result<ArrayRef> {
         match op {
             Operator::Like => binary_string_array_op!(left, right, like),

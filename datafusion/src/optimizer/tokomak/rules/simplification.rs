@@ -1,24 +1,22 @@
-
-use crate::{error::DataFusionError};
+use crate::error::DataFusionError;
 
 use super::super::{Tokomak, TokomakExpr};
 
-use egg::{rewrite as rw, *};
 use super::utils::*;
+use egg::{rewrite as rw, *};
 
-
-pub fn add_simplification_rules(optimizer: &mut Tokomak){
-    for rule in rules(){
+pub fn add_simplification_rules(optimizer: &mut Tokomak) {
+    for rule in rules() {
         optimizer.add_rule(rule)
     }
 }
 
-fn rules()->Vec<Rewrite<TokomakExpr,()>>{
-    let a:Var = "?a".parse().unwrap();
+fn rules() -> Vec<Rewrite<TokomakExpr, ()>> {
+    let a: Var = "?a".parse().unwrap();
     let b: Var = "?b".parse().unwrap();
     let c: Var = "?c".parse().unwrap();
     let d: Var = "?d".parse().unwrap();
-    let x: Var ="?x".parse().unwrap();
+    let x: Var = "?x".parse().unwrap();
     vec![
         rw!("commute-add"; "(+ ?x ?y)" => "(+ ?y ?x)"),
         rw!("commute-mul"; "(* ?x ?y)" => "(* ?y ?x)"),
@@ -60,47 +58,50 @@ fn rules()->Vec<Rewrite<TokomakExpr,()>>{
     ]
 }
 
-
-
-struct BetweenMergeApplier{
+struct BetweenMergeApplier {
     pub common_comparison: Var,
-    pub lhs_lower: Var, 
-    pub lhs_upper: Var, 
-    pub rhs_lower: Var, 
-    pub rhs_upper: Var
+    pub lhs_lower: Var,
+    pub lhs_upper: Var,
+    pub rhs_lower: Var,
+    pub rhs_upper: Var,
 }
 
-impl BetweenMergeApplier{
-    fn try_merge(&self,egraph: &mut EGraph<TokomakExpr, ()>, id: Id, subst: &Subst )->Result<(TokomakExpr, TokomakExpr), DataFusionError>{
+impl BetweenMergeApplier {
+    fn try_merge(
+        &self,
+        egraph: &mut EGraph<TokomakExpr, ()>,
+        id: Id,
+        subst: &Subst,
+    ) -> Result<(TokomakExpr, TokomakExpr), DataFusionError> {
         let lhs_low = convert_to_scalar_value(self.lhs_lower, egraph, id, subst)?;
         let lhs_high = convert_to_scalar_value(self.lhs_upper, egraph, id, subst)?;
         let rhs_low = convert_to_scalar_value(self.rhs_lower, egraph, id, subst)?;
         let rhs_high = convert_to_scalar_value(self.rhs_upper, egraph, id, subst)?;
 
         //Check if one is contained within another
-        let rhs_high_in_lhs = gte(rhs_high.clone(), lhs_low.clone())? && lte(rhs_high.clone(), lhs_high.clone())?;
-        let rhs_low_in_lhs = gte(rhs_low.clone(), lhs_low.clone())? && lte(rhs_low.clone(), lhs_high.clone())?;
+        let rhs_high_in_lhs = gte(rhs_high.clone(), lhs_low.clone())?
+            && lte(rhs_high.clone(), lhs_high.clone())?;
+        let rhs_low_in_lhs = gte(rhs_low.clone(), lhs_low.clone())?
+            && lte(rhs_low.clone(), lhs_high.clone())?;
         let is_overlap = rhs_high_in_lhs || rhs_low_in_lhs;
-        if is_overlap{
+        if is_overlap {
             let new_lower = min(lhs_low, rhs_low)?;
             let new_high = max(lhs_high, rhs_high)?;
-            return Ok((new_lower.into(),new_high.into()))
+            return Ok((new_lower.into(), new_high.into()));
         }
         Err(DataFusionError::Internal(String::new()))
     }
 }
 
-
-
-
-
-
-
-
-impl Applier<TokomakExpr, ()> for BetweenMergeApplier{
-    fn apply_one(&self, egraph: &mut EGraph<TokomakExpr, ()>, eclass: Id, subst: &Subst) -> Vec<Id> {
-        let (lower, upper) = match self.try_merge(egraph, eclass, subst){
-            Ok(new_range)=>new_range,
+impl Applier<TokomakExpr, ()> for BetweenMergeApplier {
+    fn apply_one(
+        &self,
+        egraph: &mut EGraph<TokomakExpr, ()>,
+        eclass: Id,
+        subst: &Subst,
+    ) -> Vec<Id> {
+        let (lower, upper) = match self.try_merge(egraph, eclass, subst) {
+            Ok(new_range) => new_range,
             Err(_) => return Vec::new(),
         };
         let lower_id = egraph.add(lower);
@@ -111,8 +112,6 @@ impl Applier<TokomakExpr, ()> for BetweenMergeApplier{
         vec![new_between_id]
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -153,38 +152,30 @@ mod tests {
         )
     }
     #[test]
-    fn test_between_same(){
+    fn test_between_same() {
         let expr = "(between ?x ?same ?same)".parse().unwrap();
         let runner = Runner::<TokomakExpr, (), ()>::default()
-        .with_expr(&expr)
-        .run(&rules());
+            .with_expr(&expr)
+            .run(&rules());
 
         let mut extractor = Extractor::new(&runner.egraph, AstSize);
 
         let (_, best_expr) = extractor.find_best(runner.roots[0]);
-        
 
-        assert_eq!(
-            format!("{}", best_expr),
-            "(= ?x ?same)"
-        ) 
+        assert_eq!(format!("{}", best_expr), "(= ?x ?same)")
     }
 
     #[test]
-    fn test_between_inverted_same(){
+    fn test_between_inverted_same() {
         let expr = "(between_inverted ?x ?same ?same)".parse().unwrap();
         let runner = Runner::<TokomakExpr, (), ()>::default()
-        .with_expr(&expr)
-        .run(&rules());
+            .with_expr(&expr)
+            .run(&rules());
 
         let mut extractor = Extractor::new(&runner.egraph, AstSize);
 
         let (_, best_expr) = extractor.find_best(runner.roots[0]);
-        
 
-        assert_eq!(
-            format!("{}", best_expr),
-            "(<> ?x ?same)"
-        ) 
+        assert_eq!(format!("{}", best_expr), "(<> ?x ?same)")
     }
 }

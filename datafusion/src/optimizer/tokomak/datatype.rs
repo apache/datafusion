@@ -1,7 +1,7 @@
 use crate::error::DataFusionError;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use egg::*;
-use std::convert::{TryFrom};
+use std::convert::TryFrom;
 use std::fmt::Display;
 use std::str::FromStr;
 

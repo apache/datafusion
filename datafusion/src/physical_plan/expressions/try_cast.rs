@@ -54,11 +54,13 @@ impl TryCastExpr {
         &self.cast_type
     }
 
-    pub(crate) fn evaluate(value: ColumnarValue, cast_type: &DataType)->Result<ColumnarValue>{
+    pub(crate) fn evaluate(
+        value: ColumnarValue,
+        cast_type: &DataType,
+    ) -> Result<ColumnarValue> {
         match value {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(kernels::cast::cast(
-                &array,
-                cast_type,
+                &array, cast_type,
             )?)),
             ColumnarValue::Scalar(scalar) => {
                 let scalar_array = scalar.to_array();
