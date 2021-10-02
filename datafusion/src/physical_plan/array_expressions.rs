@@ -38,18 +38,19 @@ fn array_array(arrays: &[&dyn Array]) -> Result<ArrayRef> {
                 $DATA_TYPE,
             );
             let mut array = MutableFixedSizeListArray::new(array, size);
-            // for each entry in the array
-            for index in 0..first.len() {
-                let values = array.mut_values();
-                for arg in arrays {
-                    let arg = arg.as_any().downcast_ref::<$ARRAY>().unwrap();
-                    if arg.is_null(index) {
-                        values.push(None);
-                    } else {
-                        values.push(Some(arg.value(index)));
-                    }
-                }
-            }
+            array.try_extend(
+                // for each entry in the array
+                (0..first.len()).map(|idx| {
+                    Some(arrays.iter().map(move |arg| {
+                        let arg = arg.as_any().downcast_ref::<$ARRAY>().unwrap();
+                        if arg.is_null(idx) {
+                            None
+                        } else {
+                            Some(arg.value(idx))
+                        }
+                    }))
+                }),
+            )?;
             Ok(array.as_arc())
         }};
     }
@@ -58,18 +59,20 @@ fn array_array(arrays: &[&dyn Array]) -> Result<ArrayRef> {
         ($OFFSET: ty) => {{
             let array = MutableUtf8Array::<$OFFSET>::with_capacity(first.len() * size);
             let mut array = MutableFixedSizeListArray::new(array, size);
-            // for each entry in the array
-            for index in 0..first.len() {
-                let values = array.mut_values();
-                for arg in arrays {
-                    let arg = arg.as_any().downcast_ref::<Utf8Array<$OFFSET>>().unwrap();
-                    if arg.is_null(index) {
-                        values.push::<&str>(None);
-                    } else {
-                        values.push(Some(arg.value(index)));
-                    }
-                }
-            }
+            array.try_extend(
+                // for each entry in the array
+                (0..first.len()).map(|idx| {
+                    Some(arrays.iter().map(move |arg| {
+                        let arg =
+                            arg.as_any().downcast_ref::<Utf8Array<$OFFSET>>().unwrap();
+                        if arg.is_null(idx) {
+                            None
+                        } else {
+                            Some(arg.value(idx))
+                        }
+                    }))
+                }),
+            )?;
             Ok(array.as_arc())
         }};
     }
@@ -78,18 +81,19 @@ fn array_array(arrays: &[&dyn Array]) -> Result<ArrayRef> {
         DataType::Boolean => {
             let array = MutableBooleanArray::with_capacity(first.len() * size);
             let mut array = MutableFixedSizeListArray::new(array, size);
-            // for each entry in the array
-            for index in 0..first.len() {
-                let values = array.mut_values();
-                for arg in arrays {
-                    let arg = arg.as_any().downcast_ref::<BooleanArray>().unwrap();
-                    if arg.is_null(index) {
-                        values.push(None);
-                    } else {
-                        values.push(Some(arg.value(index)));
-                    }
-                }
-            }
+            array.try_extend(
+                // for each entry in the array
+                (0..first.len()).map(|idx| {
+                    Some(arrays.iter().map(move |arg| {
+                        let arg = arg.as_any().downcast_ref::<BooleanArray>().unwrap();
+                        if arg.is_null(idx) {
+                            None
+                        } else {
+                            Some(arg.value(idx))
+                        }
+                    }))
+                }),
+            )?;
             Ok(array.as_arc())
         }
         DataType::UInt8 => array!(u8, PrimitiveArray<u8>, DataType::UInt8),

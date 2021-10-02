@@ -23,7 +23,9 @@ use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
 use crate::scalar::ScalarValue;
+use arrow::array::{Array, Int32Array};
 use arrow::compute::cast;
+use arrow::compute::take;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
@@ -79,15 +81,38 @@ impl PhysicalExpr for CastExpr {
     }
 }
 
+fn cast_with_error(array: &dyn Array, cast_type: &DataType) -> Result<Box<dyn Array>> {
+    let result = cast::cast(array, cast_type)?;
+    if result.null_count() != array.null_count() {
+        let casted_valids = result.validity().unwrap();
+        let failed_casts = match array.validity() {
+            Some(valids) => valids ^ casted_valids,
+            None => !casted_valids,
+        };
+        let invalid_indices = failed_casts
+            .iter()
+            .enumerate()
+            .filter(|(_, failed)| *failed)
+            .map(|(idx, _)| Some(idx as i32))
+            .collect::<Vec<Option<i32>>>();
+        let invalid_values = take::take(array, &Int32Array::from(&invalid_indices))?;
+        return Err(DataFusionError::Execution(format!(
+            "Could not cast {} to value of type {}",
+            invalid_values, cast_type
+        )));
+    }
+    Ok(result)
+}
+
 /// Internal cast function for casting ColumnarValue -> ColumnarValue for cast_type
 pub fn cast_column(value: &ColumnarValue, cast_type: &DataType) -> Result<ColumnarValue> {
     match value {
         ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-            cast::cast(array.as_ref(), cast_type)?.into(),
+            cast_with_error(array.as_ref(), cast_type)?.into(),
         )),
         ColumnarValue::Scalar(scalar) => {
             let scalar_array = scalar.to_array();
-            let cast_array = cast::cast(scalar_array.as_ref(), cast_type)?.into();
+            let cast_array = cast_with_error(scalar_array.as_ref(), cast_type)?.into();
             let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
             Ok(ColumnarValue::Scalar(cast_scalar))
         }
@@ -242,5 +267,15 @@ mod tests {
 
         let result = cast(col("a", &schema).unwrap(), &schema, DataType::LargeBinary);
         result.expect_err("expected Invalid CAST");
+    }
+
+    #[test]
+    fn invalid_str_cast() {
+        let arr = Utf8Array::<i32>::from_slice(&["a", "b", "123", "!", "456"]);
+        let err = cast_with_error(&arr, &DataType::Int64).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Execution error: Could not cast Utf8[a, b, !] to value of type Int64"
+        );
     }
 }

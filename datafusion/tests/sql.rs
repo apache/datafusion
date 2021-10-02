@@ -4326,9 +4326,20 @@ async fn test_cast_expressions_error() -> Result<()> {
     let mut ctx = create_ctx()?;
     register_aggregate_csv(&mut ctx)?;
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec![""]; 100];
-    assert_eq!(expected, actual);
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).unwrap();
+    let result = collect(plan).await;
+
+    match result {
+        Ok(_) => panic!("expected cast error"),
+        Err(e) => {
+            assert_contains!(
+                e.to_string(),
+                "Execution error: Could not cast Utf8[c, d, b, a, b, b, e, a, d, a, d, a, e, d, b, c, e, d, d, e, e, d, a, e, c, a, c, a, a, b, e, c, e, b, a, c, d, c, c, c, b, d, d, a, e, b, b, c, a, d, b, c, d, d, b, d, e, b, a, b, c, b, c, e, e, d, e, c, d, e, e, a, a, e, a, b, e, c, e, c, a, c, b, a, a, c, a, c, c, c, b, a, a, b, d, e, e, d, b, e] to value of type Int32"
+            );
+        }
+    }
 
     Ok(())
 }

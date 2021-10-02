@@ -241,13 +241,7 @@ pub fn regexp_matches<O: Offset>(
     });
     let mut array = MutableListArray::<O, MutableUtf8Array<O>>::new();
     for items in iter {
-        if let Some(items) = items? {
-            let values = array.mut_values();
-            values.try_extend(items)?;
-            array.try_push_valid()?;
-        } else {
-            array.push_null();
-        }
+        array.try_push(items?)?;
     }
 
     Ok(array.into())
