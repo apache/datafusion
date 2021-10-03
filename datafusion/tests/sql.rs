@@ -308,8 +308,8 @@ async fn csv_select_nested() -> Result<()> {
                    FROM aggregate_test_100
                    WHERE c1 = 'a' AND c2 >= 4
                    ORDER BY c2 ASC, c3 ASC
-                 )
-               )";
+                 ) AS a
+               ) AS b";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+----+----+------+",
@@ -600,7 +600,7 @@ async fn select_distinct_simple_4() {
 async fn projection_same_fields() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 
-    let sql = "select (1+1) as a from (select 1 as a);";
+    let sql = "select (1+1) as a from (select 1 as a) as b;";
     let actual = execute_to_batches(&mut ctx, sql).await;
 
     let expected = vec!["+---+", "| a |", "+---+", "| 2 |", "+---+"];
@@ -2106,13 +2106,13 @@ async fn cross_join() {
     );
 
     // Two partitions (from UNION) on the left
-    let sql = "SELECT * FROM (SELECT t1_id, t1_name FROM t1 UNION ALL SELECT t1_id, t1_name FROM t1) t1 CROSS JOIN t2";
+    let sql = "SELECT * FROM (SELECT t1_id, t1_name FROM t1 UNION ALL SELECT t1_id, t1_name FROM t1) AS t1 CROSS JOIN t2";
     let actual = execute(&mut ctx, sql).await;
 
     assert_eq!(4 * 4 * 2, actual.len());
 
     // Two partitions (from UNION) on the right
-    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN (SELECT t2_name FROM t2 UNION ALL SELECT t2_name FROM t2)";
+    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN (SELECT t2_name FROM t2 UNION ALL SELECT t2_name FROM t2) AS t2";
     let actual = execute(&mut ctx, sql).await;
 
     assert_eq!(4 * 4 * 2, actual.len());
@@ -2179,7 +2179,7 @@ async fn test_join_timestamp() -> Result<()> {
 
     let sql = "SELECT * \
                      FROM timestamp as a \
-                     JOIN (SELECT * FROM timestamp as b) \
+                     JOIN (SELECT * FROM timestamp) as b \
                      ON a.time = b.time \
                      ORDER BY a.time";
     let actual = execute_to_batches(&mut ctx, sql).await;
@@ -2220,7 +2220,7 @@ async fn test_join_float32() -> Result<()> {
 
     let sql = "SELECT * \
                      FROM population as a \
-                     JOIN (SELECT * FROM population as b) \
+                     JOIN (SELECT * FROM population) as b \
                      ON a.population = b.population \
                      ORDER BY a.population";
     let actual = execute_to_batches(&mut ctx, sql).await;
@@ -2261,7 +2261,7 @@ async fn test_join_float64() -> Result<()> {
 
     let sql = "SELECT * \
                      FROM population as a \
-                     JOIN (SELECT * FROM population as b) \
+                     JOIN (SELECT * FROM population) as b \
                      ON a.population = b.population \
                      ORDER BY a.population";
     let actual = execute_to_batches(&mut ctx, sql).await;
@@ -2513,11 +2513,11 @@ async fn explain_analyze_baseline_metrics() {
                   FROM aggregate_test_100 \
                   WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434' \
                   GROUP BY c1 \
-                  ORDER BY c1 ) \
+                  ORDER BY c1 ) AS a \
                  UNION ALL \
                SELECT 1 as cnt \
                  UNION ALL \
-               SELECT lead(c1, 1) OVER () as cnt FROM (select 1 as c1) \
+               SELECT lead(c1, 1) OVER () as cnt FROM (select 1 as c1) AS b \
                LIMIT 3";
     println!("running query: {}", sql);
     let plan = ctx.create_logical_plan(sql).unwrap();
@@ -2540,7 +2540,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "SortExec: [c1@1 ASC]",
+        "SortExec: [c1@0 ASC]",
         "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(
@@ -4664,9 +4664,9 @@ async fn test_physical_plan_display_indent_multi_children() {
     // ensure indenting works for nodes with multiple children
     register_aggregate_csv(&mut ctx).unwrap();
     let sql = "SELECT c1 \
-               FROM (select c1 from aggregate_test_100)\
+               FROM (select c1 from aggregate_test_100) AS a \
                JOIN\
-               (select c1 as c2 from aggregate_test_100)\
+               (select c1 as c2 from aggregate_test_100) AS b \
                ON c1=c2\
                ";
 
@@ -4681,13 +4681,15 @@ async fn test_physical_plan_display_indent_multi_children() {
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 3)",
         "          ProjectionExec: expr=[c1@0 as c1]",
-        "            RepartitionExec: partitioning=RoundRobinBatch(3)",
-        "              CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+        "            ProjectionExec: expr=[c1@0 as c1]",
+        "              RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "                CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 3)",
-        "          ProjectionExec: expr=[c1@0 as c2]",
-        "            RepartitionExec: partitioning=RoundRobinBatch(3)",
-        "              CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+        "          ProjectionExec: expr=[c2@0 as c2]",
+        "            ProjectionExec: expr=[c1@0 as c2]",
+        "              RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "                CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
     ];
 
     let data_path = datafusion::test_util::arrow_test_data();

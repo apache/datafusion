@@ -80,6 +80,7 @@ fn limit_push_down(
                 expr,
                 input,
                 schema,
+                alias,
             },
             upper_limit,
         ) => {
@@ -93,6 +94,7 @@ fn limit_push_down(
                     execution_props,
                 )?),
                 schema: schema.clone(),
+                alias: alias.clone(),
             })
         }
         (

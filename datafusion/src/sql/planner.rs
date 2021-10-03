@@ -64,6 +64,7 @@ use super::{
         resolve_positions_to_exprs,
     },
 };
+use crate::logical_plan::builder::project_with_alias;
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
@@ -158,7 +159,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
         match set_expr {
-            SetExpr::Select(s) => self.select_to_plan(s.as_ref(), ctes),
+            SetExpr::Select(s) => self.select_to_plan(s.as_ref(), ctes, alias),
             SetExpr::SetOperation {
                 op,
                 left,
@@ -502,11 +503,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         relation: &TableFactor,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
-        let (plan, columns_alias) = match relation {
+        let (plan, alias) = match relation {
             TableFactor::Table { name, alias, .. } => {
                 let table_name = name.to_string();
                 let cte = ctes.get(&table_name);
-                let columns_alias = alias.clone().map(|x| x.columns);
                 (
                     match (
                         cte,
@@ -528,21 +528,38 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             name
                         ))),
                     }?,
-                    columns_alias,
+                    alias,
                 )
             }
             TableFactor::Derived {
                 subquery, alias, ..
-            } => (
-                self.query_to_plan_with_alias(
+            } => {
+                // if alias is None, return Err
+                if alias.is_none() {
+                    return Err(DataFusionError::Plan(
+                        "subquery in FROM must have an alias".to_string(),
+                    ));
+                }
+                let logical_plan = self.query_to_plan_with_alias(
                     subquery,
                     alias.as_ref().map(|a| a.name.value.to_string()),
                     ctes,
-                )?,
-                alias.clone().map(|x| x.columns),
-            ),
+                )?;
+                (
+                    project_with_alias(
+                        logical_plan.clone(),
+                        logical_plan
+                            .schema()
+                            .fields()
+                            .iter()
+                            .map(|field| col(field.name())),
+                        alias.as_ref().map(|a| a.name.value.to_string()),
+                    )?,
+                    alias,
+                )
+            }
             TableFactor::NestedJoin(table_with_joins) => {
-                (self.plan_table_with_joins(table_with_joins, ctes)?, None)
+                (self.plan_table_with_joins(table_with_joins, ctes)?, &None)
             }
             // @todo Support TableFactory::TableFunction?
             _ => {
@@ -552,8 +569,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )))
             }
         };
-
-        if let Some(columns_alias) = columns_alias {
+        if let Some(alias) = alias {
+            let columns_alias = alias.clone().columns;
             if columns_alias.is_empty() {
                 // sqlparser-rs encodes AS t as an empty list of column alias
                 Ok(plan)
@@ -564,15 +581,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     columns_alias.len(),
                 )));
             } else {
-                let fields = plan.schema().fields().clone();
-                LogicalPlanBuilder::from(plan)
-                    .project(
-                        fields
+                Ok(LogicalPlanBuilder::from(plan.clone())
+                    .project_with_alias(
+                        plan.schema()
+                            .fields()
                             .iter()
                             .zip(columns_alias.iter())
                             .map(|(field, ident)| col(field.name()).alias(&ident.value)),
+                        Some(alias.clone().name.value),
                     )?
-                    .build()
+                    .build()?)
             }
         } else {
             Ok(plan)
@@ -584,6 +602,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         select: &Select,
         ctes: &mut HashMap<String, LogicalPlan>,
+        alias: Option<String>,
     ) -> Result<LogicalPlan> {
         let plans = self.plan_from_tables(&select.from, ctes)?;
 
@@ -782,8 +801,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             plan
         };
-
-        self.project(plan, select_exprs_post_aggr)
+        project_with_alias(plan, select_exprs_post_aggr, alias)
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
@@ -2033,12 +2051,14 @@ mod tests {
                      FROM (
                        SELECT first_name AS fn1, last_name, birth_date, age
                        FROM person
-                     )
-                   )";
-        let expected = "Projection: #fn2, #person.last_name\
-                        \n  Projection: #fn1 AS fn2, #person.last_name, #person.birth_date\
-                        \n    Projection: #person.first_name AS fn1, #person.last_name, #person.birth_date, #person.age\
-                        \n      TableScan: person projection=None";
+                     ) AS a
+                   ) AS b";
+        let expected = "Projection: #b.fn2, #b.last_name\
+                        \n  Projection: #b.fn2, #b.last_name, #b.birth_date, alias=b\
+                        \n    Projection: #a.fn1 AS fn2, #a.last_name, #a.birth_date, alias=b\
+                        \n      Projection: #a.fn1, #a.last_name, #a.birth_date, #a.age, alias=a\
+                        \n        Projection: #person.first_name AS fn1, #person.last_name, #person.birth_date, #person.age, alias=a\
+                        \n          TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -2049,14 +2069,15 @@ mod tests {
                      SELECT first_name AS fn1, age
                      FROM person
                      WHERE age > 20
-                   )
+                   ) AS a
                    WHERE fn1 = 'X' AND age < 30";
 
-        let expected = "Projection: #fn1, #person.age\
-                        \n  Filter: #fn1 = Utf8(\"X\") AND #person.age < Int64(30)\
-                        \n    Projection: #person.first_name AS fn1, #person.age\
-                        \n      Filter: #person.age > Int64(20)\
-                        \n        TableScan: person projection=None";
+        let expected = "Projection: #a.fn1, #a.age\
+                        \n  Filter: #a.fn1 = Utf8(\"X\") AND #a.age < Int64(30)\
+                        \n    Projection: #a.fn1, #a.age, alias=a\
+                        \n      Projection: #person.first_name AS fn1, #person.age, alias=a\
+                        \n        Filter: #person.age > Int64(20)\
+                        \n          TableScan: person projection=None";
 
         quick_test(sql, expected);
     }
@@ -2065,8 +2086,8 @@ mod tests {
     fn table_with_column_alias() {
         let sql = "SELECT a, b, c
                    FROM lineitem l (a, b, c)";
-        let expected = "Projection: #a, #b, #c\
-                        \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c\
+        let expected = "Projection: #l.a, #l.b, #l.c\
+                        \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c, alias=l\
                         \n    TableScan: l projection=None";
         quick_test(sql, expected);
     }
@@ -2394,11 +2415,12 @@ mod tests {
              \n    TableScan: person projection=None",
         );
         quick_test(
-            "SELECT * FROM (SELECT first_name, last_name FROM person) GROUP BY first_name, last_name",
-            "Projection: #person.first_name, #person.last_name\
-             \n  Aggregate: groupBy=[[#person.first_name, #person.last_name]], aggr=[[]]\
-             \n    Projection: #person.first_name, #person.last_name\
-             \n      TableScan: person projection=None",
+            "SELECT * FROM (SELECT first_name, last_name FROM person) AS a GROUP BY first_name, last_name",
+            "Projection: #a.first_name, #a.last_name\
+             \n  Aggregate: groupBy=[[#a.first_name, #a.last_name]], aggr=[[]]\
+             \n    Projection: #a.first_name, #a.last_name, alias=a\
+             \n      Projection: #person.first_name, #person.last_name, alias=a\
+             \n        TableScan: person projection=None",
         );
     }
 

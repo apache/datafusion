@@ -318,6 +318,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             input,
             expr,
             schema,
+            alias: _,
         } => {
             // A projection is filter-commutable, but re-writes all predicate expressions
             // collect projection.
