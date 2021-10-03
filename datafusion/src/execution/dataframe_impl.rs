@@ -214,6 +214,15 @@ impl DataFrame for DataFrameImpl {
             .build()?;
         Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
     }
+
+    fn distinct(&self) -> Result<Arc<dyn DataFrame>> {
+        Ok(Arc::new(DataFrameImpl::new(
+            self.ctx_state.clone(),
+            &LogicalPlanBuilder::from(self.to_logical_plan())
+                .distinct()?
+                .build()?,
+        )))
+    }
 }
 
 #[cfg(test)]
