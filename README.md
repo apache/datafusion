@@ -212,7 +212,7 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
 - [x] Common table expressions
 - [ ] Set Operations
   - [x] UNION ALL
-  - [ ] UNION
+  - [x] UNION
   - [ ] INTERSECT
   - [ ] MINUS
 - [x] Joins

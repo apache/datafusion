@@ -291,6 +291,15 @@ impl LogicalPlanBuilder {
         Ok(Self::from(union_with_alias(self.plan.clone(), plan, None)?))
     }
 
+    /// Apply deduplication: Only distinct (different) values are returned)
+    pub fn distinct(&self) -> Result<Self> {
+        let projection_expr = expand_wildcard(self.plan.schema(), &self.plan)?;
+        let plan = LogicalPlanBuilder::from(self.plan.clone())
+            .aggregate(projection_expr, vec![])?
+            .build()?;
+        Self::from(plan).project(vec![Expr::Wildcard])
+    }
+
     /// Apply a join with on constraint
     pub fn join(
         &self,
