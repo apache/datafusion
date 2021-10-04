@@ -21,6 +21,7 @@
 //! see also https://www.postgresql.org/docs/current/functions-window.html
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::{
     aggregates, aggregates::AggregateFunction, functions::Signature,
     type_coercion::data_types, windows::find_ranges_in_range, PhysicalExpr,
@@ -200,19 +201,19 @@ pub(super) fn signature_for_built_in(fun: &BuiltInWindowFunction) -> Signature {
         | BuiltInWindowFunction::Rank
         | BuiltInWindowFunction::DenseRank
         | BuiltInWindowFunction::PercentRank
-        | BuiltInWindowFunction::CumeDist => Signature::Any(0),
+        | BuiltInWindowFunction::CumeDist => Signature::Any(0,Volatility::Immutable),
         BuiltInWindowFunction::Lag | BuiltInWindowFunction::Lead => {
             Signature::OneOf(vec![
-                Signature::Any(1),
-                Signature::Any(2),
-                Signature::Any(3),
+                Signature::Any(1,Volatility::Immutable,),
+                Signature::Any(2,Volatility::Immutable,),
+                Signature::Any(3,Volatility::Immutable,),
             ])
         }
         BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
-            Signature::Any(1)
+            Signature::Any(1,Volatility::Immutable,)
         }
-        BuiltInWindowFunction::Ntile => Signature::Exact(vec![DataType::UInt64]),
-        BuiltInWindowFunction::NthValue => Signature::Any(2),
+        BuiltInWindowFunction::Ntile => Signature::Exact(vec![DataType::UInt64],Volatility::Immutable,),
+        BuiltInWindowFunction::NthValue => Signature::Any(2,Volatility::Immutable,),
     }
 }
 

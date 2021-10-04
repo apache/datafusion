@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::{
+use datafusion::{arrow::{
     array::{ArrayRef, Float32Array, Float64Array},
     datatypes::DataType,
     record_batch::RecordBatch,
-};
+}, physical_plan::functions::Volatility};
 
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
@@ -112,6 +112,7 @@ async fn main() -> Result<()> {
         vec![DataType::Float64, DataType::Float64],
         // returns f64
         Arc::new(DataType::Float64),
+        Volatility::Immutable,
         pow,
     );
 

@@ -1843,6 +1843,7 @@ pub fn convert_data_type(sql: &SQLDataType) -> Result<DataType> {
 mod tests {
     use super::*;
     use crate::datasource::empty::EmptyTable;
+    use crate::physical_plan::functions::Volatility;
     use crate::{logical_plan::create_udf, sql::parser::DFParser};
     use functions::ScalarFunctionImplementation;
 
@@ -3539,6 +3540,7 @@ mod tests {
                     "my_sqrt",
                     vec![DataType::Float64],
                     Arc::new(DataType::Float64),
+                    Volatility::Immutable,
                     f,
                 ))),
                 _ => None,

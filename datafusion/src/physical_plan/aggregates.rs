@@ -26,11 +26,7 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
-use super::{
-    functions::Signature,
-    type_coercion::{coerce, data_types},
-    Accumulator, AggregateExpr, PhysicalExpr,
-};
+use super::{Accumulator, AggregateExpr, PhysicalExpr, functions::{Signature, Volatility}, type_coercion::{coerce, data_types}};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
@@ -194,7 +190,7 @@ static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 pub fn signature(fun: &AggregateFunction) -> Signature {
     // note: the physical expression must accept the type returned by this function or the execution panics.
     match fun {
-        AggregateFunction::Count => Signature::Any(1),
+        AggregateFunction::Count => Signature::Any(1, Volatility::Immutable),
         AggregateFunction::Min | AggregateFunction::Max => {
             let valid = STRINGS
                 .iter()
@@ -203,10 +199,10 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .chain(DATES.iter())
                 .cloned()
                 .collect::<Vec<_>>();
-            Signature::Uniform(1, valid)
+            Signature::Uniform(1, valid,Volatility::Immutable)
         }
         AggregateFunction::Avg | AggregateFunction::Sum => {
-            Signature::Uniform(1, NUMERICS.to_vec())
+            Signature::Uniform(1, NUMERICS.to_vec(),Volatility::Immutable)
         }
     }
 }

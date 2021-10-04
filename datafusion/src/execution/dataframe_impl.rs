@@ -222,6 +222,7 @@ mod tests {
 
     use super::*;
     use crate::logical_plan::*;
+    use crate::physical_plan::functions::Volatility;
     use crate::{assert_batches_sorted_eq, execution::context::ExecutionContext};
     use crate::{datasource::csv::CsvReadOptions, physical_plan::ColumnarValue};
     use crate::{physical_plan::functions::ScalarFunctionImplementation, test};
@@ -358,6 +359,7 @@ mod tests {
             "my_fn",
             vec![DataType::Float64],
             Arc::new(DataType::Float64),
+            Volatility::Immutable,
             my_fn,
         ));
 
