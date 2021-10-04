@@ -5066,3 +5066,13 @@ async fn avro_explain() {
     ];
     assert_eq!(expected, actual);
 }
+
+#[tokio::test]
+async fn union_distinct() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT 1 as x UNION SELECT 1 as x";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["1"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}

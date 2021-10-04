@@ -170,8 +170,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
                     union_with_alias(left_plan, right_plan, alias)
                 }
+                (SetOperator::Union, false) => {
+                    let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
+                    let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
+                    let union_plan = union_with_alias(left_plan, right_plan, alias)?;
+                    LogicalPlanBuilder::from(union_plan).distinct()?.build()
+                }
                 _ => Err(DataFusionError::NotImplemented(format!(
-                    "Only UNION ALL is supported, found {}",
+                    "Only UNION ALL and UNION [DISTINCT] are supported, found {}",
                     op
                 ))),
             },
@@ -3440,7 +3446,7 @@ mod tests {
         let sql = "SELECT order_id from orders EXCEPT SELECT order_id FROM orders";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "NotImplemented(\"Only UNION ALL is supported, found EXCEPT\")",
+            "NotImplemented(\"Only UNION ALL and UNION [DISTINCT] are supported, found EXCEPT\")",
             format!("{:?}", err)
         );
     }
