@@ -26,7 +26,11 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
-use super::{Accumulator, AggregateExpr, PhysicalExpr, functions::{Signature, Volatility}, type_coercion::{coerce, data_types}};
+use super::{
+    functions::{Signature, Volatility},
+    type_coercion::{coerce, data_types},
+    Accumulator, AggregateExpr, PhysicalExpr,
+};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
@@ -199,10 +203,10 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .chain(DATES.iter())
                 .cloned()
                 .collect::<Vec<_>>();
-            Signature::Uniform(1, valid,Volatility::Immutable)
+            Signature::Uniform(1, valid, Volatility::Immutable)
         }
         AggregateFunction::Avg | AggregateFunction::Sum => {
-            Signature::Uniform(1, NUMERICS.to_vec(),Volatility::Immutable)
+            Signature::Uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }
     }
 }

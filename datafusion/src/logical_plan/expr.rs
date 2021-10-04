@@ -1603,7 +1603,12 @@ pub fn create_udf(
     fun: ScalarFunctionImplementation,
 ) -> ScalarUDF {
     let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-    ScalarUDF::new(name, &Signature::Exact(input_types, volatility), &return_type, &fun)
+    ScalarUDF::new(
+        name,
+        &Signature::Exact(input_types, volatility),
+        &return_type,
+        &fun,
+    )
 }
 
 /// Creates a new UDAF with a specific signature, state type and return type.

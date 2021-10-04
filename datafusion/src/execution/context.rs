@@ -1043,7 +1043,7 @@ impl FunctionRegistry for ExecutionContextState {
 mod tests {
     use super::*;
     use crate::logical_plan::{binary_expr, lit, Operator};
-    use crate::physical_plan::functions::{Volatility, make_scalar_function};
+    use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::physical_plan::{collect, collect_partitioned};
     use crate::test;
     use crate::variable::VarType;

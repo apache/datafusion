@@ -78,10 +78,9 @@ pub enum Signature {
     OneOf(Vec<Signature>),
 }
 
-
 ///A function's volatility, which defines the functions eligibility for certain optimizations
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub enum Volatility{
+pub enum Volatility {
     /// Immutable - An immutable function will always return the same output when given the same input.
     Immutable,
     /// Volatile - A volatile function may change the return value from evaluation to evaluation. Mutiple invocations of a volatile function may return different results when used in the same query
@@ -1098,11 +1097,12 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
 
     // for now, the list is small, as we do not have many built-in functions.
     match fun {
-        BuiltinScalarFunction::Array => {
-            Signature::Variadic(array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),Volatility::Immutable)
-        }
+        BuiltinScalarFunction::Array => Signature::Variadic(
+            array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),
+            Volatility::Immutable,
+        ),
         BuiltinScalarFunction::Concat | BuiltinScalarFunction::ConcatWithSeparator => {
-            Signature::Variadic(vec![DataType::Utf8],Volatility::Immutable)
+            Signature::Variadic(vec![DataType::Utf8], Volatility::Immutable)
         }
         BuiltinScalarFunction::Ascii
         | BuiltinScalarFunction::BitLength
@@ -1117,45 +1117,59 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
         | BuiltinScalarFunction::SHA384
         | BuiltinScalarFunction::SHA512
         | BuiltinScalarFunction::Trim
-        | BuiltinScalarFunction::Upper => {
-            Signature::Uniform(1, vec![DataType::Utf8, DataType::LargeUtf8],Volatility::Immutable)
-        }
+        | BuiltinScalarFunction::Upper => Signature::Uniform(
+            1,
+            vec![DataType::Utf8, DataType::LargeUtf8],
+            Volatility::Immutable,
+        ),
         BuiltinScalarFunction::Btrim
         | BuiltinScalarFunction::Ltrim
         | BuiltinScalarFunction::Rtrim => Signature::OneOf(vec![
             Signature::Exact(vec![DataType::Utf8], Volatility::Immutable),
-            Signature::Exact(vec![DataType::Utf8, DataType::Utf8],Volatility::Immutable),
+            Signature::Exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Immutable),
         ]),
         BuiltinScalarFunction::Chr | BuiltinScalarFunction::ToHex => {
-            Signature::Uniform(1, vec![DataType::Int64],Volatility::Immutable)
+            Signature::Uniform(1, vec![DataType::Int64], Volatility::Immutable)
         }
         BuiltinScalarFunction::Lpad | BuiltinScalarFunction::Rpad => {
             Signature::OneOf(vec![
-                Signature::Exact(vec![DataType::Utf8, DataType::Int64],Volatility::Immutable),
-                Signature::Exact(vec![DataType::LargeUtf8, DataType::Int64],Volatility::Immutable),
-                Signature::Exact(vec![DataType::Utf8, DataType::Int64, DataType::Utf8],Volatility::Immutable),
-                Signature::Exact(vec![
-                    DataType::LargeUtf8,
-                    DataType::Int64,
-                    DataType::Utf8,
-                ],Volatility::Immutable),
-                Signature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Int64,
-                    DataType::LargeUtf8,
-                ],Volatility::Immutable),
-                Signature::Exact(vec![
-                    DataType::LargeUtf8,
-                    DataType::Int64,
-                    DataType::LargeUtf8,
-                ],Volatility::Immutable),
+                Signature::Exact(
+                    vec![DataType::Utf8, DataType::Int64],
+                    Volatility::Immutable,
+                ),
+                Signature::Exact(
+                    vec![DataType::LargeUtf8, DataType::Int64],
+                    Volatility::Immutable,
+                ),
+                Signature::Exact(
+                    vec![DataType::Utf8, DataType::Int64, DataType::Utf8],
+                    Volatility::Immutable,
+                ),
+                Signature::Exact(
+                    vec![DataType::LargeUtf8, DataType::Int64, DataType::Utf8],
+                    Volatility::Immutable,
+                ),
+                Signature::Exact(
+                    vec![DataType::Utf8, DataType::Int64, DataType::LargeUtf8],
+                    Volatility::Immutable,
+                ),
+                Signature::Exact(
+                    vec![DataType::LargeUtf8, DataType::Int64, DataType::LargeUtf8],
+                    Volatility::Immutable,
+                ),
             ])
         }
         BuiltinScalarFunction::Left
         | BuiltinScalarFunction::Repeat
         | BuiltinScalarFunction::Right => Signature::OneOf(vec![
-            Signature::Exact(vec![DataType::Utf8, DataType::Int64],Volatility::Immutable),
-            Signature::Exact(vec![DataType::LargeUtf8, DataType::Int64],Volatility::Immutable),
+            Signature::Exact(
+                vec![DataType::Utf8, DataType::Int64],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::LargeUtf8, DataType::Int64],
+                Volatility::Immutable,
+            ),
         ]),
         BuiltinScalarFunction::ToTimestamp => Signature::Uniform(
             1,
@@ -1165,7 +1179,8 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Timestamp(TimeUnit::Millisecond, None),
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
-            ],Volatility::Immutable
+            ],
+            Volatility::Immutable,
         ),
         BuiltinScalarFunction::ToTimestampMillis => Signature::Uniform(
             1,
@@ -1175,7 +1190,8 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
-            ],Volatility::Immutable
+            ],
+            Volatility::Immutable,
         ),
         BuiltinScalarFunction::ToTimestampMicros => Signature::Uniform(
             1,
@@ -1185,7 +1201,8 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
                 DataType::Timestamp(TimeUnit::Millisecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
-            ],Volatility::Immutable
+            ],
+            Volatility::Immutable,
         ),
         BuiltinScalarFunction::ToTimestampSeconds => Signature::Uniform(
             1,
@@ -1195,92 +1212,161 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 DataType::Timestamp(TimeUnit::Millisecond, None),
-            ],Volatility::Immutable
+            ],
+            Volatility::Immutable,
         ),
-        BuiltinScalarFunction::DateTrunc => Signature::Exact(vec![
-            DataType::Utf8,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-        ],Volatility::Immutable),
-        BuiltinScalarFunction::DatePart => Signature::OneOf(vec![
-            Signature::Exact(vec![DataType::Utf8, DataType::Date32],Volatility::Immutable),
-            Signature::Exact(vec![DataType::Utf8, DataType::Date64],Volatility::Immutable),
-            Signature::Exact(vec![
-                DataType::Utf8,
-                DataType::Timestamp(TimeUnit::Second, None),
-            ],Volatility::Immutable),
-            Signature::Exact(vec![
-                DataType::Utf8,
-                DataType::Timestamp(TimeUnit::Microsecond, None),
-            ],Volatility::Immutable),
-            Signature::Exact(vec![
-                DataType::Utf8,
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-            ],Volatility::Immutable),
-            Signature::Exact(vec![
+        BuiltinScalarFunction::DateTrunc => Signature::Exact(
+            vec![
                 DataType::Utf8,
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
-            ],Volatility::Immutable),
+            ],
+            Volatility::Immutable,
+        ),
+        BuiltinScalarFunction::DatePart => Signature::OneOf(vec![
+            Signature::Exact(
+                vec![DataType::Utf8, DataType::Date32],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::Utf8, DataType::Date64],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::Utf8, DataType::Timestamp(TimeUnit::Second, None)],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                ],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                ],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ],
+                Volatility::Immutable,
+            ),
         ]),
         BuiltinScalarFunction::SplitPart => Signature::OneOf(vec![
-            Signature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Int64],Volatility::Immutable),
-            Signature::Exact(vec![DataType::LargeUtf8, DataType::Utf8, DataType::Int64],Volatility::Immutable),
-            Signature::Exact(vec![DataType::Utf8, DataType::LargeUtf8, DataType::Int64],Volatility::Immutable),
-            Signature::Exact(vec![
-                DataType::LargeUtf8,
-                DataType::LargeUtf8,
-                DataType::Int64,
-            ],Volatility::Immutable),
+            Signature::Exact(
+                vec![DataType::Utf8, DataType::Utf8, DataType::Int64],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::LargeUtf8, DataType::Utf8, DataType::Int64],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::Utf8, DataType::LargeUtf8, DataType::Int64],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::LargeUtf8, DataType::LargeUtf8, DataType::Int64],
+                Volatility::Immutable,
+            ),
         ]),
 
         BuiltinScalarFunction::Strpos | BuiltinScalarFunction::StartsWith => {
             Signature::OneOf(vec![
-                Signature::Exact(vec![DataType::Utf8, DataType::Utf8],Volatility::Immutable),
-                Signature::Exact(vec![DataType::Utf8, DataType::LargeUtf8],Volatility::Immutable),
-                Signature::Exact(vec![DataType::LargeUtf8, DataType::Utf8],Volatility::Immutable),
-                Signature::Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8],Volatility::Immutable),
+                Signature::Exact(
+                    vec![DataType::Utf8, DataType::Utf8],
+                    Volatility::Immutable,
+                ),
+                Signature::Exact(
+                    vec![DataType::Utf8, DataType::LargeUtf8],
+                    Volatility::Immutable,
+                ),
+                Signature::Exact(
+                    vec![DataType::LargeUtf8, DataType::Utf8],
+                    Volatility::Immutable,
+                ),
+                Signature::Exact(
+                    vec![DataType::LargeUtf8, DataType::LargeUtf8],
+                    Volatility::Immutable,
+                ),
             ])
         }
 
         BuiltinScalarFunction::Substr => Signature::OneOf(vec![
-            Signature::Exact(vec![DataType::Utf8, DataType::Int64],Volatility::Immutable),
-            Signature::Exact(vec![DataType::LargeUtf8, DataType::Int64],Volatility::Immutable),
-            Signature::Exact(vec![DataType::Utf8, DataType::Int64, DataType::Int64],Volatility::Immutable),
-            Signature::Exact(vec![DataType::LargeUtf8, DataType::Int64, DataType::Int64],Volatility::Immutable),
+            Signature::Exact(
+                vec![DataType::Utf8, DataType::Int64],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::LargeUtf8, DataType::Int64],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::Utf8, DataType::Int64, DataType::Int64],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::LargeUtf8, DataType::Int64, DataType::Int64],
+                Volatility::Immutable,
+            ),
         ]),
 
         BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
-            Signature::OneOf(vec![Signature::Exact(vec![
-                DataType::Utf8,
-                DataType::Utf8,
-                DataType::Utf8,
-            ],Volatility::Immutable)])
+            Signature::OneOf(vec![Signature::Exact(
+                vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
+                Volatility::Immutable,
+            )])
         }
         BuiltinScalarFunction::RegexpReplace => Signature::OneOf(vec![
-            Signature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],Volatility::Immutable),
-            Signature::Exact(vec![
-                DataType::Utf8,
-                DataType::Utf8,
-                DataType::Utf8,
-                DataType::Utf8,
-            ],Volatility::Immutable),
+            Signature::Exact(
+                vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                ],
+                Volatility::Immutable,
+            ),
         ]),
 
         BuiltinScalarFunction::NullIf => {
-            Signature::Uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(),Volatility::Immutable)
+            Signature::Uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(), Volatility::Immutable)
         }
         BuiltinScalarFunction::RegexpMatch => Signature::OneOf(vec![
-            Signature::Exact(vec![DataType::Utf8, DataType::Utf8],Volatility::Immutable),
-            Signature::Exact(vec![DataType::LargeUtf8, DataType::Utf8],Volatility::Immutable),
-            Signature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],Volatility::Immutable),
-            Signature::Exact(vec![DataType::LargeUtf8, DataType::Utf8, DataType::Utf8],Volatility::Immutable),
+            Signature::Exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Immutable),
+            Signature::Exact(
+                vec![DataType::LargeUtf8, DataType::Utf8],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
+                Volatility::Immutable,
+            ),
+            Signature::Exact(
+                vec![DataType::LargeUtf8, DataType::Utf8, DataType::Utf8],
+                Volatility::Immutable,
+            ),
         ]),
-        BuiltinScalarFunction::Random => Signature::Exact(vec![],Volatility::Volatile),
+        BuiltinScalarFunction::Random => Signature::Exact(vec![], Volatility::Volatile),
         // math expressions expect 1 argument of type f64 or f32
         // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
         // return the best approximation for it (in f64).
         // We accept f32 because in this case it is clear that the best approximation
         // will be as good as the number of digits in the number
-        _ => Signature::Uniform(1, vec![DataType::Float64, DataType::Float32], Volatility::Immutable),
+        _ => Signature::Uniform(
+            1,
+            vec![DataType::Float64, DataType::Float32],
+            Volatility::Immutable,
+        ),
     }
 }
 

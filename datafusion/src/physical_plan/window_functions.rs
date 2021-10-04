@@ -201,19 +201,21 @@ pub(super) fn signature_for_built_in(fun: &BuiltInWindowFunction) -> Signature {
         | BuiltInWindowFunction::Rank
         | BuiltInWindowFunction::DenseRank
         | BuiltInWindowFunction::PercentRank
-        | BuiltInWindowFunction::CumeDist => Signature::Any(0,Volatility::Immutable),
+        | BuiltInWindowFunction::CumeDist => Signature::Any(0, Volatility::Immutable),
         BuiltInWindowFunction::Lag | BuiltInWindowFunction::Lead => {
             Signature::OneOf(vec![
-                Signature::Any(1,Volatility::Immutable,),
-                Signature::Any(2,Volatility::Immutable,),
-                Signature::Any(3,Volatility::Immutable,),
+                Signature::Any(1, Volatility::Immutable),
+                Signature::Any(2, Volatility::Immutable),
+                Signature::Any(3, Volatility::Immutable),
             ])
         }
         BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
-            Signature::Any(1,Volatility::Immutable,)
+            Signature::Any(1, Volatility::Immutable)
         }
-        BuiltInWindowFunction::Ntile => Signature::Exact(vec![DataType::UInt64],Volatility::Immutable,),
-        BuiltInWindowFunction::NthValue => Signature::Any(2,Volatility::Immutable,),
+        BuiltInWindowFunction::Ntile => {
+            Signature::Exact(vec![DataType::UInt64], Volatility::Immutable)
+        }
+        BuiltInWindowFunction::NthValue => Signature::Any(2, Volatility::Immutable),
     }
 }
 
