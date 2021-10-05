@@ -1605,7 +1605,7 @@ pub fn create_udf(
     let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
     ScalarUDF::new(
         name,
-        &Signature::Exact(input_types, volatility),
+        &Signature::exact(input_types, volatility),
         &return_type,
         &fun,
     )
@@ -1626,7 +1626,7 @@ pub fn create_udaf(
     let state_type: StateTypeFunction = Arc::new(move |_| Ok(state_type.clone()));
     AggregateUDF::new(
         name,
-        &Signature::Exact(vec![input_type], volatility),
+        &Signature::exact(vec![input_type], volatility),
         &return_type,
         &accumulator,
         &state_type,

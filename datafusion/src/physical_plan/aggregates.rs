@@ -194,7 +194,7 @@ static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 pub fn signature(fun: &AggregateFunction) -> Signature {
     // note: the physical expression must accept the type returned by this function or the execution panics.
     match fun {
-        AggregateFunction::Count => Signature::Any(1, Volatility::Immutable),
+        AggregateFunction::Count => Signature::any(1, Volatility::Immutable),
         AggregateFunction::Min | AggregateFunction::Max => {
             let valid = STRINGS
                 .iter()
@@ -203,10 +203,10 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .chain(DATES.iter())
                 .cloned()
                 .collect::<Vec<_>>();
-            Signature::Uniform(1, valid, Volatility::Immutable)
+            Signature::uniform(1, valid, Volatility::Immutable)
         }
         AggregateFunction::Avg | AggregateFunction::Sum => {
-            Signature::Uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
+            Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }
     }
 }

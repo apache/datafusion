@@ -36,6 +36,7 @@ use arrow::datatypes::{DataType, Schema, TimeUnit};
 use super::{functions::Signature, PhysicalExpr};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::try_cast;
+use crate::physical_plan::functions::TypeSignature;
 
 /// Returns `expressions` coerced to types compatible with
 /// `signature`, if possible.
@@ -75,7 +76,7 @@ pub fn data_types(
     if current_types.is_empty() {
         return Ok(vec![]);
     }
-    let valid_types = get_valid_types(signature, current_types)?;
+    let valid_types = get_valid_types(&signature.type_signature, current_types)?;
 
     if valid_types
         .iter()
@@ -93,32 +94,32 @@ pub fn data_types(
     // none possible -> Error
     Err(DataFusionError::Plan(format!(
         "Coercion from {:?} to the signature {:?} failed.",
-        current_types, signature
+        current_types, &signature.type_signature
     )))
 }
 
 fn get_valid_types(
-    signature: &Signature,
+    signature: &TypeSignature,
     current_types: &[DataType],
 ) -> Result<Vec<Vec<DataType>>> {
     let valid_types = match signature {
-        Signature::Variadic(valid_types, ..) => valid_types
+        TypeSignature::Variadic(valid_types, ..) => valid_types
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
-        Signature::Uniform(number, valid_types, ..) => valid_types
+        TypeSignature::Uniform(number, valid_types, ..) => valid_types
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
-        Signature::VariadicEqual(_) => {
+        TypeSignature::VariadicEqual => {
             // one entry with the same len as current_types, whose type is `current_types[0]`.
             vec![current_types
                 .iter()
                 .map(|_| current_types[0].clone())
                 .collect()]
         }
-        Signature::Exact(valid_types, ..) => vec![valid_types.clone()],
-        Signature::Any(number, ..) => {
+        TypeSignature::Exact(valid_types, ..) => vec![valid_types.clone()],
+        TypeSignature::Any(number, ..) => {
             if current_types.len() != *number {
                 return Err(DataFusionError::Plan(format!(
                     "The function expected {} arguments but received {}",
@@ -128,7 +129,7 @@ fn get_valid_types(
             }
             vec![(0..*number).map(|i| current_types[i].clone()).collect()]
         }
-        Signature::OneOf(types, ..) => types
+        TypeSignature::OneOf(types, ..) => types
             .iter()
             .filter_map(|t| get_valid_types(t, current_types).ok())
             .flatten()
@@ -209,7 +210,10 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::{expressions::col, functions::Volatility};
+    use crate::physical_plan::{
+        expressions::col,
+        functions::{TypeSignature, Volatility},
+    };
     use arrow::datatypes::{DataType, Field, Schema};
 
     #[test]
@@ -284,18 +288,18 @@ mod tests {
             // u16 -> u32
             case(
                 vec![DataType::UInt16],
-                Signature::Uniform(1, vec![DataType::UInt32], Volatility::Immutable),
+                Signature::uniform(1, vec![DataType::UInt32], Volatility::Immutable),
                 vec![DataType::UInt32],
             )?,
             // same type
             case(
                 vec![DataType::UInt32, DataType::UInt32],
-                Signature::Uniform(2, vec![DataType::UInt32], Volatility::Immutable),
+                Signature::uniform(2, vec![DataType::UInt32], Volatility::Immutable),
                 vec![DataType::UInt32, DataType::UInt32],
             )?,
             case(
                 vec![DataType::UInt32],
-                Signature::Uniform(
+                Signature::uniform(
                     1,
                     vec![DataType::Float32, DataType::Float64],
                     Volatility::Immutable,
@@ -305,19 +309,19 @@ mod tests {
             // u32 -> f32
             case(
                 vec![DataType::UInt32, DataType::UInt32],
-                Signature::Variadic(vec![DataType::Float32], Volatility::Immutable),
+                Signature::variadic(vec![DataType::Float32], Volatility::Immutable),
                 vec![DataType::Float32, DataType::Float32],
             )?,
             // u32 -> f32
             case(
                 vec![DataType::Float32, DataType::UInt32],
-                Signature::VariadicEqual(Volatility::Immutable),
+                Signature::variadic_equal(Volatility::Immutable),
                 vec![DataType::Float32, DataType::Float32],
             )?,
             // common type is u64
             case(
                 vec![DataType::UInt32, DataType::UInt64],
-                Signature::Variadic(
+                Signature::variadic(
                     vec![DataType::UInt32, DataType::UInt64],
                     Volatility::Immutable,
                 ),
@@ -326,7 +330,7 @@ mod tests {
             // f32 -> f32
             case(
                 vec![DataType::Float32],
-                Signature::Any(1, Volatility::Immutable),
+                Signature::any(1, Volatility::Immutable),
                 vec![DataType::Float32],
             )?,
         ];
@@ -342,25 +346,25 @@ mod tests {
             // we do not know how to cast bool to UInt16 => fail
             case(
                 vec![DataType::Boolean],
-                Signature::Uniform(1, vec![DataType::UInt16], Volatility::Immutable),
+                Signature::uniform(1, vec![DataType::UInt16], Volatility::Immutable),
                 vec![],
             )?,
             // u32 and bool are not uniform
             case(
                 vec![DataType::UInt32, DataType::Boolean],
-                Signature::VariadicEqual(Volatility::Immutable),
+                Signature::variadic_equal(Volatility::Immutable),
                 vec![],
             )?,
             // bool is not castable to u32
             case(
                 vec![DataType::Boolean, DataType::Boolean],
-                Signature::Variadic(vec![DataType::UInt32], Volatility::Immutable),
+                Signature::variadic(vec![DataType::UInt32], Volatility::Immutable),
                 vec![],
             )?,
             // expected two arguments
             case(
                 vec![DataType::UInt32],
-                Signature::Any(2, Volatility::Immutable),
+                Signature::any(2, Volatility::Immutable),
                 vec![],
             )?,
         ];
@@ -379,10 +383,8 @@ mod tests {
 
     #[test]
     fn test_get_valid_types_one_of() -> Result<()> {
-        let signature = Signature::OneOf(vec![
-            Signature::Any(1, Volatility::Immutable),
-            Signature::Any(2, Volatility::Immutable),
-        ]);
+        let signature =
+            TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]);
 
         let invalid_types = get_valid_types(
             &signature,
