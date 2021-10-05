@@ -313,9 +313,75 @@ impl BuiltinScalarFunction {
     /// Returns the [Volatility] of the builtin function.  
     pub fn volatility(&self) -> Volatility {
         match self {
-            BuiltinScalarFunction::Random => Volatility::Volatile,
+
+            //Immutable scalar builtins
+            BuiltinScalarFunction::Abs => Volatility::Immutable,
+            BuiltinScalarFunction::Acos => Volatility::Immutable,
+            BuiltinScalarFunction::Asin => Volatility::Immutable,
+            BuiltinScalarFunction::Atan => Volatility::Immutable,
+            BuiltinScalarFunction::Ceil => Volatility::Immutable,
+            BuiltinScalarFunction::Cos => Volatility::Immutable,
+            BuiltinScalarFunction::Exp => Volatility::Immutable,
+            BuiltinScalarFunction::Floor => Volatility::Immutable,
+            BuiltinScalarFunction::Ln => Volatility::Immutable,
+            BuiltinScalarFunction::Log => Volatility::Immutable,
+            BuiltinScalarFunction::Log10 => Volatility::Immutable,
+            BuiltinScalarFunction::Log2 => Volatility::Immutable,
+            BuiltinScalarFunction::Round => Volatility::Immutable,
+            BuiltinScalarFunction::Signum => Volatility::Immutable,
+            BuiltinScalarFunction::Sin => Volatility::Immutable,
+            BuiltinScalarFunction::Sqrt => Volatility::Immutable,
+            BuiltinScalarFunction::Tan => Volatility::Immutable,
+            BuiltinScalarFunction::Trunc => Volatility::Immutable,
+            BuiltinScalarFunction::Array => Volatility::Immutable,
+            BuiltinScalarFunction::Ascii => Volatility::Immutable,
+            BuiltinScalarFunction::BitLength => Volatility::Immutable,
+            BuiltinScalarFunction::Btrim => Volatility::Immutable,
+            BuiltinScalarFunction::CharacterLength => Volatility::Immutable,
+            BuiltinScalarFunction::Chr => Volatility::Immutable,
+            BuiltinScalarFunction::Concat => Volatility::Immutable,
+            BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
+            BuiltinScalarFunction::DatePart => Volatility::Immutable,
+            BuiltinScalarFunction::DateTrunc => Volatility::Immutable,
+            BuiltinScalarFunction::InitCap => Volatility::Immutable,
+            BuiltinScalarFunction::Left => Volatility::Immutable,
+            BuiltinScalarFunction::Lpad => Volatility::Immutable,
+            BuiltinScalarFunction::Lower => Volatility::Immutable,
+            BuiltinScalarFunction::Ltrim => Volatility::Immutable,
+            BuiltinScalarFunction::MD5 => Volatility::Immutable,
+            BuiltinScalarFunction::NullIf => Volatility::Immutable,
+            BuiltinScalarFunction::OctetLength => Volatility::Immutable,
+            
+            BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
+            BuiltinScalarFunction::Repeat => Volatility::Immutable,
+            BuiltinScalarFunction::Replace => Volatility::Immutable,
+            BuiltinScalarFunction::Reverse => Volatility::Immutable,
+            BuiltinScalarFunction::Right => Volatility::Immutable,
+            BuiltinScalarFunction::Rpad => Volatility::Immutable,
+            BuiltinScalarFunction::Rtrim => Volatility::Immutable,
+            BuiltinScalarFunction::SHA224 => Volatility::Immutable,
+            BuiltinScalarFunction::SHA256 => Volatility::Immutable,
+            BuiltinScalarFunction::SHA384 => Volatility::Immutable,
+            BuiltinScalarFunction::SHA512 => Volatility::Immutable,
+            BuiltinScalarFunction::SplitPart => Volatility::Immutable,
+            BuiltinScalarFunction::StartsWith => Volatility::Immutable,
+            BuiltinScalarFunction::Strpos => Volatility::Immutable,
+            BuiltinScalarFunction::Substr => Volatility::Immutable,
+            BuiltinScalarFunction::ToHex => Volatility::Immutable,
+            BuiltinScalarFunction::ToTimestamp => Volatility::Immutable,
+            BuiltinScalarFunction::ToTimestampMillis => Volatility::Immutable,
+            BuiltinScalarFunction::ToTimestampMicros => Volatility::Immutable,
+            BuiltinScalarFunction::ToTimestampSeconds => Volatility::Immutable,
+            BuiltinScalarFunction::Translate => Volatility::Immutable,
+            BuiltinScalarFunction::Trim => Volatility::Immutable,
+            BuiltinScalarFunction::Upper => Volatility::Immutable,
+            BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
+
+            //Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
-            _ => Volatility::Immutable,
+
+            //Volatile builtin functions
+            BuiltinScalarFunction::Random => Volatility::Volatile,
         }
     }
 }
@@ -1174,10 +1240,10 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
     match fun {
         BuiltinScalarFunction::Array => Signature::variadic(
             array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::Concat | BuiltinScalarFunction::ConcatWithSeparator => {
-            Signature::variadic(vec![DataType::Utf8], Volatility::Immutable)
+            Signature::variadic(vec![DataType::Utf8], fun.volatility())
         }
         BuiltinScalarFunction::Ascii
         | BuiltinScalarFunction::BitLength
@@ -1195,7 +1261,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
         | BuiltinScalarFunction::Upper => Signature::uniform(
             1,
             vec![DataType::Utf8, DataType::LargeUtf8],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::Btrim
         | BuiltinScalarFunction::Ltrim
@@ -1204,10 +1270,10 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 TypeSignature::Exact(vec![DataType::Utf8]),
                 TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::Chr | BuiltinScalarFunction::ToHex => {
-            Signature::uniform(1, vec![DataType::Int64], Volatility::Immutable)
+            Signature::uniform(1, vec![DataType::Int64], fun.volatility())
         }
         BuiltinScalarFunction::Lpad | BuiltinScalarFunction::Rpad => Signature::one_of(
             vec![
@@ -1234,7 +1300,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     DataType::LargeUtf8,
                 ]),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::Left
         | BuiltinScalarFunction::Repeat
@@ -1243,7 +1309,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
                 TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Int64]),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::ToTimestamp => Signature::uniform(
             1,
@@ -1254,7 +1320,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::ToTimestampMillis => Signature::uniform(
             1,
@@ -1265,7 +1331,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::ToTimestampMicros => Signature::uniform(
             1,
@@ -1276,7 +1342,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Timestamp(TimeUnit::Millisecond, None),
                 DataType::Timestamp(TimeUnit::Second, None),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::ToTimestampSeconds => Signature::uniform(
             1,
@@ -1287,14 +1353,14 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 DataType::Timestamp(TimeUnit::Millisecond, None),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::DateTrunc => Signature::exact(
             vec![
                 DataType::Utf8,
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::DatePart => Signature::one_of(
             vec![
@@ -1317,7 +1383,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
                 ]),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
         BuiltinScalarFunction::SplitPart => Signature::one_of(
             vec![
@@ -1342,7 +1408,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     DataType::Int64,
                 ]),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
 
         BuiltinScalarFunction::Strpos | BuiltinScalarFunction::StartsWith => {
@@ -1353,7 +1419,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
                 ],
-                Volatility::Immutable,
+                fun.volatility(),
             )
         }
 
@@ -1372,7 +1438,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     DataType::Int64,
                 ]),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
 
         BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
@@ -1382,7 +1448,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     DataType::Utf8,
                     DataType::Utf8,
                 ])],
-                Volatility::Immutable,
+                fun.volatility(),
             )
         }
         BuiltinScalarFunction::RegexpReplace => Signature::one_of(
@@ -1399,11 +1465,11 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     DataType::Utf8,
                 ]),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
 
         BuiltinScalarFunction::NullIf => {
-            Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(), Volatility::Immutable)
+            Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(), fun.volatility())
         }
         BuiltinScalarFunction::RegexpMatch => Signature::one_of(
             vec![
@@ -1420,9 +1486,9 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     DataType::Utf8,
                 ]),
             ],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
-        BuiltinScalarFunction::Random => Signature::exact(vec![], Volatility::Volatile),
+        BuiltinScalarFunction::Random => Signature::exact(vec![], fun.volatility()),
         // math expressions expect 1 argument of type f64 or f32
         // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
         // return the best approximation for it (in f64).
@@ -1431,7 +1497,7 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
         _ => Signature::uniform(
             1,
             vec![DataType::Float64, DataType::Float32],
-            Volatility::Immutable,
+            fun.volatility(),
         ),
     }
 }
