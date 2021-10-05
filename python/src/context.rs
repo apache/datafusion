@@ -31,7 +31,7 @@ use datafusion::prelude::CsvReadOptions;
 
 use crate::dataframe;
 use crate::errors;
-use crate::functions;
+use crate::functions::{self, PyVolatility};
 use crate::to_rust;
 use crate::types::PyDataType;
 
@@ -170,9 +170,10 @@ impl ExecutionContext {
         name: &str,
         func: PyObject,
         args_types: Vec<PyDataType>,
+        volatility: PyVolatility,
         return_type: PyDataType,
     ) {
-        let function = functions::create_udf(func, args_types, return_type, name);
+        let function = functions::create_udf(func, args_types, return_type,volatility, name);
 
         self.ctx.register_udf(function.function);
     }
