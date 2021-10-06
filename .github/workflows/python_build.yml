@@ -49,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9"]
+        python-version: ["3.10"]
         os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v2
@@ -60,7 +60,7 @@ jobs:
 
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly-2021-10-21
+          toolchain: nightly-2021-10-23
 
       - name: Install dependencies
         run: |
