@@ -173,7 +173,8 @@ impl ExecutionContext {
         volatility: PyVolatility,
         return_type: PyDataType,
     ) {
-        let function = functions::create_udf(func, args_types, return_type,volatility, name);
+        let function =
+            functions::create_udf(func, args_types, return_type, volatility, name);
 
         self.ctx.register_udf(function.function);
     }

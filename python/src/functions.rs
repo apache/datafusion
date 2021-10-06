@@ -201,31 +201,31 @@ define_unary_function!(min);
 define_unary_function!(max);
 define_unary_function!(count);
 
-
-
-
-#[pyclass(name="Volatility", module="datafusion.functions")]
+#[pyclass(name = "Volatility", module = "datafusion.functions")]
 #[derive(Clone)]
-pub struct PyVolatility{
-    pub(crate) volatility: Volatility
+pub struct PyVolatility {
+    pub(crate) volatility: Volatility,
 }
 
-
-
-
 #[pymethods]
-impl PyVolatility{
+impl PyVolatility {
     #[staticmethod]
-    fn immutable()->Self{
-        Self{volatility: Volatility::Immutable}
+    fn immutable() -> Self {
+        Self {
+            volatility: Volatility::Immutable,
+        }
     }
     #[staticmethod]
-    fn stable()->Self{
-        Self{volatility: Volatility::Stable}
+    fn stable() -> Self {
+        Self {
+            volatility: Volatility::Stable,
+        }
     }
     #[staticmethod]
-    fn volatile()->Self{
-        Self{volatility: Volatility::Volatile}
+    fn volatile() -> Self {
+        Self {
+            volatility: Volatility::Volatile,
+        }
     }
 }
 
@@ -262,7 +262,7 @@ fn udf(
 ) -> PyResult<expression::ScalarUDF> {
     let name = fun.getattr(py, "__qualname__")?.extract::<String>(py)?;
 
-    Ok(create_udf(fun, input_types,  return_type,volatility, &name))
+    Ok(create_udf(fun, input_types, return_type, volatility, &name))
 }
 
 /// Creates a new udf.
