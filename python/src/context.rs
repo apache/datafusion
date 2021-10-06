@@ -170,8 +170,8 @@ impl ExecutionContext {
         name: &str,
         func: PyObject,
         args_types: Vec<PyDataType>,
-        volatility: PyVolatility,
         return_type: PyDataType,
+        volatility: PyVolatility,
     ) {
         let function =
             functions::create_udf(func, args_types, return_type, volatility, name);

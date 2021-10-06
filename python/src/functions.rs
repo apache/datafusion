@@ -271,8 +271,8 @@ fn udaf(
     accumulator: PyObject,
     input_type: PyDataType,
     return_type: PyDataType,
-    volatility: PyVolatility,
     state_type: Vec<PyDataType>,
+    volatility: PyVolatility,
     py: Python,
 ) -> PyResult<expression::AggregateUDF> {
     let name = accumulator
