@@ -49,7 +49,6 @@ use crate::catalog::{
     ResolvedTableReference, TableReference,
 };
 use crate::datasource::csv::CsvFile;
-use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
 use crate::datasource::parquet::ParquetTable;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
@@ -169,7 +168,6 @@ impl ExecutionContext {
                 aggregate_functions: HashMap::new(),
                 config,
                 execution_props: ExecutionProps::new(),
-                object_store_registry: Arc::new(ObjectStoreRegistry::new()),
             })),
         }
     }
@@ -396,29 +394,6 @@ impl ExecutionContext {
     /// Retrieves a `CatalogProvider` instance by name
     pub fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         self.state.lock().unwrap().catalog_list.catalog(name)
-    }
-
-    /// Registers a object store with scheme using a custom `ObjectStore` so that
-    /// an external file system or object storage system could be used against this context.
-    ///
-    /// Returns the `ObjectStore` previously registered for this scheme, if any
-    pub fn register_object_store(
-        &self,
-        scheme: impl Into<String>,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Option<Arc<dyn ObjectStore>> {
-        let scheme = scheme.into();
-
-        self.state
-            .lock()
-            .unwrap()
-            .object_store_registry
-            .register_store(scheme, object_store)
-    }
-
-    /// Retrieves a `ObjectStore` instance by scheme
-    pub fn object_store(&self, scheme: &str) -> Option<Arc<dyn ObjectStore>> {
-        self.state.lock().unwrap().object_store_registry.get(scheme)
     }
 
     /// Registers a table using a custom `TableProvider` so that
@@ -929,8 +904,6 @@ pub struct ExecutionContextState {
     pub config: ExecutionConfig,
     /// Execution properties
     pub execution_props: ExecutionProps,
-    /// Object Store that are registered with the context
-    pub object_store_registry: Arc<ObjectStoreRegistry>,
 }
 
 impl ExecutionProps {
@@ -958,7 +931,6 @@ impl ExecutionContextState {
             aggregate_functions: HashMap::new(),
             config: ExecutionConfig::new(),
             execution_props: ExecutionProps::new(),
-            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
         }
     }
 

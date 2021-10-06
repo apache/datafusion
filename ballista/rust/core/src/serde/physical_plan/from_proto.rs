@@ -674,7 +674,6 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                     aggregate_functions: Default::default(),
                     config: ExecutionConfig::new(),
                     execution_props: ExecutionProps::new(),
-                    object_store_registry: Arc::new(ObjectStoreRegistry::new()),
                 };
 
                 let fun_expr = functions::create_physical_fun(

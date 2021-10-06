@@ -26,11 +26,25 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use futures::{AsyncRead, Stream};
+use lazy_static::lazy_static;
 
 use local::LocalFileSystem;
 
 use crate::error::{DataFusionError, Result};
 use chrono::Utc;
+
+lazy_static! {
+    /// A singleton to help making the object store registry
+    /// consitent throughout the code. For instance in a distributed
+    /// system like Ballista, it ensures that the stores configured
+    /// here will be consistent on the executor and the scheduler.
+    pub static ref OBJECT_STORES: Arc<ObjectStoreRegistry> = {
+        let reg = Arc::new(ObjectStoreRegistry::new());
+        reg.register_store(LOCAL_SCHEME.to_string(), Arc::new(LocalFileSystem));
+        // YOU CAN ADD YOUR CUSTOM STORES HERE
+        reg
+    };
+}
 
 /// Object Reader for one file in a object store
 #[async_trait]
@@ -101,14 +115,10 @@ pub struct ObjectStoreRegistry {
 }
 
 impl ObjectStoreRegistry {
-    /// Create the registry that object stores can registered into.
-    /// ['LocalFileSystem'] store is registered in by default to support read local files natively.
+    /// Create an empty registry that object stores can be registered into.
     pub fn new() -> Self {
-        let mut map: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
-        map.insert(LOCAL_SCHEME.to_string(), Arc::new(LocalFileSystem));
-
         Self {
-            object_stores: RwLock::new(map),
+            object_stores: RwLock::new(HashMap::new()),
         }
     }
 
