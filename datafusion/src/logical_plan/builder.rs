@@ -94,6 +94,11 @@ impl LogicalPlanBuilder {
         Self { plan }
     }
 
+    /// Return the output schema of the plan build so far
+    pub fn schema(&self) -> &DFSchemaRef {
+        self.plan.schema()
+    }
+
     /// Create an empty relation.
     ///
     /// `produce_one_row` set to true means this empty node needs to produce a placeholder row.
@@ -678,6 +683,18 @@ mod tests {
         assert_eq!(expected, format!("{:?}", plan));
 
         Ok(())
+    }
+
+    #[test]
+    fn plan_builder_schema() {
+        let schema = employee_schema();
+        let plan =
+            LogicalPlanBuilder::scan_empty(Some("employee_csv"), &schema, None).unwrap();
+
+        let expected =
+            DFSchema::try_from_qualified_schema("employee_csv", &schema).unwrap();
+
+        assert_eq!(&expected, plan.schema().as_ref())
     }
 
     #[test]
