@@ -16,6 +16,7 @@
 
 select
   c9,
+  cume_dist() OVER (PARTITION BY c2 ORDER BY c3) cume_dist_by_c3,
   rank() OVER (PARTITION BY c2 ORDER BY c3) rank_by_c3,
   dense_rank() OVER (PARTITION BY c2 ORDER BY c3) dense_rank_by_c3
 FROM test
