@@ -159,7 +159,7 @@ impl DFSchema {
             .filter(|(_, field)| match (qualifier, &field.qualifier) {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
-                // qualifer and name.
+                // qualifier and name.
                 (Some(q), Some(field_q)) => q == field_q && field.name() == name,
                 // field to lookup is qualified but current field is unqualified.
                 (Some(_), None) => false,
@@ -170,7 +170,7 @@ impl DFSchema {
         match matches.next() {
             None => Err(DataFusionError::Plan(format!(
                 "No field named '{}.{}'. Valid fields are {}.",
-                qualifier.unwrap_or(""),
+                qualifier.unwrap_or("<unqualified>"),
                 name,
                 self.get_field_names()
             ))),
@@ -179,7 +179,7 @@ impl DFSchema {
                 // found more than one matches
                 Some(_) => Err(DataFusionError::Internal(format!(
                     "Ambiguous reference to qualified field named '{}.{}'",
-                    qualifier.unwrap_or(""),
+                    qualifier.unwrap_or("<unqualified>"),
                     name
                 ))),
             },
