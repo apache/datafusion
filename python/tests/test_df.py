@@ -81,7 +81,12 @@ def test_limit(df):
 
 def test_udf(df):
     # is_null is a pa function over arrays
-    udf = f.udf(lambda x: x.is_null(), [pa.int64()], pa.bool_())
+    udf = f.udf(
+        lambda x: x.is_null(),
+        [pa.int64()],
+        pa.bool_(),
+        f.Volatility.immutable(),
+    )
 
     df = df.select(udf(f.col("a")))
     result = df.collect()[0].column(0)

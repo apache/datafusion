@@ -62,7 +62,13 @@ def df():
 
 
 def test_aggregate(df):
-    udaf = f.udaf(Accumulator, pa.float64(), pa.float64(), [pa.float64()])
+    udaf = f.udaf(
+        Accumulator,
+        pa.float64(),
+        pa.float64(),
+        [pa.float64()],
+        f.Volatility.immutable(),
+    )
 
     df = df.aggregate([], [udaf(f.col("a"))])
 
@@ -73,7 +79,13 @@ def test_aggregate(df):
 
 
 def test_group_by(df):
-    udaf = f.udaf(Accumulator, pa.float64(), pa.float64(), [pa.float64()])
+    udaf = f.udaf(
+        Accumulator,
+        pa.float64(),
+        pa.float64(),
+        [pa.float64()],
+        f.Volatility.immutable(),
+    )
 
     df = df.aggregate([f.col("b")], [udaf(f.col("a"))])
 

@@ -21,6 +21,7 @@
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{window_frames, DFField, DFSchema, LogicalPlan};
+use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
     window_functions,
@@ -1598,10 +1599,16 @@ pub fn create_udf(
     name: &str,
     input_types: Vec<DataType>,
     return_type: Arc<DataType>,
+    volatility: Volatility,
     fun: ScalarFunctionImplementation,
 ) -> ScalarUDF {
     let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-    ScalarUDF::new(name, &Signature::Exact(input_types), &return_type, &fun)
+    ScalarUDF::new(
+        name,
+        &Signature::exact(input_types, volatility),
+        &return_type,
+        &fun,
+    )
 }
 
 /// Creates a new UDAF with a specific signature, state type and return type.
@@ -1611,6 +1618,7 @@ pub fn create_udaf(
     name: &str,
     input_type: DataType,
     return_type: Arc<DataType>,
+    volatility: Volatility,
     accumulator: AccumulatorFunctionImplementation,
     state_type: Arc<Vec<DataType>>,
 ) -> AggregateUDF {
@@ -1618,7 +1626,7 @@ pub fn create_udaf(
     let state_type: StateTypeFunction = Arc::new(move |_| Ok(state_type.clone()));
     AggregateUDF::new(
         name,
-        &Signature::Exact(vec![input_type]),
+        &Signature::exact(vec![input_type], volatility),
         &return_type,
         &accumulator,
         &state_type,

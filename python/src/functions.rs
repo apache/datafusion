@@ -20,6 +20,7 @@ use crate::udf;
 use crate::{expression, types::PyDataType};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_plan;
+use datafusion::physical_plan::functions::Volatility;
 use pyo3::{prelude::*, types::PyTuple, wrap_pyfunction};
 use std::sync::Arc;
 
@@ -200,10 +201,39 @@ define_unary_function!(min);
 define_unary_function!(max);
 define_unary_function!(count);
 
+#[pyclass(name = "Volatility", module = "datafusion.functions")]
+#[derive(Clone)]
+pub struct PyVolatility {
+    pub(crate) volatility: Volatility,
+}
+
+#[pymethods]
+impl PyVolatility {
+    #[staticmethod]
+    fn immutable() -> Self {
+        Self {
+            volatility: Volatility::Immutable,
+        }
+    }
+    #[staticmethod]
+    fn stable() -> Self {
+        Self {
+            volatility: Volatility::Stable,
+        }
+    }
+    #[staticmethod]
+    fn volatile() -> Self {
+        Self {
+            volatility: Volatility::Volatile,
+        }
+    }
+}
+
 pub(crate) fn create_udf(
     fun: PyObject,
     input_types: Vec<PyDataType>,
     return_type: PyDataType,
+    volatility: PyVolatility,
     name: &str,
 ) -> expression::ScalarUDF {
     let input_types: Vec<DataType> =
@@ -215,6 +245,7 @@ pub(crate) fn create_udf(
             name,
             input_types,
             return_type,
+            volatility.volatility,
             udf::array_udf(fun),
         ),
     }
@@ -226,11 +257,12 @@ fn udf(
     fun: PyObject,
     input_types: Vec<PyDataType>,
     return_type: PyDataType,
+    volatility: PyVolatility,
     py: Python,
 ) -> PyResult<expression::ScalarUDF> {
     let name = fun.getattr(py, "__qualname__")?.extract::<String>(py)?;
 
-    Ok(create_udf(fun, input_types, return_type, &name))
+    Ok(create_udf(fun, input_types, return_type, volatility, &name))
 }
 
 /// Creates a new udf.
@@ -240,6 +272,7 @@ fn udaf(
     input_type: PyDataType,
     return_type: PyDataType,
     state_type: Vec<PyDataType>,
+    volatility: PyVolatility,
     py: Python,
 ) -> PyResult<expression::AggregateUDF> {
     let name = accumulator
@@ -255,6 +288,7 @@ fn udaf(
             &name,
             input_type,
             return_type,
+            volatility.volatility,
             udaf::array_udaf(accumulator),
             state_type,
         ),
@@ -262,6 +296,7 @@ fn udaf(
 }
 
 pub fn init(module: &PyModule) -> PyResult<()> {
+    module.add_class::<PyVolatility>()?;
     module.add_function(wrap_pyfunction!(abs, module)?)?;
     module.add_function(wrap_pyfunction!(acos, module)?)?;
     module.add_function(wrap_pyfunction!(array, module)?)?;
