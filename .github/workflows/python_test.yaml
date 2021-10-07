@@ -56,7 +56,7 @@ jobs:
           source venv/bin/activate
           cd python
           maturin develop
-          pytest -v .
+          RUST_BACKTRACE=1 pytest -v .
         env:
           CARGO_HOME: "/home/runner/.cargo"
           CARGO_TARGET_DIR: "/home/runner/target"
