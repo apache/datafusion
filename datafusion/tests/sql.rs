@@ -37,6 +37,7 @@ use datafusion::assert_batches_sorted_eq;
 use datafusion::logical_plan::LogicalPlan;
 #[cfg(feature = "avro")]
 use datafusion::physical_plan::avro::AvroReadOptions;
+use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
@@ -846,6 +847,7 @@ fn create_ctx() -> Result<ExecutionContext> {
         "custom_sqrt",
         vec![DataType::Float64],
         Arc::new(DataType::Float64),
+        Volatility::Immutable,
         Arc::new(custom_sqrt),
     ));
 

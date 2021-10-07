@@ -1043,7 +1043,7 @@ impl FunctionRegistry for ExecutionContextState {
 mod tests {
     use super::*;
     use crate::logical_plan::{binary_expr, lit, Operator};
-    use crate::physical_plan::functions::make_scalar_function;
+    use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::physical_plan::{collect, collect_partitioned};
     use crate::test;
     use crate::variable::VarType;
@@ -2727,6 +2727,7 @@ mod tests {
             "MY_FUNC",
             vec![DataType::Int32],
             Arc::new(DataType::Int32),
+            Volatility::Immutable,
             myfunc,
         ));
 
@@ -2805,6 +2806,7 @@ mod tests {
             "MY_AVG",
             DataType::Float64,
             Arc::new(DataType::Float64),
+            Volatility::Immutable,
             Arc::new(|| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
@@ -3017,6 +3019,7 @@ mod tests {
             "my_add",
             vec![DataType::Int32, DataType::Int32],
             Arc::new(DataType::Int32),
+            Volatility::Immutable,
             myfunc,
         ));
 
@@ -3144,6 +3147,7 @@ mod tests {
             "my_avg",
             DataType::Float64,
             Arc::new(DataType::Float64),
+            Volatility::Immutable,
             Arc::new(|| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
