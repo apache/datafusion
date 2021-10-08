@@ -25,8 +25,8 @@ jobs:
       - uses: actions/checkout@v2
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install nightly-2021-09-07
-          rustup default nightly-2021-09-07
+          rustup toolchain install nightly-2021-10-21
+          rustup default nightly-2021-10-21
           rustup component add rustfmt
       - name: Cache Cargo
         uses: actions/cache@v2
