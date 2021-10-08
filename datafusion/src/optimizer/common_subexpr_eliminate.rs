@@ -81,6 +81,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             expr,
             input,
             schema,
+            alias,
         } => {
             let mut arrays = vec![];
             for e in expr {
@@ -103,6 +104,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 expr: new_expr.pop().unwrap(),
                 input: Arc::new(new_input),
                 schema: schema.clone(),
+                alias: alias.clone(),
             })
         }
         LogicalPlan::Filter { predicate, input } => {
@@ -278,6 +280,7 @@ fn build_project_plan(
         expr: project_exprs,
         input: Arc::new(input),
         schema: Arc::new(schema),
+        alias: None,
     })
 }
 

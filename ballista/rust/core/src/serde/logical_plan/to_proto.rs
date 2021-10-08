@@ -801,19 +801,23 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )))
                 }
             }
-            LogicalPlan::Projection { expr, input, .. } => {
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
-                        protobuf::ProjectionNode {
-                            input: Some(Box::new(input.as_ref().try_into()?)),
-                            expr: expr
-                                .iter()
-                                .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, BallistaError>>()?,
-                        },
-                    ))),
-                })
-            }
+            LogicalPlan::Projection {
+                expr, input, alias, ..
+            } => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
+                    protobuf::ProjectionNode {
+                        input: Some(Box::new(input.as_ref().try_into()?)),
+                        expr: expr.iter().map(|expr| expr.try_into()).collect::<Result<
+                            Vec<_>,
+                            BallistaError,
+                        >>(
+                        )?,
+                        optional_alias: alias
+                            .clone()
+                            .map(protobuf::projection_node::OptionalAlias::Alias),
+                    },
+                ))),
+            }),
             LogicalPlan::Filter { predicate, input } => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
