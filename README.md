@@ -214,7 +214,9 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
   - [x] UNION ALL
   - [x] UNION
   - [ ] INTERSECT
-  - [ ] MINUS
+  - [ ] INTERSECT ALL
+  - [ ] EXCEPT
+  - [ ] EXCEPT ALL
 - [x] Joins
   - [x] INNER JOIN
   - [x] LEFT JOIN
