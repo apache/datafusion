@@ -118,10 +118,11 @@ pub fn from_plan(
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Projection { schema, .. } => Ok(LogicalPlan::Projection {
+        LogicalPlan::Projection { schema, alias, .. } => Ok(LogicalPlan::Projection {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),
             schema: schema.clone(),
+            alias: alias.clone(),
         }),
         LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter {
             predicate: expr[0].clone(),

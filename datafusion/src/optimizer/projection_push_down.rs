@@ -140,6 +140,7 @@ fn optimize_plan(
             input,
             expr,
             schema,
+            alias,
         } => {
             // projection:
             // * remove any expression that is not required
@@ -190,6 +191,7 @@ fn optimize_plan(
                     expr: new_expr,
                     input: Arc::new(new_input),
                     schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
+                    alias: alias.clone(),
                 })
             }
         }
@@ -744,6 +746,7 @@ mod tests {
             expr,
             input: Arc::new(table_scan),
             schema: Arc::new(projected_schema),
+            alias: None,
         };
 
         assert_fields_eq(&plan, vec!["a", "b"]);

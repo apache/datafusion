@@ -63,7 +63,14 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
                 LogicalPlanBuilder::from(input)
-                    .project(x)?
+                    .project_with_alias(
+                        x,
+                        projection.optional_alias.as_ref().map(|a| match a {
+                            protobuf::projection_node::OptionalAlias::Alias(alias) => {
+                                alias.clone()
+                            }
+                        }),
+                    )?
                     .build()
                     .map_err(|e| e.into())
             }

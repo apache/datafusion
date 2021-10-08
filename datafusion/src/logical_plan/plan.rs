@@ -76,6 +76,8 @@ pub enum LogicalPlan {
         input: Arc<LogicalPlan>,
         /// The schema description of the output
         schema: DFSchemaRef,
+        /// Projection output relation alias
+        alias: Option<String>,
     },
     /// Filters rows from its input that do not match an
     /// expression (essentially a WHERE clause with a predicate
@@ -723,13 +725,18 @@ impl LogicalPlan {
 
                         Ok(())
                     }
-                    LogicalPlan::Projection { ref expr, .. } => {
+                    LogicalPlan::Projection {
+                        ref expr, alias, ..
+                    } => {
                         write!(f, "Projection: ")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
                             write!(f, "{:?}", expr_item)?;
+                        }
+                        if let Some(a) = alias {
+                            write!(f, ", alias={}", a)?;
                         }
                         Ok(())
                     }

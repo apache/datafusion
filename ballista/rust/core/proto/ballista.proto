@@ -311,6 +311,9 @@ message AvroTableScanNode {
 message ProjectionNode {
   LogicalPlanNode input = 1;
   repeated LogicalExprNode expr = 2;
+  oneof optional_alias {
+    string alias = 3;
+  }
 }
 
 message SelectionNode {

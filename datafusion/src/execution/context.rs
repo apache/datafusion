@@ -2047,7 +2047,7 @@ mod tests {
     async fn join_partitioned() -> Result<()> {
         // self join on partition id (workaround for duplicate column name)
         let results = execute(
-            "SELECT 1 FROM test JOIN (SELECT c1 AS id1 FROM test) ON c1=id1",
+            "SELECT 1 FROM test JOIN (SELECT c1 AS id1 FROM test) AS a ON c1=id1",
             4,
         )
         .await?;
@@ -2080,7 +2080,7 @@ mod tests {
         let results = plan_and_collect(
             &mut ctx,
             "SELECT * FROM t as t1  \
-             JOIN (SELECT * FROM t as t2) \
+             JOIN (SELECT * FROM t) as t2 \
              ON t1.nanos = t2.nanos",
         )
         .await
@@ -2090,7 +2090,7 @@ mod tests {
         let results = plan_and_collect(
             &mut ctx,
             "SELECT * FROM t as t1  \
-             JOIN (SELECT * FROM t as t2) \
+             JOIN (SELECT * FROM t) as t2 \
              ON t1.micros = t2.micros",
         )
         .await
@@ -2100,7 +2100,7 @@ mod tests {
         let results = plan_and_collect(
             &mut ctx,
             "SELECT * FROM t as t1  \
-             JOIN (SELECT * FROM t as t2) \
+             JOIN (SELECT * FROM t) as t2 \
              ON t1.millis = t2.millis",
         )
         .await
@@ -2967,12 +2967,12 @@ mod tests {
     #[tokio::test]
     async fn ctx_sql_should_optimize_plan() -> Result<()> {
         let mut ctx = ExecutionContext::new();
-        let plan1 =
-            ctx.create_logical_plan("SELECT * FROM (SELECT 1) WHERE TRUE AND TRUE")?;
+        let plan1 = ctx
+            .create_logical_plan("SELECT * FROM (SELECT 1) AS one WHERE TRUE AND TRUE")?;
 
         let opt_plan1 = ctx.optimize(&plan1)?;
 
-        let plan2 = ctx.sql("SELECT * FROM (SELECT 1) WHERE TRUE AND TRUE")?;
+        let plan2 = ctx.sql("SELECT * FROM (SELECT 1) AS one WHERE TRUE AND TRUE")?;
 
         assert_eq!(
             format!("{:?}", opt_plan1),
@@ -3727,7 +3727,7 @@ mod tests {
                     SELECT i, 'a' AS cat FROM catalog_a.schema_a.table_a
                     UNION ALL
                     SELECT i, 'b' AS cat FROM catalog_b.schema_b.table_b
-                )
+                ) AS all
                 GROUP BY cat
                 ORDER BY cat
                 ",

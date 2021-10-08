@@ -236,34 +236,22 @@ impl LogicalPlanBuilder {
         Ok(Self::from(table_scan))
     }
 
-    /// Apply a projection.
-    ///
-    /// # Errors
-    /// This function errors under any of the following conditions:
-    /// * Two or more expressions have the same name
-    /// * An invalid expression is used (e.g. a `sort` expression)
+    /// Apply a projection without alias.
     pub fn project(&self, expr: impl IntoIterator<Item = Expr>) -> Result<Self> {
-        let input_schema = self.plan.schema();
-        let mut projected_expr = vec![];
-        for e in expr {
-            match e {
-                Expr::Wildcard => {
-                    projected_expr.extend(expand_wildcard(input_schema, &self.plan)?)
-                }
-                _ => projected_expr
-                    .push(columnize_expr(normalize_col(e, &self.plan)?, input_schema)),
-            }
-        }
+        self.project_with_alias(expr, None)
+    }
 
-        validate_unique_names("Projections", projected_expr.iter(), input_schema)?;
-
-        let schema = DFSchema::new(exprlist_to_fields(&projected_expr, input_schema)?)?;
-
-        Ok(Self::from(LogicalPlan::Projection {
-            expr: projected_expr,
-            input: Arc::new(self.plan.clone()),
-            schema: DFSchemaRef::new(schema),
-        }))
+    /// Apply a projection with alias
+    pub fn project_with_alias(
+        &self,
+        expr: impl IntoIterator<Item = Expr>,
+        alias: Option<String>,
+    ) -> Result<Self> {
+        Ok(Self::from(project_with_alias(
+            self.plan.clone(),
+            expr,
+            alias,
+        )?))
     }
 
     /// Apply a filter
@@ -477,12 +465,9 @@ impl LogicalPlanBuilder {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
         let all_expr = group_expr.iter().chain(aggr_expr.iter());
-
         validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
-
         let aggr_schema =
             DFSchema::new(exprlist_to_fields(all_expr, self.plan.schema())?)?;
-
         Ok(Self::from(LogicalPlan::Aggregate {
             input: Arc::new(self.plan.clone()),
             group_expr,
@@ -611,6 +596,41 @@ pub fn union_with_alias(
     Ok(LogicalPlan::Union {
         schema: union_schema,
         inputs,
+        alias,
+    })
+}
+
+/// Project with optional alias
+/// # Errors
+/// This function errors under any of the following conditions:
+/// * Two or more expressions have the same name
+/// * An invalid expression is used (e.g. a `sort` expression)
+pub fn project_with_alias(
+    plan: LogicalPlan,
+    expr: impl IntoIterator<Item = Expr>,
+    alias: Option<String>,
+) -> Result<LogicalPlan> {
+    let input_schema = plan.schema();
+    let mut projected_expr = vec![];
+    for e in expr {
+        match e {
+            Expr::Wildcard => {
+                projected_expr.extend(expand_wildcard(input_schema, &plan)?)
+            }
+            _ => projected_expr
+                .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
+        }
+    }
+    validate_unique_names("Projections", projected_expr.iter(), input_schema)?;
+    let input_schema = DFSchema::new(exprlist_to_fields(&projected_expr, input_schema)?)?;
+    let schema = match alias {
+        Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
+        None => input_schema,
+    };
+    Ok(LogicalPlan::Projection {
+        expr: projected_expr,
+        input: Arc::new(plan.clone()),
+        schema: DFSchemaRef::new(schema),
         alias,
     })
 }
