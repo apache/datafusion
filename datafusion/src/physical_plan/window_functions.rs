@@ -438,6 +438,15 @@ mod tests {
     }
 
     #[test]
+    fn test_percent_rank_return_type() -> Result<()> {
+        let fun = WindowFunction::from_str("percent_rank")?;
+        let observed = return_type(&fun, &[])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_cume_dist_return_type() -> Result<()> {
         let fun = WindowFunction::from_str("cume_dist")?;
         let observed = return_type(&fun, &[])?;
