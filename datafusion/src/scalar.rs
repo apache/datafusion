@@ -780,7 +780,8 @@ impl ScalarValue {
             }
             DataType::Struct(fields) => {
                 // Initialize a Vector to store the ScalarValues for each column
-                let mut columns: Vec<Vec<ScalarValue>> = (0..fields.len()).map(|_| Vec::new()).collect();
+                let mut columns: Vec<Vec<ScalarValue>> =
+                    (0..fields.len()).map(|_| Vec::new()).collect();
 
                 // Iterate over scalars to populate the column scalars for each row
                 for scalar in scalars.into_iter() {
@@ -803,14 +804,21 @@ impl ScalarValue {
                             }
                         };
                     } else {
-                        return Err(DataFusionError::Internal(format!("Expected Struct but found: {}", scalar)))
+                        return Err(DataFusionError::Internal(format!(
+                            "Expected Struct but found: {}",
+                            scalar
+                        )));
                     };
                 }
 
                 // Call iter_to_array recursively to convert the scalars for each column into Arrow arrays
-                let field_values = fields.iter().zip(columns).map(|(field, column)| -> Result<(Field, ArrayRef)> {
-                    Ok((field.clone(), Self::iter_to_array(column)?))
-                }).collect::<Result<Vec<_>>>()?;
+                let field_values = fields
+                    .iter()
+                    .zip(columns)
+                    .map(|(field, column)| -> Result<(Field, ArrayRef)> {
+                        Ok((field.clone(), Self::iter_to_array(column)?))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
                 Arc::new(StructArray::from(field_values))
             }
@@ -961,27 +969,29 @@ impl ScalarValue {
                 e,
                 size
             ),
-            ScalarValue::Struct(values, fields) => {
-                match values {
-                    Some(values) => {
-                        let field_values: Vec<_> = fields.iter().zip(values.iter()).map(|(field, value)| {
+            ScalarValue::Struct(values, fields) => match values {
+                Some(values) => {
+                    let field_values: Vec<_> = fields
+                        .iter()
+                        .zip(values.iter())
+                        .map(|(field, value)| {
                             (field.clone(), value.to_array_of_size(size))
-                        }).collect();
+                        })
+                        .collect();
 
-                        Arc::new(StructArray::from(field_values))
-                    }
-                    None => {
-                        let field_values: Vec<_> = fields.iter().map(|field| {
+                    Arc::new(StructArray::from(field_values))
+                }
+                None => {
+                    let field_values: Vec<_> = fields.iter().map(|field| {
                             let none_field = Self::try_from(field.data_type()).expect(
                                 "Failed to construct null ScalarValue from Struct field type"
                             );
                             (field.clone(), none_field.to_array_of_size(size))
                         }).collect();
 
-                        Arc::new(StructArray::from(field_values))
-                    },
+                    Arc::new(StructArray::from(field_values))
                 }
-            }
+            },
         }
     }
 
@@ -1078,21 +1088,24 @@ impl ScalarValue {
                     // was null
                     None => values.data_type().try_into()?,
                 }
-            },
+            }
             DataType::Struct(fields) => {
-                let array = array.as_any().downcast_ref::<StructArray>().ok_or_else(
-                    || DataFusionError::Internal("Failed to downcast ArrayRef to StructArray".to_string())
-                )?;
+                let array =
+                    array
+                        .as_any()
+                        .downcast_ref::<StructArray>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "Failed to downcast ArrayRef to StructArray".to_string(),
+                            )
+                        })?;
                 let mut field_values: Vec<ScalarValue> = Vec::new();
                 for col_index in 0..array.num_columns() {
                     let col_array = array.column(col_index);
                     let col_scalar = ScalarValue::try_from_array(col_array, index)?;
                     field_values.push(col_scalar);
                 }
-                Self::Struct(
-                    Some(Box::new(field_values)),
-                    Box::new(fields.clone())
-                )
+                Self::Struct(Some(Box::new(field_values)), Box::new(fields.clone()))
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -1270,9 +1283,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
         let mut scalars: Vec<ScalarValue> = Vec::new();
 
         value.iter().for_each(|(name, scalar)| {
-            fields.push(
-                Field::new(name, scalar.get_datatype(), false)
-            );
+            fields.push(Field::new(name, scalar.get_datatype(), false));
             scalars.push(scalar.clone());
         });
 
@@ -1467,17 +1478,17 @@ impl fmt::Display for ScalarValue {
             ScalarValue::IntervalDayTime(e) => format_option!(f, e)?,
             ScalarValue::IntervalYearMonth(e) => format_option!(f, e)?,
             ScalarValue::Struct(e, fields) => match e {
-                Some(l) => {
-                    write!(
-                        f,
-                        "{}",
-                        l.iter().zip(fields.iter())
-                            .map(|(value, field)| format!("{}:{}", field.name(), value))
-                            .collect::<Vec<_>>().join(",")
-                    )?
-                }
+                Some(l) => write!(
+                    f,
+                    "{}",
+                    l.iter()
+                        .zip(fields.iter())
+                        .map(|(value, field)| format!("{}:{}", field.name(), value))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )?,
                 None => write!(f, "NULL")?,
-            }
+            },
         };
         Ok(())
     }
@@ -2045,10 +2056,10 @@ mod tests {
                 ("A", ScalarValue::from(1.0)),
                 ("B", ScalarValue::from("Z"))
             ])
-                .partial_cmp(&ScalarValue::from(vec![
-                    ("a", ScalarValue::from(2.0)),
-                    ("b", ScalarValue::from("A"))
-                ])),
+            .partial_cmp(&ScalarValue::from(vec![
+                ("a", ScalarValue::from(2.0)),
+                ("b", ScalarValue::from("A"))
+            ])),
             None
         );
     }
@@ -2065,21 +2076,29 @@ mod tests {
                 ScalarValue::Boolean(Some(false)),
                 ScalarValue::Utf8(Some("Hello".to_string())),
             ])),
-            Box::new(vec![
-                field_a.clone(),
-                field_b.clone(),
-                field_c.clone(),
-            ])
+            Box::new(vec![field_a.clone(), field_b.clone(), field_c.clone()]),
         );
-        assert_eq!(format!("{:?}", scalar), String::from("Struct({A:23,B:false,C:Hello})"));
+        assert_eq!(
+            format!("{:?}", scalar),
+            String::from("Struct({A:23,B:false,C:Hello})")
+        );
 
         // Convert to length-2 array
         let array = scalar.to_array_of_size(2);
 
         let expected = Arc::new(StructArray::from(vec![
-            (field_a.clone(), Arc::new(Int32Array::from(vec![23, 23])) as ArrayRef),
-            (field_b.clone(), Arc::new(BooleanArray::from(vec![false, false])) as ArrayRef),
-            (field_c.clone(), Arc::new(StringArray::from(vec!["Hello", "Hello"])) as ArrayRef),
+            (
+                field_a.clone(),
+                Arc::new(Int32Array::from(vec![23, 23])) as ArrayRef,
+            ),
+            (
+                field_b.clone(),
+                Arc::new(BooleanArray::from(vec![false, false])) as ArrayRef,
+            ),
+            (
+                field_c.clone(),
+                Arc::new(StringArray::from(vec!["Hello", "Hello"])) as ArrayRef,
+            ),
         ])) as ArrayRef;
 
         assert_eq!(&array, &expected);
@@ -2096,7 +2115,7 @@ mod tests {
         let constructed = ScalarValue::from(vec![
             ("A", ScalarValue::Int32(Some(23))),
             ("B", ScalarValue::Boolean(Some(false))),
-            ("C", ScalarValue::Utf8(Some("Hello".to_string())))
+            ("C", ScalarValue::Utf8(Some("Hello".to_string()))),
         ]);
         assert_eq!(constructed, scalar);
 
@@ -2105,25 +2124,34 @@ mod tests {
             ScalarValue::from(vec![
                 ("A", ScalarValue::Int32(Some(23))),
                 ("B", ScalarValue::Boolean(Some(false))),
-                ("C", ScalarValue::Utf8(Some("Hello".to_string())))
+                ("C", ScalarValue::Utf8(Some("Hello".to_string()))),
             ]),
             ScalarValue::from(vec![
                 ("A", ScalarValue::Int32(Some(7))),
                 ("B", ScalarValue::Boolean(Some(true))),
-                ("C", ScalarValue::Utf8(Some("World".to_string())))
+                ("C", ScalarValue::Utf8(Some("World".to_string()))),
             ]),
             ScalarValue::from(vec![
                 ("A", ScalarValue::Int32(Some(-1000))),
                 ("B", ScalarValue::Boolean(Some(true))),
-                ("C", ScalarValue::Utf8(Some("!!!!!".to_string())))
+                ("C", ScalarValue::Utf8(Some("!!!!!".to_string()))),
             ]),
         ];
         let array = ScalarValue::iter_to_array(scalars).unwrap();
 
         let expected = Arc::new(StructArray::from(vec![
-            (field_a.clone(), Arc::new(Int32Array::from(vec![23, 7, -1000])) as ArrayRef),
-            (field_b.clone(), Arc::new(BooleanArray::from(vec![false, true, true])) as ArrayRef),
-            (field_c.clone(), Arc::new(StringArray::from(vec!["Hello", "World", "!!!!!"])) as ArrayRef),
+            (
+                field_a,
+                Arc::new(Int32Array::from(vec![23, 7, -1000])) as ArrayRef,
+            ),
+            (
+                field_b,
+                Arc::new(BooleanArray::from(vec![false, true, true])) as ArrayRef,
+            ),
+            (
+                field_c,
+                Arc::new(StringArray::from(vec!["Hello", "World", "!!!!!"])) as ArrayRef,
+            ),
         ])) as ArrayRef;
 
         assert_eq!(&array, &expected);
@@ -2135,49 +2163,63 @@ mod tests {
         let field_list = Field::new(
             "list_field",
             DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
-            false
+            false,
         );
 
         let l0 = ScalarValue::List(
-            Some(Box::new(vec![ScalarValue::from(1i32), ScalarValue::from(2i32), ScalarValue::from(3i32)])),
-            Box::new(DataType::Int32)
+            Some(Box::new(vec![
+                ScalarValue::from(1i32),
+                ScalarValue::from(2i32),
+                ScalarValue::from(3i32),
+            ])),
+            Box::new(DataType::Int32),
         );
 
         let l1 = ScalarValue::List(
-            Some(Box::new(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)])),
-            Box::new(DataType::Int32)
+            Some(Box::new(vec![
+                ScalarValue::from(4i32),
+                ScalarValue::from(5i32),
+            ])),
+            Box::new(DataType::Int32),
         );
 
         let l2 = ScalarValue::List(
             Some(Box::new(vec![ScalarValue::from(6i32)])),
-            Box::new(DataType::Int32)
+            Box::new(DataType::Int32),
         );
 
         let s0 = ScalarValue::from(vec![
             ("A", ScalarValue::Utf8(Some(String::from("First")))),
-            ("list_field", l0.clone()),
+            ("list_field", l0),
         ]);
 
         let s1 = ScalarValue::from(vec![
             ("A", ScalarValue::Utf8(Some(String::from("Second")))),
-            ("list_field", l1.clone()),
+            ("list_field", l1),
         ]);
 
         let s2 = ScalarValue::from(vec![
             ("A", ScalarValue::Utf8(Some(String::from("Third")))),
-            ("list_field", l2.clone()),
+            ("list_field", l2),
         ]);
 
-        let array = ScalarValue::iter_to_array(vec![s0.clone(), s1.clone(), s2.clone()]).unwrap();
+        let array =
+            ScalarValue::iter_to_array(vec![s0, s1, s2]).unwrap();
         let array = array.as_any().downcast_ref::<StructArray>().unwrap();
 
         let expected = StructArray::from(vec![
-            (field_a, Arc::new(StringArray::from(vec!["First", "Second", "Third"])) as ArrayRef),
-            (field_list, Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(1), Some(2), Some(3)]),
-                Some(vec![Some(4), Some(5)]),
-                Some(vec![Some(6)]),
-            ]))),
+            (
+                field_a,
+                Arc::new(StringArray::from(vec!["First", "Second", "Third"])) as ArrayRef,
+            ),
+            (
+                field_list,
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(1), Some(2), Some(3)]),
+                    Some(vec![Some(4), Some(5)]),
+                    Some(vec![Some(6)]),
+                ])),
+            ),
         ]);
 
         assert_eq!(array, &expected);
