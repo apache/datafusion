@@ -5080,3 +5080,14 @@ async fn union_distinct() -> Result<()> {
     assert_eq!(expected, actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn union_all_with_aggregate() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql =
+        "SELECT SUM(d) FROM (SELECT 1 as c, 2 as d UNION ALL SELECT 1 as c, 3 AS d) as a";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["5"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}

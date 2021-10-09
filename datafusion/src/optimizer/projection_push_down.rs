@@ -397,7 +397,6 @@ fn optimize_plan(
                 .filter(|f| new_required_columns.contains(&f.qualified_column()))
                 .map(|f| f.field())
                 .collect::<HashSet<&Field>>();
-
             let new_inputs = inputs
                 .iter()
                 .map(|input_plan| {
@@ -418,10 +417,17 @@ fn optimize_plan(
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-
+            let new_schema = DFSchema::new(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|f| union_required_fields.contains(f.field()))
+                    .cloned()
+                    .collect(),
+            )?;
             Ok(LogicalPlan::Union {
                 inputs: new_inputs,
-                schema: schema.clone(),
+                schema: Arc::new(new_schema),
                 alias: alias.clone(),
             })
         }
