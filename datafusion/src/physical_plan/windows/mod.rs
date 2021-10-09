@@ -22,8 +22,8 @@ use crate::logical_plan::window_frames::WindowFrame;
 use crate::physical_plan::{
     aggregates,
     expressions::{
-        cume_dist, dense_rank, lag, lead, rank, Literal, NthValue, PhysicalSortExpr,
-        RowNumber,
+        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue,
+        PhysicalSortExpr, RowNumber,
     },
     type_coercion::coerce,
     window_functions::{
@@ -96,6 +96,7 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name)),
         BuiltInWindowFunction::Rank => Arc::new(rank(name)),
         BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name)),
+        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
         BuiltInWindowFunction::Lag => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
