@@ -102,7 +102,7 @@ pub struct Statistics {
     /// Statistics on a column level
     pub column_statistics: Option<Vec<ColumnStatistics>>,
     /// If true, any field that is `Some(..)` is the actual value in the data provided by the operator (it is not
-    /// an estimate). Any or all other fields might still be None, in which case no information is known.  
+    /// an estimate). Any or all other fields might still be None, in which case no information is known.
     /// if false, any field that is `Some(..)` may contain an inexact estimate and may not be the actual value.
     pub is_exact: bool,
 }
@@ -625,6 +625,7 @@ pub mod functions;
 pub mod hash_aggregate;
 pub mod hash_join;
 pub mod hash_utils;
+pub(crate) mod hyperloglog;
 pub mod join_utils;
 pub mod json;
 pub mod limit;
