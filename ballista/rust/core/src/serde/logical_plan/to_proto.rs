@@ -1485,6 +1485,7 @@ impl TryInto<protobuf::ScalarFunction> for &BuiltinScalarFunction {
             BuiltinScalarFunction::SHA256 => Ok(protobuf::ScalarFunction::Sha256),
             BuiltinScalarFunction::SHA384 => Ok(protobuf::ScalarFunction::Sha384),
             BuiltinScalarFunction::SHA512 => Ok(protobuf::ScalarFunction::Sha512),
+            BuiltinScalarFunction::Digest => Ok(protobuf::ScalarFunction::Digest),
             BuiltinScalarFunction::ToTimestampMillis => {
                 Ok(protobuf::ScalarFunction::Totimestampmillis)
             }

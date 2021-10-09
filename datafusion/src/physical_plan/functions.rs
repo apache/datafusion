@@ -185,6 +185,8 @@ pub enum BuiltinScalarFunction {
     Ceil,
     /// cos
     Cos,
+    /// Digest
+    Digest,
     /// exp
     Exp,
     /// floor
@@ -310,7 +312,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Random | BuiltinScalarFunction::Now
         )
     }
-    /// Returns the [Volatility] of the builtin function.  
+    /// Returns the [Volatility] of the builtin function.
     pub fn volatility(&self) -> Volatility {
         match self {
             //Immutable scalar builtins
@@ -350,7 +352,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::MD5 => Volatility::Immutable,
             BuiltinScalarFunction::NullIf => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
-
             BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
             BuiltinScalarFunction::Replace => Volatility::Immutable,
@@ -362,6 +363,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SHA256 => Volatility::Immutable,
             BuiltinScalarFunction::SHA384 => Volatility::Immutable,
             BuiltinScalarFunction::SHA512 => Volatility::Immutable,
+            BuiltinScalarFunction::Digest => Volatility::Immutable,
             BuiltinScalarFunction::SplitPart => Volatility::Immutable,
             BuiltinScalarFunction::StartsWith => Volatility::Immutable,
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
@@ -449,6 +451,7 @@ impl FromStr for BuiltinScalarFunction {
             "sha256" => BuiltinScalarFunction::SHA256,
             "sha384" => BuiltinScalarFunction::SHA384,
             "sha512" => BuiltinScalarFunction::SHA512,
+            "digest" => BuiltinScalarFunction::Digest,
             "split_part" => BuiltinScalarFunction::SplitPart,
             "starts_with" => BuiltinScalarFunction::StartsWith,
             "strpos" => BuiltinScalarFunction::Strpos,
@@ -554,6 +557,7 @@ pub fn return_type(
         BuiltinScalarFunction::SHA256 => utf8_to_binary_type(&arg_types[0], "sha256"),
         BuiltinScalarFunction::SHA384 => utf8_to_binary_type(&arg_types[0], "sha384"),
         BuiltinScalarFunction::SHA512 => utf8_to_binary_type(&arg_types[0], "sha512"),
+        BuiltinScalarFunction::Digest => utf8_to_binary_type(&arg_types[0], "digest"),
         BuiltinScalarFunction::SplitPart => utf8_to_str_type(&arg_types[0], "split_part"),
         BuiltinScalarFunction::StartsWith => Ok(DataType::Boolean),
         BuiltinScalarFunction::Strpos => utf8_to_int_type(&arg_types[0], "strpos"),
@@ -850,6 +854,9 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::MD5 => {
             Arc::new(invoke_if_crypto_expressions_feature_flag!(md5, "md5"))
+        }
+        BuiltinScalarFunction::Digest => {
+            Arc::new(invoke_if_crypto_expressions_feature_flag!(digest, "digest"))
         }
         BuiltinScalarFunction::NullIf => Arc::new(nullif_func),
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
@@ -1354,6 +1361,9 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
             ],
             fun.volatility(),
         ),
+        BuiltinScalarFunction::Digest => {
+            Signature::exact(vec![DataType::Utf8, DataType::Utf8], fun.volatility())
+        }
         BuiltinScalarFunction::DateTrunc => Signature::exact(
             vec![
                 DataType::Utf8,
