@@ -559,6 +559,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha256 => BuiltinScalarFunction::SHA256,
             ScalarFunction::Sha384 => BuiltinScalarFunction::SHA384,
             ScalarFunction::Sha512 => BuiltinScalarFunction::SHA512,
+            ScalarFunction::Digest => BuiltinScalarFunction::Digest,
             ScalarFunction::Ln => BuiltinScalarFunction::Ln,
             ScalarFunction::Totimestampmillis => BuiltinScalarFunction::ToTimestampMillis,
         }
