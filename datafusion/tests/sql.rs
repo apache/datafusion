@@ -4050,6 +4050,18 @@ async fn test_crypto_expressions() -> Result<()> {
     test_expression!("digest('','sha512')", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
     test_expression!("sha512(NULL)", "NULL");
     test_expression!("digest(NULL,'sha512')", "NULL");
+    test_expression!("digest(NULL,'blake2s')", "NULL");
+    test_expression!("digest(NULL,'blake2b')", "NULL");
+    test_expression!("digest('','blake2b')", "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce");
+    test_expression!("digest('tom','blake2b')", "482499a18da10a18d8d35ab5eb4c635551ec5b8d3ff37c3e87a632caf6680fe31566417834b4732e26e0203d1cad4f5366cb7ab57d89694e4c1fda3e26af2c23");
+    test_expression!(
+        "digest('','blake2s')",
+        "69217a3079908094e11121d042354a7c1f55b6482ca1a51e1b250dfd1ed0eef9"
+    );
+    test_expression!(
+        "digest('tom','blake2s')",
+        "5fc3f2b3a07cade5023c3df566e4d697d3823ba1b72bfb3e84cf7e768b2e7529"
+    );
     Ok(())
 }
 

@@ -28,8 +28,9 @@ use arrow::{
     },
     datatypes::DataType,
 };
+use blake2::{Blake2b, Blake2s, Digest};
 use md5::Md5;
-use sha2::{Digest as SHA2Digest, Sha224, Sha256, Sha384, Sha512};
+use sha2::{Sha224, Sha256, Sha384, Sha512};
 use std::any::type_name;
 use std::fmt::Write;
 use std::sync::Arc;
@@ -48,6 +49,8 @@ enum DigestAlgorithm {
     Sha256,
     Sha384,
     Sha512,
+    Blake2s,
+    Blake2b,
 }
 
 fn digest_process(
@@ -112,6 +115,8 @@ impl DigestAlgorithm {
             Self::Sha256 => digest_to_scalar!(Sha256, value),
             Self::Sha384 => digest_to_scalar!(Sha384, value),
             Self::Sha512 => digest_to_scalar!(Sha512, value),
+            Self::Blake2b => digest_to_scalar!(Blake2b, value),
+            Self::Blake2s => digest_to_scalar!(Blake2s, value),
         })
     }
 
@@ -135,6 +140,8 @@ impl DigestAlgorithm {
             Self::Sha256 => digest_to_array!(Sha256, input_value),
             Self::Sha384 => digest_to_array!(Sha384, input_value),
             Self::Sha512 => digest_to_array!(Sha512, input_value),
+            Self::Blake2b => digest_to_array!(Blake2b, input_value),
+            Self::Blake2s => digest_to_array!(Blake2s, input_value),
         };
         Ok(ColumnarValue::Array(array))
     }
@@ -155,6 +162,8 @@ impl FromStr for DigestAlgorithm {
             "sha256" => Self::Sha256,
             "sha384" => Self::Sha384,
             "sha512" => Self::Sha512,
+            "blake2b" => Self::Blake2b,
+            "blake2s" => Self::Blake2s,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in digest algorithm named {}",
@@ -237,23 +246,30 @@ define_digest_function!(
     Sha224,
     "computes sha224 hash digest of the given input"
 );
-
 define_digest_function!(
     sha256,
     Sha256,
     "computes sha256 hash digest of the given input"
 );
-
 define_digest_function!(
     sha384,
     Sha384,
     "computes sha384 hash digest of the given input"
 );
-
 define_digest_function!(
     sha512,
     Sha512,
     "computes sha512 hash digest of the given input"
+);
+define_digest_function!(
+    blake2b,
+    Blake2b,
+    "computes blake2b hash digest of the given input"
+);
+define_digest_function!(
+    blake2s,
+    Blake2s,
+    "computes blake2s hash digest of the given input"
 );
 
 /// Digest computes a binary hash of the given data, accepts Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
