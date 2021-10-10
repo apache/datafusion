@@ -1508,7 +1508,7 @@ macro_rules! unary_scalar_expr {
     };
 }
 
-/// Create an convenience function representing a /binaryunary scalar function
+/// Create an convenience function representing a binary scalar function
 macro_rules! binary_scalar_expr {
     ($ENUM:ident, $FUNC:ident) => {
         #[doc = "this scalar function is not documented yet"]
@@ -1581,6 +1581,7 @@ unary_scalar_expr!(Upper, upper);
 // date functions
 binary_scalar_expr!(DatePart, date_part);
 binary_scalar_expr!(DateTrunc, date_trunc);
+binary_scalar_expr!(Digest, digest);
 
 /// returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {
@@ -2124,6 +2125,17 @@ mod tests {
                 assert!(false, "unexpected");
             }
         }};
+    }
+
+    #[test]
+    fn digest_function_definitions() {
+        if let Expr::ScalarFunction { fun, args } = digest(col("tableA.a"), lit("md5")) {
+            let name = functions::BuiltinScalarFunction::Digest;
+            assert_eq!(name, fun);
+            assert_eq!(2, args.len());
+        } else {
+            unreachable!();
+        }
     }
 
     #[test]

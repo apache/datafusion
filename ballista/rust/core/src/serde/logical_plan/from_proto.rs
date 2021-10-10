@@ -27,8 +27,8 @@ use datafusion::logical_plan::window_frames::{
     WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::logical_plan::{
-    abs, acos, asin, atan, ceil, cos, exp, floor, ln, log10, log2, round, signum, sin,
-    sqrt, tan, trunc, Column, DFField, DFSchema, Expr, JoinConstraint, JoinType,
+    abs, acos, asin, atan, ceil, cos, digest, exp, floor, ln, log10, log2, round, signum,
+    sin, sqrt, tan, trunc, Column, DFField, DFSchema, Expr, JoinConstraint, JoinType,
     LogicalPlan, LogicalPlanBuilder, Operator,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
@@ -1151,6 +1151,9 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                     }
                     protobuf::ScalarFunction::Sha512 => {
                         Ok(sha512((&args[0]).try_into()?))
+                    }
+                    protobuf::ScalarFunction::Digest => {
+                        Ok(digest((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }
                     _ => Err(proto_error(
                         "Protobuf deserialization error: Unsupported scalar function",
