@@ -1278,13 +1278,15 @@ impl FromStr for ScalarValue {
 
 impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
     fn from(value: Vec<(&str, ScalarValue)>) -> Self {
-        let mut fields: Vec<Field> = Vec::new();
-        let mut scalars: Vec<ScalarValue> = Vec::new();
-
-        value.iter().for_each(|(name, scalar)| {
-            fields.push(Field::new(name, scalar.get_datatype(), false));
-            scalars.push(scalar.clone());
-        });
+        let (fields, scalars): (Vec<_>, Vec<_>) = value
+            .into_iter()
+            .map(|(name, scalar)| {
+                (
+                    Field::new(name, scalar.get_datatype(), false),
+                    scalar.clone(),
+                )
+            })
+            .unzip();
 
         Self::Struct(Some(Box::new(scalars)), Box::new(fields))
     }
