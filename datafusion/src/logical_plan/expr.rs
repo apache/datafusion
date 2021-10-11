@@ -59,7 +59,7 @@ impl Column {
     pub fn from_qualified_name(flat_name: &str) -> Self {
         use sqlparser::tokenizer::Token;
 
-        let dialect = sqlparser::dialect::GenericDialect {};
+        let dialect = sqlparser::dialect::PostgreSqlDialect {};
         let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, flat_name);
         if let Ok(tokens) = tokenizer.tokenize() {
             if let [Token::Word(relation), Token::Period, Token::Word(name)] =
