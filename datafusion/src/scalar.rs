@@ -1535,7 +1535,21 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::IntervalYearMonth(_) => {
                 write!(f, "IntervalYearMonth(\"{}\")", self)
             }
-            ScalarValue::Struct(_, _) => write!(f, "Struct({{{}}})", self),
+            ScalarValue::Struct(e, fields) => {
+                // Use Debug representation of field values
+                match e {
+                    Some(l) => write!(
+                        f,
+                        "Struct({{{}}})",
+                        l.iter()
+                            .zip(fields.iter())
+                            .map(|(value, field)| format!("{}:{:?}", field.name(), value))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                    None => write!(f, "Struct(NULL)"),
+                }
+            }
         }
     }
 }
