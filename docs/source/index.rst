@@ -52,6 +52,7 @@ Table of content
    :maxdepth: 1
    :caption: Specification
 
+   specification/roadmap
    specification/invariants
    specification/output-field-name-semantic
 

@@ -356,6 +356,10 @@ are mapped to Arrow types according to the following table
 | `CUSTOM`      | _Not yet supported_               |
 | `ARRAY`       | _Not yet supported_               |
 
+# Roadmap
+
+Please see [Roadmap](docs/source/specification/roadmap.md) for information of where the project is headed.
+
 # Architecture Overview
 
 There is no formal document describing DataFusion's architecture yet, but the following presentations offer a good overview of its different components and how they interact together.
