@@ -1480,7 +1480,7 @@ impl fmt::Display for ScalarValue {
             ScalarValue::Struct(e, fields) => match e {
                 Some(l) => write!(
                     f,
-                    "{}",
+                    "{{{}}}",
                     l.iter()
                         .zip(fields.iter())
                         .map(|(value, field)| format!("{}:{}", field.name(), value))
