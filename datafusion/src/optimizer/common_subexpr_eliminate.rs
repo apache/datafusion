@@ -270,7 +270,7 @@ fn build_project_plan(
 
     fields.extend_from_slice(input.schema().fields());
     input.schema().fields().iter().for_each(|field| {
-        project_exprs.push(col(&field.qualified_name()));
+        project_exprs.push(Expr::Column(field.qualified_column()));
     });
 
     let mut schema = DFSchema::new(fields)?;
