@@ -39,7 +39,7 @@ worth noting that using the settings in the `[profile.release]` section will sig
 [dependencies]
 datafusion = { version = "5.0" , features = ["simd"]}
 tokio = { version = "^1.0", features = ["rt-multi-thread"] }
-snmalloc-rs = {version = "0.2", features= ["cache-friendly"]}
+snmalloc-rs = "0.2"
 
 [profile.release]
 lto = true
