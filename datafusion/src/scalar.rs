@@ -86,7 +86,6 @@ pub enum ScalarValue {
     IntervalYearMonth(Option<i32>),
     /// Interval with DayTime unit
     IntervalDayTime(Option<i64>),
-
     /// struct of nested ScalarValue (boxed to reduce size_of(ScalarValue))
     #[allow(clippy::box_vec)]
     Struct(Option<Box<Vec<ScalarValue>>>, Box<Vec<Field>>),
@@ -2217,8 +2216,7 @@ mod tests {
             ("list_field", l2),
         ]);
 
-        let array =
-            ScalarValue::iter_to_array(vec![s0, s1, s2]).unwrap();
+        let array = ScalarValue::iter_to_array(vec![s0, s1, s2]).unwrap();
         let array = array.as_any().downcast_ref::<StructArray>().unwrap();
 
         let expected = StructArray::from(vec![
