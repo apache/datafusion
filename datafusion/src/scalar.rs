@@ -1281,10 +1281,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
         let (fields, scalars): (Vec<_>, Vec<_>) = value
             .into_iter()
             .map(|(name, scalar)| {
-                (
-                    Field::new(name, scalar.get_datatype(), false),
-                    scalar.clone(),
-                )
+                (Field::new(name, scalar.get_datatype(), false), scalar)
             })
             .unzip();
 
@@ -2237,14 +2234,14 @@ mod tests {
                 Arc::new(StringArray::from(vec!["Hello", "World", "!!!!!"])) as ArrayRef,
             ),
             (
-                field_d.clone(),
+                field_d,
                 Arc::new(StructArray::from(vec![
                     (
-                        field_e.clone(),
+                        field_e,
                         Arc::new(Int16Array::from(vec![2, 4, 6])) as ArrayRef,
                     ),
                     (
-                        field_f.clone(),
+                        field_f,
                         Arc::new(Int64Array::from(vec![3, 5, 7])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
