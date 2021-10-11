@@ -2085,17 +2085,44 @@ mod tests {
         let field_b = Field::new("B", DataType::Boolean, false);
         let field_c = Field::new("C", DataType::Utf8, false);
 
+        let field_e = Field::new("e", DataType::Int16, false);
+        let field_f = Field::new("f", DataType::Int64, false);
+        let field_d = Field::new(
+            "D",
+            DataType::Struct(vec![field_e.clone(), field_f.clone()]),
+            false,
+        );
+
         let scalar = ScalarValue::Struct(
             Some(Box::new(vec![
                 ScalarValue::Int32(Some(23)),
                 ScalarValue::Boolean(Some(false)),
                 ScalarValue::Utf8(Some("Hello".to_string())),
+                ScalarValue::from(vec![
+                    ("e", ScalarValue::from(2i16)),
+                    ("f", ScalarValue::from(3i64)),
+                ]),
             ])),
-            Box::new(vec![field_a.clone(), field_b.clone(), field_c.clone()]),
+            Box::new(vec![
+                field_a.clone(),
+                field_b.clone(),
+                field_c.clone(),
+                field_d.clone(),
+            ]),
         );
+
+        // Check Display
+        assert_eq!(
+            format!("{}", scalar),
+            String::from("{A:23,B:false,C:Hello,D:{e:2,f:3}}")
+        );
+
+        // Check Debug
         assert_eq!(
             format!("{:?}", scalar),
-            String::from("Struct({A:23,B:false,C:Hello})")
+            String::from(
+                r#"Struct({A:Int32(23),B:Boolean(false),C:Utf8("Hello"),D:Struct({e:Int16(2),f:Int64(3)})})"#
+            )
         );
 
         // Convert to length-2 array
@@ -2114,6 +2141,19 @@ mod tests {
                 field_c.clone(),
                 Arc::new(StringArray::from(vec!["Hello", "Hello"])) as ArrayRef,
             ),
+            (
+                field_d.clone(),
+                Arc::new(StructArray::from(vec![
+                    (
+                        field_e.clone(),
+                        Arc::new(Int16Array::from(vec![2, 2])) as ArrayRef,
+                    ),
+                    (
+                        field_f.clone(),
+                        Arc::new(Int64Array::from(vec![3, 3])) as ArrayRef,
+                    ),
+                ])) as ArrayRef,
+            ),
         ])) as ArrayRef;
 
         assert_eq!(&array, &expected);
@@ -2124,32 +2164,61 @@ mod tests {
 
         // None version
         let none_scalar = ScalarValue::try_from(array.data_type()).unwrap();
-        assert_eq!(format!("{:?}", none_scalar), String::from("Struct({NULL})"));
+        assert!(none_scalar.is_null());
+        assert_eq!(format!("{:?}", none_scalar), String::from("Struct(NULL)"));
 
         // Construct with convenience From<Vec<(&str, ScalarValue)>>
         let constructed = ScalarValue::from(vec![
-            ("A", ScalarValue::Int32(Some(23))),
-            ("B", ScalarValue::Boolean(Some(false))),
-            ("C", ScalarValue::Utf8(Some("Hello".to_string()))),
+            ("A", ScalarValue::from(23)),
+            ("B", ScalarValue::from(false)),
+            ("C", ScalarValue::from("Hello")),
+            (
+                "D",
+                ScalarValue::from(vec![
+                    ("e", ScalarValue::from(2i16)),
+                    ("f", ScalarValue::from(3i64)),
+                ]),
+            ),
         ]);
         assert_eq!(constructed, scalar);
 
         // Build Array from Vec of structs
         let scalars = vec![
             ScalarValue::from(vec![
-                ("A", ScalarValue::Int32(Some(23))),
-                ("B", ScalarValue::Boolean(Some(false))),
-                ("C", ScalarValue::Utf8(Some("Hello".to_string()))),
+                ("A", ScalarValue::from(23)),
+                ("B", ScalarValue::from(false)),
+                ("C", ScalarValue::from("Hello")),
+                (
+                    "D",
+                    ScalarValue::from(vec![
+                        ("e", ScalarValue::from(2i16)),
+                        ("f", ScalarValue::from(3i64)),
+                    ]),
+                ),
             ]),
             ScalarValue::from(vec![
-                ("A", ScalarValue::Int32(Some(7))),
-                ("B", ScalarValue::Boolean(Some(true))),
-                ("C", ScalarValue::Utf8(Some("World".to_string()))),
+                ("A", ScalarValue::from(7)),
+                ("B", ScalarValue::from(true)),
+                ("C", ScalarValue::from("World")),
+                (
+                    "D",
+                    ScalarValue::from(vec![
+                        ("e", ScalarValue::from(4i16)),
+                        ("f", ScalarValue::from(5i64)),
+                    ]),
+                ),
             ]),
             ScalarValue::from(vec![
-                ("A", ScalarValue::Int32(Some(-1000))),
-                ("B", ScalarValue::Boolean(Some(true))),
-                ("C", ScalarValue::Utf8(Some("!!!!!".to_string()))),
+                ("A", ScalarValue::from(-1000)),
+                ("B", ScalarValue::from(true)),
+                ("C", ScalarValue::from("!!!!!")),
+                (
+                    "D",
+                    ScalarValue::from(vec![
+                        ("e", ScalarValue::from(6i16)),
+                        ("f", ScalarValue::from(7i64)),
+                    ]),
+                ),
             ]),
         ];
         let array = ScalarValue::iter_to_array(scalars).unwrap();
@@ -2166,6 +2235,19 @@ mod tests {
             (
                 field_c,
                 Arc::new(StringArray::from(vec!["Hello", "World", "!!!!!"])) as ArrayRef,
+            ),
+            (
+                field_d.clone(),
+                Arc::new(StructArray::from(vec![
+                    (
+                        field_e.clone(),
+                        Arc::new(Int16Array::from(vec![2, 4, 6])) as ArrayRef,
+                    ),
+                    (
+                        field_f.clone(),
+                        Arc::new(Int64Array::from(vec![3, 5, 7])) as ArrayRef,
+                    ),
+                ])) as ArrayRef,
             ),
         ])) as ArrayRef;
 
