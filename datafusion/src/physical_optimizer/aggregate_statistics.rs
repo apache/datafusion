@@ -167,7 +167,7 @@ fn take_optimizable_count_with_nulls(
     if let (Some(num_rows), Some(col_stats), Some(casted_expr)) = (
         stats.num_rows,
         &stats.column_statistics,
-        agg_expr.as_any().downcast_ref::<expressions::Min>(),
+        agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         if casted_expr.expressions().len() == 1 {
             // TODO optimize with exprs other than Column
