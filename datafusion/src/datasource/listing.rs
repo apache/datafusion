@@ -74,9 +74,9 @@ impl ListingOptions {
         object_store_registry: Arc<ObjectStoreRegistry>,
         uri: &str,
     ) -> Result<SchemaRef> {
-        let object_store = object_store_registry.get_by_uri(uri)?;
+        let (object_store, path) = object_store_registry.get_by_uri(uri)?;
         let file_stream = object_store
-            .list_file_with_suffix(uri, &self.file_extension)
+            .list_file_with_suffix(path, &self.file_extension)
             .await?
             .map(move |file_meta| object_store.file_reader(file_meta?.sized_file));
         let file_schema = self.format.infer_schema(Box::pin(file_stream)).await?;
@@ -137,9 +137,9 @@ impl TableProvider for ListingTable {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // TODO object_store_registry should be provided as param here
-        let object_store = self.object_store_registry.get_by_uri(&self.uri)?;
+        let (object_store, path) = self.object_store_registry.get_by_uri(&self.uri)?;
         let (partitioned_file_lists, statistics) = self
-            .list_files_for_scan(Arc::clone(&object_store), filters, limit)
+            .list_files_for_scan(Arc::clone(&object_store), path, filters, limit)
             .await?;
         // create the execution plan
         self.options
@@ -169,13 +169,14 @@ impl ListingTable {
     async fn list_files_for_scan<'a>(
         &'a self,
         object_store: Arc<dyn ObjectStore>,
+        path: &'a str,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
         // list files (with partitions)
         let file_list = pruned_partition_list(
             object_store.as_ref(),
-            &self.uri,
+            path,
             filters,
             &self.options.file_extension,
             &self.options.partitions,
@@ -387,7 +388,9 @@ mod tests {
             opt,
         );
 
-        let (file_list, _) = table.list_files_for_scan(mock_store, &[], None).await?;
+        let (file_list, _) = table
+            .list_files_for_scan(mock_store, "bucket/key-prefix", &[], None)
+            .await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 
