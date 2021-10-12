@@ -43,6 +43,64 @@ use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{Accumulator, Statistics};
 use crate::scalar::ScalarValue;
 
+/// The Apache Parquet `FileFormat` implementation
+pub struct ParquetFormat {
+    /// Activate statistics based row group level pruning
+    pub enable_pruning: bool,
+}
+
+#[async_trait]
+impl FileFormat for ParquetFormat {
+    async fn infer_schema(&self, mut paths: StringStream) -> Result<SchemaRef> {
+        // We currently get the schema information from the first file rather than do
+        // schema merging and this is a limitation.
+        // See https://issues.apache.org/jira/browse/ARROW-11017
+        let first_file = paths
+            .next()
+            .await
+            .ok_or_else(|| DataFusionError::Plan("No data file found".to_owned()))?;
+        let (schema, _) = fetch_metadata(&first_file)?;
+        Ok(Arc::new(schema))
+    }
+
+    async fn infer_stats(&self, path: &str) -> Result<Statistics> {
+        let (_, stats) = fetch_metadata(path)?;
+        Ok(stats)
+    }
+
+    async fn create_executor(
+        &self,
+        schema: SchemaRef,
+        files: Vec<Vec<PartitionedFile>>,
+        statistics: Statistics,
+        projection: &Option<Vec<usize>>,
+        batch_size: usize,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // If enable pruning then combine the filters to build the predicate.
+        // If disable pruning then set the predicate to None, thus readers
+        // will not prune data based on the statistics.
+        let predicate = if self.enable_pruning {
+            combine_filters(filters)
+        } else {
+            None
+        };
+
+        Ok(Arc::new(ParquetExec::try_new(
+            files,
+            statistics,
+            schema,
+            projection.clone(),
+            predicate,
+            limit
+                .map(|l| std::cmp::min(l, batch_size))
+                .unwrap_or(batch_size),
+            limit,
+        )?))
+    }
+}
+
 fn summarize_min_max(
     max_values: &mut Vec<Option<MaxAccumulator>>,
     min_values: &mut Vec<Option<MinAccumulator>>,
@@ -224,329 +282,263 @@ fn fetch_metadata(path: &str) -> Result<(Schema, Statistics)> {
     Ok((schema, statistics))
 }
 
-/// The Apache Parquet `FileFormat` implementation
-pub struct ParquetFormat {
-    /// Activate statistics based row group level pruning
-    pub enable_pruning: bool,
-}
+#[cfg(test)]
+mod tests {
+    use crate::datasource::format::string_stream;
+    use crate::physical_plan::collect;
 
-#[async_trait]
-impl FileFormat for ParquetFormat {
-    async fn infer_schema(&self, mut paths: StringStream) -> Result<SchemaRef> {
-        // We currently get the schema information from the first file rather than do
-        // schema merging and this is a limitation.
-        // See https://issues.apache.org/jira/browse/ARROW-11017
-        let first_file = paths
-            .next()
-            .await
-            .ok_or_else(|| DataFusionError::Plan("No data file found".to_owned()))?;
-        let (schema, _) = fetch_metadata(&first_file)?;
-        Ok(Arc::new(schema))
+    use super::*;
+    use arrow::array::{
+        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
+        TimestampNanosecondArray,
+    };
+    use futures::StreamExt;
+
+    #[tokio::test]
+    async fn read_small_batches() -> Result<()> {
+        let projection = None;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 2).await?;
+        let stream = exec.execute(0).await?;
+
+        let _ = stream
+            .map(|batch| {
+                let batch = batch.unwrap();
+                assert_eq!(11, batch.num_columns());
+                assert_eq!(2, batch.num_rows());
+            })
+            .fold(0, |acc, _| async move { acc + 1i32 })
+            .await;
+
+        // test metadata
+        assert_eq!(exec.statistics().num_rows, Some(8));
+        assert_eq!(exec.statistics().total_byte_size, Some(671));
+
+        Ok(())
     }
 
-    async fn infer_stats(&self, path: &str) -> Result<Statistics> {
-        let (_, stats) = fetch_metadata(path)?;
-        Ok(stats)
+    #[tokio::test]
+    async fn read_alltypes_plain_parquet() -> Result<()> {
+        let projection = None;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+
+        let x: Vec<String> = exec
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+        let y = x.join("\n");
+        assert_eq!(
+            "id: Int32\n\
+             bool_col: Boolean\n\
+             tinyint_col: Int32\n\
+             smallint_col: Int32\n\
+             int_col: Int32\n\
+             bigint_col: Int64\n\
+             float_col: Float32\n\
+             double_col: Float64\n\
+             date_string_col: Binary\n\
+             string_col: Binary\n\
+             timestamp_col: Timestamp(Nanosecond, None)",
+            y
+        );
+
+        let batches = collect(exec).await?;
+
+        assert_eq!(1, batches.len());
+        assert_eq!(11, batches[0].num_columns());
+        assert_eq!(8, batches[0].num_rows());
+
+        Ok(())
     }
 
-    async fn create_executor(
-        &self,
-        schema: SchemaRef,
-        files: Vec<Vec<PartitionedFile>>,
-        statistics: Statistics,
+    #[tokio::test]
+    async fn read_bool_alltypes_plain_parquet() -> Result<()> {
+        let projection = Some(vec![1]);
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+
+        let batches = collect(exec).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(8, batches[0].num_rows());
+
+        let array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        let mut values: Vec<bool> = vec![];
+        for i in 0..batches[0].num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(
+            "[true, false, true, false, true, false, true, false]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_i32_alltypes_plain_parquet() -> Result<()> {
+        let projection = Some(vec![0]);
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+
+        let batches = collect(exec).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(8, batches[0].num_rows());
+
+        let array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let mut values: Vec<i32> = vec![];
+        for i in 0..batches[0].num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{:?}", values));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_i96_alltypes_plain_parquet() -> Result<()> {
+        let projection = Some(vec![10]);
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+
+        let batches = collect(exec).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(8, batches[0].num_rows());
+
+        let array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap();
+        let mut values: Vec<i64> = vec![];
+        for i in 0..batches[0].num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{:?}", values));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_f32_alltypes_plain_parquet() -> Result<()> {
+        let projection = Some(vec![6]);
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+
+        let batches = collect(exec).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(8, batches[0].num_rows());
+
+        let array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .unwrap();
+        let mut values: Vec<f32> = vec![];
+        for i in 0..batches[0].num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(
+            "[0.0, 1.1, 0.0, 1.1, 0.0, 1.1, 0.0, 1.1]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_f64_alltypes_plain_parquet() -> Result<()> {
+        let projection = Some(vec![7]);
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+
+        let batches = collect(exec).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(8, batches[0].num_rows());
+
+        let array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        let mut values: Vec<f64> = vec![];
+        for i in 0..batches[0].num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(
+            "[0.0, 10.1, 0.0, 10.1, 0.0, 10.1, 0.0, 10.1]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_binary_alltypes_plain_parquet() -> Result<()> {
+        let projection = Some(vec![9]);
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+
+        let batches = collect(exec).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(8, batches[0].num_rows());
+
+        let array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        let mut values: Vec<&str> = vec![];
+        for i in 0..batches[0].num_rows() {
+            values.push(std::str::from_utf8(array.value(i)).unwrap());
+        }
+
+        assert_eq!(
+            "[\"0\", \"1\", \"0\", \"1\", \"0\", \"1\", \"0\", \"1\"]",
+            format!("{:?}", values)
+        );
+
+        Ok(())
+    }
+
+    async fn get_exec(
+        file_name: &str,
         projection: &Option<Vec<usize>>,
         batch_size: usize,
-        filters: &[Expr],
-        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // If enable pruning then combine the filters to build the predicate.
-        // If disable pruning then set the predicate to None, thus readers
-        // will not prune data based on the statistics.
-        let predicate = if self.enable_pruning {
-            combine_filters(filters)
-        } else {
-            None
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, file_name);
+        let table = ParquetFormat {
+            enable_pruning: true,
         };
-
-        Ok(Arc::new(ParquetExec::try_new(
-            files,
-            statistics,
-            schema,
-            projection.clone(),
-            predicate,
-            limit
-                .map(|l| std::cmp::min(l, batch_size))
-                .unwrap_or(batch_size),
-            limit,
-        )?))
+        let schema = table
+            .infer_schema(string_stream(vec![filename.clone()]))
+            .await
+            .expect("Schema inference");
+        let stats = table
+            .infer_stats(&filename.clone())
+            .await
+            .expect("Stats inference");
+        let files = vec![vec![PartitionedFile {
+            path: filename,
+            statistics: stats.clone(),
+        }]];
+        let exec = table
+            .create_executor(schema, files, stats, projection, batch_size, &[], None)
+            .await?;
+        Ok(exec)
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use arrow::array::{
-//         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
-//         TimestampNanosecondArray,
-//     };
-//     use arrow::record_batch::RecordBatch;
-//     use futures::StreamExt;
-
-//     #[tokio::test]
-//     async fn read_small_batches() -> Result<()> {
-//         let table = load_table("alltypes_plain.parquet")?;
-//         let projection = None;
-//         let exec = table.scan(&projection, 2, &[], None)?;
-//         let stream = exec.execute(0).await?;
-
-//         let _ = stream
-//             .map(|batch| {
-//                 let batch = batch.unwrap();
-//                 assert_eq!(11, batch.num_columns());
-//                 assert_eq!(2, batch.num_rows());
-//             })
-//             .fold(0, |acc, _| async move { acc + 1i32 })
-//             .await;
-
-//         // test metadata
-//         assert_eq!(exec.statistics().num_rows, Some(8));
-//         assert_eq!(exec.statistics().total_byte_size, Some(671));
-
-//         Ok(())
-//     }
-
-//     #[tokio::test]
-//     async fn read_alltypes_plain_parquet() -> Result<()> {
-//         let table = load_table("alltypes_plain.parquet")?;
-
-//         let x: Vec<String> = table
-//             .schema()
-//             .fields()
-//             .iter()
-//             .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
-//             .collect();
-//         let y = x.join("\n");
-//         assert_eq!(
-//             "id: Int32\n\
-//              bool_col: Boolean\n\
-//              tinyint_col: Int32\n\
-//              smallint_col: Int32\n\
-//              int_col: Int32\n\
-//              bigint_col: Int64\n\
-//              float_col: Float32\n\
-//              double_col: Float64\n\
-//              date_string_col: Binary\n\
-//              string_col: Binary\n\
-//              timestamp_col: Timestamp(Nanosecond, None)",
-//             y
-//         );
-
-//         let projection = None;
-//         let batch = get_first_batch(table, &projection).await?;
-
-//         assert_eq!(11, batch.num_columns());
-//         assert_eq!(8, batch.num_rows());
-
-//         Ok(())
-//     }
-
-//     #[tokio::test]
-//     async fn read_bool_alltypes_plain_parquet() -> Result<()> {
-//         let table = load_table("alltypes_plain.parquet")?;
-//         let projection = Some(vec![1]);
-//         let batch = get_first_batch(table, &projection).await?;
-
-//         assert_eq!(1, batch.num_columns());
-//         assert_eq!(8, batch.num_rows());
-
-//         let array = batch
-//             .column(0)
-//             .as_any()
-//             .downcast_ref::<BooleanArray>()
-//             .unwrap();
-//         let mut values: Vec<bool> = vec![];
-//         for i in 0..batch.num_rows() {
-//             values.push(array.value(i));
-//         }
-
-//         assert_eq!(
-//             "[true, false, true, false, true, false, true, false]",
-//             format!("{:?}", values)
-//         );
-
-//         Ok(())
-//     }
-
-//     #[tokio::test]
-//     async fn read_i32_alltypes_plain_parquet() -> Result<()> {
-//         let table = load_table("alltypes_plain.parquet")?;
-//         let projection = Some(vec![0]);
-//         let batch = get_first_batch(table, &projection).await?;
-
-//         assert_eq!(1, batch.num_columns());
-//         assert_eq!(8, batch.num_rows());
-
-//         let array = batch
-//             .column(0)
-//             .as_any()
-//             .downcast_ref::<Int32Array>()
-//             .unwrap();
-//         let mut values: Vec<i32> = vec![];
-//         for i in 0..batch.num_rows() {
-//             values.push(array.value(i));
-//         }
-
-//         assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{:?}", values));
-
-//         Ok(())
-//     }
-
-//     #[tokio::test]
-//     async fn read_i96_alltypes_plain_parquet() -> Result<()> {
-//         let table = load_table("alltypes_plain.parquet")?;
-//         let projection = Some(vec![10]);
-//         let batch = get_first_batch(table, &projection).await?;
-
-//         assert_eq!(1, batch.num_columns());
-//         assert_eq!(8, batch.num_rows());
-
-//         let array = batch
-//             .column(0)
-//             .as_any()
-//             .downcast_ref::<TimestampNanosecondArray>()
-//             .unwrap();
-//         let mut values: Vec<i64> = vec![];
-//         for i in 0..batch.num_rows() {
-//             values.push(array.value(i));
-//         }
-
-//         assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{:?}", values));
-
-//         Ok(())
-//     }
-
-//     #[tokio::test]
-//     async fn read_f32_alltypes_plain_parquet() -> Result<()> {
-//         let table = load_table("alltypes_plain.parquet")?;
-//         let projection = Some(vec![6]);
-//         let batch = get_first_batch(table, &projection).await?;
-
-//         assert_eq!(1, batch.num_columns());
-//         assert_eq!(8, batch.num_rows());
-
-//         let array = batch
-//             .column(0)
-//             .as_any()
-//             .downcast_ref::<Float32Array>()
-//             .unwrap();
-//         let mut values: Vec<f32> = vec![];
-//         for i in 0..batch.num_rows() {
-//             values.push(array.value(i));
-//         }
-
-//         assert_eq!(
-//             "[0.0, 1.1, 0.0, 1.1, 0.0, 1.1, 0.0, 1.1]",
-//             format!("{:?}", values)
-//         );
-
-//         Ok(())
-//     }
-
-//     #[tokio::test]
-//     async fn read_f64_alltypes_plain_parquet() -> Result<()> {
-//         let table = load_table("alltypes_plain.parquet")?;
-//         let projection = Some(vec![7]);
-//         let batch = get_first_batch(table, &projection).await?;
-
-//         assert_eq!(1, batch.num_columns());
-//         assert_eq!(8, batch.num_rows());
-
-//         let array = batch
-//             .column(0)
-//             .as_any()
-//             .downcast_ref::<Float64Array>()
-//             .unwrap();
-//         let mut values: Vec<f64> = vec![];
-//         for i in 0..batch.num_rows() {
-//             values.push(array.value(i));
-//         }
-
-//         assert_eq!(
-//             "[0.0, 10.1, 0.0, 10.1, 0.0, 10.1, 0.0, 10.1]",
-//             format!("{:?}", values)
-//         );
-
-//         Ok(())
-//     }
-
-//     #[tokio::test]
-//     async fn read_binary_alltypes_plain_parquet() -> Result<()> {
-//         let table = load_table("alltypes_plain.parquet")?;
-//         let projection = Some(vec![9]);
-//         let batch = get_first_batch(table, &projection).await?;
-
-//         assert_eq!(1, batch.num_columns());
-//         assert_eq!(8, batch.num_rows());
-
-//         let array = batch
-//             .column(0)
-//             .as_any()
-//             .downcast_ref::<BinaryArray>()
-//             .unwrap();
-//         let mut values: Vec<&str> = vec![];
-//         for i in 0..batch.num_rows() {
-//             values.push(std::str::from_utf8(array.value(i)).unwrap());
-//         }
-
-//         assert_eq!(
-//             "[\"0\", \"1\", \"0\", \"1\", \"0\", \"1\", \"0\", \"1\"]",
-//             format!("{:?}", values)
-//         );
-
-//         Ok(())
-//     }
-
-//     fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
-//         let testdata = crate::test_util::parquet_test_data();
-//         let filename = format!("{}/{}", testdata, name);
-//         let table = ParquetTable::try_new(&filename, 2)?;
-//         Ok(Arc::new(table))
-//     }
-
-//     async fn get_first_batch(
-//         table: Arc<dyn TableProvider>,
-//         projection: &Option<Vec<usize>>,
-//     ) -> Result<RecordBatch> {
-//         let exec = table.scan(projection, 1024, &[], None)?;
-//         let mut it = exec.execute(0).await?;
-//         it.next()
-//             .await
-//             .expect("should have received at least one batch")
-//             .map_err(|e| e.into())
-//     }
-
-//     #[test]
-//     fn combine_zero_filters() {
-//         let result = combine_filters(&[]);
-//         assert_eq!(result, None);
-//     }
-
-//     #[test]
-//     fn combine_one_filter() {
-//         use crate::logical_plan::{binary_expr, col, lit, Operator};
-//         let filter = binary_expr(col("c1"), Operator::Lt, lit(1));
-//         let result = combine_filters(&[filter.clone()]);
-//         assert_eq!(result, Some(filter));
-//     }
-
-//     #[test]
-//     fn combine_multiple_filters() {
-//         use crate::logical_plan::{and, binary_expr, col, lit, Operator};
-//         let filter1 = binary_expr(col("c1"), Operator::Lt, lit(1));
-//         let filter2 = binary_expr(col("c2"), Operator::Lt, lit(2));
-//         let filter3 = binary_expr(col("c3"), Operator::Lt, lit(3));
-//         let result =
-//             combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
-//         assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
-//     }
-// }

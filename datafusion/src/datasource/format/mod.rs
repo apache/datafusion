@@ -38,6 +38,11 @@ use futures::Stream;
 /// A stream of String that can be used accross await calls
 pub type StringStream = Pin<Box<dyn Stream<Item = String> + Send + Sync>>;
 
+/// Convert a vec into a `StringStream`
+pub fn string_stream(strings: Vec<String>) -> StringStream {
+    Box::pin(futures::stream::iter(strings))
+}
+
 /// This trait abstracts all the file format specific implementations
 /// from the `TableProvider`. This helps code re-utilization accross
 /// providers that support the the same file formats.

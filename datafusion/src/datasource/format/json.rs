@@ -94,3 +94,103 @@ impl FileFormat for JsonFormat {
         Ok(Arc::new(exec))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::Int64Array;
+
+    use super::*;
+    use crate::{datasource::format::string_stream, physical_plan::collect};
+
+    #[tokio::test]
+    async fn read_small_batches() -> Result<()> {
+        let projection = None;
+        let exec = get_exec(&projection, 2).await?;
+        let stream = exec.execute(0).await?;
+
+        let tt_rows: i32 = stream
+            .map(|batch| {
+                let batch = batch.unwrap();
+                assert_eq!(4, batch.num_columns());
+                assert_eq!(2, batch.num_rows());
+            })
+            .fold(0, |acc, _| async move { acc + 1i32 })
+            .await;
+
+        assert_eq!(tt_rows, 6 /* 12/2 */);
+
+        // test metadata
+        assert_eq!(exec.statistics().num_rows, None);
+        assert_eq!(exec.statistics().total_byte_size, None);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_schema() -> Result<()> {
+        let projection = None;
+        let exec = get_exec(&projection, 1024).await?;
+
+        let x: Vec<String> = exec
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+        assert_eq!(vec!["a: Int64", "b: Float64", "c: Boolean", "d: Utf8",], x);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_int_column() -> Result<()> {
+        let projection = Some(vec![0]);
+        let exec = get_exec(&projection, 1024).await?;
+
+        let batches = collect(exec).await.expect("Collect batches");
+
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(12, batches[0].num_rows());
+
+        let array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let mut values: Vec<i64> = vec![];
+        for i in 0..batches[0].num_rows() {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(
+            vec![1, -10, 2, 1, 7, 1, 1, 5, 1, 1, 1, 100000000000000],
+            values
+        );
+
+        Ok(())
+    }
+
+    async fn get_exec(
+        projection: &Option<Vec<usize>>,
+        batch_size: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let filename = "tests/jsons/2.json";
+        let table = JsonFormat {
+            schema_infer_max_rec: Some(1000),
+        };
+        let schema = table
+            .infer_schema(string_stream(vec![filename.to_owned()]))
+            .await
+            .expect("Schema inference");
+        let stats = table.infer_stats(filename).await.expect("Stats inference");
+        let files = vec![vec![PartitionedFile {
+            path: filename.to_owned(),
+            statistics: stats.clone(),
+        }]];
+        let exec = table
+            .create_executor(schema, files, stats, projection, batch_size, &[], None)
+            .await?;
+        Ok(exec)
+    }
+}

@@ -100,3 +100,122 @@ impl FileFormat for CsvFormat {
         Ok(Arc::new(exec))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::StringArray;
+
+    use super::*;
+    use crate::{datasource::format::string_stream, physical_plan::collect};
+
+    #[tokio::test]
+    async fn read_small_batches() -> Result<()> {
+        // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
+        let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
+        let exec = get_exec("aggregate_test_100.csv", &projection, 2).await?;
+        let stream = exec.execute(0).await?;
+
+        let tt_rows: i32 = stream
+            .map(|batch| {
+                let batch = batch.unwrap();
+                assert_eq!(12, batch.num_columns());
+                assert_eq!(2, batch.num_rows());
+            })
+            .fold(0, |acc, _| async move { acc + 1i32 })
+            .await;
+
+        assert_eq!(tt_rows, 50 /* 100/2 */);
+
+        // test metadata
+        assert_eq!(exec.statistics().num_rows, None);
+        assert_eq!(exec.statistics().total_byte_size, None);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_schema() -> Result<()> {
+        let projection = None;
+        let exec = get_exec("aggregate_test_100.csv", &projection, 1024).await?;
+
+        let x: Vec<String> = exec
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+        assert_eq!(
+            vec![
+                "c1: Utf8",
+                "c2: Int64",
+                "c3: Int64",
+                "c4: Int64",
+                "c5: Int64",
+                "c6: Int64",
+                "c7: Int64",
+                "c8: Int64",
+                "c9: Int64",
+                "c10: Int64",
+                "c11: Float64",
+                "c12: Float64",
+                "c13: Utf8"
+            ],
+            x
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_char_column() -> Result<()> {
+        let projection = Some(vec![0]);
+        let exec = get_exec("aggregate_test_100.csv", &projection, 1024).await?;
+
+        let batches = collect(exec).await.expect("Collect batches");
+
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(100, batches[0].num_rows());
+
+        let array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let mut values: Vec<&str> = vec![];
+        for i in 0..5 {
+            values.push(array.value(i));
+        }
+
+        assert_eq!(vec!["c", "d", "b", "a", "b"], values);
+
+        Ok(())
+    }
+
+    async fn get_exec(
+        file_name: &str,
+        projection: &Option<Vec<usize>>,
+        batch_size: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = format!("{}/csv/{}", testdata, file_name);
+        let table = CsvFormat {
+            has_header: true,
+            schema_infer_max_rec: Some(1000),
+            delimiter: b',',
+        };
+        let schema = table
+            .infer_schema(string_stream(vec![filename.clone()]))
+            .await
+            .expect("Schema inference");
+        let stats = table.infer_stats(&filename).await.expect("Stats inference");
+        let files = vec![vec![PartitionedFile {
+            path: filename,
+            statistics: stats.clone(),
+        }]];
+        let exec = table
+            .create_executor(schema, files, stats, projection, batch_size, &[], None)
+            .await?;
+        Ok(exec)
+    }
+}
