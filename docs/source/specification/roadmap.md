@@ -20,39 +20,42 @@ under the License.
 # Roadmap
 
 This document describes high level goals of the DataFusion and
-Ballista development community. It is not meant to restrict, but
-rather help newcomers understand the broader context of where other
-parts of the community is headed, and inspire additional
-contributions.
+Ballista development community. It is not meant to restrict
+possibilities, but rather help newcomers understand the broader
+context of where the community is headed, and inspire
+additional contributions.
 
-DataFusion and Ballista, are part of the [Apache
+DataFusion and Ballista are part of the [Apache
 Arrow](https://arrow.apache.org/) project and governed by the Apache
-Software Foundation governance model. Thus it is an entirely driven by
-volunteer contributions, and we welcome contributions for items not on
+Software Foundation governance model. These projects are entirely driven by
+volunteers, and we welcome contributions for items not on
 this roadmap. However, before submitting a large PR, we strongly
 suggest you read the [before
 starting](https://arrow.apache.org/docs/developers/contributing.html#before-starting)
-recommendations to minimize code review surprises.
+recommendations to minimize surprises during code review.
 
 # DataFusion
 
-## Vision
-
-DataFusion's goal is to become _the de facto query engine_ of choice
+DataFusion's goal is to become the embedded query engine of choice
 for new analytic applications, by leveraging the unique features of
-Rust and [Apache Arrow](https://arrow.apache.org/) to provide:
+[Rust](https://www.rust-lang.org/) and [Apache Arrow](https://arrow.apache.org/)
+to provide:
 
-1. Best-in-class query performance for a single node
-2. A feature-complete declarative query interface via (most of) PostgreSQL
+1. Best-in-class single node query performance
+2. A feature-complete declarative SQL query interface compatible with PostgreSQL
 3. A feature-rich procedural interface for creating and running execution plans
 4. High performance, erogonomic extensibility points at at every layer
 
-## SQL Language
+The
+
+## Additional SQL Language Features
 
 - Complete support list on [status](https://github.com/apache/arrow-datafusion/blob/master/README.md#status)
 - Timestamp Arithmetic [#194](https://github.com/apache/arrow-datafusion/issues/194)
 - SQL Parser extension point
 - Support for nested structures (fields, lists, structs)
+- Remaining Set Operators (`INTERSECT` / `EXCEPT`) [#1082](https://github.com/apache/arrow-datafusion/issues/1082)
+- Run all queries from the TPCH benchmark (see [milestone](https://github.com/apache/arrow-datafusion/milestone/2) for more details)
 
 ## Query Optimizer
 
@@ -62,7 +65,7 @@ Rust and [Apache Arrow](https://arrow.apache.org/) to provide:
 ## Runtime / Infrastructure
 
 - Better support for reading data from remote filesystems (e.g. S3) without caching it locally
-- [arrow2](https://github.com/apache/arrow-datafusion/milestone/3)
+- Migrate to some sort of arrow2 based implementation (see [milestone](https://github.com/apache/arrow-datafusion/milestone/3) for more details)
 
 ## Resource Management
 
