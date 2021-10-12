@@ -68,11 +68,11 @@ impl ObjectReader for LocalFileReader {
     fn chunk_reader(
         &self,
         start: u64,
-        _length: usize,
+        length: usize,
     ) -> Result<Box<dyn Read + Send + Sync>> {
         let mut file = File::open(&self.file.path)?;
         file.seek(SeekFrom::Start(start))?;
-        Ok(Box::new(file))
+        Ok(Box::new(file.take(length as u64)))
     }
 
     fn length(&self) -> u64 {
