@@ -40,6 +40,7 @@ use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use tokio::task::JoinHandle;
 
 /// Sort execution plan
 #[derive(Debug)]
@@ -228,6 +229,13 @@ pin_project! {
         output: futures::channel::oneshot::Receiver<ArrowResult<Option<RecordBatch>>>,
         finished: bool,
         schema: SchemaRef,
+        join_handle: JoinHandle<()>,
+    }
+
+    impl PinnedDrop for SortStream {
+        fn drop(this: Pin<&mut Self>) {
+            this.join_handle.abort();
+        }
     }
 }
 
@@ -239,7 +247,7 @@ impl SortStream {
     ) -> Self {
         let (tx, rx) = futures::channel::oneshot::channel();
         let schema = input.schema();
-        tokio::spawn(async move {
+        let join_handle = tokio::spawn(async move {
             let schema = input.schema();
             let sorted_batch = common::collect(input)
                 .await
@@ -257,13 +265,15 @@ impl SortStream {
                     Ok(result)
                 });
 
-            tx.send(sorted_batch)
+            // failing here is OK, the receiver is gone and does not care about the result
+            tx.send(sorted_batch).ok();
         });
 
         Self {
             output: rx,
             finished: false,
             schema,
+            join_handle,
         }
     }
 }
@@ -305,6 +315,8 @@ impl RecordBatchStream for SortStream {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Weak;
+
     use super::*;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
@@ -314,8 +326,10 @@ mod tests {
         csv::{CsvExec, CsvReadOptions},
     };
     use crate::test;
+    use crate::test::exec::BlockingExec;
     use arrow::array::*;
     use arrow::datatypes::*;
+    use futures::FutureExt;
 
     #[tokio::test]
     async fn test_sort() -> Result<()> {
@@ -471,6 +485,44 @@ mod tests {
         ];
 
         assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drop_cancel() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema)));
+        let refs = blocking_exec.refs();
+        let sort_exec = Arc::new(SortExec::try_new(
+            vec![PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions::default(),
+            }],
+            blocking_exec,
+        )?);
+
+        let fut = collect(sort_exec);
+        let mut fut = fut.boxed();
+
+        let waker = futures::task::noop_waker();
+        let mut cx = futures::task::Context::from_waker(&waker);
+        let poll = fut.poll_unpin(&mut cx);
+
+        assert!(poll.is_pending());
+        drop(fut);
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if dbg!(Weak::strong_count(&refs)) == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
 
         Ok(())
     }
