@@ -82,7 +82,7 @@ impl FileFormat for JsonFormat {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = NdJsonExec::try_new(
+        let exec = NdJsonExec::new(
             // flattening this for now because NdJsonExec does not support partitioning yet
             files.into_iter().flatten().map(|f| f.path).collect(),
             statistics,
@@ -90,7 +90,7 @@ impl FileFormat for JsonFormat {
             projection.clone(),
             batch_size,
             limit,
-        )?;
+        );
         Ok(Arc::new(exec))
     }
 }

@@ -53,14 +53,14 @@ pub struct AvroExec {
 impl AvroExec {
     /// Create a new JSON reader execution plan provided file list and schema
     /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
-    pub fn try_new(
+    pub fn new(
         files: Vec<String>,
         statistics: Statistics,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
         batch_size: usize,
         limit: Option<usize>,
-    ) -> Result<Self> {
+    ) -> Self {
         let projected_schema = match &projection {
             None => Arc::clone(&schema),
             Some(p) => Arc::new(Schema::new(
@@ -68,7 +68,7 @@ impl AvroExec {
             )),
         };
 
-        Ok(Self {
+        Self {
             files,
             statistics,
             schema,
@@ -76,7 +76,7 @@ impl AvroExec {
             projected_schema,
             batch_size,
             limit,
-        })
+        }
     }
 }
 
@@ -239,7 +239,7 @@ mod tests {
 
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let avro_exec = AvroExec::try_new(
+        let avro_exec = AvroExec::new(
             vec![filename.clone()],
             Statistics::default(),
             AvroFormat {}
@@ -248,7 +248,7 @@ mod tests {
             Some(vec![0, 1, 2]),
             1024,
             None,
-        )?;
+        );
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
         let mut results = avro_exec.execute(0).await?;

@@ -86,7 +86,7 @@ impl FileFormat for CsvFormat {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = CsvExec::try_new(
+        let exec = CsvExec::new(
             // flattening this for now because CsvExec does not support partitioning yet
             files.into_iter().flatten().map(|f| f.path).collect(),
             statistics,
@@ -96,7 +96,7 @@ impl FileFormat for CsvFormat {
             projection.clone(),
             batch_size,
             limit,
-        )?;
+        );
         Ok(Arc::new(exec))
     }
 }

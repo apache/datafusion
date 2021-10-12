@@ -63,7 +63,7 @@ impl CsvExec {
     /// Create a new CSV reader execution plan provided file list and schema
     /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
     #[allow(clippy::too_many_arguments)]
-    pub fn try_new(
+    pub fn new(
         files: Vec<String>,
         statistics: Statistics,
         schema: SchemaRef,
@@ -72,7 +72,7 @@ impl CsvExec {
         projection: Option<Vec<usize>>,
         batch_size: usize,
         limit: Option<usize>,
-    ) -> Result<Self> {
+    ) -> Self {
         let projected_schema = match &projection {
             None => Arc::clone(&schema),
             Some(p) => Arc::new(Schema::new(
@@ -80,7 +80,7 @@ impl CsvExec {
             )),
         };
 
-        Ok(Self {
+        Self {
             files,
             schema,
             statistics,
@@ -90,7 +90,7 @@ impl CsvExec {
             projected_schema,
             batch_size,
             limit,
-        })
+        }
     }
 }
 
@@ -246,7 +246,7 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
-        let csv = CsvExec::try_new(
+        let csv = CsvExec::new(
             vec![path],
             Statistics::default(),
             schema,
@@ -255,7 +255,7 @@ mod tests {
             Some(vec![0, 2, 4]),
             1024,
             None,
-        )?;
+        );
         assert_eq!(13, csv.schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -276,7 +276,7 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
-        let csv = CsvExec::try_new(
+        let csv = CsvExec::new(
             vec![path],
             Statistics::default(),
             schema,
@@ -285,7 +285,7 @@ mod tests {
             None,
             1024,
             None,
-        )?;
+        );
         assert_eq!(13, csv.schema.fields().len());
         assert_eq!(13, csv.projected_schema.fields().len());
         assert_eq!(13, csv.schema().fields().len());

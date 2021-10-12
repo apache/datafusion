@@ -64,7 +64,7 @@ impl FileFormat for AvroFormat {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = AvroExec::try_new(
+        let exec = AvroExec::new(
             // flattening this for now because CsvExec does not support partitioning yet
             files.into_iter().flatten().map(|f| f.path).collect(),
             statistics,
@@ -72,7 +72,7 @@ impl FileFormat for AvroFormat {
             projection.clone(),
             batch_size,
             limit,
-        )?;
+        );
         Ok(Arc::new(exec))
     }
 }

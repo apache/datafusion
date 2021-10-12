@@ -87,7 +87,7 @@ impl FileFormat for ParquetFormat {
             None
         };
 
-        Ok(Arc::new(ParquetExec::try_new(
+        Ok(Arc::new(ParquetExec::new(
             files,
             statistics,
             schema,
@@ -97,7 +97,7 @@ impl FileFormat for ParquetFormat {
                 .map(|l| std::cmp::min(l, batch_size))
                 .unwrap_or(batch_size),
             limit,
-        )?))
+        )))
     }
 }
 

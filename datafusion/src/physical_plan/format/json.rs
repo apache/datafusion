@@ -54,14 +54,14 @@ pub struct NdJsonExec {
 impl NdJsonExec {
     /// Create a new JSON reader execution plan provided file list and schema
     /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
-    pub fn try_new(
+    pub fn new(
         files: Vec<String>,
         statistics: Statistics,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
         batch_size: usize,
         limit: Option<usize>,
-    ) -> Result<Self> {
+    ) -> Self {
         let projected_schema = match &projection {
             None => Arc::clone(&schema),
             Some(p) => Arc::new(Schema::new(
@@ -69,7 +69,7 @@ impl NdJsonExec {
             )),
         };
 
-        Ok(Self {
+        Self {
             files,
             statistics,
             schema,
@@ -77,7 +77,7 @@ impl NdJsonExec {
             projected_schema,
             batch_size,
             limit,
-        })
+        }
     }
 }
 
@@ -239,14 +239,14 @@ mod tests {
     async fn nd_json_exec_file_without_projection() -> Result<()> {
         use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = NdJsonExec::try_new(
+        let exec = NdJsonExec::new(
             vec![path.clone()],
             Default::default(),
             infer_schema(path).await?,
             None,
             1024,
             Some(3),
-        )?;
+        );
 
         // TODO: this is not where schema inference should be tested
 
@@ -291,14 +291,14 @@ mod tests {
     #[tokio::test]
     async fn nd_json_exec_file_projection() -> Result<()> {
         let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = NdJsonExec::try_new(
+        let exec = NdJsonExec::new(
             vec![path.clone()],
             Default::default(),
             infer_schema(path).await?,
             Some(vec![0, 2]),
             1024,
             None,
-        )?;
+        );
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 
