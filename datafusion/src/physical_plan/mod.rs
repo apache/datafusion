@@ -621,6 +621,7 @@ pub mod empty;
 pub mod explain;
 pub mod expressions;
 pub mod filter;
+pub mod format;
 pub mod functions;
 pub mod hash_aggregate;
 pub mod hash_join;

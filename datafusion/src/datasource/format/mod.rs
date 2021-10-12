@@ -21,6 +21,7 @@ pub mod csv;
 pub mod json;
 pub mod parquet;
 
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::arrow::datatypes::{Schema, SchemaRef};
@@ -32,14 +33,19 @@ use crate::physical_plan::{Accumulator, ColumnStatistics, ExecutionPlan, Statist
 use super::PartitionedFile;
 
 use async_trait::async_trait;
+use futures::Stream;
+
+/// A stream of String that can be used accross await calls
+pub type StringStream = Pin<Box<dyn Stream<Item = String> + Send + Sync>>;
 
 /// This trait abstracts all the file format specific implementations
 /// from the `TableProvider`. This helps code re-utilization accross
 /// providers that support the the same file formats.
 #[async_trait]
 pub trait FileFormat: Send + Sync {
-    /// Open the file at the given path and infer its schema
-    async fn infer_schema(&self, path: &str) -> Result<SchemaRef>;
+    /// Open the files at the paths provided by iterator and infer the
+    /// common schema
+    async fn infer_schema(&self, paths: StringStream) -> Result<SchemaRef>;
 
     /// Open the file at the given path and infer its statistics
     async fn infer_stats(&self, path: &str) -> Result<Statistics>;

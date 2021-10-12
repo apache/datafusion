@@ -23,20 +23,22 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use futures::stream::StreamExt;
 use parquet::arrow::ArrowReader;
 use parquet::arrow::ParquetFileArrowReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::FileFormat;
-use super::{create_max_min_accs, get_col_stats};
+use super::{create_max_min_accs, get_col_stats, StringStream};
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::PartitionedFile;
+use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::logical_plan::combine_filters;
 use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::parquet::ParquetExec;
+use crate::physical_plan::format::ParquetExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{Accumulator, Statistics};
 use crate::scalar::ScalarValue;
@@ -230,8 +232,15 @@ pub struct ParquetFormat {
 
 #[async_trait]
 impl FileFormat for ParquetFormat {
-    async fn infer_schema(&self, path: &str) -> Result<SchemaRef> {
-        let (schema, _) = fetch_metadata(path)?;
+    async fn infer_schema(&self, mut paths: StringStream) -> Result<SchemaRef> {
+        // We currently get the schema information from the first file rather than do
+        // schema merging and this is a limitation.
+        // See https://issues.apache.org/jira/browse/ARROW-11017
+        let first_file = paths
+            .next()
+            .await
+            .ok_or_else(|| DataFusionError::Plan("No data file found".to_owned()))?;
+        let (schema, _) = fetch_metadata(&first_file)?;
         Ok(Arc::new(schema))
     }
 
@@ -259,7 +268,7 @@ impl FileFormat for ParquetFormat {
             None
         };
 
-        Ok(Arc::new(ParquetExec::try_new_refacto(
+        Ok(Arc::new(ParquetExec::try_new(
             files,
             statistics,
             schema,

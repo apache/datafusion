@@ -17,15 +17,22 @@
 
 //! Line delimited JSON format abstractions
 
+use std::io::BufReader;
 use std::sync::Arc;
 
+use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use arrow::json::reader::infer_json_schema_from_iterator;
+use arrow::json::reader::ValueIter;
 use async_trait::async_trait;
+use futures::StreamExt;
+use std::fs::File;
 
-use super::FileFormat;
+use super::{FileFormat, StringStream};
 use crate::datasource::PartitionedFile;
 use crate::error::Result;
 use crate::logical_plan::Expr;
+use crate::physical_plan::format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
@@ -34,13 +41,31 @@ pub struct JsonFormat {
     /// If no schema was provided for the table, it will be
     /// infered from the data itself, this limits the number
     /// of lines used in the process.
-    pub schema_infer_max_rec: Option<u64>,
+    pub schema_infer_max_rec: Option<usize>,
 }
 
 #[async_trait]
 impl FileFormat for JsonFormat {
-    async fn infer_schema(&self, _path: &str) -> Result<SchemaRef> {
-        todo!()
+    async fn infer_schema(&self, mut paths: StringStream) -> Result<SchemaRef> {
+        let mut schemas = Vec::new();
+        let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
+        while let Some(file) = paths.next().await {
+            let file = File::open(file)?;
+            let mut reader = BufReader::new(file);
+            let iter = ValueIter::new(&mut reader, None);
+            let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
+                let should_take = records_to_read > 0;
+                records_to_read -= 1;
+                should_take
+            }))?;
+            if records_to_read == 0 {
+                break;
+            }
+            schemas.push(schema);
+        }
+
+        let schema = Schema::try_merge(schemas)?;
+        Ok(Arc::new(schema))
     }
 
     async fn infer_stats(&self, _path: &str) -> Result<Statistics> {
@@ -49,14 +74,22 @@ impl FileFormat for JsonFormat {
 
     async fn create_executor(
         &self,
-        _schema: SchemaRef,
-        _files: Vec<Vec<PartitionedFile>>,
-        _statistics: Statistics,
-        _projection: &Option<Vec<usize>>,
-        _batch_size: usize,
+        schema: SchemaRef,
+        files: Vec<Vec<PartitionedFile>>,
+        statistics: Statistics,
+        projection: &Option<Vec<usize>>,
+        batch_size: usize,
         _filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        todo!()
+        let exec = NdJsonExec::try_new(
+            files.into_iter().flatten().map(|f| f.path).collect(),
+            statistics,
+            schema,
+            projection.clone(),
+            batch_size,
+            limit,
+        )?;
+        Ok(Arc::new(exec))
     }
 }

@@ -26,7 +26,7 @@ use futures::{StreamExt, TryStreamExt};
 
 use crate::{
     datasource::format::{self},
-    error::{DataFusionError, Result},
+    error::Result,
     logical_plan::Expr,
     physical_plan::{common, ExecutionPlan, Statistics},
 };
@@ -65,19 +65,9 @@ impl ListingOptions {
     /// This way when creating the logical plan we can decide to resolve the schema
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema(&self, path: &str) -> Result<SchemaRef> {
-        // We currently get the schema information from the first file rather than do
-        // schema merging and this is a limitation.
-        // See https://issues.apache.org/jira/browse/ARROW-11017
-        let first_file = common::build_file_list(path, &self.file_extension)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "No file (with .{} extension) found at path {}",
-                    &self.file_extension, path
-                ))
-            })?;
-        let file_schema = self.format.infer_schema(&first_file).await?;
+        let files =
+            futures::stream::iter(common::build_file_list(path, &self.file_extension)?);
+        let file_schema = self.format.infer_schema(Box::pin(files)).await?;
         // Add the partition columns to the file schema
         let mut fields = file_schema.fields().clone();
         for part in &self.partitions {
@@ -223,6 +213,42 @@ fn split_files(
 mod tests {
     use super::*;
     use futures::StreamExt;
+
+    #[test]
+    fn test_split_files() {
+        let files = vec![
+            PartitionedFile::from("a".to_string()),
+            PartitionedFile::from("b".to_string()),
+            PartitionedFile::from("c".to_string()),
+            PartitionedFile::from("d".to_string()),
+            PartitionedFile::from("e".to_string()),
+        ];
+
+        let chunks = split_files(files.clone(), 1);
+        assert_eq!(1, chunks.len());
+        assert_eq!(5, chunks[0].len());
+
+        let chunks = split_files(files.clone(), 2);
+        assert_eq!(2, chunks.len());
+        assert_eq!(3, chunks[0].len());
+        assert_eq!(2, chunks[1].len());
+
+        let chunks = split_files(files.clone(), 5);
+        assert_eq!(5, chunks.len());
+        assert_eq!(1, chunks[0].len());
+        assert_eq!(1, chunks[1].len());
+        assert_eq!(1, chunks[2].len());
+        assert_eq!(1, chunks[3].len());
+        assert_eq!(1, chunks[4].len());
+
+        let chunks = split_files(files, 123);
+        assert_eq!(5, chunks.len());
+        assert_eq!(1, chunks[0].len());
+        assert_eq!(1, chunks[1].len());
+        assert_eq!(1, chunks[2].len());
+        assert_eq!(1, chunks[3].len());
+        assert_eq!(1, chunks[4].len());
+    }
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
