@@ -69,7 +69,7 @@ The
 
 ## Resource Management
 
-- Finer grain control and limit of runtime memory and CPU usage
+- Finer grain control and limit of runtime memory [#587](https://github.com/apache/arrow-datafusion/issues/587) and CPU usage [#54](https://github.com/apache/arrow-datafusion/issues/64)
 
 ## Python Interface
 
