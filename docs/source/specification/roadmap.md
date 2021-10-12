@@ -77,7 +77,13 @@ TBD
 
 ## DataFusion CLI (`datafusion-cli`)
 
-TODO: add relevant parts of https://github.com/apache/arrow-datafusion/issues/1096
+Note: There are some additional thoughts on a datafusion-cli vision on [#1096](https://github.com/apache/arrow-datafusion/issues/1096#issuecomment-939418770).
+
+- Better abstraction between REPL parsing and queries so that commands are separated and handled correctly
+- Connect to the `Statistics` subsystem and have the cli print out more stats for query debugging, etc.
+- Improved error handling for interactive use and shell scripting usage
+- publishing to apt, brew, and possible NuGet registry so that people can use it more easily
+- adopt a shorter name, like dfcli?
 
 ## Ballista
 
