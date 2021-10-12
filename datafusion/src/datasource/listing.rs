@@ -128,7 +128,7 @@ impl TableProvider for ListingTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // list files (with partitions)
         let file_list = pruned_partition_list(
-            &self.options.format.object_store_registry(),
+            self.options.format.object_store_registry(),
             &self.path,
             filters,
             &self.options.file_extension,

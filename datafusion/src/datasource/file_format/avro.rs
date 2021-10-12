@@ -382,7 +382,7 @@ mod tests {
 mod tests {
     use super::*;
 
-    use crate::datasource::file_format::string_stream;
+    use crate::datasource::object_store::local::local_sized_file_stream;
     use crate::error::DataFusionError;
 
     #[tokio::test]
@@ -390,7 +390,7 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let schema_result = AvroFormat::default()
-            .infer_schema(string_stream(vec![filename]))
+            .infer_schema(local_sized_file_stream(vec![filename]))
             .await;
         assert!(matches!(
             schema_result,

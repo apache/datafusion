@@ -182,6 +182,7 @@ struct CsvStream<R: Read> {
 }
 impl CsvStream<Box<dyn Read + Send + Sync>> {
     /// Create an iterator for a CSV file
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         object_store_registry: &ObjectStoreRegistry,
         file: &SizedFile,
