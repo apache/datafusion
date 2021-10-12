@@ -17,15 +17,49 @@
 
 //! Module containing helper methods for the various file formats
 
-// pub mod csv;
-// pub mod json;
+pub mod csv;
+pub mod json;
 pub mod parquet;
 
+use std::sync::Arc;
+
 use crate::arrow::datatypes::{Schema, SchemaRef};
+use crate::error::Result;
+use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+use crate::physical_plan::{Accumulator, ColumnStatistics, ExecutionPlan, Statistics};
 
 use super::PartitionedFile;
+
+use async_trait::async_trait;
+
+/// This trait abstracts all the file format specific implementations
+/// from the `TableProvider`. This helps code re-utilization accross
+/// providers that support the the same file formats.
+#[async_trait]
+pub trait FileFormat: Send + Sync {
+    /// Open the file at the given path and infer its schema
+    async fn infer_schema(&self, path: &str) -> Result<SchemaRef>;
+
+    /// Open the file at the given path and infer its statistics
+    async fn infer_stats(&self, path: &str) -> Result<Statistics>;
+
+    /// Take a list of files and convert it to the appropriate executor
+    /// according to this file format.
+    /// TODO group params into TableDescription(schema,files,stats) and
+    /// ScanOptions(projection,batch_size,filters) to avoid too_many_arguments
+    #[allow(clippy::too_many_arguments)]
+    async fn create_executor(
+        &self,
+        schema: SchemaRef,
+        files: Vec<Vec<PartitionedFile>>,
+        statistics: Statistics,
+        projection: &Option<Vec<usize>>,
+        batch_size: usize,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+}
 
 /// Get all files as well as the summary statistic
 /// if the optional `limit` is provided, includes only sufficient files

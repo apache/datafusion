@@ -15,21 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Parquet format helper methods
+//! Parquet format abstractions
 
 use std::fs::File;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
+use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
 use parquet::arrow::ArrowReader;
 use parquet::arrow::ParquetFileArrowReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
+use super::FileFormat;
 use super::{create_max_min_accs, get_col_stats};
 use crate::arrow::datatypes::{DataType, Field};
+use crate::datasource::PartitionedFile;
 use crate::error::Result;
+use crate::logical_plan::combine_filters;
+use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
+use crate::physical_plan::parquet::ParquetExec;
+use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{Accumulator, Statistics};
 use crate::scalar::ScalarValue;
 
@@ -156,7 +164,7 @@ fn summarize_min_max(
 }
 
 /// Read and parse the metadata of the Parquet file at location `path`
-pub fn fetch_metadata(path: &str) -> Result<(Schema, Statistics)> {
+fn fetch_metadata(path: &str) -> Result<(Schema, Statistics)> {
     let file = File::open(path)?;
     let file_reader = Arc::new(SerializedFileReader::new(file)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
@@ -212,6 +220,57 @@ pub fn fetch_metadata(path: &str) -> Result<(Schema, Statistics)> {
     };
 
     Ok((schema, statistics))
+}
+
+/// The Apache Parquet `FileFormat` implementation
+pub struct ParquetFormat {
+    /// Activate statistics based row group level pruning
+    pub enable_pruning: bool,
+}
+
+#[async_trait]
+impl FileFormat for ParquetFormat {
+    async fn infer_schema(&self, path: &str) -> Result<SchemaRef> {
+        let (schema, _) = fetch_metadata(path)?;
+        Ok(Arc::new(schema))
+    }
+
+    async fn infer_stats(&self, path: &str) -> Result<Statistics> {
+        let (_, stats) = fetch_metadata(path)?;
+        Ok(stats)
+    }
+
+    async fn create_executor(
+        &self,
+        schema: SchemaRef,
+        files: Vec<Vec<PartitionedFile>>,
+        statistics: Statistics,
+        projection: &Option<Vec<usize>>,
+        batch_size: usize,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // If enable pruning then combine the filters to build the predicate.
+        // If disable pruning then set the predicate to None, thus readers
+        // will not prune data based on the statistics.
+        let predicate = if self.enable_pruning {
+            combine_filters(filters)
+        } else {
+            None
+        };
+
+        Ok(Arc::new(ParquetExec::try_new_refacto(
+            files,
+            statistics,
+            schema,
+            projection.clone(),
+            predicate,
+            limit
+                .map(|l| std::cmp::min(l, batch_size))
+                .unwrap_or(batch_size),
+            limit,
+        )?))
+    }
 }
 
 // #[cfg(test)]

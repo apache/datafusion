@@ -18,57 +18,21 @@
 //! A table that uses the files system / table store listing capability
 //! to get the list of files to process.
 
-use std::{any::Any, collections::HashSet, sync::Arc};
+use std::{any::Any, sync::Arc};
 
-use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::SchemaRef;
+use futures::{StreamExt, TryStreamExt};
 
 use crate::{
     datasource::format::{self},
     error::{DataFusionError, Result},
-    logical_plan::{combine_filters, Column, Expr},
-    optimizer,
-    physical_plan::{common, parquet::ParquetExec, ExecutionPlan, Statistics},
+    logical_plan::Expr,
+    physical_plan::{common, ExecutionPlan, Statistics},
 };
 
-use super::{datasource::TableProviderFilterPushDown, PartitionedFile, TableProvider};
-
-/// The supported file types with the associated options.
-pub enum FormatOptions {
-    /// The Apache Parquet file type.
-    Parquet {
-        /// Parquet files contain row group statistics in the
-        /// metadata section. Set true to parse it. This can
-        /// add a lot of overhead as it requires each file to
-        /// be opened and partially parsed.
-        collect_stat: bool,
-        /// Activate statistics based row group level pruning
-        enable_pruning: bool,
-        /// group files to avoid that the number of partitions
-        /// exceeds this limit
-        max_partitions: usize,
-    },
-    /// Row oriented text file with newline as row delimiter.
-    Csv {
-        /// Set true to indicate that the first line is a header.
-        has_header: bool,
-        /// The character seprating values within a row.
-        delimiter: u8,
-        /// If no schema was provided for the table, it will be
-        /// infered from the data itself, this limits the number
-        /// of lines used in the process.
-        schema_infer_max_rec: Option<u64>,
-    },
-    /// New line delimited JSON.
-    Json {
-        /// If no schema was provided for the table, it will be
-        /// infered from the data itself, this limits the number
-        /// of lines used in the process.
-        schema_infer_max_rec: Option<u64>,
-    },
-}
+use super::{
+    datasource::TableProviderFilterPushDown, format::FileFormat, PartitionedFile,
+};
 
 /// Options for creating a `ListingTable`
 pub struct ListingOptions {
@@ -76,21 +40,29 @@ pub struct ListingOptions {
     /// keep all files on the path)
     pub file_extension: String,
     /// The file format
-    pub format: FormatOptions,
+    pub format: Arc<dyn FileFormat>,
     /// The expected partition column names.
     /// For example `Vec["a", "b"]` means that the two first levels of
     /// partitioning expected should be named "a" and "b":
     /// - If there is a third level of partitioning it will be ignored.
     /// - Files that don't follow this partitioning will be ignored.
     /// Note that only `DataType::Utf8` is supported for the column type.
+    /// TODO implement case where partitions.len() > 0
     pub partitions: Vec<String>,
+    /// Set true to try to guess statistics from the file parse it.
+    /// This can add a lot of overhead as it requires files to
+    /// be opened and partially parsed.
+    pub collect_stat: bool,
+    /// Group files to avoid that the number of partitions
+    /// exceeds this limit
+    pub max_partitions: usize,
 }
 
 impl ListingOptions {
     /// This method will not be called by the table itself but before creating it.
     /// This way when creating the logical plan we can decide to resolve the schema
     /// locally or ask a remote service to do it (e.g a scheduler).
-    pub fn infer_schema(&self, path: &str) -> Result<SchemaRef> {
+    pub async fn infer_schema(&self, path: &str) -> Result<SchemaRef> {
         // We currently get the schema information from the first file rather than do
         // schema merging and this is a limitation.
         // See https://issues.apache.org/jira/browse/ARROW-11017
@@ -103,86 +75,7 @@ impl ListingOptions {
                     &self.file_extension, path
                 ))
             })?;
-        // Infer the schema according to the rules specific to this file format
-        let schema = match self.format {
-            FormatOptions::Parquet { .. } => {
-                let (schema, _) = format::parquet::fetch_metadata(&first_file)?;
-                schema
-            }
-            _ => todo!("other file formats"),
-        };
-        // Add the partition columns to the file schema
-        let mut fields = schema.fields().clone();
-        for part in &self.partitions {
-            fields.push(Field::new(part, DataType::Utf8, false));
-        }
-        Ok(Arc::new(Schema::new(fields)))
-    }
-
-    fn create_executor(
-        &self,
-        schema: SchemaRef,
-        files: Vec<PartitionedFile>,
-        projection: &Option<Vec<usize>>,
-        batch_size: usize,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        match self {
-            ListingOptions {
-                format:
-                    FormatOptions::Parquet {
-                        collect_stat,
-                        enable_pruning,
-                        max_partitions,
-                    },
-                ..
-            } => {
-                // If enable pruning then combine the filters to build the predicate.
-                // If disable pruning then set the predicate to None, thus readers
-                // will not prune data based on the statistics.
-                let predicate = if *enable_pruning {
-                    combine_filters(filters)
-                } else {
-                    None
-                };
-
-                // collect the statistics if required by the config
-                let mut files = files;
-                if *collect_stat {
-                    files = files
-                        .into_iter()
-                        .map(|file| -> Result<PartitionedFile> {
-                            let (_, statistics) =
-                                format::parquet::fetch_metadata(&file.path)?;
-                            // TODO use _schema to check that it is valid or for schema merging
-                            Ok(PartitionedFile {
-                                statistics,
-                                path: file.path,
-                            })
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                }
-
-                let (files, statistics) =
-                    format::get_statistics_with_limit(&files, Arc::clone(&schema), limit);
-
-                let partitioned_file_lists = split_files(files, *max_partitions);
-
-                Ok(Arc::new(ParquetExec::try_new_refacto(
-                    partitioned_file_lists,
-                    statistics,
-                    schema,
-                    projection.clone(),
-                    predicate,
-                    limit
-                        .map(|l| std::cmp::min(l, batch_size))
-                        .unwrap_or(batch_size),
-                    limit,
-                )?))
-            }
-            _ => todo!(),
-        }
+        self.format.infer_schema(&first_file).await
     }
 }
 
@@ -211,7 +104,9 @@ impl ListingTable {
     }
 }
 
-impl TableProvider for ListingTable {
+// TODO add back impl ExecutionPlan
+#[allow(dead_code)]
+impl ListingTable {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -220,7 +115,7 @@ impl TableProvider for ListingTable {
         Arc::clone(&self.schema)
     }
 
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         batch_size: usize,
@@ -234,15 +129,40 @@ impl TableProvider for ListingTable {
             &self.options.file_extension,
             &self.options.partitions,
         )?;
+
+        // collect the statistics if required by the config
+        let mut files = file_list;
+        if self.options.collect_stat {
+            files = futures::stream::iter(files)
+                .then(|file| async {
+                    let statistics = self.options.format.infer_stats(&file.path).await?;
+                    Ok(PartitionedFile {
+                        statistics,
+                        path: file.path,
+                    }) as Result<PartitionedFile>
+                })
+                .try_collect::<Vec<_>>()
+                .await?;
+        }
+
+        let (files, statistics) =
+            format::get_statistics_with_limit(&files, self.schema(), limit);
+
+        let partitioned_file_lists = split_files(files, self.options.max_partitions);
+
         // 2. create the plan
-        self.options.create_executor(
-            self.schema(),
-            file_list,
-            projection,
-            batch_size,
-            filters,
-            limit,
-        )
+        self.options
+            .format
+            .create_executor(
+                self.schema(),
+                partitioned_file_lists,
+                statistics,
+                projection,
+                batch_size,
+                filters,
+                limit,
+            )
+            .await
     }
 
     fn supports_filter_pushdown(
@@ -258,7 +178,7 @@ impl TableProvider for ListingTable {
 fn pruned_partition_list(
     // registry: &ObjectStoreRegistry,
     path: &str,
-    filters: &[Expr],
+    _filters: &[Expr],
     file_extension: &str,
     partition_names: &[String],
 ) -> Result<Vec<PartitionedFile>> {
@@ -274,51 +194,8 @@ fn pruned_partition_list(
     if partition_names.is_empty() {
         list_all()
     } else {
-        let mut applicable_exprs = vec![];
-        let partition_set = partition_names.iter().collect::<HashSet<_>>();
-        'expr: for expr in filters {
-            let mut columns: HashSet<Column> = HashSet::new();
-            optimizer::utils::expr_to_columns(expr, &mut columns)?;
-            for col in columns {
-                if !partition_set.contains(&col.name) {
-                    continue 'expr;
-                }
-            }
-            applicable_exprs.push(expr.clone());
-        }
-
-        if applicable_exprs.is_empty() {
-            list_all()
-        } else {
-            // 1) could be to run the filters on the partition values
-
-            // let partition_values = list_partitions(path, partition_names)?;
-            // let df = ExecutionContext::new()
-            //     .read_table(Arc::new(MemTable::try_new(
-            //         partition_values.schema(),
-            //         vec![vec![partition_values]],
-            //     )?))?
-            //     .filter(combine_filters(&applicable_exprs).unwrap())?
-            //     .collect()
-            //     .await?;
-
-            // this requires `fn scan()` to be async
-
-            // 2) take the filtered partition lines and list the files
-            // contained in the associated folders
-
-            todo!()
-        }
+        todo!("use filters to prune partitions")
     }
-}
-
-#[allow(dead_code)]
-fn list_partitions(
-    // registry: &ObjectStoreRegistry,
-    _path: &str,
-    _partitions: &[String],
-) -> Result<RecordBatch> {
-    todo!()
 }
 
 fn split_files(
@@ -337,47 +214,47 @@ fn split_files(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::StreamExt;
+    // use super::*;
+    // use futures::StreamExt;
 
-    #[tokio::test]
-    async fn read_small_batches() -> Result<()> {
-        let table = load_table("alltypes_plain.parquet")?;
-        let projection = None;
-        let exec = table.scan(&projection, 2, &[], None)?;
-        let stream = exec.execute(0).await?;
+    // #[tokio::test]
+    // async fn read_small_batches() -> Result<()> {
+    //     let table = load_table("alltypes_plain.parquet").await?;
+    //     let projection = None;
+    //     let exec = table.scan(&projection, 2, &[], None)?;
+    //     let stream = exec.execute(0).await?;
 
-        let _ = stream
-            .map(|batch| {
-                let batch = batch.unwrap();
-                assert_eq!(11, batch.num_columns());
-                assert_eq!(2, batch.num_rows());
-            })
-            .fold(0, |acc, _| async move { acc + 1i32 })
-            .await;
+    //     let _ = stream
+    //         .map(|batch| {
+    //             let batch = batch.unwrap();
+    //             assert_eq!(11, batch.num_columns());
+    //             assert_eq!(2, batch.num_rows());
+    //         })
+    //         .fold(0, |acc, _| async move { acc + 1i32 })
+    //         .await;
 
-        // test metadata
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
+    //     // test metadata
+    //     assert_eq!(exec.statistics().num_rows, Some(8));
+    //     assert_eq!(exec.statistics().total_byte_size, Some(671));
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
-        let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, name);
-        let opt = ListingOptions {
-            file_extension: "parquet".to_owned(),
-            format: FormatOptions::Parquet {
-                collect_stat: true,
-                enable_pruning: true,
-                max_partitions: 2,
-            },
-            partitions: vec![],
-        };
-        // here we resolve the schema locally
-        let schema = opt.infer_schema(&filename)?;
-        let table = ListingTable::try_new(&filename, schema, opt)?;
-        Ok(Arc::new(table))
-    }
+    // async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
+    //     let testdata = crate::test_util::parquet_test_data();
+    //     let filename = format!("{}/{}", testdata, name);
+    //     let opt = ListingOptions {
+    //         file_extension: "parquet".to_owned(),
+    //         format: Arc::new(format::parquet::ParquetFormat {
+    //             enable_pruning: true,
+    //         }),
+    //         partitions: vec![],
+    //         max_partitions: 2,
+    //         collect_stat: true,
+    //     };
+    //     // here we resolve the schema locally
+    //     let schema = opt.infer_schema(&filename).await?;
+    //     let table = ListingTable::try_new(&filename, schema, opt)?;
+    //     Ok(Arc::new(table))
+    // }
 }

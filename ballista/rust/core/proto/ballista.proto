@@ -949,14 +949,14 @@ message GetFileMetadataParams {
   FileType file_type = 2;
 }
 
-message ParquetConfig {
-  // fields of datasource::listing::FormatOptions::Parquet
+message ParquetFormat {
+  // fields of datasource::format::parquet::ParquetFormat
 }
 
 message ListingConfig {
   string extension = 1;
   oneof format {
-    ParquetConfig parquet = 2;
+    ParquetFormat parquet = 2;
     // csv, json, ...
   }
 }
