@@ -26,9 +26,6 @@ use arrow::{
 
 use crate::arrow::array::Array;
 use crate::arrow::compute::concat;
-use crate::arrow::datatypes::{
-    Int16Type, Int32Type, Int64Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
 use crate::scalar::ScalarValue;
 use crate::{
     error::DataFusionError,
@@ -36,9 +33,7 @@ use crate::{
     field_util::get_indexed_field as get_data_type_field,
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
-use arrow::array::{ArrayRef, DictionaryArray, ListArray};
-use arrow::datatypes::{ArrowPrimitiveType, Int8Type};
-use num_traits::ToPrimitive;
+use arrow::array::ListArray;
 use std::fmt::Debug;
 
 /// expression to get a field of a struct array.
@@ -96,25 +91,8 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                     let iter = concat(vec.as_slice()).unwrap();
                     Ok(ColumnarValue::Array(iter))
                 }
-                (DataType::Dictionary(ref kt, _), ScalarValue::Utf8(Some(s))) => {
-                    match **kt {
-                        DataType::Int8 => dict_lookup::<Int8Type>(array, s),
-                        DataType::Int16 => dict_lookup::<Int16Type>(array, s),
-                        DataType::Int32 => dict_lookup::<Int32Type>(array, s),
-                        DataType::Int64 => dict_lookup::<Int64Type>(array, s),
-                        DataType::UInt8 => dict_lookup::<UInt8Type>(array, s),
-                        DataType::UInt16 => dict_lookup::<UInt16Type>(array, s),
-                        DataType::UInt32 => dict_lookup::<UInt32Type>(array, s),
-                        DataType::UInt64 => dict_lookup::<UInt64Type>(array, s),
-                        _ => Err(DataFusionError::NotImplemented(
-                            "dictionary lookup only available for numeric keys"
-                                .to_string(),
-                        )),
-                    }
-                }
                 _ => Err(DataFusionError::NotImplemented(
-                    "get indexed field is only possible on dictionary and list"
-                        .to_string(),
+                    "get indexed field is only possible on lists".to_string(),
                 )),
             },
             ColumnarValue::Scalar(_) => Err(DataFusionError::NotImplemented(
@@ -130,26 +108,4 @@ pub fn get_indexed_field(
     key: ScalarValue,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(GetIndexedFieldExpr::new(arg, key)))
-}
-
-fn dict_lookup<T: ArrowPrimitiveType>(
-    array: ArrayRef,
-    lookup: &str,
-) -> Result<ColumnarValue>
-where
-    T::Native: num_traits::cast::ToPrimitive,
-{
-    let as_dict_array = array.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
-    if let Some(index) = as_dict_array.lookup_key(lookup) {
-        Ok(ColumnarValue::Array(
-            as_dict_array
-                .keys()
-                .slice(ToPrimitive::to_usize(&index).unwrap(), 1),
-        ))
-    } else {
-        Err(DataFusionError::NotImplemented(format!(
-            "key not found in dictionary for : {}",
-            lookup
-        )))
-    }
 }

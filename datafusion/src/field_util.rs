@@ -29,21 +29,6 @@ use crate::scalar::ScalarValue;
 /// * there is no field key is not of the required index type
 pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Field> {
     match (data_type, key) {
-        (DataType::Dictionary(ref kt, ref _vt), ScalarValue::Utf8(Some(k))) => {
-            match kt.as_ref() {
-                DataType::Int8 | DataType::Int16 |DataType::Int32 |DataType::Int64 |DataType::UInt8
-                | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-                    Ok(Field::new(k, *kt.clone(), true))
-                },
-                _ => Err(DataFusionError::Plan(format!("The key for a dictionary has to be a primitive type, was : \"{}\"", key))),
-            }
-        },
-        (DataType::Dictionary(_, _), _) => {
-            Err(DataFusionError::Plan(
-                "Only utf8 types are valid for dictionary lookup"
-                    .to_string(),
-            ))
-        }
         (DataType::List(lt), ScalarValue::Int64(Some(i))) => {
             Ok(Field::new(&i.to_string(), lt.data_type().clone(), false))
         }
