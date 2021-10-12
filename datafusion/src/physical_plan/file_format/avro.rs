@@ -16,6 +16,8 @@
 // under the License.
 
 //! Execution plan for reading line-delimited Avro files
+use crate::datasource::file_format::PartitionedFile;
+use crate::datasource::object_store::ObjectStoreRegistry;
 use crate::error::{DataFusionError, Result};
 #[cfg(feature = "avro")]
 use crate::physical_plan::RecordBatchStream;
@@ -32,7 +34,6 @@ use std::any::Any;
 use std::sync::Arc;
 #[cfg(feature = "avro")]
 use std::{
-    fs::File,
     io::Read,
     pin::Pin,
     task::{Context, Poll},
@@ -41,7 +42,8 @@ use std::{
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
 pub struct AvroExec {
-    files: Vec<String>,
+    object_store_registry: Arc<ObjectStoreRegistry>,
+    files: Vec<PartitionedFile>,
     statistics: Statistics,
     schema: SchemaRef,
     projection: Option<Vec<usize>>,
@@ -54,7 +56,8 @@ impl AvroExec {
     /// Create a new JSON reader execution plan provided file list and schema
     /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
     pub fn new(
-        files: Vec<String>,
+        object_store_registry: Arc<ObjectStoreRegistry>,
+        files: Vec<PartitionedFile>,
         statistics: Statistics,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
@@ -69,6 +72,7 @@ impl AvroExec {
         };
 
         Self {
+            object_store_registry,
             files,
             statistics,
             schema,
@@ -121,21 +125,27 @@ impl ExecutionPlan for AvroExec {
 
     #[cfg(feature = "avro")]
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        let mut builder = crate::avro_to_arrow::ReaderBuilder::new()
-            .with_schema(self.schema.clone())
-            .with_batch_size(self.batch_size);
-        if let Some(proj) = &self.projection {
-            builder = builder.with_projection(
-                proj.iter()
-                    .map(|col_idx| self.schema.field(*col_idx).name())
-                    .cloned()
-                    .collect(),
-            );
-        }
+        let file = self
+            .object_store_registry
+            .get_by_uri(&self.files[partition].file.path)?
+            .file_reader(self.files[partition].file.clone())?
+            .chunk_reader(0, self.files[partition].file.size as usize)?;
 
-        let file = File::open(&self.files[partition])?;
+        let proj = self.projection.as_ref().map(|p| {
+            p.iter()
+                .map(|col_idx| self.schema.field(*col_idx).name())
+                .cloned()
+                .collect()
+        });
 
-        Ok(Box::pin(AvroStream::new(builder.build(file)?, self.limit)))
+        let avro_reader = crate::avro_to_arrow::Reader::try_new(
+            file,
+            self.schema(),
+            self.batch_size,
+            proj,
+        )?;
+
+        Ok(Box::pin(AvroStream::new(avro_reader, self.limit)))
     }
 
     fn fmt_as(
@@ -147,10 +157,14 @@ impl ExecutionPlan for AvroExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "AvroExec: batch_size={}, limit={:?}, partitions=[{}]",
+                    "AvroExec: batch_size={}, limit={:?}, files=[{}]",
                     self.batch_size,
                     self.limit,
-                    self.files.join(", ")
+                    self.files
+                        .iter()
+                        .map(|f| f.file.path.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             }
         }
@@ -229,6 +243,10 @@ impl<R: Read + Unpin> RecordBatchStream for AvroStream<'_, R> {
 #[cfg(feature = "avro")]
 mod tests {
 
+    use crate::datasource::object_store::local::{
+        local_sized_file, local_sized_file_stream,
+    };
+
     use super::*;
 
     #[tokio::test]
@@ -240,10 +258,13 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let avro_exec = AvroExec::new(
-            vec![filename.clone()],
+            Arc::new(ObjectStoreRegistry::new()),
+            vec![PartitionedFile {
+                file: local_sized_file(filename.clone()),
+            }],
             Statistics::default(),
-            AvroFormat {}
-                .infer_schema(Box::pin(futures::stream::once(async { filename })))
+            AvroFormat::default()
+                .infer_schema(local_sized_file_stream(vec![filename]))
                 .await?,
             Some(vec![0, 1, 2]),
             1024,

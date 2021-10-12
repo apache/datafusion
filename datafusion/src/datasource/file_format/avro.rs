@@ -23,11 +23,11 @@ use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
-use std::fs::File;
 
+use super::FileFormat;
 use super::PartitionedFile;
-use super::{FileFormat, StringStream};
 use crate::avro_to_arrow::read_avro_schema_from_reader;
+use crate::datasource::object_store::{ObjectStoreRegistry, SizedFile, SizedFileStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::AvroExec;
@@ -35,22 +35,46 @@ use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
 /// Line-delimited Avro `FileFormat` implementation.
-pub struct AvroFormat {}
+pub struct AvroFormat {
+    /// Object store registry
+    pub object_store_registry: Arc<ObjectStoreRegistry>,
+}
+
+impl Default for AvroFormat {
+    fn default() -> Self {
+        Self {
+            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+        }
+    }
+}
+
+impl AvroFormat {
+    /// Create Parquet with the given object store and default values
+    pub fn new(object_store_registry: Arc<ObjectStoreRegistry>) -> Self {
+        Self {
+            object_store_registry,
+        }
+    }
+}
 
 #[async_trait]
 impl FileFormat for AvroFormat {
-    async fn infer_schema(&self, mut paths: StringStream) -> Result<SchemaRef> {
+    async fn infer_schema(&self, mut file_stream: SizedFileStream) -> Result<SchemaRef> {
         let mut schemas = vec![];
-        while let Some(filename) = paths.next().await {
-            let mut file = File::open(filename)?;
-            let schema = read_avro_schema_from_reader(&mut file)?;
+        while let Some(fmeta_res) = file_stream.next().await {
+            let fmeta = fmeta_res?;
+            let fsize = fmeta.size as usize;
+            let object_store = self.object_store_registry.get_by_uri(&fmeta.path)?;
+            let obj_reader = object_store.file_reader(fmeta)?;
+            let mut reader = obj_reader.chunk_reader(0, fsize)?;
+            let schema = read_avro_schema_from_reader(&mut reader)?;
             schemas.push(schema);
         }
         let merged_schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(merged_schema))
     }
 
-    async fn infer_stats(&self, _path: &str) -> Result<Statistics> {
+    async fn infer_stats(&self, _path: SizedFile) -> Result<Statistics> {
         Ok(Statistics::default())
     }
 
@@ -65,8 +89,9 @@ impl FileFormat for AvroFormat {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = AvroExec::new(
+            Arc::clone(&self.object_store_registry),
             // flattening this for now because CsvExec does not support partitioning yet
-            files.into_iter().flatten().map(|f| f.path).collect(),
+            files.into_iter().flatten().collect(),
             statistics,
             schema,
             projection.clone(),
@@ -75,13 +100,19 @@ impl FileFormat for AvroFormat {
         );
         Ok(Arc::new(exec))
     }
+
+    fn object_store_registry(&self) -> &Arc<ObjectStoreRegistry> {
+        &self.object_store_registry
+    }
 }
 
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
-    use crate::datasource::file_format::string_stream;
-    use crate::physical_plan::collect;
+    use crate::{
+        datasource::object_store::local::{local_sized_file, local_sized_file_stream},
+        physical_plan::collect,
+    };
 
     use super::*;
     use arrow::array::{
@@ -327,16 +358,18 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/{}", testdata, file_name);
-        let format = AvroFormat {};
+        let format = AvroFormat::default();
         let schema = format
-            .infer_schema(string_stream(vec![filename.clone()]))
+            .infer_schema(local_sized_file_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
         let stats = format
-            .infer_stats(&filename)
+            .infer_stats(local_sized_file(filename.clone()))
             .await
             .expect("Stats inference");
-        let files = vec![vec![PartitionedFile { path: filename }]];
+        let files = vec![vec![PartitionedFile {
+            file: local_sized_file(filename.to_owned()),
+        }]];
         let exec = format
             .create_physical_plan(schema, files, stats, projection, batch_size, &[], None)
             .await?;
@@ -356,7 +389,7 @@ mod tests {
     async fn test() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let schema_result = AvroFormat {}
+        let schema_result = AvroFormat::default()
             .infer_schema(string_stream(vec![filename]))
             .await;
         assert!(matches!(

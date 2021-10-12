@@ -23,10 +23,10 @@ use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
-use std::fs::File;
 
+use super::FileFormat;
 use super::PartitionedFile;
-use super::{FileFormat, StringStream};
+use crate::datasource::object_store::{ObjectStoreRegistry, SizedFile, SizedFileStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::CsvExec;
@@ -35,25 +35,69 @@ use crate::physical_plan::Statistics;
 
 /// Character Separated Value `FileFormat` implementation.
 pub struct CsvFormat {
+    has_header: bool,
+    delimiter: u8,
+    schema_infer_max_rec: Option<usize>,
+    object_store_registry: Arc<ObjectStoreRegistry>,
+}
+
+impl Default for CsvFormat {
+    fn default() -> Self {
+        Self {
+            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+            schema_infer_max_rec: None,
+            has_header: true,
+            delimiter: b',',
+        }
+    }
+}
+
+impl CsvFormat {
+    /// Create Parquet with the given object store and default values
+    pub fn new(object_store_registry: Arc<ObjectStoreRegistry>) -> Self {
+        Self {
+            object_store_registry,
+            ..Default::default()
+        }
+    }
+
+    /// Set a limit in terms of records to scan to infer the schema
+    /// - default to `None` (no limit)
+    pub fn with_schema_infer_max_rec(&mut self, max_rec: Option<usize>) -> &mut Self {
+        self.schema_infer_max_rec = max_rec;
+        self
+    }
+
     /// Set true to indicate that the first line is a header.
-    pub has_header: bool,
-    /// The character seprating values within a row.
-    pub delimiter: u8,
-    /// If no schema was provided for the table, it will be
-    /// infered from the data itself, this limits the number
-    /// of lines used in the process.
-    pub schema_infer_max_rec: Option<usize>,
+    /// - default to true
+    pub fn with_has_header(&mut self, has_header: bool) -> &mut Self {
+        self.has_header = has_header;
+        self
+    }
+
+    /// The character separating values within a row.
+    /// - default to ','
+    pub fn with_delimiter(&mut self, delimiter: u8) -> &mut Self {
+        self.delimiter = delimiter;
+        self
+    }
 }
 
 #[async_trait]
 impl FileFormat for CsvFormat {
-    async fn infer_schema(&self, mut paths: StringStream) -> Result<SchemaRef> {
+    async fn infer_schema(&self, mut file_stream: SizedFileStream) -> Result<SchemaRef> {
         let mut schemas = vec![];
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(std::usize::MAX);
 
-        while let Some(fname) = paths.next().await {
-            let (schema, records_read) = arrow::csv::reader::infer_file_schema(
-                &mut File::open(fname)?,
+        while let Some(fmeta_res) = file_stream.next().await {
+            let fmeta = fmeta_res?;
+            let fsize = fmeta.size as usize;
+            let object_store = self.object_store_registry.get_by_uri(&fmeta.path)?;
+
+            let obj_reader = object_store.file_reader(fmeta)?;
+            let mut reader = obj_reader.chunk_reader(0, fsize)?;
+            let (schema, records_read) = arrow::csv::reader::infer_reader_schema(
+                &mut reader,
                 self.delimiter,
                 Some(records_to_read),
                 self.has_header,
@@ -72,7 +116,7 @@ impl FileFormat for CsvFormat {
         Ok(Arc::new(merged_schema))
     }
 
-    async fn infer_stats(&self, _path: &str) -> Result<Statistics> {
+    async fn infer_stats(&self, _path: SizedFile) -> Result<Statistics> {
         Ok(Statistics::default())
     }
 
@@ -87,8 +131,9 @@ impl FileFormat for CsvFormat {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = CsvExec::new(
+            Arc::clone(&self.object_store_registry),
             // flattening this for now because CsvExec does not support partitioning yet
-            files.into_iter().flatten().map(|f| f.path).collect(),
+            files.into_iter().flatten().collect(),
             statistics,
             schema,
             self.has_header,
@@ -99,6 +144,10 @@ impl FileFormat for CsvFormat {
         );
         Ok(Arc::new(exec))
     }
+
+    fn object_store_registry(&self) -> &Arc<ObjectStoreRegistry> {
+        &self.object_store_registry
+    }
 }
 
 #[cfg(test)]
@@ -106,7 +155,10 @@ mod tests {
     use arrow::array::StringArray;
 
     use super::*;
-    use crate::{datasource::file_format::string_stream, physical_plan::collect};
+    use crate::{
+        datasource::object_store::local::{local_sized_file, local_sized_file_stream},
+        physical_plan::collect,
+    };
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
@@ -199,20 +251,18 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/csv/{}", testdata, file_name);
-        let format = CsvFormat {
-            has_header: true,
-            schema_infer_max_rec: Some(1000),
-            delimiter: b',',
-        };
+        let format = CsvFormat::default();
         let schema = format
-            .infer_schema(string_stream(vec![filename.clone()]))
+            .infer_schema(local_sized_file_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
         let stats = format
-            .infer_stats(&filename)
+            .infer_stats(local_sized_file(filename.clone()))
             .await
             .expect("Stats inference");
-        let files = vec![vec![PartitionedFile { path: filename }]];
+        let files = vec![vec![PartitionedFile {
+            file: local_sized_file(filename.to_owned()),
+        }]];
         let exec = format
             .create_physical_plan(schema, files, stats, projection, batch_size, &[], None)
             .await?;

@@ -20,24 +20,29 @@
 pub mod local;
 
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
+use std::io::Read;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use futures::{AsyncRead, Stream};
+use futures::{Stream, StreamExt};
 
 use local::LocalFileSystem;
 
 use crate::error::{DataFusionError, Result};
-use chrono::Utc;
 
-/// Object Reader for one file in a object store
+/**
+Object Reader for one file in an object store
+*/
 #[async_trait]
 pub trait ObjectReader {
     /// Get reader for a part [start, start + length] in the file asynchronously
-    async fn chunk_reader(&self, start: u64, length: usize)
-        -> Result<Arc<dyn AsyncRead>>;
+    fn chunk_reader(
+        &self,
+        start: u64,
+        length: usize,
+    ) -> Result<Box<dyn Read + Send + Sync>>;
 
     /// Get length for the file
     fn length(&self) -> u64;
@@ -47,25 +52,29 @@ pub trait ObjectReader {
 #[derive(Debug)]
 pub enum ListEntry {
     /// File metadata
-    FileMeta(FileMeta),
+    SizedFile(SizedFile),
     /// Prefix to be further resolved during partition discovery
     Prefix(String),
 }
 
 /// File meta we got from object store
-#[derive(Debug)]
-pub struct FileMeta {
+#[derive(Debug, Clone)]
+pub struct SizedFile {
     /// Path of the file
     pub path: String,
-    /// Last time the file was modified in UTC
-    pub last_modified: Option<chrono::DateTime<Utc>>,
     /// File size in total
     pub size: u64,
 }
 
+impl std::fmt::Display for SizedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{} (size: {})", self.path, self.size)
+    }
+}
+
 /// Stream of files get listed from object store
-pub type FileMetaStream =
-    Pin<Box<dyn Stream<Item = Result<FileMeta>> + Send + Sync + 'static>>;
+pub type SizedFileStream =
+    Pin<Box<dyn Stream<Item = Result<SizedFile>> + Send + Sync + 'static>>;
 
 /// Stream of list entries get from object store
 pub type ListEntryStream =
@@ -76,7 +85,24 @@ pub type ListEntryStream =
 #[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
     /// Returns all the files in path `prefix`
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream>;
+    async fn list_file(&self, prefix: &str) -> Result<SizedFileStream>;
+
+    /// Calls `list_file` with a suffix filter
+    async fn list_file_with_suffix(
+        &self,
+        prefix: &str,
+        suffix: &str,
+    ) -> Result<SizedFileStream> {
+        let file_stream = self.list_file(prefix).await?;
+        let suffix = suffix.to_owned();
+        Ok(Box::pin(file_stream.filter(move |fr| {
+            let has_suffix = match fr {
+                Ok(f) => f.path.ends_with(&suffix),
+                Err(_) => true,
+            };
+            async move { has_suffix }
+        })))
+    }
 
     /// Returns all the files in `prefix` if the `prefix` is already a leaf dir,
     /// or all paths between the `prefix` and the first occurrence of the `delimiter` if it is provided.
@@ -87,7 +113,7 @@ pub trait ObjectStore: Sync + Send + Debug {
     ) -> Result<ListEntryStream>;
 
     /// Get object reader for one file
-    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
+    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
 }
 
 static LOCAL_SCHEME: &str = "file";
@@ -98,6 +124,22 @@ static LOCAL_SCHEME: &str = "file";
 pub struct ObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
     pub object_stores: RwLock<HashMap<String, Arc<dyn ObjectStore>>>,
+}
+
+impl fmt::Debug for ObjectStoreRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObjectStoreRegistry")
+            .field(
+                "schemes",
+                &self
+                    .object_stores
+                    .read()
+                    .unwrap()
+                    .keys()
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 impl ObjectStoreRegistry {

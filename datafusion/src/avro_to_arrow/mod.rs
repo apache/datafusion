@@ -28,11 +28,11 @@ use crate::arrow::datatypes::Schema;
 use crate::error::Result;
 #[cfg(feature = "avro")]
 pub use reader::{Reader, ReaderBuilder};
-use std::io::{Read, Seek};
+use std::io::Read;
 
 #[cfg(feature = "avro")]
 /// Read Avro schema given a reader
-pub fn read_avro_schema_from_reader<R: Read + Seek>(reader: &mut R) -> Result<Schema> {
+pub fn read_avro_schema_from_reader<R: Read>(reader: &mut R) -> Result<Schema> {
     let avro_reader = avro_rs::Reader::new(reader)?;
     let schema = avro_reader.writer_schema();
     schema::to_arrow_schema(schema)
@@ -40,7 +40,7 @@ pub fn read_avro_schema_from_reader<R: Read + Seek>(reader: &mut R) -> Result<Sc
 
 #[cfg(not(feature = "avro"))]
 /// Read Avro schema given a reader (requires the avro feature)
-pub fn read_avro_schema_from_reader<R: Read + Seek>(_: &mut R) -> Result<Schema> {
+pub fn read_avro_schema_from_reader<R: Read>(_: &mut R) -> Result<Schema> {
     Err(crate::error::DataFusionError::NotImplemented(
         "cannot read avro schema without the 'avro' feature enabled".to_string(),
     ))

@@ -18,10 +18,11 @@
 //! Execution plan for reading Parquet files
 
 use std::fmt;
-use std::fs::File;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
+use crate::datasource::file_format::parquet::ChunkObjectReader;
+use crate::datasource::object_store::ObjectStoreRegistry;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, Expr},
@@ -63,10 +64,11 @@ use crate::datasource::file_format::{FilePartition, PartitionedFile};
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
+    object_store_registry: Arc<ObjectStoreRegistry>,
     /// Parquet partitions to read
-    pub partitions: Vec<ParquetPartition>,
+    partitions: Vec<ParquetPartition>,
     /// Schema after projection is applied
-    pub schema: SchemaRef,
+    schema: SchemaRef,
     /// Projection for which columns to load
     projection: Vec<usize>,
     /// Batch size
@@ -110,6 +112,7 @@ struct ParquetFileMetrics {
 impl ParquetExec {
     /// Create a new Parquet reader execution plan provided file list and schema
     pub fn new(
+        object_store_registry: Arc<ObjectStoreRegistry>,
         files: Vec<Vec<PartitionedFile>>,
         statistics: Statistics,
         schema: SchemaRef,
@@ -156,6 +159,7 @@ impl ParquetExec {
             Self::project(&projection, schema, statistics);
 
         Self {
+            object_store_registry,
             partitions,
             schema: projected_schema,
             projection,
@@ -283,9 +287,11 @@ impl ExecutionPlan for ParquetExec {
         let predicate_builder = self.predicate_builder.clone();
         let batch_size = self.batch_size;
         let limit = self.limit;
+        let object_store_registry = Arc::clone(&self.object_store_registry);
 
         task::spawn_blocking(move || {
             if let Err(e) = read_partition(
+                &object_store_registry,
                 partition_index,
                 partition,
                 metrics,
@@ -462,6 +468,7 @@ fn build_row_group_predicate(
 
 #[allow(clippy::too_many_arguments)]
 fn read_partition(
+    object_store_registry: &ObjectStoreRegistry,
     partition_index: usize,
     partition: ParquetPartition,
     metrics: ExecutionPlanMetricsSet,
@@ -474,10 +481,16 @@ fn read_partition(
     let mut total_rows = 0;
     let all_files = partition.file_partition.files;
     'outer: for partitioned_file in all_files {
-        let file_metrics =
-            ParquetFileMetrics::new(partition_index, &*partitioned_file.path, &metrics);
-        let file = File::open(partitioned_file.path.as_str())?;
-        let mut file_reader = SerializedFileReader::new(file)?;
+        let file_metrics = ParquetFileMetrics::new(
+            partition_index,
+            &*partitioned_file.file.path,
+            &metrics,
+        );
+        let object_reader = object_store_registry
+            .get_by_uri(&partitioned_file.file.path)?
+            .file_reader(partitioned_file.file.clone())?;
+        let mut file_reader =
+            SerializedFileReader::new(ChunkObjectReader(object_reader))?;
         if let Some(predicate_builder) = predicate_builder {
             let row_group_predicate = build_row_group_predicate(
                 predicate_builder,
@@ -526,7 +539,10 @@ fn read_partition(
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::file_format::{parquet::ParquetFormat, FileFormat};
+    use crate::datasource::{
+        file_format::{parquet::ParquetFormat, FileFormat},
+        object_store::local::{local_sized_file, local_sized_file_stream},
+    };
 
     use super::*;
     use arrow::datatypes::{DataType, Field};
@@ -542,15 +558,14 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let parquet_exec = ParquetExec::new(
+            Arc::new(ObjectStoreRegistry::new()),
             vec![vec![PartitionedFile {
-                path: filename.clone(),
+                file: local_sized_file(filename.clone()),
             }]],
             Statistics::default(),
-            ParquetFormat {
-                enable_pruning: true,
-            }
-            .infer_schema(Box::pin(futures::stream::once(async { filename })))
-            .await?,
+            ParquetFormat::default()
+                .infer_schema(local_sized_file_stream(vec![filename]))
+                .await?,
             Some(vec![0, 1, 2]),
             None,
             1024,

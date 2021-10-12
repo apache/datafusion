@@ -17,14 +17,15 @@
 
 //! Object store that represents the Local File System.
 
-use std::fs::Metadata;
+use std::fs::{self, File, Metadata};
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::{stream, AsyncRead, StreamExt};
+use futures::{stream, StreamExt};
 
 use crate::datasource::object_store::{
-    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
+    ListEntryStream, ObjectReader, ObjectStore, SizedFile, SizedFileStream,
 };
 use crate::error::DataFusionError;
 use crate::error::Result;
@@ -35,7 +36,7 @@ pub struct LocalFileSystem;
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
+    async fn list_file(&self, prefix: &str) -> Result<SizedFileStream> {
         list_all(prefix.to_owned()).await
     }
 
@@ -47,29 +48,31 @@ impl ObjectStore for LocalFileSystem {
         todo!()
     }
 
-    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
+    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 }
 
 struct LocalFileReader {
-    file: FileMeta,
+    file: SizedFile,
 }
 
 impl LocalFileReader {
-    fn new(file: FileMeta) -> Result<Self> {
+    fn new(file: SizedFile) -> Result<Self> {
         Ok(Self { file })
     }
 }
 
 #[async_trait]
 impl ObjectReader for LocalFileReader {
-    async fn chunk_reader(
+    fn chunk_reader(
         &self,
-        _start: u64,
+        start: u64,
         _length: usize,
-    ) -> Result<Arc<dyn AsyncRead>> {
-        todo!()
+    ) -> Result<Box<dyn Read + Send + Sync>> {
+        let mut file = File::open(&self.file.path)?;
+        file.seek(SeekFrom::Start(start))?;
+        Ok(Box::new(file))
     }
 
     fn length(&self) -> u64 {
@@ -77,11 +80,10 @@ impl ObjectReader for LocalFileReader {
     }
 }
 
-async fn list_all(prefix: String) -> Result<FileMetaStream> {
-    fn get_meta(path: String, metadata: Metadata) -> FileMeta {
-        FileMeta {
+async fn list_all(prefix: String) -> Result<SizedFileStream> {
+    fn get_meta(path: String, metadata: Metadata) -> SizedFile {
+        SizedFile {
             path,
-            last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
             size: metadata.len(),
         }
     }
@@ -89,7 +91,7 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
     async fn find_files_in_dir(
         path: String,
         to_visit: &mut Vec<String>,
-    ) -> Result<Vec<FileMeta>> {
+    ) -> Result<Vec<SizedFile>> {
         let mut dir = tokio::fs::read_dir(path).await?;
         let mut files = Vec::new();
 
@@ -130,6 +132,19 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
         })
         .flatten();
         Ok(Box::pin(result))
+    }
+}
+
+/// Create a stream of `SizedFile` applying `local_sized_file` to each path
+pub fn local_sized_file_stream(files: Vec<String>) -> SizedFileStream {
+    Box::pin(futures::stream::iter(files).map(|f| Ok(local_sized_file(f))))
+}
+
+/// Helper method to fetch the file size at given path and create a `SizedFile`
+pub fn local_sized_file(file: String) -> SizedFile {
+    SizedFile {
+        size: fs::metadata(&file).expect("Local file metadata").len(),
+        path: file,
     }
 }
 

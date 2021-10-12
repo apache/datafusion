@@ -28,11 +28,14 @@ use crate::{
     datasource::file_format::{self, PartitionedFile},
     error::Result,
     logical_plan::Expr,
-    physical_plan::{common, ExecutionPlan, Statistics},
+    physical_plan::{ExecutionPlan, Statistics},
 };
 
 use super::{
-    datasource::TableProviderFilterPushDown, file_format::FileFormat, TableProvider,
+    datasource::TableProviderFilterPushDown,
+    file_format::{FileFormat, PartitionedFileStream},
+    object_store::ObjectStoreRegistry,
+    TableProvider,
 };
 
 /// Options for creating a `ListingTable`
@@ -67,9 +70,11 @@ impl ListingOptions {
     /// This way when creating the logical plan we can decide to resolve the schema
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema(&self, path: &str) -> Result<SchemaRef> {
-        let files =
-            futures::stream::iter(common::build_file_list(path, &self.file_extension)?);
-        let file_schema = self.format.infer_schema(Box::pin(files)).await?;
+        let object_store = self.format.object_store_registry().get_by_uri(path)?;
+        let file_stream = object_store
+            .list_file_with_suffix(path, &self.file_extension)
+            .await?;
+        let file_schema = self.format.infer_schema(file_stream).await?;
         // Add the partition columns to the file schema
         let mut fields = file_schema.fields().clone();
         for part in &self.partitions {
@@ -123,21 +128,27 @@ impl TableProvider for ListingTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // list files (with partitions)
         let file_list = pruned_partition_list(
+            &self.options.format.object_store_registry(),
             &self.path,
             filters,
             &self.options.file_extension,
             &self.options.partitions,
-        )?;
+        )
+        .await?;
 
         // collect the statistics if required by the config
-        let files = futures::stream::iter(file_list)
-            .then(|file| async {
+        let files = file_list
+            .then(|part_file| async {
+                let part_file = part_file?;
                 let statistics = if self.options.collect_stat {
-                    self.options.format.infer_stats(&file.path).await?
+                    self.options
+                        .format
+                        .infer_stats(part_file.file.clone())
+                        .await?
                 } else {
                     Statistics::default()
                 };
-                Ok((file, statistics)) as Result<(PartitionedFile, Statistics)>
+                Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
             })
             .try_collect::<Vec<_>>()
             .await?;
@@ -172,21 +183,21 @@ impl TableProvider for ListingTable {
 
 /// Discover the partitions on the given path and prune out files
 /// relative to irrelevant partitions using `filters` expressions
-fn pruned_partition_list(
-    // registry: &ObjectStoreRegistry,
+async fn pruned_partition_list(
+    registry: &ObjectStoreRegistry,
     path: &str,
     _filters: &[Expr],
     file_extension: &str,
     partition_names: &[String],
-) -> Result<Vec<PartitionedFile>> {
-    let list_all = || {
-        Ok(common::build_file_list(path, file_extension)?
-            .into_iter()
-            .map(|f| PartitionedFile { path: f })
-            .collect::<Vec<PartitionedFile>>())
-    };
+) -> Result<PartitionedFileStream> {
     if partition_names.is_empty() {
-        list_all()
+        Ok(Box::pin(
+            registry
+                .get_by_uri(path)?
+                .list_file_with_suffix(path, file_extension)
+                .await?
+                .map(|f| Ok(PartitionedFile { file: f? })),
+        ))
     } else {
         todo!("use filters to prune partitions")
     }
@@ -208,25 +219,44 @@ fn split_files(
 
 #[cfg(test)]
 mod tests {
+    use crate::datasource::{
+        file_format::parquet::ParquetFormat, object_store::SizedFile,
+    };
+
     use super::*;
 
     #[test]
     fn test_split_files() {
         let files = vec![
             PartitionedFile {
-                path: "a".to_owned(),
+                file: SizedFile {
+                    path: "a".to_owned(),
+                    size: 10,
+                },
             },
             PartitionedFile {
-                path: "b".to_owned(),
+                file: SizedFile {
+                    path: "b".to_owned(),
+                    size: 10,
+                },
             },
             PartitionedFile {
-                path: "c".to_owned(),
+                file: SizedFile {
+                    path: "c".to_owned(),
+                    size: 10,
+                },
             },
             PartitionedFile {
-                path: "d".to_owned(),
+                file: SizedFile {
+                    path: "d".to_owned(),
+                    size: 10,
+                },
             },
             PartitionedFile {
-                path: "e".to_owned(),
+                file: SizedFile {
+                    path: "e".to_owned(),
+                    size: 10,
+                },
             },
         ];
 
@@ -282,9 +312,7 @@ mod tests {
         let filename = format!("{}/{}", testdata, name);
         let opt = ListingOptions {
             file_extension: "parquet".to_owned(),
-            format: Arc::new(file_format::parquet::ParquetFormat {
-                enable_pruning: true,
-            }),
+            format: Arc::new(ParquetFormat::default()),
             partitions: vec![],
             max_partitions: 2,
             collect_stat: true,

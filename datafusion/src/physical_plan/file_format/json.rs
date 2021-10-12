@@ -19,6 +19,8 @@
 use async_trait::async_trait;
 use futures::Stream;
 
+use crate::datasource::file_format::PartitionedFile;
+use crate::datasource::object_store::ObjectStoreRegistry;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -31,7 +33,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use std::any::Any;
-use std::fs::File;
 use std::{
     io::Read,
     pin::Pin,
@@ -42,7 +43,8 @@ use std::{
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
 pub struct NdJsonExec {
-    files: Vec<String>,
+    object_store_registry: Arc<ObjectStoreRegistry>,
+    files: Vec<PartitionedFile>,
     statistics: Statistics,
     schema: SchemaRef,
     projection: Option<Vec<usize>>,
@@ -55,7 +57,8 @@ impl NdJsonExec {
     /// Create a new JSON reader execution plan provided file list and schema
     /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
     pub fn new(
-        files: Vec<String>,
+        object_store_registry: Arc<ObjectStoreRegistry>,
+        files: Vec<PartitionedFile>,
         statistics: Statistics,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
@@ -70,6 +73,7 @@ impl NdJsonExec {
         };
 
         Self {
+            object_store_registry,
             files,
             statistics,
             schema,
@@ -114,24 +118,22 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        let mut builder = json::ReaderBuilder::new()
-            .with_schema(self.schema.clone())
-            .with_batch_size(self.batch_size);
-        if let Some(proj) = &self.projection {
-            builder = builder.with_projection(
-                proj.iter()
-                    .map(|col_idx| self.schema.field(*col_idx).name())
-                    .cloned()
-                    .collect(),
-            );
-        }
+        let proj = self.projection.as_ref().map(|p| {
+            p.iter()
+                .map(|col_idx| self.schema.field(*col_idx).name())
+                .cloned()
+                .collect()
+        });
 
-        let file = File::open(&self.files[partition])?;
+        let file = self
+            .object_store_registry
+            .get_by_uri(&self.files[partition].file.path)?
+            .file_reader(self.files[partition].file.clone())?
+            .chunk_reader(0, self.files[partition].file.size as usize)?;
 
-        Ok(Box::pin(NdJsonStream::new(
-            builder.build(file)?,
-            self.limit,
-        )))
+        let json_reader = json::Reader::new(file, self.schema(), self.batch_size, proj);
+
+        Ok(Box::pin(NdJsonStream::new(json_reader, self.limit)))
     }
 
     fn fmt_as(
@@ -143,10 +145,14 @@ impl ExecutionPlan for NdJsonExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "JsonExec: batch_size={}, limit={:?}, partitions=[{}]",
+                    "JsonExec: batch_size={}, limit={:?}, files=[{}]",
                     self.batch_size,
                     self.limit,
-                    self.files.join(", ")
+                    self.files
+                        .iter()
+                        .map(|f| f.file.path.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             }
         }
@@ -221,18 +227,19 @@ impl<R: Read + Unpin> RecordBatchStream for NdJsonStream<R> {
 mod tests {
     use futures::StreamExt;
 
-    use crate::datasource::file_format::{json::JsonFormat, FileFormat};
+    use crate::datasource::{
+        file_format::{json::JsonFormat, FileFormat},
+        object_store::local::{local_sized_file, local_sized_file_stream},
+    };
 
     use super::*;
 
     const TEST_DATA_BASE: &str = "tests/jsons";
 
     async fn infer_schema(path: String) -> Result<SchemaRef> {
-        JsonFormat {
-            schema_infer_max_rec: None,
-        }
-        .infer_schema(Box::pin(futures::stream::once(async { path })))
-        .await
+        JsonFormat::default()
+            .infer_schema(local_sized_file_stream(vec![path]))
+            .await
     }
 
     #[tokio::test]
@@ -240,7 +247,10 @@ mod tests {
         use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::new(
-            vec![path.clone()],
+            Arc::new(ObjectStoreRegistry::new()),
+            vec![PartitionedFile {
+                file: local_sized_file(path.clone()),
+            }],
             Default::default(),
             infer_schema(path).await?,
             None,
@@ -292,7 +302,10 @@ mod tests {
     async fn nd_json_exec_file_projection() -> Result<()> {
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::new(
-            vec![path.clone()],
+            Arc::new(ObjectStoreRegistry::new()),
+            vec![PartitionedFile {
+                file: local_sized_file(path.clone()),
+            }],
             Default::default(),
             infer_schema(path).await?,
             Some(vec![0, 2]),

@@ -17,6 +17,8 @@
 
 //! Execution plan for reading CSV files
 
+use crate::datasource::file_format::PartitionedFile;
+use crate::datasource::object_store::{ObjectStoreRegistry, SizedFile};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -28,7 +30,6 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use futures::Stream;
 use std::any::Any;
-use std::fs::File;
 use std::io::Read;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -39,8 +40,9 @@ use async_trait::async_trait;
 /// Execution plan for scanning a CSV file
 #[derive(Debug, Clone)]
 pub struct CsvExec {
+    object_store_registry: Arc<ObjectStoreRegistry>,
     /// List of data files
-    files: Vec<String>,
+    files: Vec<PartitionedFile>,
     /// Schema representing the CSV file
     schema: SchemaRef,
     /// Provided statistics
@@ -64,7 +66,8 @@ impl CsvExec {
     /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        files: Vec<String>,
+        object_store_registry: Arc<ObjectStoreRegistry>,
+        files: Vec<PartitionedFile>,
         statistics: Statistics,
         schema: SchemaRef,
         has_header: bool,
@@ -81,6 +84,7 @@ impl CsvExec {
         };
 
         Self {
+            object_store_registry,
             files,
             schema,
             statistics,
@@ -132,7 +136,8 @@ impl ExecutionPlan for CsvExec {
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(CsvStream::try_new(
-            &self.files[partition],
+            &self.object_store_registry,
+            &self.files[partition].file,
             self.schema.clone(),
             self.has_header,
             self.delimiter,
@@ -151,11 +156,15 @@ impl ExecutionPlan for CsvExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "CsvExec: has_header={}, batch_size={}, limit={:?}, partitions=[{}]",
+                    "CsvExec: has_header={}, batch_size={}, limit={:?}, files=[{}]",
                     self.has_header,
                     self.batch_size,
                     self.limit,
-                    self.files.join(", ")
+                    self.files
+                        .iter()
+                        .map(|f| f.file.path.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             }
         }
@@ -171,10 +180,11 @@ struct CsvStream<R: Read> {
     /// Arrow CSV reader
     reader: csv::Reader<R>,
 }
-impl CsvStream<File> {
+impl CsvStream<Box<dyn Read + Send + Sync>> {
     /// Create an iterator for a CSV file
     pub fn try_new(
-        filename: &str,
+        object_store_registry: &ObjectStoreRegistry,
+        file: &SizedFile,
         schema: SchemaRef,
         has_header: bool,
         delimiter: Option<u8>,
@@ -182,12 +192,16 @@ impl CsvStream<File> {
         batch_size: usize,
         limit: Option<usize>,
     ) -> Result<Self> {
-        let file = File::open(filename)?;
+        let file = object_store_registry
+            .get_by_uri(&file.path)?
+            .file_reader(file.clone())?
+            .chunk_reader(0, file.size as usize)?;
         Self::try_new_from_reader(
             file, schema, has_header, delimiter, projection, batch_size, limit,
         )
     }
 }
+
 impl<R: Read> CsvStream<R> {
     /// Create an iterator for a reader
     pub fn try_new_from_reader(
@@ -237,7 +251,9 @@ impl<R: Read + Unpin> RecordBatchStream for CsvStream<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::aggr_test_schema;
+    use crate::{
+        datasource::object_store::local::local_sized_file, test::aggr_test_schema,
+    };
     use futures::StreamExt;
 
     #[tokio::test]
@@ -247,7 +263,10 @@ mod tests {
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::new(
-            vec![path],
+            Arc::new(ObjectStoreRegistry::new()),
+            vec![PartitionedFile {
+                file: local_sized_file(path),
+            }],
             Statistics::default(),
             schema,
             true,
@@ -277,7 +296,10 @@ mod tests {
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::new(
-            vec![path],
+            Arc::new(ObjectStoreRegistry::new()),
+            vec![PartitionedFile {
+                file: local_sized_file(path),
+            }],
             Statistics::default(),
             schema,
             true,

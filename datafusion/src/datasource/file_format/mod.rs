@@ -34,13 +34,15 @@ use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 use async_trait::async_trait;
 use futures::Stream;
 
-/// A stream of String that can be used accross await calls
-pub type StringStream = Pin<Box<dyn Stream<Item = String> + Send + Sync>>;
+use super::object_store::{ObjectStoreRegistry, SizedFile, SizedFileStream};
 
-/// Convert a vector into a stream
-pub fn string_stream(strings: Vec<String>) -> StringStream {
-    Box::pin(futures::stream::iter(strings))
-}
+// /// A stream of String that can be used accross await calls
+// pub type StringStream = Pin<Box<dyn Stream<Item = String> + Send + Sync>>;
+
+// /// Convert a vector into a stream
+// pub fn string_stream(strings: Vec<String>) -> StringStream {
+//     Box::pin(futures::stream::iter(strings))
+// }
 
 /// This trait abstracts all the file format specific implementations
 /// from the `TableProvider`. This helps code re-utilization accross
@@ -49,10 +51,10 @@ pub fn string_stream(strings: Vec<String>) -> StringStream {
 pub trait FileFormat: Send + Sync {
     /// Open the files at the paths provided by iterator and infer the
     /// common schema
-    async fn infer_schema(&self, paths: StringStream) -> Result<SchemaRef>;
+    async fn infer_schema(&self, paths: SizedFileStream) -> Result<SchemaRef>;
 
     /// Open the file at the given path and infer its statistics
-    async fn infer_stats(&self, path: &str) -> Result<Statistics>;
+    async fn infer_stats(&self, path: SizedFile) -> Result<Statistics>;
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.
@@ -69,6 +71,9 @@ pub trait FileFormat: Send + Sync {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Get the oject store from which to read this file format
+    fn object_store_registry(&self) -> &Arc<ObjectStoreRegistry>;
 }
 
 /// Get all files as well as the summary statistic
@@ -162,15 +167,19 @@ pub fn get_statistics_with_limit(
 /// TODO move back to crate::datasource::mod.rs once legacy cleaned up
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
-    pub path: String,
+    pub file: SizedFile,
     // Values of partition columns to be appended to each row
     // pub partition_value: Option<Vec<ScalarValue>>,
     // We may include row group range here for a more fine-grained parallel execution
 }
 
+/// Stream of files get listed from object store
+pub type PartitionedFileStream =
+    Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
+
 impl std::fmt::Display for PartitionedFile {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.path)
+        write!(f, "{}", self.file)
     }
 }
 
