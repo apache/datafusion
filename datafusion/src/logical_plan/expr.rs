@@ -1495,6 +1495,21 @@ pub fn random() -> Expr {
     }
 }
 
+/// Returns the approximate number of distinct input values.
+/// This function provides an approximation of count(DISTINCT x).
+/// Zero is returned if all input values are null.
+/// This function should produce a standard error of 0.81%,
+/// which is the standard deviation of the (approximately normal)
+/// error distribution over all possible sets.
+/// It does not guarantee an upper bound on the error for any specific input set.
+pub fn approx_distinct(expr: Expr) -> Expr {
+    Expr::AggregateFunction {
+        fun: aggregates::AggregateFunction::ApproxDistinct,
+        distinct: false,
+        args: vec![expr],
+    }
+}
+
 /// Create an convenience function representing a unary scalar function
 macro_rules! unary_scalar_expr {
     ($ENUM:ident, $FUNC:ident) => {

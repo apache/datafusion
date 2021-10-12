@@ -190,6 +190,8 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
   - [x] trim
 - Miscellaneous/Boolean functions
   - [x] nullif
+- Approximation functions
+  - [ ] approx_distinct
 - Common date/time functions
   - [ ] Basic date functions
   - [ ] Basic time functions

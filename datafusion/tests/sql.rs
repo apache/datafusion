@@ -983,6 +983,23 @@ async fn csv_query_count() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn csv_query_approx_count() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------+--------------+",
+        "| count_c9 | count_c9_str |",
+        "+----------+--------------+",
+        "| 100      | 99           |",
+        "+----------+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
 async fn csv_query_window_with_empty_over() -> Result<()> {

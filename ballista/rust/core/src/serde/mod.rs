@@ -114,6 +114,9 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Sum => AggregateFunction::Sum,
             protobuf::AggregateFunction::Avg => AggregateFunction::Avg,
             protobuf::AggregateFunction::Count => AggregateFunction::Count,
+            protobuf::AggregateFunction::ApproxDistinct => {
+                AggregateFunction::ApproxDistinct
+            }
         }
     }
 }
