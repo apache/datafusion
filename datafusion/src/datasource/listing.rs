@@ -212,7 +212,6 @@ fn split_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::StreamExt;
 
     #[test]
     fn test_split_files() {
@@ -251,20 +250,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_small_batches() -> Result<()> {
+    async fn read_single_file() -> Result<()> {
         let table = load_table("alltypes_plain.parquet").await?;
         let projection = None;
-        let exec = table.scan(&projection, 2, &[], None).await?;
-        let stream = exec.execute(0).await?;
+        let exec = table
+            .scan(&projection, 1024, &[], None)
+            .await
+            .expect("Scan table");
 
-        let _ = stream
-            .map(|batch| {
-                let batch = batch.unwrap();
-                assert_eq!(11, batch.num_columns());
-                assert_eq!(2, batch.num_rows());
-            })
-            .fold(0, |acc, _| async move { acc + 1i32 })
-            .await;
+        assert_eq!(exec.children().len(), 0);
+        assert_eq!(exec.output_partitioning().partition_count(), 1);
 
         // test metadata
         assert_eq!(exec.statistics().num_rows, Some(8));
@@ -272,6 +267,8 @@ mod tests {
 
         Ok(())
     }
+
+    // TODO add tests on listing once the ObjectStore abstraction is added
 
     async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
@@ -286,7 +283,7 @@ mod tests {
             collect_stat: true,
         };
         // here we resolve the schema locally
-        let schema = opt.infer_schema(&filename).await?;
+        let schema = opt.infer_schema(&filename).await.expect("Infer schema");
         let table = ListingTable::try_new(&filename, schema, opt)?;
         Ok(Arc::new(table))
     }
