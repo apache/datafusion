@@ -18,7 +18,7 @@
 //! Execution plan for reading CSV files
 
 use crate::datasource::file_format::PartitionedFile;
-use crate::datasource::object_store::{ObjectStoreRegistry, SizedFile};
+use crate::datasource::object_store::ObjectStoreRegistry;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -135,9 +135,14 @@ impl ExecutionPlan for CsvExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        Ok(Box::pin(CsvStream::try_new(
-            &self.object_store_registry,
-            &self.files[partition].file,
+        let file = self
+            .object_store_registry
+            .get_by_uri(&self.files[partition].file.path)?
+            .file_reader(self.files[partition].file.clone())?
+            .sync_reader()?;
+
+        Ok(Box::pin(CsvStream::try_new_from_reader(
+            file,
             self.schema.clone(),
             self.has_header,
             self.delimiter,
@@ -179,28 +184,6 @@ impl ExecutionPlan for CsvExec {
 struct CsvStream<R: Read> {
     /// Arrow CSV reader
     reader: csv::Reader<R>,
-}
-impl CsvStream<Box<dyn Read + Send + Sync>> {
-    /// Create an iterator for a CSV file
-    #[allow(clippy::too_many_arguments)]
-    pub fn try_new(
-        object_store_registry: &ObjectStoreRegistry,
-        file: &SizedFile,
-        schema: SchemaRef,
-        has_header: bool,
-        delimiter: Option<u8>,
-        projection: &Option<Vec<usize>>,
-        batch_size: usize,
-        limit: Option<usize>,
-    ) -> Result<Self> {
-        let file = object_store_registry
-            .get_by_uri(&file.path)?
-            .file_reader(file.clone())?
-            .sync_reader()?;
-        Self::try_new_from_reader(
-            file, schema, has_header, delimiter, projection, batch_size, limit,
-        )
-    }
 }
 
 impl<R: Read> CsvStream<R> {
