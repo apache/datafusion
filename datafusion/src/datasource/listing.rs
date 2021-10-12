@@ -150,7 +150,7 @@ impl TableProvider for ListingTable {
         // create the execution plan
         self.options
             .format
-            .create_executor(
+            .create_physical_plan(
                 self.schema(),
                 partitioned_file_lists,
                 statistics,

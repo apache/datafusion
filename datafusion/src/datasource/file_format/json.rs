@@ -72,7 +72,7 @@ impl FileFormat for JsonFormat {
         Ok(Statistics::default())
     }
 
-    async fn create_executor(
+    async fn create_physical_plan(
         &self,
         schema: SchemaRef,
         files: Vec<Vec<PartitionedFile>>,
@@ -188,7 +188,7 @@ mod tests {
             path: filename.to_owned(),
         }]];
         let exec = format
-            .create_executor(schema, files, stats, projection, batch_size, &[], None)
+            .create_physical_plan(schema, files, stats, projection, batch_size, &[], None)
             .await?;
         Ok(exec)
     }

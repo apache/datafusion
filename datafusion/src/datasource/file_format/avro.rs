@@ -54,7 +54,7 @@ impl FileFormat for AvroFormat {
         Ok(Statistics::default())
     }
 
-    async fn create_executor(
+    async fn create_physical_plan(
         &self,
         schema: SchemaRef,
         files: Vec<Vec<PartitionedFile>>,
@@ -338,7 +338,7 @@ mod tests {
             .expect("Stats inference");
         let files = vec![vec![PartitionedFile { path: filename }]];
         let exec = format
-            .create_executor(schema, files, stats, projection, batch_size, &[], None)
+            .create_physical_plan(schema, files, stats, projection, batch_size, &[], None)
             .await?;
         Ok(exec)
     }

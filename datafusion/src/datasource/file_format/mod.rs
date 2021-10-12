@@ -59,7 +59,7 @@ pub trait FileFormat: Send + Sync {
     /// TODO group params into TableDescription(schema,files,stats) and
     /// ScanOptions(projection,batch_size,filters) to avoid too_many_arguments
     #[allow(clippy::too_many_arguments)]
-    async fn create_executor(
+    async fn create_physical_plan(
         &self,
         schema: SchemaRef,
         files: Vec<Vec<PartitionedFile>>,
