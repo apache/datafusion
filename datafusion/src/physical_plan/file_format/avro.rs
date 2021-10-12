@@ -129,7 +129,7 @@ impl ExecutionPlan for AvroExec {
             .object_store_registry
             .get_by_uri(&self.files[partition].file.path)?
             .file_reader(self.files[partition].file.clone())?
-            .chunk_reader(0, self.files[partition].file.size as usize)?;
+            .reader()?;
 
         let proj = self.projection.as_ref().map(|p| {
             p.iter()

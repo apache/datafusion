@@ -91,11 +91,11 @@ impl FileFormat for CsvFormat {
 
         while let Some(fmeta_res) = file_stream.next().await {
             let fmeta = fmeta_res?;
-            let fsize = fmeta.size as usize;
-            let object_store = self.object_store_registry.get_by_uri(&fmeta.path)?;
-
-            let obj_reader = object_store.file_reader(fmeta)?;
-            let mut reader = obj_reader.chunk_reader(0, fsize)?;
+            let mut reader = self
+                .object_store_registry
+                .get_by_uri(&fmeta.path)?
+                .file_reader(fmeta)?
+                .reader()?;
             let (schema, records_read) = arrow::csv::reader::infer_reader_schema(
                 &mut reader,
                 self.delimiter,

@@ -44,6 +44,11 @@ pub trait ObjectReader {
         length: usize,
     ) -> Result<Box<dyn Read + Send + Sync>>;
 
+    /// Get reader for the entire file
+    fn reader(&self) -> Result<Box<dyn Read + Send + Sync>> {
+        self.chunk_reader(0, self.length() as usize)
+    }
+
     /// Get the size of the file
     fn length(&self) -> u64;
 }

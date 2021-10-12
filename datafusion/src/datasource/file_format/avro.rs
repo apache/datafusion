@@ -34,7 +34,7 @@ use crate::physical_plan::file_format::AvroExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
-/// Line-delimited Avro `FileFormat` implementation.
+/// Avro `FileFormat` implementation.
 pub struct AvroFormat {
     /// Object store registry
     pub object_store_registry: Arc<ObjectStoreRegistry>,
@@ -63,10 +63,11 @@ impl FileFormat for AvroFormat {
         let mut schemas = vec![];
         while let Some(fmeta_res) = file_stream.next().await {
             let fmeta = fmeta_res?;
-            let fsize = fmeta.size as usize;
-            let object_store = self.object_store_registry.get_by_uri(&fmeta.path)?;
-            let obj_reader = object_store.file_reader(fmeta)?;
-            let mut reader = obj_reader.chunk_reader(0, fsize)?;
+            let mut reader = self
+                .object_store_registry
+                .get_by_uri(&fmeta.path)?
+                .file_reader(fmeta)?
+                .reader()?;
             let schema = read_avro_schema_from_reader(&mut reader)?;
             schemas.push(schema);
         }

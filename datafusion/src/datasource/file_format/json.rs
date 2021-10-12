@@ -77,12 +77,12 @@ impl FileFormat for JsonFormat {
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
         while let Some(fmeta_res) = file_stream.next().await {
             let fmeta = fmeta_res?;
-            let fsize = fmeta.size as usize;
-            let object_store = self.object_store_registry.get_by_uri(&fmeta.path)?;
-
-            let obj_reader = object_store.file_reader(fmeta)?;
-            let chunk_reader = obj_reader.chunk_reader(0, fsize)?;
-            let mut reader = BufReader::new(chunk_reader);
+            let reader = self
+                .object_store_registry
+                .get_by_uri(&fmeta.path)?
+                .file_reader(fmeta)?
+                .reader()?;
+            let mut reader = BufReader::new(reader);
             let iter = ValueIter::new(&mut reader, None);
             let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
                 let should_take = records_to_read > 0;
