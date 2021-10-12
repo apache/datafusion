@@ -34,7 +34,7 @@ use crate::{
 use super::{
     datasource::TableProviderFilterPushDown,
     file_format::{FileFormat, PartitionedFileStream, PhysicalPlanConfig},
-    object_store::{ObjectStore, ObjectStoreRegistry},
+    object_store::ObjectStore,
     TableProvider,
 };
 
@@ -69,12 +69,11 @@ impl ListingOptions {
     /// This method will not be called by the table itself but before creating it.
     /// This way when creating the logical plan we can decide to resolve the schema
     /// locally or ask a remote service to do it (e.g a scheduler).
-    pub async fn infer_schema(
-        &self,
-        object_store_registry: Arc<ObjectStoreRegistry>,
-        uri: &str,
+    pub async fn infer_schema<'a>(
+        &'a self,
+        object_store: Arc<dyn ObjectStore>,
+        path: &'a str,
     ) -> Result<SchemaRef> {
-        let (object_store, path) = object_store_registry.get_by_uri(uri)?;
         let file_stream = object_store
             .list_file_with_suffix(path, &self.file_extension)
             .await?
@@ -92,9 +91,8 @@ impl ListingOptions {
 /// An implementation of `TableProvider` that uses the object store
 /// or file system listing capability to get the list of files.
 pub struct ListingTable {
-    // TODO pass object_store_registry to scan() instead
-    object_store_registry: Arc<ObjectStoreRegistry>,
-    uri: String,
+    object_store: Arc<dyn ObjectStore>,
+    path: String,
     schema: SchemaRef,
     options: ListingOptions,
 }
@@ -102,17 +100,15 @@ pub struct ListingTable {
 impl ListingTable {
     /// Create new table that lists the FS to get the files to scan.
     pub fn new(
-        // TODO pass object_store_registry to scan() instead
-        object_store_registry: Arc<ObjectStoreRegistry>,
-        uri: impl Into<String>,
+        object_store: Arc<dyn ObjectStore>,
+        path: String,
         // the schema must be resolved before creating the table
         schema: SchemaRef,
         options: ListingOptions,
     ) -> Self {
-        let uri: String = uri.into();
         Self {
-            object_store_registry,
-            uri,
+            object_store,
+            path,
             schema,
             options,
         }
@@ -137,15 +133,19 @@ impl TableProvider for ListingTable {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // TODO object_store_registry should be provided as param here
-        let (object_store, path) = self.object_store_registry.get_by_uri(&self.uri)?;
         let (partitioned_file_lists, statistics) = self
-            .list_files_for_scan(Arc::clone(&object_store), path, filters, limit)
+            .list_files_for_scan(
+                Arc::clone(&self.object_store),
+                &self.path,
+                filters,
+                limit,
+            )
             .await?;
         // create the execution plan
         self.options
             .format
             .create_physical_plan(PhysicalPlanConfig {
-                object_store,
+                object_store: Arc::clone(&self.object_store),
                 schema: self.schema(),
                 files: partitioned_file_lists,
                 statistics,
@@ -205,7 +205,7 @@ impl ListingTable {
         if files.is_empty() {
             return Err(DataFusionError::Plan(format!(
                 "No files found at {} with file extension {}",
-                self.uri, self.options.file_extension,
+                self.path, self.options.file_extension,
             )));
         }
 
@@ -257,8 +257,8 @@ mod tests {
     use crate::datasource::{
         file_format::{avro::AvroFormat, parquet::ParquetFormat},
         object_store::{
-            FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
-            SizedFile,
+            local::LocalFileSystem, FileMeta, FileMetaStream, ListEntryStream,
+            ObjectReader, ObjectStore, SizedFile,
         },
     };
 
@@ -347,13 +347,13 @@ mod tests {
             max_partitions: 2,
             collect_stat: true,
         };
-        let object_store_reg = Arc::new(ObjectStoreRegistry::new());
         // here we resolve the schema locally
         let schema = opt
-            .infer_schema(Arc::clone(&object_store_reg), &filename)
+            .infer_schema(Arc::new(LocalFileSystem {}), &filename)
             .await
             .expect("Infer schema");
-        let table = ListingTable::new(object_store_reg, &filename, schema, opt);
+        let table =
+            ListingTable::new(Arc::new(LocalFileSystem {}), filename, schema, opt);
         Ok(Arc::new(table))
     }
 
@@ -362,10 +362,8 @@ mod tests {
         max_partitions: usize,
         output_partitioning: usize,
     ) -> Result<()> {
-        let registry = ObjectStoreRegistry::new();
         let mock_store: Arc<dyn ObjectStore> =
             Arc::new(MockObjectStore { files_in_folder });
-        registry.register_store("mock".to_owned(), Arc::clone(&mock_store));
 
         let format = AvroFormat {};
 
@@ -377,13 +375,11 @@ mod tests {
             collect_stat: true,
         };
 
-        let object_store_reg = Arc::new(ObjectStoreRegistry::new());
-
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
         let table = ListingTable::new(
-            object_store_reg,
-            "mock://bucket/key-prefix",
+            Arc::clone(&mock_store),
+            "bucket/key-prefix".to_owned(),
             Arc::new(schema),
             opt,
         );
