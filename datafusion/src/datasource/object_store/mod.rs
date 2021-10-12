@@ -58,10 +58,11 @@ pub trait ObjectReader {
     fn length(&self) -> u64;
 }
 
-/// Represents a file or a prefix that may require further resolution
+/// Represents a specific file or a prefix (folder) that may
+/// require further resolution
 #[derive(Debug)]
 pub enum ListEntry {
-    /// Complete file path with size
+    /// Specific file with metadata
     FileMeta(FileMeta),
     /// Prefix to be further resolved during partition discovery
     Prefix(String),
