@@ -189,6 +189,57 @@ impl ParquetExec {
         ))
     }
 
+    /// Create a new Parquet reader execution plan provided file list and schema
+    pub fn try_new_refacto(
+        files: Vec<Vec<PartitionedFile>>,
+        statistics: Statistics,
+        schema: SchemaRef,
+        projection: Option<Vec<usize>>,
+        predicate: Option<Expr>,
+        batch_size: usize,
+        limit: Option<usize>,
+    ) -> Result<Self> {
+        debug!("Creating ParquetExec, desc: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
+        files, projection, predicate, limit);
+
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let partitions = files
+            .into_iter()
+            .enumerate()
+            .map(|(i, f)| ParquetPartition::new(f, i, metrics.clone()))
+            .collect::<Vec<_>>();
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let predicate_creation_errors =
+            MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
+
+        let predicate_builder = predicate.and_then(|predicate_expr| {
+            match PruningPredicate::try_new(&predicate_expr, schema.clone()) {
+                Ok(predicate_builder) => Some(predicate_builder),
+                Err(e) => {
+                    debug!(
+                        "Could not create pruning predicate for {:?}: {}",
+                        predicate_expr, e
+                    );
+                    predicate_creation_errors.add(1);
+                    None
+                }
+            }
+        });
+
+        Ok(Self::new(
+            partitions,
+            schema,
+            projection,
+            statistics,
+            metrics,
+            predicate_builder,
+            batch_size,
+            limit,
+        ))
+    }
+
     /// Create a new Parquet reader execution plan with provided partitions and schema
     #[allow(clippy::too_many_arguments)]
     pub fn new(

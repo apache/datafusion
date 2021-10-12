@@ -22,6 +22,7 @@ pub mod planner;
 #[cfg(feature = "sled")]
 mod standalone;
 pub mod state;
+use ballista_core::serde::protobuf::{GetSchemaParams, GetSchemaResult};
 #[cfg(feature = "sled")]
 pub use standalone::new_standalone_scheduler;
 
@@ -266,6 +267,16 @@ impl SchedulerGrpc for SchedulerServer {
                 "Missing metadata in request",
             ))
         }
+    }
+
+    /// this service would replace get_file_meatadata
+    async fn get_schema(
+        &self,
+        _request: Request<GetSchemaParams>,
+    ) -> std::result::Result<Response<GetSchemaResult>, tonic::Status> {
+        // if GetSchemaParams contains a provider config of type ListingConfig
+        // use ListingOptions.infer_schema()
+        todo!()
     }
 
     async fn get_file_metadata(
