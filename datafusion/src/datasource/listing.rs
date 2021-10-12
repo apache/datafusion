@@ -87,18 +87,18 @@ pub struct ListingTable {
 
 impl ListingTable {
     /// Create new table that lists the FS to get the files to scan.
-    pub fn try_new(
+    pub fn new(
         path: impl Into<String>,
         // the schema must be resolved before creating the table
         schema: SchemaRef,
         options: ListingOptions,
-    ) -> Result<Self> {
+    ) -> Self {
         let path: String = path.into();
-        Ok(Self {
+        Self {
             path,
             schema,
             options,
-        })
+        }
     }
 }
 
@@ -284,7 +284,7 @@ mod tests {
         };
         // here we resolve the schema locally
         let schema = opt.infer_schema(&filename).await.expect("Infer schema");
-        let table = ListingTable::try_new(&filename, schema, opt)?;
+        let table = ListingTable::new(&filename, schema, opt);
         Ok(Arc::new(table))
     }
 }
