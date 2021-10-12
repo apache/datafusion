@@ -17,6 +17,7 @@
 
 //! CSV format abstractions
 
+use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
@@ -32,6 +33,7 @@ use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
 /// Character Separated Value `FileFormat` implementation.
+#[derive(Debug)]
 pub struct CsvFormat {
     has_header: bool,
     delimiter: u8,
@@ -63,16 +65,30 @@ impl CsvFormat {
         self
     }
 
+    /// True if the first line is a header.
+    pub fn has_header(&self) -> bool {
+        self.has_header
+    }
+
     /// The character separating values within a row.
     /// - default to ','
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = delimiter;
         self
     }
+
+    /// The delimiter character.
+    pub fn delimiter(&self) -> u8 {
+        self.delimiter
+    }
 }
 
 #[async_trait]
 impl FileFormat for CsvFormat {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
         let mut schemas = vec![];
 
@@ -111,7 +127,7 @@ impl FileFormat for CsvFormat {
         let exec = CsvExec::new(
             conf.object_store,
             // flattening this for now because CsvExec does not support partitioning yet
-            conf.files.into_iter().flatten().collect(),
+            conf.files.into_iter().flatten().collect::<Vec<_>>(),
             conf.statistics,
             conf.schema,
             self.has_header,
@@ -131,11 +147,12 @@ mod tests {
     use super::*;
     use crate::{
         datasource::{
-            file_format::{PartitionedFile, PhysicalPlanConfig},
+            file_format::PhysicalPlanConfig,
             object_store::local::{
                 local_file_meta, local_object_reader, local_object_reader_stream,
                 LocalFileSystem,
             },
+            PartitionedFile,
         },
         physical_plan::collect,
     };

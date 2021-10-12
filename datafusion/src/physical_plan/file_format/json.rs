@@ -19,8 +19,8 @@
 use async_trait::async_trait;
 use futures::Stream;
 
-use crate::datasource::file_format::PartitionedFile;
 use crate::datasource::object_store::ObjectStore;
+use crate::datasource::PartitionedFile;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,

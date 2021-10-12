@@ -21,6 +21,8 @@ use std::{collections::HashSet, sync::Arc};
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 
+use tokio::runtime::Runtime;
+
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -53,11 +55,16 @@ impl ExecutionContext {
     }
 
     /// Returns a DataFrame whose plan corresponds to the SQL statement.
-    fn sql(&mut self, query: &str) -> PyResult<dataframe::DataFrame> {
-        let df = self
-            .ctx
-            .sql(query)
-            .map_err(|e| -> errors::DataFusionError { e.into() })?;
+    fn sql(&mut self, query: &str, py: Python) -> PyResult<dataframe::DataFrame> {
+        let rt = Runtime::new().unwrap();
+        let df = py.allow_threads(|| {
+            rt.block_on(async {
+                self.ctx
+                    .sql(query)
+                    .await
+                    .map_err(|e| -> errors::DataFusionError { e.into() })
+            })
+        })?;
         Ok(dataframe::DataFrame::new(
             self.ctx.state.clone(),
             df.to_logical_plan(),
@@ -119,8 +126,13 @@ impl ExecutionContext {
         Ok(())
     }
 
-    fn register_parquet(&mut self, name: &str, path: &str) -> PyResult<()> {
-        errors::wrap(self.ctx.register_parquet(name, path))?;
+    fn register_parquet(&mut self, name: &str, path: &str, py: Python) -> PyResult<()> {
+        let rt = Runtime::new().unwrap();
+        py.allow_threads(|| {
+            rt.block_on(async {
+                errors::wrap(self.ctx.register_parquet(name, path).await)
+            })
+        })?;
         Ok(())
     }
 
@@ -140,6 +152,7 @@ impl ExecutionContext {
         delimiter: &str,
         schema_infer_max_records: usize,
         file_extension: &str,
+        py: Python,
     ) -> PyResult<()> {
         let path = path
             .to_str()
@@ -162,7 +175,12 @@ impl ExecutionContext {
             .file_extension(file_extension);
         options.schema = schema.as_ref();
 
-        errors::wrap(self.ctx.register_csv(name, path, options))?;
+        let rt = Runtime::new().unwrap();
+        py.allow_threads(|| {
+            rt.block_on(async {
+                errors::wrap(self.ctx.register_csv(name, path, options).await)
+            })
+        })?;
         Ok(())
     }
 

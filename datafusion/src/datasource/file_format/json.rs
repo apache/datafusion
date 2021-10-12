@@ -17,6 +17,7 @@
 
 //! Line delimited JSON format abstractions
 
+use std::any::Any;
 use std::io::BufReader;
 use std::sync::Arc;
 
@@ -36,6 +37,7 @@ use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
 /// New line delimited JSON `FileFormat` implementation.
+#[derive(Debug)]
 pub struct JsonFormat {
     schema_infer_max_rec: Option<usize>,
 }
@@ -59,6 +61,10 @@ impl JsonFormat {
 
 #[async_trait]
 impl FileFormat for JsonFormat {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
@@ -91,7 +97,7 @@ impl FileFormat for JsonFormat {
         let exec = NdJsonExec::new(
             conf.object_store,
             // flattening this for now because NdJsonExec does not support partitioning yet
-            conf.files.into_iter().flatten().collect(),
+            conf.files.into_iter().flatten().collect::<Vec<_>>(),
             conf.statistics,
             conf.schema,
             conf.projection,
@@ -109,11 +115,12 @@ mod tests {
     use super::*;
     use crate::{
         datasource::{
-            file_format::{PartitionedFile, PhysicalPlanConfig},
+            file_format::PhysicalPlanConfig,
             object_store::local::{
                 local_file_meta, local_object_reader, local_object_reader_stream,
                 LocalFileSystem,
             },
+            PartitionedFile,
         },
         physical_plan::collect,
     };

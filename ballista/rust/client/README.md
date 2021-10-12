@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
        "tripdata",
        "/path/to/yellow_tripdata_2020-01.csv",
        CsvReadOptions::new(),
-   )?;
+   ).await?;
 
    // execute the query
    let df = ctx.sql(
@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
        FROM tripdata
        GROUP BY passenger_count
        ORDER BY passenger_count",
-   )?;
+   ).await?;
 
    // collect the results and print them to stdout
    let results = df.collect().await?;

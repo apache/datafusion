@@ -26,16 +26,17 @@ mod roundtrip_tests {
     use core::panic;
     use datafusion::{
         arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit},
+        datasource::object_store::local::LocalFileSystem,
         logical_plan::{
             col, Expr, LogicalPlan, LogicalPlanBuilder, Partitioning, ToDFSchema,
         },
-        physical_plan::{csv::CsvReadOptions, functions::BuiltinScalarFunction::Sqrt},
+        physical_plan::functions::BuiltinScalarFunction::Sqrt,
         prelude::*,
         scalar::ScalarValue,
         sql::parser::FileType,
     };
     use protobuf::arrow_type;
-    use std::convert::TryInto;
+    use std::{convert::TryInto, sync::Arc};
 
     //Given a identity of a LogicalPlan converts it to protobuf and back, using debug formatting to test equality.
     macro_rules! roundtrip_test {
@@ -57,8 +58,8 @@ mod roundtrip_tests {
         };
     }
 
-    #[test]
-    fn roundtrip_repartition() -> Result<()> {
+    #[tokio::test]
+    async fn roundtrip_repartition() -> Result<()> {
         use datafusion::logical_plan::Partitioning;
 
         let test_batch_sizes = [usize::MIN, usize::MAX, 43256];
@@ -76,10 +77,13 @@ mod roundtrip_tests {
 
         let plan = std::sync::Arc::new(
             LogicalPlanBuilder::scan_csv(
+                Arc::new(LocalFileSystem {}),
                 "employee.csv",
                 CsvReadOptions::new().schema(&schema).has_header(true),
                 Some(vec![3, 4]),
+                4,
             )
+            .await
             .and_then(|plan| plan.sort(vec![col("salary")]))
             .and_then(|plan| plan.build())
             .map_err(BallistaError::DataFusionError)?,
@@ -665,8 +669,8 @@ mod roundtrip_tests {
         Ok(())
     }
 
-    #[test]
-    fn roundtrip_analyze() -> Result<()> {
+    #[tokio::test]
+    async fn roundtrip_analyze() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("first_name", DataType::Utf8, false),
@@ -676,20 +680,26 @@ mod roundtrip_tests {
         ]);
 
         let verbose_plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
+            4,
         )
+        .await
         .and_then(|plan| plan.sort(vec![col("salary")]))
         .and_then(|plan| plan.explain(true, true))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
         let plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
+            4,
         )
+        .await
         .and_then(|plan| plan.sort(vec![col("salary")]))
         .and_then(|plan| plan.explain(false, true))
         .and_then(|plan| plan.build())
@@ -702,8 +712,8 @@ mod roundtrip_tests {
         Ok(())
     }
 
-    #[test]
-    fn roundtrip_explain() -> Result<()> {
+    #[tokio::test]
+    async fn roundtrip_explain() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("first_name", DataType::Utf8, false),
@@ -713,20 +723,26 @@ mod roundtrip_tests {
         ]);
 
         let verbose_plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
+            4,
         )
+        .await
         .and_then(|plan| plan.sort(vec![col("salary")]))
         .and_then(|plan| plan.explain(true, false))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
         let plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
+            4,
         )
+        .await
         .and_then(|plan| plan.sort(vec![col("salary")]))
         .and_then(|plan| plan.explain(false, false))
         .and_then(|plan| plan.build())
@@ -739,8 +755,8 @@ mod roundtrip_tests {
         Ok(())
     }
 
-    #[test]
-    fn roundtrip_join() -> Result<()> {
+    #[tokio::test]
+    async fn roundtrip_join() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("first_name", DataType::Utf8, false),
@@ -750,18 +766,24 @@ mod roundtrip_tests {
         ]);
 
         let scan_plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
             "employee1",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![0, 3, 4]),
-        )?
+            4,
+        )
+        .await?
         .build()
         .map_err(BallistaError::DataFusionError)?;
 
         let plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
             "employee2",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![0, 3, 4]),
+            4,
         )
+        .await
         .and_then(|plan| plan.join(&scan_plan, JoinType::Inner, (vec!["id"], vec!["id"])))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
@@ -770,8 +792,8 @@ mod roundtrip_tests {
         Ok(())
     }
 
-    #[test]
-    fn roundtrip_sort() -> Result<()> {
+    #[tokio::test]
+    async fn roundtrip_sort() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("first_name", DataType::Utf8, false),
@@ -781,10 +803,13 @@ mod roundtrip_tests {
         ]);
 
         let plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
+            4,
         )
+        .await
         .and_then(|plan| plan.sort(vec![col("salary")]))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
@@ -793,8 +818,8 @@ mod roundtrip_tests {
         Ok(())
     }
 
-    #[test]
-    fn roundtrip_empty_relation() -> Result<()> {
+    #[tokio::test]
+    async fn roundtrip_empty_relation() -> Result<()> {
         let plan_false = LogicalPlanBuilder::empty(false)
             .build()
             .map_err(BallistaError::DataFusionError)?;
@@ -810,8 +835,8 @@ mod roundtrip_tests {
         Ok(())
     }
 
-    #[test]
-    fn roundtrip_logical_plan() -> Result<()> {
+    #[tokio::test]
+    async fn roundtrip_logical_plan() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("first_name", DataType::Utf8, false),
@@ -821,10 +846,13 @@ mod roundtrip_tests {
         ]);
 
         let plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
+            4,
         )
+        .await
         .and_then(|plan| plan.aggregate(vec![col("state")], vec![max(col("salary"))]))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;

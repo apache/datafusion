@@ -34,7 +34,7 @@ use datafusion::{
     datasource::TableProvider,
     logical_plan::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder},
     physical_plan::{
-        accept, metrics::MetricsSet, parquet::ParquetExec, ExecutionPlan,
+        accept, file_format::ParquetExec, metrics::MetricsSet, ExecutionPlan,
         ExecutionPlanVisitor,
     },
     prelude::{ExecutionConfig, ExecutionContext},
@@ -482,7 +482,7 @@ impl ContextWithParquet {
         // now, setup a the file as a data source and run a query against it
         let mut ctx = ExecutionContext::with_config(config);
 
-        ctx.register_parquet("t", &parquet_path).unwrap();
+        ctx.register_parquet("t", &parquet_path).await.unwrap();
         let provider = ctx.deregister_table("t").unwrap().unwrap();
         ctx.register_table("t", provider.clone()).unwrap();
 
@@ -510,7 +510,7 @@ impl ContextWithParquet {
     /// rows and normalized execution metrics
     async fn query(&mut self, sql: &str) -> TestOutput {
         println!("Planning sql {}", sql);
-        let logical_plan = self.ctx.sql(sql).expect("planning").to_logical_plan();
+        let logical_plan = self.ctx.sql(sql).await.expect("planning").to_logical_plan();
         self.run_test(logical_plan, sql).await
     }
 
@@ -523,6 +523,7 @@ impl ContextWithParquet {
         let input = self
             .ctx
             .sql("SELECT * from t")
+            .await
             .expect("planning")
             .collect()
             .await

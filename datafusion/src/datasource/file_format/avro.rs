@@ -17,6 +17,7 @@
 
 //! Apache Avro format abstractions
 
+use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
@@ -33,11 +34,15 @@ use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
 /// Avro `FileFormat` implementation.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct AvroFormat;
 
 #[async_trait]
 impl FileFormat for AvroFormat {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
         let mut schemas = vec![];
         while let Some(obj_reader) = readers.next().await {
@@ -60,7 +65,7 @@ impl FileFormat for AvroFormat {
         let exec = AvroExec::new(
             conf.object_store,
             // flattening this for now because CsvExec does not support partitioning yet
-            conf.files.into_iter().flatten().collect(),
+            conf.files.into_iter().flatten().collect::<Vec<_>>(),
             conf.statistics,
             conf.schema,
             conf.projection,
@@ -76,11 +81,11 @@ impl FileFormat for AvroFormat {
 mod tests {
     use crate::{
         datasource::{
-            file_format::PartitionedFile,
             object_store::local::{
                 local_file_meta, local_object_reader, local_object_reader_stream,
                 LocalFileSystem,
             },
+            PartitionedFile,
         },
         physical_plan::collect,
     };

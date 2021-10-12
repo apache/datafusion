@@ -1397,9 +1397,11 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::execution::options::CsvReadOptions;
     use crate::logical_plan::{DFField, DFSchema, DFSchemaRef};
     use crate::physical_plan::{
-        csv::CsvReadOptions, expressions, DisplayFormatType, Partitioning, Statistics,
+        expressions, DisplayFormatType, Partitioning, Statistics,
     };
     use crate::scalar::ScalarValue;
     use crate::{
@@ -1429,14 +1431,21 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
-            // filter clause needs the type coercion rule applied
-            .filter(col("c7").lt(lit(5_u8)))?
-            .project(vec![col("c1"), col("c2")])?
-            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .sort(vec![col("c1").sort(true, true)])?
-            .limit(10)?
-            .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
+            path,
+            options,
+            None,
+            1,
+        )
+        .await?
+        // filter clause needs the type coercion rule applied
+        .filter(col("c7").lt(lit(5_u8)))?
+        .project(vec![col("c1"), col("c2")])?
+        .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+        .sort(vec![col("c1").sort(true, true)])?
+        .limit(10)?
+        .build()?;
 
         let plan = plan(&logical_plan).await?;
 
@@ -1474,9 +1483,16 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
-            .filter(col("c7").lt(col("c12")))?
-            .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
+            path,
+            options,
+            None,
+            1,
+        )
+        .await?
+        .filter(col("c7").lt(col("c12")))?
+        .build()?;
 
         let plan = plan(&logical_plan).await?;
 
@@ -1511,8 +1527,15 @@ mod tests {
             col("c1").like(col("c2")),
         ];
         for case in cases {
-            let logical_plan = LogicalPlanBuilder::scan_csv(&path, options, None)?
-                .project(vec![case.clone()]);
+            let logical_plan = LogicalPlanBuilder::scan_csv(
+                Arc::new(LocalFileSystem {}),
+                &path,
+                options,
+                None,
+                1,
+            )
+            .await?
+            .project(vec![case.clone()]);
             let message = format!(
                 "Expression {:?} expected to error due to impossible coercion",
                 case
@@ -1604,11 +1627,18 @@ mod tests {
             Expr::Literal(ScalarValue::Utf8(Some("a".to_string()))),
             Expr::Literal(ScalarValue::Int64(Some(1))),
         ];
-        let logical_plan = LogicalPlanBuilder::scan_csv(&path, options, None)?
-            // filter clause needs the type coercion rule applied
-            .filter(col("c12").lt(lit(0.05)))?
-            .project(vec![col("c1").in_list(list, false)])?
-            .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
+            &path,
+            options,
+            None,
+            1,
+        )
+        .await?
+        // filter clause needs the type coercion rule applied
+        .filter(col("c12").lt(lit(0.05)))?
+        .project(vec![col("c1").in_list(list, false)])?
+        .build()?;
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8
         let expected = "InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false }";
@@ -1619,11 +1649,18 @@ mod tests {
             Expr::Literal(ScalarValue::Boolean(Some(true))),
             Expr::Literal(ScalarValue::Utf8(Some("a".to_string()))),
         ];
-        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
-            // filter clause needs the type coercion rule applied
-            .filter(col("c12").lt(lit(0.05)))?
-            .project(vec![col("c12").lt_eq(lit(0.025)).in_list(list, false)])?
-            .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
+            &path,
+            options,
+            None,
+            1,
+        )
+        .await?
+        // filter clause needs the type coercion rule applied
+        .filter(col("c12").lt(lit(0.05)))?
+        .project(vec![col("c12").lt_eq(lit(0.025)).in_list(list, false)])?
+        .build()?;
         let execution_plan = plan(&logical_plan).await;
 
         let expected_error = "Unsupported CAST from Utf8 to Boolean";
@@ -1647,11 +1684,14 @@ mod tests {
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
         let logical_plan = LogicalPlanBuilder::scan_csv_with_name(
-            path,
+            Arc::new(LocalFileSystem {}),
+            &path,
             options,
             None,
             "aggregate_test_100",
-        )?
+            1,
+        )
+        .await?
         .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
         .build()?;
 
@@ -1677,9 +1717,16 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
 
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = LogicalPlanBuilder::scan_csv(path, options, None)?
-            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
+            &path,
+            options,
+            None,
+            1,
+        )
+        .await?
+        .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+        .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{:?}", execution_plan);

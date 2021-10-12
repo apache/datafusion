@@ -46,7 +46,7 @@
 //! let mut ctx = ExecutionContext::new();
 //!
 //! // create the dataframe
-//! let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
+//! let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 //!
 //! // create a plan
 //! let df = df.filter(col("a").lt_eq(col("b")))?
@@ -83,10 +83,10 @@
 //! # async fn main() -> Result<()> {
 //! let mut ctx = ExecutionContext::new();
 //!
-//! ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new())?;
+//! ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
 //!
 //! // create a plan
-//! let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")?;
+//! let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;

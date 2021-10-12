@@ -230,22 +230,23 @@ mod tests {
     use std::vec;
 
     use super::*;
+    use crate::execution::options::CsvReadOptions;
     use crate::logical_plan::*;
     use crate::physical_plan::functions::Volatility;
+    use crate::physical_plan::ColumnarValue;
     use crate::{assert_batches_sorted_eq, execution::context::ExecutionContext};
-    use crate::{datasource::csv::CsvReadOptions, physical_plan::ColumnarValue};
     use crate::{physical_plan::functions::ScalarFunctionImplementation, test};
     use arrow::datatypes::DataType;
 
-    #[test]
-    fn select_columns() -> Result<()> {
+    #[tokio::test]
+    async fn select_columns() -> Result<()> {
         // build plan using Table API
-        let t = test_table()?;
+        let t = test_table().await?;
         let t2 = t.select_columns(&["c1", "c2", "c11"])?;
         let plan = t2.to_logical_plan();
 
         // build query using SQL
-        let sql_plan = create_plan("SELECT c1, c2, c11 FROM aggregate_test_100")?;
+        let sql_plan = create_plan("SELECT c1, c2, c11 FROM aggregate_test_100").await?;
 
         // the two plans should be identical
         assert_same_plan(&plan, &sql_plan);
@@ -253,15 +254,15 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn select_expr() -> Result<()> {
+    #[tokio::test]
+    async fn select_expr() -> Result<()> {
         // build plan using Table API
-        let t = test_table()?;
+        let t = test_table().await?;
         let t2 = t.select(vec![col("c1"), col("c2"), col("c11")])?;
         let plan = t2.to_logical_plan();
 
         // build query using SQL
-        let sql_plan = create_plan("SELECT c1, c2, c11 FROM aggregate_test_100")?;
+        let sql_plan = create_plan("SELECT c1, c2, c11 FROM aggregate_test_100").await?;
 
         // the two plans should be identical
         assert_same_plan(&plan, &sql_plan);
@@ -272,7 +273,7 @@ mod tests {
     #[tokio::test]
     async fn aggregate() -> Result<()> {
         // build plan using DataFrame API
-        let df = test_table()?;
+        let df = test_table().await?;
         let group_expr = vec![col("c1")];
         let aggr_expr = vec![
             min(col("c12")),
@@ -305,8 +306,10 @@ mod tests {
 
     #[tokio::test]
     async fn join() -> Result<()> {
-        let left = test_table()?.select_columns(&["c1", "c2"])?;
-        let right = test_table_with_name("c2")?.select_columns(&["c1", "c3"])?;
+        let left = test_table().await?.select_columns(&["c1", "c2"])?;
+        let right = test_table_with_name("c2")
+            .await?
+            .select_columns(&["c1", "c3"])?;
         let left_rows = left.collect().await?;
         let right_rows = right.collect().await?;
         let join = left.join(right, JoinType::Inner, &["c1"], &["c1"])?;
@@ -317,16 +320,16 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn limit() -> Result<()> {
+    #[tokio::test]
+    async fn limit() -> Result<()> {
         // build query using Table API
-        let t = test_table()?;
+        let t = test_table().await?;
         let t2 = t.select_columns(&["c1", "c2", "c11"])?.limit(10)?;
         let plan = t2.to_logical_plan();
 
         // build query using SQL
         let sql_plan =
-            create_plan("SELECT c1, c2, c11 FROM aggregate_test_100 LIMIT 10")?;
+            create_plan("SELECT c1, c2, c11 FROM aggregate_test_100 LIMIT 10").await?;
 
         // the two plans should be identical
         assert_same_plan(&plan, &sql_plan);
@@ -334,10 +337,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn explain() -> Result<()> {
+    #[tokio::test]
+    async fn explain() -> Result<()> {
         // build query using Table API
-        let df = test_table()?;
+        let df = test_table().await?;
         let df = df
             .select_columns(&["c1", "c2", "c11"])?
             .limit(10)?
@@ -346,7 +349,8 @@ mod tests {
 
         // build query using SQL
         let sql_plan =
-            create_plan("EXPLAIN SELECT c1, c2, c11 FROM aggregate_test_100 LIMIT 10")?;
+            create_plan("EXPLAIN SELECT c1, c2, c11 FROM aggregate_test_100 LIMIT 10")
+                .await?;
 
         // the two plans should be identical
         assert_same_plan(&plan, &sql_plan);
@@ -354,10 +358,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn registry() -> Result<()> {
+    #[tokio::test]
+    async fn registry() -> Result<()> {
         let mut ctx = ExecutionContext::new();
-        register_aggregate_csv(&mut ctx, "aggregate_test_100")?;
+        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
 
         // declare the udf
         let my_fn: ScalarFunctionImplementation =
@@ -392,7 +396,7 @@ mod tests {
 
     #[tokio::test]
     async fn sendable() {
-        let df = test_table().unwrap();
+        let df = test_table().await.unwrap();
         // dataframes should be sendable between threads/tasks
         let task = tokio::task::spawn(async move {
             df.select_columns(&["c1"])
@@ -407,23 +411,23 @@ mod tests {
     }
 
     /// Create a logical plan from a SQL query
-    fn create_plan(sql: &str) -> Result<LogicalPlan> {
+    async fn create_plan(sql: &str) -> Result<LogicalPlan> {
         let mut ctx = ExecutionContext::new();
-        register_aggregate_csv(&mut ctx, "aggregate_test_100")?;
+        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
         ctx.create_logical_plan(sql)
     }
 
-    fn test_table_with_name(name: &str) -> Result<Arc<dyn DataFrame + 'static>> {
+    async fn test_table_with_name(name: &str) -> Result<Arc<dyn DataFrame + 'static>> {
         let mut ctx = ExecutionContext::new();
-        register_aggregate_csv(&mut ctx, name)?;
+        register_aggregate_csv(&mut ctx, name).await?;
         ctx.table(name)
     }
 
-    fn test_table() -> Result<Arc<dyn DataFrame + 'static>> {
-        test_table_with_name("aggregate_test_100")
+    async fn test_table() -> Result<Arc<dyn DataFrame + 'static>> {
+        test_table_with_name("aggregate_test_100").await
     }
 
-    fn register_aggregate_csv(
+    async fn register_aggregate_csv(
         ctx: &mut ExecutionContext,
         table_name: &str,
     ) -> Result<()> {
@@ -433,7 +437,8 @@ mod tests {
             table_name,
             &format!("{}/csv/aggregate_test_100.csv", testdata),
             CsvReadOptions::new().schema(schema.as_ref()),
-        )?;
+        )
+        .await?;
         Ok(())
     }
 }

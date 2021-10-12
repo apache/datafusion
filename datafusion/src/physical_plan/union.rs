@@ -218,12 +218,10 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::object_store::{local::LocalFileSystem, ObjectStore};
     use crate::test;
     use crate::{
-        physical_plan::{
-            collect,
-            csv::{CsvExec, CsvReadOptions},
-        },
+        physical_plan::{collect, file_format::CsvExec},
         scalar::ScalarValue,
     };
     use arrow::record_batch::RecordBatch;
@@ -231,26 +229,35 @@ mod tests {
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {
         let schema = test::aggr_test_schema();
+        let fs: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem {});
 
         // Create csv's with different partitioning
-        let path = test::create_partitioned_csv("aggregate_test_100.csv", 4)?;
-        let path2 = test::create_partitioned_csv("aggregate_test_100.csv", 5)?;
+        let (_, files) = test::create_partitioned_csv("aggregate_test_100.csv", 4)?;
+        let (_, files2) = test::create_partitioned_csv("aggregate_test_100.csv", 5)?;
 
-        let csv = CsvExec::try_new(
-            &path,
-            CsvReadOptions::new().schema(&schema),
+        let csv = CsvExec::new(
+            Arc::clone(&fs),
+            files,
+            Statistics::default(),
+            Arc::clone(&schema),
+            true,
+            b',',
             None,
             1024,
             None,
-        )?;
+        );
 
-        let csv2 = CsvExec::try_new(
-            &path2,
-            CsvReadOptions::new().schema(&schema),
+        let csv2 = CsvExec::new(
+            Arc::clone(&fs),
+            files2,
+            Statistics::default(),
+            schema,
+            true,
+            b',',
             None,
             1024,
             None,
-        )?;
+        );
 
         let union_exec = Arc::new(UnionExec::new(vec![Arc::new(csv), Arc::new(csv2)]));
 

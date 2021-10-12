@@ -28,11 +28,7 @@ use std::{
 use ballista::context::BallistaContext;
 use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::arrow::util::pretty;
-use datafusion::datasource::parquet::ParquetTable;
-use datafusion::datasource::{CsvFile, MemTable, TableProvider};
+use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::parquet::basic::Compression;
@@ -40,6 +36,20 @@ use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
+use datafusion::{
+    arrow::datatypes::{DataType, Field, Schema},
+    datasource::file_format::{csv::CsvFormat, FileFormat},
+};
+use datafusion::{
+    arrow::record_batch::RecordBatch, datasource::file_format::parquet::ParquetFormat,
+};
+use datafusion::{
+    arrow::util::pretty,
+    datasource::{
+        listing::{ListingOptions, ListingTable},
+        object_store::local::LocalFileSystem,
+    },
+};
 
 use structopt::StructOpt;
 
@@ -272,6 +282,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
                     .has_header(false)
                     .file_extension(".tbl");
                 ctx.register_csv(table, &path, options)
+                    .await
                     .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))?;
             }
             "csv" => {
@@ -279,11 +290,13 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
                 let schema = get_schema(table);
                 let options = CsvReadOptions::new().schema(&schema).has_header(true);
                 ctx.register_csv(table, &path, options)
+                    .await
                     .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))?;
             }
             "parquet" => {
                 let path = format!("{}/{}", path, table);
                 ctx.register_parquet(table, &path)
+                    .await
                     .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))?;
             }
             other => {
@@ -301,6 +314,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
         let start = Instant::now();
         let df = ctx
             .sql(&sql)
+            .await
             .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))?;
         let batches = df
             .collect()
@@ -384,7 +398,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
         let mut ctx = ExecutionContext::with_config(config);
 
         // build plan to read the TBL file
-        let mut csv = ctx.read_csv(&input_path, options)?;
+        let mut csv = ctx.read_csv(&input_path, options).await?;
 
         // optionally, repartition the file
         if opt.partitions > 1 {
@@ -445,40 +459,52 @@ fn get_table(
     table_format: &str,
     target_partitions: usize,
 ) -> Result<Arc<dyn TableProvider>> {
-    match table_format {
-        // dbgen creates .tbl ('|' delimited) files without header
-        "tbl" => {
-            let path = format!("{}/{}.tbl", path, table);
-            let schema = get_schema(table);
-            let options = CsvReadOptions::new()
-                .schema(&schema)
-                .delimiter(b'|')
-                .has_header(false)
-                .file_extension(".tbl");
+    let (format, path, extension): (Arc<dyn FileFormat>, String, &'static str) =
+        match table_format {
+            // dbgen creates .tbl ('|' delimited) files without header
+            "tbl" => {
+                let path = format!("{}/{}.tbl", path, table);
 
-            Ok(Arc::new(CsvFile::try_new(&path, options)?))
-        }
-        "csv" => {
-            let path = format!("{}/{}", path, table);
-            let schema = get_schema(table);
-            let options = CsvReadOptions::new().schema(&schema).has_header(true);
+                let format = CsvFormat::default()
+                    .with_delimiter(b'|')
+                    .with_has_header(false);
 
-            Ok(Arc::new(CsvFile::try_new(&path, options)?))
-        }
-        "parquet" => {
-            let path = format!("{}/{}", path, table);
-            let schema = get_schema(table);
-            Ok(Arc::new(ParquetTable::try_new_with_schema(
-                &path,
-                schema,
-                target_partitions,
-                false,
-            )?))
-        }
-        other => {
-            unimplemented!("Invalid file format '{}'", other);
-        }
-    }
+                (Arc::new(format), path, ".tbl")
+            }
+            "csv" => {
+                let path = format!("{}/{}", path, table);
+                let format = CsvFormat::default()
+                    .with_delimiter(b',')
+                    .with_has_header(true);
+
+                (Arc::new(format), path, ".csv")
+            }
+            "parquet" => {
+                let path = format!("{}/{}", path, table);
+                let format = ParquetFormat::default().with_enable_pruning(true);
+
+                (Arc::new(format), path, ".parquet")
+            }
+            other => {
+                unimplemented!("Invalid file format '{}'", other);
+            }
+        };
+    let schema = Arc::new(get_schema(table));
+
+    let options = ListingOptions {
+        format,
+        file_extension: extension.to_owned(),
+        target_partitions,
+        collect_stat: true,
+        partitions: vec![],
+    };
+
+    Ok(Arc::new(ListingTable::new(
+        Arc::new(LocalFileSystem {}),
+        path,
+        schema,
+        options,
+    )))
 }
 
 fn get_schema(table: &str) -> Schema {
@@ -1002,7 +1028,9 @@ mod tests {
                 .schema(&schema)
                 .delimiter(b'|')
                 .file_extension(".out");
-            let df = ctx.read_csv(&format!("{}/answers/q{}.out", path, n), options)?;
+            let df = ctx
+                .read_csv(&format!("{}/answers/q{}.out", path, n), options)
+                .await?;
             let df = df.select(
                 get_answer_schema(n)
                     .fields()
@@ -1081,10 +1109,13 @@ mod tests {
                     .delimiter(b'|')
                     .has_header(false)
                     .file_extension(".tbl");
-                let provider = CsvFile::try_new(
-                    &format!("{}/{}.tbl", tpch_data_path, table),
-                    options,
-                )?;
+                let listing_options = options.to_listing_options(1);
+                let provider = ListingTable::new(
+                    Arc::new(LocalFileSystem {}),
+                    format!("{}/{}.tbl", tpch_data_path, table),
+                    Arc::new(schema),
+                    listing_options,
+                );
                 ctx.register_table(table, Arc::new(provider))?;
             }
 
@@ -1105,7 +1136,7 @@ mod tests {
             assert_eq!(
                 format!("{:?}", plan),
                 format!("{:?}", round_trip),
-                "opitmized logical plan round trip failed"
+                "optimized logical plan round trip failed"
             );
 
             // test physical plan roundtrip

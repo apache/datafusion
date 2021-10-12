@@ -173,7 +173,8 @@ async fn assert_provider_row_count(value: i64, expected_count: u64) -> Result<()
 
     ctx.register_table("data", Arc::new(provider))?;
     let sql_results = ctx
-        .sql(&format!("select count(*) from data where flag = {}", value))?
+        .sql(&format!("select count(*) from data where flag = {}", value))
+        .await?
         .collect()
         .await?;
 
