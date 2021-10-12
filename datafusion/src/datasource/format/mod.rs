@@ -30,6 +30,7 @@ use super::PartitionedFile;
 /// Get all files as well as the summary statistic
 /// if the optional `limit` is provided, includes only sufficient files
 /// needed to read up to `limit` number of rows
+/// TODO fix case where `num_rows` and `total_byte_size` are not defined (stat should be None instead of Some(0))
 pub fn get_statistics_with_limit(
     all_files: &[PartitionedFile],
     schema: SchemaRef,

@@ -24,7 +24,7 @@ use arrow::datatypes::SchemaRef;
 
 use crate::{
     datasource::format::{self},
-    error::Result,
+    error::{DataFusionError, Result},
     logical_plan::{combine_filters, Expr},
     physical_plan::{common, parquet::ParquetExec, ExecutionPlan, Statistics},
 };
@@ -79,13 +79,23 @@ impl ListingOptions {
     /// This method will not be called by the table itself but before creating it.
     /// This way when creating the logical plan we can decide to resolve the schema
     /// locally or ask a remote service to do it (e.g a scheduler).
-    pub fn infer_schema(&self, _path: &str) -> Result<SchemaRef> {
-        match self {
-            ListingOptions {
-                format: FormatOptions::Parquet { .. },
-                ..
-            } => {
-                todo!("list one file and get the schema for it")
+    pub fn infer_schema(&self, path: &str) -> Result<SchemaRef> {
+        // We currently get the schema information from the first file rather than do
+        // schema merging and this is a limitation.
+        // See https://issues.apache.org/jira/browse/ARROW-11017
+        let first_file = common::build_file_list(path, &self.extension)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "No file (with .{} extension) found at path {}",
+                    &self.extension, path
+                ))
+            })?;
+        match self.format {
+            FormatOptions::Parquet { .. } => {
+                let (schema, _) = format::parquet::fetch_metadata(&first_file)?;
+                Ok(Arc::new(schema))
             }
             _ => todo!("other file formats"),
         }
@@ -125,7 +135,7 @@ impl ListingOptions {
                     files = files
                         .into_iter()
                         .map(|file| -> Result<PartitionedFile> {
-                            let (_schema, statistics) =
+                            let (_, statistics) =
                                 format::parquet::fetch_metadata(&file.path)?;
                             // TODO use _schema to check that it is valid or for schema merging
                             Ok(PartitionedFile {
@@ -281,7 +291,7 @@ mod tests {
         let opt = ListingOptions {
             extension: ".parquet".to_owned(),
             format: FormatOptions::Parquet {
-                collect_stat: false,
+                collect_stat: true,
                 enable_pruning: true,
                 max_partitions: 2,
             },
