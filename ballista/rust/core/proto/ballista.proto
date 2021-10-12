@@ -949,30 +949,6 @@ message GetFileMetadataParams {
   FileType file_type = 2;
 }
 
-message ParquetFormat {
-  // fields of datasource::format::parquet::ParquetFormat
-}
-
-message ListingConfig {
-  string extension = 1;
-  oneof format {
-    ParquetFormat parquet = 2;
-    // csv, json, ...
-  }
-}
-
-message GetSchemaParams {
-  string path = 1;
-  oneof provider_config {
-    ListingConfig listing = 2;
-    // delta, iceberg... (maybe replace oneof with something more exensible)
-  }
-}
-
-message GetSchemaResult {
-  Schema schema = 1;
-}
-
 message GetFileMetadataResult {
   Schema schema = 1;
   repeated FilePartitionMetadata partitions = 2;
@@ -985,8 +961,6 @@ message FilePartitionMetadata {
 service SchedulerGrpc {
   // Executors must poll the scheduler for heartbeat and to receive tasks
   rpc PollWork (PollWorkParams) returns (PollWorkResult) {}
-
-  rpc GetSchema (GetSchemaParams) returns (GetSchemaResult) {}
 
   rpc GetFileMetadata (GetFileMetadataParams) returns (GetFileMetadataResult) {}
 

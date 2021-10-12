@@ -37,7 +37,7 @@ use futures::Stream;
 /// A stream of String that can be used accross await calls
 pub type StringStream = Pin<Box<dyn Stream<Item = String> + Send + Sync>>;
 
-/// Convert a vec into a `StringStream`
+/// Convert a vector into a stream
 pub fn string_stream(strings: Vec<String>) -> StringStream {
     Box::pin(futures::stream::iter(strings))
 }
