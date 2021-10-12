@@ -61,7 +61,7 @@ pub struct CsvExec {
 
 impl CsvExec {
     /// Create a new CSV reader execution plan provided file list and schema
-    /// TODO: support partitiondd file list (Vec<Vec<PartitionedFile>>)
+    /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         files: Vec<String>,

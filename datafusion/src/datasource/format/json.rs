@@ -176,19 +176,19 @@ mod tests {
         batch_size: usize,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let filename = "tests/jsons/2.json";
-        let table = JsonFormat {
+        let format = JsonFormat {
             schema_infer_max_rec: Some(1000),
         };
-        let schema = table
+        let schema = format
             .infer_schema(string_stream(vec![filename.to_owned()]))
             .await
             .expect("Schema inference");
-        let stats = table.infer_stats(filename).await.expect("Stats inference");
+        let stats = format.infer_stats(filename).await.expect("Stats inference");
         let files = vec![vec![PartitionedFile {
             path: filename.to_owned(),
             statistics: stats.clone(),
         }]];
-        let exec = table
+        let exec = format
             .create_executor(schema, files, stats, projection, batch_size, &[], None)
             .await?;
         Ok(exec)

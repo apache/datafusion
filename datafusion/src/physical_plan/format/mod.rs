@@ -17,10 +17,12 @@
 
 //! Execution plans that read file formats
 
+mod avro;
 mod csv;
 mod json;
 mod parquet;
 
 pub use self::parquet::ParquetExec;
+pub use avro::AvroExec;
 pub use csv::CsvExec;
 pub use json::NdJsonExec;

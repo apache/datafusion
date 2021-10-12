@@ -17,6 +17,7 @@
 
 //! Module containing helper methods for the various file formats
 
+pub mod avro;
 pub mod csv;
 pub mod json;
 pub mod parquet;

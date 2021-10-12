@@ -199,21 +199,24 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/csv/{}", testdata, file_name);
-        let table = CsvFormat {
+        let format = CsvFormat {
             has_header: true,
             schema_infer_max_rec: Some(1000),
             delimiter: b',',
         };
-        let schema = table
+        let schema = format
             .infer_schema(string_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
-        let stats = table.infer_stats(&filename).await.expect("Stats inference");
+        let stats = format
+            .infer_stats(&filename)
+            .await
+            .expect("Stats inference");
         let files = vec![vec![PartitionedFile {
             path: filename,
             statistics: stats.clone(),
         }]];
-        let exec = table
+        let exec = format
             .create_executor(schema, files, stats, projection, batch_size, &[], None)
             .await?;
         Ok(exec)

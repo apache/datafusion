@@ -521,14 +521,14 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, file_name);
-        let table = ParquetFormat {
+        let format = ParquetFormat {
             enable_pruning: true,
         };
-        let schema = table
+        let schema = format
             .infer_schema(string_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
-        let stats = table
+        let stats = format
             .infer_stats(&filename.clone())
             .await
             .expect("Stats inference");
@@ -536,7 +536,7 @@ mod tests {
             path: filename,
             statistics: stats.clone(),
         }]];
-        let exec = table
+        let exec = format
             .create_executor(schema, files, stats, projection, batch_size, &[], None)
             .await?;
         Ok(exec)
