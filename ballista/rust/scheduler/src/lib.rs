@@ -269,7 +269,7 @@ impl SchedulerGrpc for SchedulerServer {
         }
     }
 
-    /// this service would replace get_file_meatadata
+    /// this service would replace get_file_metadata
     async fn get_schema(
         &self,
         _request: Request<GetSchemaParams>,
