@@ -124,10 +124,10 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let projection = None;
-        let exec = get_exec("alltypes_plain.avro", &projection, 2).await?;
+        let exec = get_exec("alltypes_plain.avro", &projection, 2, None).await?;
         let stream = exec.execute(0).await?;
 
-        let _ = stream
+        let tt_batches = stream
             .map(|batch| {
                 let batch = batch.unwrap();
                 assert_eq!(11, batch.num_columns());
@@ -136,13 +136,27 @@ mod tests {
             .fold(0, |acc, _| async move { acc + 1i32 })
             .await;
 
+        assert_eq!(tt_batches, 4 /* 8/2 */);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_limit() -> Result<()> {
+        let projection = None;
+        let exec = get_exec("alltypes_plain.avro", &projection, 1024, Some(1)).await?;
+        let batches = collect(exec).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(11, batches[0].num_columns());
+        assert_eq!(1, batches[0].num_rows());
+
         Ok(())
     }
 
     #[tokio::test]
     async fn read_alltypes_plain_avro() -> Result<()> {
         let projection = None;
-        let exec = get_exec("alltypes_plain.avro", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.avro", &projection, 1024, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -192,7 +206,7 @@ mod tests {
     #[tokio::test]
     async fn read_bool_alltypes_plain_avro() -> Result<()> {
         let projection = Some(vec![1]);
-        let exec = get_exec("alltypes_plain.avro", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.avro", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(batches.len(), 1);
@@ -220,7 +234,7 @@ mod tests {
     #[tokio::test]
     async fn read_i32_alltypes_plain_avro() -> Result<()> {
         let projection = Some(vec![0]);
-        let exec = get_exec("alltypes_plain.avro", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.avro", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(batches.len(), 1);
@@ -245,7 +259,7 @@ mod tests {
     #[tokio::test]
     async fn read_i96_alltypes_plain_avro() -> Result<()> {
         let projection = Some(vec![10]);
-        let exec = get_exec("alltypes_plain.avro", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.avro", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(batches.len(), 1);
@@ -270,7 +284,7 @@ mod tests {
     #[tokio::test]
     async fn read_f32_alltypes_plain_avro() -> Result<()> {
         let projection = Some(vec![6]);
-        let exec = get_exec("alltypes_plain.avro", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.avro", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(batches.len(), 1);
@@ -298,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn read_f64_alltypes_plain_avro() -> Result<()> {
         let projection = Some(vec![7]);
-        let exec = get_exec("alltypes_plain.avro", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.avro", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(batches.len(), 1);
@@ -326,7 +340,7 @@ mod tests {
     #[tokio::test]
     async fn read_binary_alltypes_plain_avro() -> Result<()> {
         let projection = Some(vec![9]);
-        let exec = get_exec("alltypes_plain.avro", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.avro", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(batches.len(), 1);
@@ -355,6 +369,7 @@ mod tests {
         file_name: &str,
         projection: &Option<Vec<usize>>,
         batch_size: usize,
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/{}", testdata, file_name);
@@ -371,7 +386,15 @@ mod tests {
             file: local_sized_file(filename.to_owned()),
         }]];
         let exec = format
-            .create_physical_plan(schema, files, stats, projection, batch_size, &[], None)
+            .create_physical_plan(
+                schema,
+                files,
+                stats,
+                projection,
+                batch_size,
+                &[],
+                limit,
+            )
             .await?;
         Ok(exec)
     }

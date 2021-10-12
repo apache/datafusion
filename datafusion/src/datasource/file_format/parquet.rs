@@ -128,9 +128,7 @@ impl FileFormat for ParquetFormat {
             schema,
             projection.clone(),
             predicate,
-            limit
-                .map(|l| std::cmp::min(l, batch_size))
-                .unwrap_or(batch_size),
+            batch_size,
             limit,
         )))
     }
@@ -361,10 +359,10 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let projection = None;
-        let exec = get_exec("alltypes_plain.parquet", &projection, 2).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 2, None).await?;
         let stream = exec.execute(0).await?;
 
-        let _ = stream
+        let tt_batches = stream
             .map(|batch| {
                 let batch = batch.unwrap();
                 assert_eq!(11, batch.num_columns());
@@ -372,6 +370,8 @@ mod tests {
             })
             .fold(0, |acc, _| async move { acc + 1i32 })
             .await;
+
+        assert_eq!(tt_batches, 4 /* 8/2 */);
 
         // test metadata
         assert_eq!(exec.statistics().num_rows, Some(8));
@@ -381,9 +381,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_limit() -> Result<()> {
+        let projection = None;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, Some(1)).await?;
+
+        // note: even if the limit is set, the executor rounds up to the batch size
+        assert_eq!(exec.statistics().num_rows, Some(8));
+        assert_eq!(exec.statistics().total_byte_size, Some(671));
+        assert!(exec.statistics().is_exact);
+        let batches = collect(exec).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(11, batches[0].num_columns());
+        assert_eq!(8, batches[0].num_rows());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn read_alltypes_plain_parquet() -> Result<()> {
         let projection = None;
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -419,7 +436,7 @@ mod tests {
     #[tokio::test]
     async fn read_bool_alltypes_plain_parquet() -> Result<()> {
         let projection = Some(vec![1]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(1, batches.len());
@@ -447,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn read_i32_alltypes_plain_parquet() -> Result<()> {
         let projection = Some(vec![0]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(1, batches.len());
@@ -472,7 +489,7 @@ mod tests {
     #[tokio::test]
     async fn read_i96_alltypes_plain_parquet() -> Result<()> {
         let projection = Some(vec![10]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(1, batches.len());
@@ -497,7 +514,7 @@ mod tests {
     #[tokio::test]
     async fn read_f32_alltypes_plain_parquet() -> Result<()> {
         let projection = Some(vec![6]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(1, batches.len());
@@ -525,7 +542,7 @@ mod tests {
     #[tokio::test]
     async fn read_f64_alltypes_plain_parquet() -> Result<()> {
         let projection = Some(vec![7]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(1, batches.len());
@@ -553,7 +570,7 @@ mod tests {
     #[tokio::test]
     async fn read_binary_alltypes_plain_parquet() -> Result<()> {
         let projection = Some(vec![9]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
         let batches = collect(exec).await?;
         assert_eq!(1, batches.len());
@@ -582,6 +599,7 @@ mod tests {
         file_name: &str,
         projection: &Option<Vec<usize>>,
         batch_size: usize,
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, file_name);
@@ -598,7 +616,15 @@ mod tests {
             file: local_sized_file(filename.clone()),
         }]];
         let exec = format
-            .create_physical_plan(schema, files, stats, projection, batch_size, &[], None)
+            .create_physical_plan(
+                schema,
+                files,
+                stats,
+                projection,
+                batch_size,
+                &[],
+                limit,
+            )
             .await?;
         Ok(exec)
     }

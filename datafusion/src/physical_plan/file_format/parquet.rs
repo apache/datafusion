@@ -110,7 +110,8 @@ struct ParquetFileMetrics {
 }
 
 impl ParquetExec {
-    /// Create a new Parquet reader execution plan provided file list and schema
+    /// Create a new Parquet reader execution plan provided file list and schema.
+    /// Even if `limit` is set, ParquetExec rounds up the number of records to the next `batch_size`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         object_store_registry: Arc<ObjectStoreRegistry>,

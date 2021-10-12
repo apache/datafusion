@@ -144,10 +144,10 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let projection = None;
-        let exec = get_exec(&projection, 2).await?;
+        let exec = get_exec(&projection, 2, None).await?;
         let stream = exec.execute(0).await?;
 
-        let tt_rows: i32 = stream
+        let tt_batches: i32 = stream
             .map(|batch| {
                 let batch = batch.unwrap();
                 assert_eq!(4, batch.num_columns());
@@ -156,7 +156,7 @@ mod tests {
             .fold(0, |acc, _| async move { acc + 1i32 })
             .await;
 
-        assert_eq!(tt_rows, 6 /* 12/2 */);
+        assert_eq!(tt_batches, 6 /* 12/2 */);
 
         // test metadata
         assert_eq!(exec.statistics().num_rows, None);
@@ -166,9 +166,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_limit() -> Result<()> {
+        let projection = None;
+        let exec = get_exec(&projection, 1024, Some(1)).await?;
+        let batches = collect(exec).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(4, batches[0].num_columns());
+        assert_eq!(1, batches[0].num_rows());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn infer_schema() -> Result<()> {
         let projection = None;
-        let exec = get_exec(&projection, 1024).await?;
+        let exec = get_exec(&projection, 1024, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -184,7 +196,7 @@ mod tests {
     #[tokio::test]
     async fn read_int_column() -> Result<()> {
         let projection = Some(vec![0]);
-        let exec = get_exec(&projection, 1024).await?;
+        let exec = get_exec(&projection, 1024, None).await?;
 
         let batches = collect(exec).await.expect("Collect batches");
 
@@ -213,6 +225,7 @@ mod tests {
     async fn get_exec(
         projection: &Option<Vec<usize>>,
         batch_size: usize,
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let filename = "tests/jsons/2.json";
         let format = JsonFormat::default();
@@ -228,7 +241,15 @@ mod tests {
             file: local_sized_file(filename.to_owned()),
         }]];
         let exec = format
-            .create_physical_plan(schema, files, stats, projection, batch_size, &[], None)
+            .create_physical_plan(
+                schema,
+                files,
+                stats,
+                projection,
+                batch_size,
+                &[],
+                limit,
+            )
             .await?;
         Ok(exec)
     }
