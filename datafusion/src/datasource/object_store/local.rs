@@ -97,6 +97,7 @@ async fn list_all(prefix: String) -> Result<SizedFileStream> {
         SizedFile {
             path,
             size: metadata.len(),
+            last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
         }
     }
 
@@ -154,9 +155,11 @@ pub fn local_sized_file_stream(files: Vec<String>) -> SizedFileStream {
 
 /// Helper method to fetch the file size at given path and create a `SizedFile`
 pub fn local_sized_file(file: String) -> SizedFile {
+    let metadata = fs::metadata(&file).expect("Local file metadata");
     SizedFile {
-        size: fs::metadata(&file).expect("Local file metadata").len(),
+        size: metadata.len(),
         path: file,
+        last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
     }
 }
 

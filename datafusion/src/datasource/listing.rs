@@ -242,37 +242,19 @@ mod tests {
 
     #[test]
     fn test_split_files() {
+        let new_partitioned_file = |path: &str| PartitionedFile {
+            file: SizedFile {
+                path: path.to_owned(),
+                size: 10,
+                last_modified: None,
+            },
+        };
         let files = vec![
-            PartitionedFile {
-                file: SizedFile {
-                    path: "a".to_owned(),
-                    size: 10,
-                },
-            },
-            PartitionedFile {
-                file: SizedFile {
-                    path: "b".to_owned(),
-                    size: 10,
-                },
-            },
-            PartitionedFile {
-                file: SizedFile {
-                    path: "c".to_owned(),
-                    size: 10,
-                },
-            },
-            PartitionedFile {
-                file: SizedFile {
-                    path: "d".to_owned(),
-                    size: 10,
-                },
-            },
-            PartitionedFile {
-                file: SizedFile {
-                    path: "e".to_owned(),
-                    size: 10,
-                },
-            },
+            new_partitioned_file("a"),
+            new_partitioned_file("b"),
+            new_partitioned_file("c"),
+            new_partitioned_file("d"),
+            new_partitioned_file("e"),
         ];
 
         let chunks = split_files(files.clone(), 1);
@@ -390,6 +372,7 @@ mod tests {
                 Ok(SizedFile {
                     path: format!("{}file{}", prefix, i),
                     size: 100,
+                    last_modified: None,
                 })
             });
             Ok(Box::pin(futures::stream::iter(files)))

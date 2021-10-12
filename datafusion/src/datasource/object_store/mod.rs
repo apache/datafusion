@@ -26,6 +26,7 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::{AsyncRead, Stream, StreamExt};
 
 use local::LocalFileSystem;
@@ -73,6 +74,11 @@ pub struct SizedFile {
     pub path: String,
     /// File size in total
     pub size: u64,
+    /// The last modification time of the file according to the
+    /// object store metadata. This information might be used by
+    /// catalog systems like Delta Lake for time travel (see
+    /// https://github.com/delta-io/delta/issues/192)
+    pub last_modified: Option<DateTime<Utc>>,
 }
 
 impl std::fmt::Display for SizedFile {
