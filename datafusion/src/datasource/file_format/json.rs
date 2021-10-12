@@ -29,9 +29,7 @@ use futures::StreamExt;
 
 use super::FileFormat;
 use super::PartitionedFile;
-use crate::datasource::object_store::FileMeta;
-use crate::datasource::object_store::FileMetaStream;
-use crate::datasource::object_store::ObjectStoreRegistry;
+use crate::datasource::object_store::{ObjectReader, ObjectReaderStream, ObjectStore};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
@@ -41,27 +39,17 @@ use crate::physical_plan::Statistics;
 /// New line delimited JSON `FileFormat` implementation.
 pub struct JsonFormat {
     schema_infer_max_rec: Option<usize>,
-    object_store_registry: Arc<ObjectStoreRegistry>,
 }
 
 impl Default for JsonFormat {
     fn default() -> Self {
         Self {
             schema_infer_max_rec: None,
-            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
         }
     }
 }
 
 impl JsonFormat {
-    /// Create Parquet with the given object store and default values
-    pub fn new(object_store_registry: Arc<ObjectStoreRegistry>) -> Self {
-        Self {
-            object_store_registry,
-            ..Default::default()
-        }
-    }
-
     /// Set a limit in terms of records to scan to infer the schema
     /// - defaults to `None` (no limit)
     pub fn with_schema_infer_max_rec(&mut self, max_rec: Option<usize>) -> &mut Self {
@@ -72,17 +60,11 @@ impl JsonFormat {
 
 #[async_trait]
 impl FileFormat for JsonFormat {
-    async fn infer_schema(&self, mut file_stream: FileMetaStream) -> Result<SchemaRef> {
+    async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
-        while let Some(fmeta_res) = file_stream.next().await {
-            let fmeta = fmeta_res?;
-            let reader = self
-                .object_store_registry
-                .get_by_uri(&fmeta.path)?
-                .file_reader(fmeta)?
-                .sync_reader()?;
-            let mut reader = BufReader::new(reader);
+        while let Some(obj_reader) = readers.next().await {
+            let mut reader = BufReader::new(obj_reader?.sync_reader()?);
             let iter = ValueIter::new(&mut reader, None);
             let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
                 let should_take = records_to_read > 0;
@@ -99,12 +81,13 @@ impl FileFormat for JsonFormat {
         Ok(Arc::new(schema))
     }
 
-    async fn infer_stats(&self, _path: FileMeta) -> Result<Statistics> {
+    async fn infer_stats(&self, _reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
         Ok(Statistics::default())
     }
 
     async fn create_physical_plan(
         &self,
+        object_store: Arc<dyn ObjectStore>,
         schema: SchemaRef,
         files: Vec<Vec<PartitionedFile>>,
         statistics: Statistics,
@@ -114,7 +97,7 @@ impl FileFormat for JsonFormat {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = NdJsonExec::new(
-            Arc::clone(&self.object_store_registry),
+            object_store,
             // flattening this for now because NdJsonExec does not support partitioning yet
             files.into_iter().flatten().collect(),
             statistics,
@@ -125,10 +108,6 @@ impl FileFormat for JsonFormat {
         );
         Ok(Arc::new(exec))
     }
-
-    fn object_store_registry(&self) -> &Arc<ObjectStoreRegistry> {
-        &self.object_store_registry
-    }
 }
 
 #[cfg(test)]
@@ -137,7 +116,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        datasource::object_store::local::{local_file_meta, local_file_meta_stream},
+        datasource::object_store::local::{
+            local_file_meta, local_object_reader, local_object_reader_stream,
+            LocalFileSystem,
+        },
         physical_plan::collect,
     };
 
@@ -230,18 +212,19 @@ mod tests {
         let filename = "tests/jsons/2.json";
         let format = JsonFormat::default();
         let schema = format
-            .infer_schema(local_file_meta_stream(vec![filename.to_owned()]))
+            .infer_schema(local_object_reader_stream(vec![filename.to_owned()]))
             .await
             .expect("Schema inference");
         let stats = format
-            .infer_stats(local_file_meta(filename.to_owned()))
+            .infer_stats(local_object_reader(filename.to_owned()))
             .await
             .expect("Stats inference");
         let files = vec![vec![PartitionedFile {
-            file: local_file_meta(filename.to_owned()),
+            file_meta: local_file_meta(filename.to_owned()),
         }]];
         let exec = format
             .create_physical_plan(
+                Arc::new(LocalFileSystem {}),
                 schema,
                 files,
                 stats,

@@ -33,11 +33,12 @@ use local::LocalFileSystem;
 
 use crate::error::{DataFusionError, Result};
 
-/// Object Reader for one file in an object store
+/// Object Reader for one file in an object store.
+///
 /// Note that the dynamic dispatch on the reader might
 /// have some performance impacts.
 #[async_trait]
-pub trait ObjectReader {
+pub trait ObjectReader: Send + Sync {
     /// Get reader for a part [start, start + length] in the file asynchronously
     async fn chunk_reader(&self, start: u64, length: usize)
         -> Result<Box<dyn AsyncRead>>;
@@ -68,13 +69,23 @@ pub enum ListEntry {
     Prefix(String),
 }
 
-/// Complete file path with size we got from object store
+/// The path and size of the file.
 #[derive(Debug, Clone)]
-pub struct FileMeta {
-    /// Path of the file
+pub struct SizedFile {
+    /// Path of the file. It is relative to the current object
+    /// store (it does not specify the xx:// scheme).
     pub path: String,
     /// File size in total
     pub size: u64,
+}
+
+/// Description of a file as returned by the listing command of a
+/// given object store. The resulting path is relative to the
+/// object store that generated it.
+#[derive(Debug, Clone)]
+pub struct FileMeta {
+    /// The path and size of the file.
+    pub sized_file: SizedFile,
     /// The last modification time of the file according to the
     /// object store metadata. This information might be used by
     /// catalog systems like Delta Lake for time travel (see
@@ -82,9 +93,22 @@ pub struct FileMeta {
     pub last_modified: Option<DateTime<Utc>>,
 }
 
+impl FileMeta {
+    /// The path that describes this file. It is relative to the
+    /// associated object store.
+    pub fn path(&self) -> &str {
+        &self.sized_file.path
+    }
+
+    /// The size of the file.
+    pub fn size(&self) -> u64 {
+        self.sized_file.size
+    }
+}
+
 impl std::fmt::Display for FileMeta {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{} (size: {})", self.path, self.size)
+        write!(f, "{} (size: {})", self.path(), self.size())
     }
 }
 
@@ -95,6 +119,10 @@ pub type FileMetaStream =
 /// Stream of list entries obtained from object store
 pub type ListEntryStream =
     Pin<Box<dyn Stream<Item = Result<ListEntry>> + Send + Sync + 'static>>;
+
+/// Stream readers opened on a given object store
+pub type ObjectReaderStream =
+    Pin<Box<dyn Stream<Item = Result<Arc<dyn ObjectReader>>> + Send + Sync + 'static>>;
 
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
@@ -113,7 +141,7 @@ pub trait ObjectStore: Sync + Send + Debug {
         let suffix = suffix.to_owned();
         Ok(Box::pin(file_stream.filter(move |fr| {
             let has_suffix = match fr {
-                Ok(f) => f.path.ends_with(&suffix),
+                Ok(f) => f.path().ends_with(&suffix),
                 Err(_) => true,
             };
             async move { has_suffix }
@@ -129,7 +157,7 @@ pub trait ObjectStore: Sync + Send + Debug {
     ) -> Result<ListEntryStream>;
 
     /// Get object reader for one file
-    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
+    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
 }
 
 static LOCAL_SCHEME: &str = "file";

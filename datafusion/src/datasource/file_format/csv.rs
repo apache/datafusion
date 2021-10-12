@@ -26,7 +26,7 @@ use futures::StreamExt;
 
 use super::FileFormat;
 use super::PartitionedFile;
-use crate::datasource::object_store::{FileMeta, FileMetaStream, ObjectStoreRegistry};
+use crate::datasource::object_store::{ObjectReader, ObjectReaderStream, ObjectStore};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::CsvExec;
@@ -38,13 +38,11 @@ pub struct CsvFormat {
     has_header: bool,
     delimiter: u8,
     schema_infer_max_rec: Option<usize>,
-    object_store_registry: Arc<ObjectStoreRegistry>,
 }
 
 impl Default for CsvFormat {
     fn default() -> Self {
         Self {
-            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
             schema_infer_max_rec: None,
             has_header: true,
             delimiter: b',',
@@ -53,14 +51,6 @@ impl Default for CsvFormat {
 }
 
 impl CsvFormat {
-    /// Create Parquet with the given object store and default values
-    pub fn new(object_store_registry: Arc<ObjectStoreRegistry>) -> Self {
-        Self {
-            object_store_registry,
-            ..Default::default()
-        }
-    }
-
     /// Set a limit in terms of records to scan to infer the schema
     /// - default to `None` (no limit)
     pub fn with_schema_infer_max_rec(&mut self, max_rec: Option<usize>) -> &mut Self {
@@ -85,17 +75,13 @@ impl CsvFormat {
 
 #[async_trait]
 impl FileFormat for CsvFormat {
-    async fn infer_schema(&self, mut file_stream: FileMetaStream) -> Result<SchemaRef> {
+    async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
         let mut schemas = vec![];
+
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(std::usize::MAX);
 
-        while let Some(fmeta_res) = file_stream.next().await {
-            let fmeta = fmeta_res?;
-            let mut reader = self
-                .object_store_registry
-                .get_by_uri(&fmeta.path)?
-                .file_reader(fmeta)?
-                .sync_reader()?;
+        while let Some(obj_reader) = readers.next().await {
+            let mut reader = obj_reader?.sync_reader()?;
             let (schema, records_read) = arrow::csv::reader::infer_reader_schema(
                 &mut reader,
                 self.delimiter,
@@ -116,12 +102,13 @@ impl FileFormat for CsvFormat {
         Ok(Arc::new(merged_schema))
     }
 
-    async fn infer_stats(&self, _path: FileMeta) -> Result<Statistics> {
+    async fn infer_stats(&self, _reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
         Ok(Statistics::default())
     }
 
     async fn create_physical_plan(
         &self,
+        object_store: Arc<dyn ObjectStore>,
         schema: SchemaRef,
         files: Vec<Vec<PartitionedFile>>,
         statistics: Statistics,
@@ -131,7 +118,7 @@ impl FileFormat for CsvFormat {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = CsvExec::new(
-            Arc::clone(&self.object_store_registry),
+            object_store,
             // flattening this for now because CsvExec does not support partitioning yet
             files.into_iter().flatten().collect(),
             statistics,
@@ -144,10 +131,6 @@ impl FileFormat for CsvFormat {
         );
         Ok(Arc::new(exec))
     }
-
-    fn object_store_registry(&self) -> &Arc<ObjectStoreRegistry> {
-        &self.object_store_registry
-    }
 }
 
 #[cfg(test)]
@@ -156,7 +139,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        datasource::object_store::local::{local_file_meta, local_file_meta_stream},
+        datasource::object_store::local::{
+            local_file_meta, local_object_reader, local_object_reader_stream,
+            LocalFileSystem,
+        },
         physical_plan::collect,
     };
 
@@ -266,18 +252,19 @@ mod tests {
         let filename = format!("{}/csv/{}", testdata, file_name);
         let format = CsvFormat::default();
         let schema = format
-            .infer_schema(local_file_meta_stream(vec![filename.clone()]))
+            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
         let stats = format
-            .infer_stats(local_file_meta(filename.clone()))
+            .infer_stats(local_object_reader(filename.clone()))
             .await
             .expect("Stats inference");
         let files = vec![vec![PartitionedFile {
-            file: local_file_meta(filename.to_owned()),
+            file_meta: local_file_meta(filename.to_owned()),
         }]];
         let exec = format
             .create_physical_plan(
+                Arc::new(LocalFileSystem {}),
                 schema,
                 files,
                 stats,

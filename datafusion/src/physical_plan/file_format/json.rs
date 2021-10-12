@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use futures::Stream;
 
 use crate::datasource::file_format::PartitionedFile;
-use crate::datasource::object_store::ObjectStoreRegistry;
+use crate::datasource::object_store::ObjectStore;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -43,7 +43,7 @@ use std::{
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
 pub struct NdJsonExec {
-    object_store_registry: Arc<ObjectStoreRegistry>,
+    object_store: Arc<dyn ObjectStore>,
     files: Vec<PartitionedFile>,
     statistics: Statistics,
     schema: SchemaRef,
@@ -57,7 +57,7 @@ impl NdJsonExec {
     /// Create a new JSON reader execution plan provided file list and schema
     /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
     pub fn new(
-        object_store_registry: Arc<ObjectStoreRegistry>,
+        object_store: Arc<dyn ObjectStore>,
         files: Vec<PartitionedFile>,
         statistics: Statistics,
         schema: SchemaRef,
@@ -73,7 +73,7 @@ impl NdJsonExec {
         };
 
         Self {
-            object_store_registry,
+            object_store,
             files,
             statistics,
             schema,
@@ -126,9 +126,8 @@ impl ExecutionPlan for NdJsonExec {
         });
 
         let file = self
-            .object_store_registry
-            .get_by_uri(&self.files[partition].file.path)?
-            .file_reader(self.files[partition].file.clone())?
+            .object_store
+            .file_reader(self.files[partition].file_meta.sized_file.clone())?
             .sync_reader()?;
 
         let json_reader = json::Reader::new(file, self.schema(), self.batch_size, proj);
@@ -150,7 +149,7 @@ impl ExecutionPlan for NdJsonExec {
                     self.limit,
                     self.files
                         .iter()
-                        .map(|f| f.file.path.as_str())
+                        .map(|f| f.file_meta.path())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -229,7 +228,9 @@ mod tests {
 
     use crate::datasource::{
         file_format::{json::JsonFormat, FileFormat},
-        object_store::local::{local_file_meta, local_file_meta_stream},
+        object_store::local::{
+            local_file_meta, local_object_reader_stream, LocalFileSystem,
+        },
     };
 
     use super::*;
@@ -238,7 +239,7 @@ mod tests {
 
     async fn infer_schema(path: String) -> Result<SchemaRef> {
         JsonFormat::default()
-            .infer_schema(local_file_meta_stream(vec![path]))
+            .infer_schema(local_object_reader_stream(vec![path]))
             .await
     }
 
@@ -247,9 +248,9 @@ mod tests {
         use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::new(
-            Arc::new(ObjectStoreRegistry::new()),
+            Arc::new(LocalFileSystem {}),
             vec![PartitionedFile {
-                file: local_file_meta(path.clone()),
+                file_meta: local_file_meta(path.clone()),
             }],
             Default::default(),
             infer_schema(path).await?,
@@ -302,9 +303,9 @@ mod tests {
     async fn nd_json_exec_file_projection() -> Result<()> {
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::new(
-            Arc::new(ObjectStoreRegistry::new()),
+            Arc::new(LocalFileSystem {}),
             vec![PartitionedFile {
-                file: local_file_meta(path.clone()),
+                file_meta: local_file_meta(path.clone()),
             }],
             Default::default(),
             infer_schema(path).await?,

@@ -30,6 +30,8 @@ use crate::datasource::object_store::{
 use crate::error::DataFusionError;
 use crate::error::Result;
 
+use super::{ObjectReaderStream, SizedFile};
+
 #[derive(Debug)]
 /// Local File System as Object Store.
 pub struct LocalFileSystem;
@@ -48,17 +50,17 @@ impl ObjectStore for LocalFileSystem {
         todo!()
     }
 
-    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
+    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 }
 
 struct LocalFileReader {
-    file: FileMeta,
+    file: SizedFile,
 }
 
 impl LocalFileReader {
-    fn new(file: FileMeta) -> Result<Self> {
+    fn new(file: SizedFile) -> Result<Self> {
         Ok(Self { file })
     }
 }
@@ -95,8 +97,10 @@ impl ObjectReader for LocalFileReader {
 async fn list_all(prefix: String) -> Result<FileMetaStream> {
     fn get_meta(path: String, metadata: Metadata) -> FileMeta {
         FileMeta {
-            path,
-            size: metadata.len(),
+            sized_file: SizedFile {
+                path,
+                size: metadata.len(),
+            },
             last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
         }
     }
@@ -148,17 +152,26 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
     }
 }
 
-/// Create a stream of `FileMeta` applying `local_file_meta` to each path in `files`
-pub fn local_file_meta_stream(files: Vec<String>) -> FileMetaStream {
-    Box::pin(futures::stream::iter(files).map(|f| Ok(local_file_meta(f))))
+/// Create a stream of `ObjectReader` by opening each file in the `files` vector
+pub fn local_object_reader_stream(files: Vec<String>) -> ObjectReaderStream {
+    Box::pin(futures::stream::iter(files).map(|f| Ok(local_object_reader(f))))
 }
 
-/// Helper method to fetch the file size at given path and create a `FileMeta`
+/// Helper method to convert a file location to an ObjectReader
+pub fn local_object_reader(file: String) -> Arc<dyn ObjectReader> {
+    LocalFileSystem
+        .file_reader(local_file_meta(file).sized_file)
+        .expect("File not found")
+}
+
+/// Helper method to fetch the file size and date at given path and create a `FileMeta`
 pub fn local_file_meta(file: String) -> FileMeta {
     let metadata = fs::metadata(&file).expect("Local file metadata");
     FileMeta {
-        size: metadata.len(),
-        path: file,
+        sized_file: SizedFile {
+            size: metadata.len(),
+            path: file,
+        },
         last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
     }
 }
@@ -193,8 +206,8 @@ mod tests {
         let mut files = list_all(tmp.path().to_str().unwrap().to_string()).await?;
         while let Some(file) = files.next().await {
             let file = file?;
-            assert_eq!(file.size, 0);
-            all_files.insert(file.path);
+            assert_eq!(file.size(), 0);
+            all_files.insert(file.path().to_owned());
         }
 
         assert_eq!(all_files.len(), 3);

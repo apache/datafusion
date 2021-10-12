@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
 use crate::datasource::file_format::parquet::ChunkObjectReader;
-use crate::datasource::object_store::ObjectStoreRegistry;
+use crate::datasource::object_store::ObjectStore;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, Expr},
@@ -64,7 +64,7 @@ use crate::datasource::file_format::{FilePartition, PartitionedFile};
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
-    object_store_registry: Arc<ObjectStoreRegistry>,
+    object_store: Arc<dyn ObjectStore>,
     /// Parquet partitions to read
     partitions: Vec<ParquetPartition>,
     /// Schema after projection is applied
@@ -114,7 +114,7 @@ impl ParquetExec {
     /// Even if `limit` is set, ParquetExec rounds up the number of records to the next `batch_size`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        object_store_registry: Arc<ObjectStoreRegistry>,
+        object_store: Arc<dyn ObjectStore>,
         files: Vec<Vec<PartitionedFile>>,
         statistics: Statistics,
         schema: SchemaRef,
@@ -161,7 +161,7 @@ impl ParquetExec {
             Self::project(&projection, schema, statistics);
 
         Self {
-            object_store_registry,
+            object_store,
             partitions,
             schema: projected_schema,
             projection,
@@ -289,11 +289,11 @@ impl ExecutionPlan for ParquetExec {
         let predicate_builder = self.predicate_builder.clone();
         let batch_size = self.batch_size;
         let limit = self.limit;
-        let object_store_registry = Arc::clone(&self.object_store_registry);
+        let object_store = Arc::clone(&self.object_store);
 
         task::spawn_blocking(move || {
             if let Err(e) = read_partition(
-                &object_store_registry,
+                object_store.as_ref(),
                 partition_index,
                 partition,
                 metrics,
@@ -470,7 +470,7 @@ fn build_row_group_predicate(
 
 #[allow(clippy::too_many_arguments)]
 fn read_partition(
-    object_store_registry: &ObjectStoreRegistry,
+    object_store: &dyn ObjectStore,
     partition_index: usize,
     partition: ParquetPartition,
     metrics: ExecutionPlanMetricsSet,
@@ -485,12 +485,11 @@ fn read_partition(
     'outer: for partitioned_file in all_files {
         let file_metrics = ParquetFileMetrics::new(
             partition_index,
-            &*partitioned_file.file.path,
+            &*partitioned_file.file_meta.path(),
             &metrics,
         );
-        let object_reader = object_store_registry
-            .get_by_uri(&partitioned_file.file.path)?
-            .file_reader(partitioned_file.file.clone())?;
+        let object_reader =
+            object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
         let mut file_reader =
             SerializedFileReader::new(ChunkObjectReader(object_reader))?;
         if let Some(predicate_builder) = predicate_builder {
@@ -543,7 +542,9 @@ fn read_partition(
 mod tests {
     use crate::datasource::{
         file_format::{parquet::ParquetFormat, FileFormat},
-        object_store::local::{local_file_meta, local_file_meta_stream},
+        object_store::local::{
+            local_file_meta, local_object_reader_stream, LocalFileSystem,
+        },
     };
 
     use super::*;
@@ -560,13 +561,13 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let parquet_exec = ParquetExec::new(
-            Arc::new(ObjectStoreRegistry::new()),
+            Arc::new(LocalFileSystem {}),
             vec![vec![PartitionedFile {
-                file: local_file_meta(filename.clone()),
+                file_meta: local_file_meta(filename.clone()),
             }]],
             Statistics::default(),
             ParquetFormat::default()
-                .infer_schema(local_file_meta_stream(vec![filename]))
+                .infer_schema(local_object_reader_stream(vec![filename]))
                 .await?,
             Some(vec![0, 1, 2]),
             None,

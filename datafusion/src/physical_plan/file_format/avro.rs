@@ -17,7 +17,7 @@
 
 //! Execution plan for reading line-delimited Avro files
 use crate::datasource::file_format::PartitionedFile;
-use crate::datasource::object_store::ObjectStoreRegistry;
+use crate::datasource::object_store::ObjectStore;
 use crate::error::{DataFusionError, Result};
 #[cfg(feature = "avro")]
 use crate::physical_plan::RecordBatchStream;
@@ -42,7 +42,7 @@ use std::{
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
 pub struct AvroExec {
-    object_store_registry: Arc<ObjectStoreRegistry>,
+    object_store: Arc<dyn ObjectStore>,
     files: Vec<PartitionedFile>,
     statistics: Statistics,
     schema: SchemaRef,
@@ -56,7 +56,7 @@ impl AvroExec {
     /// Create a new JSON reader execution plan provided file list and schema
     /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
     pub fn new(
-        object_store_registry: Arc<ObjectStoreRegistry>,
+        object_store: Arc<dyn ObjectStore>,
         files: Vec<PartitionedFile>,
         statistics: Statistics,
         schema: SchemaRef,
@@ -72,7 +72,7 @@ impl AvroExec {
         };
 
         Self {
-            object_store_registry,
+            object_store,
             files,
             statistics,
             schema,
@@ -126,9 +126,8 @@ impl ExecutionPlan for AvroExec {
     #[cfg(feature = "avro")]
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         let file = self
-            .object_store_registry
-            .get_by_uri(&self.files[partition].file.path)?
-            .file_reader(self.files[partition].file.clone())?
+            .object_store
+            .file_reader(self.files[partition].file_meta.sized_file.clone())?
             .sync_reader()?;
 
         let proj = self.projection.as_ref().map(|p| {
@@ -162,7 +161,7 @@ impl ExecutionPlan for AvroExec {
                     self.limit,
                     self.files
                         .iter()
-                        .map(|f| f.file.path.as_str())
+                        .map(|f| f.file_meta.path())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -244,7 +243,7 @@ impl<R: Read + Unpin> RecordBatchStream for AvroStream<'_, R> {
 mod tests {
 
     use crate::datasource::object_store::local::{
-        local_file_meta, local_file_meta_stream,
+        local_file_meta, local_object_reader_stream, LocalFileSystem,
     };
 
     use super::*;
@@ -258,13 +257,13 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let avro_exec = AvroExec::new(
-            Arc::new(ObjectStoreRegistry::new()),
+            Arc::new(LocalFileSystem {}),
             vec![PartitionedFile {
-                file: local_file_meta(filename.clone()),
+                file_meta: local_file_meta(filename.clone()),
             }],
             Statistics::default(),
-            AvroFormat::default()
-                .infer_schema(local_file_meta_stream(vec![filename]))
+            AvroFormat {}
+                .infer_schema(local_object_reader_stream(vec![filename]))
                 .await?,
             Some(vec![0, 1, 2]),
             1024,

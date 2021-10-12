@@ -37,10 +37,7 @@ use super::FileFormat;
 use super::PartitionedFile;
 use super::{create_max_min_accs, get_col_stats};
 use crate::arrow::datatypes::{DataType, Field};
-use crate::datasource::object_store::FileMeta;
-use crate::datasource::object_store::FileMetaStream;
-use crate::datasource::object_store::ObjectReader;
-use crate::datasource::object_store::ObjectStoreRegistry;
+use crate::datasource::object_store::{ObjectReader, ObjectReaderStream, ObjectStore};
 use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::logical_plan::combine_filters;
@@ -53,7 +50,6 @@ use crate::scalar::ScalarValue;
 
 /// The Apache Parquet `FileFormat` implementation
 pub struct ParquetFormat {
-    object_store_registry: Arc<ObjectStoreRegistry>,
     enable_pruning: bool,
 }
 
@@ -61,20 +57,11 @@ impl Default for ParquetFormat {
     fn default() -> Self {
         Self {
             enable_pruning: true,
-            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
         }
     }
 }
 
 impl ParquetFormat {
-    /// Create Parquet with the given object store and default values
-    pub fn new(object_store_registry: Arc<ObjectStoreRegistry>) -> Self {
-        Self {
-            object_store_registry,
-            ..Default::default()
-        }
-    }
-
     /// Activate statistics based row group level pruning
     /// - defaults to true
     pub fn with_enable_pruning(&mut self, enable: bool) -> &mut Self {
@@ -85,25 +72,26 @@ impl ParquetFormat {
 
 #[async_trait]
 impl FileFormat for ParquetFormat {
-    async fn infer_schema(&self, mut paths: FileMetaStream) -> Result<SchemaRef> {
+    async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
         // We currently get the schema information from the first file rather than do
         // schema merging and this is a limitation.
         // See https://issues.apache.org/jira/browse/ARROW-11017
-        let first_file = paths
+        let first_file = readers
             .next()
             .await
             .ok_or_else(|| DataFusionError::Plan("No data file found".to_owned()))??;
-        let (schema, _) = fetch_metadata(&self.object_store_registry, first_file)?;
+        let (schema, _) = fetch_metadata(first_file)?;
         Ok(Arc::new(schema))
     }
 
-    async fn infer_stats(&self, path: FileMeta) -> Result<Statistics> {
-        let (_, stats) = fetch_metadata(&self.object_store_registry, path)?;
+    async fn infer_stats(&self, reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
+        let (_, stats) = fetch_metadata(reader)?;
         Ok(stats)
     }
 
     async fn create_physical_plan(
         &self,
+        object_store: Arc<dyn ObjectStore>,
         schema: SchemaRef,
         files: Vec<Vec<PartitionedFile>>,
         statistics: Statistics,
@@ -122,7 +110,7 @@ impl FileFormat for ParquetFormat {
         };
 
         Ok(Arc::new(ParquetExec::new(
-            Arc::clone(&self.object_store_registry),
+            object_store,
             files,
             statistics,
             schema,
@@ -131,10 +119,6 @@ impl FileFormat for ParquetFormat {
             batch_size,
             limit,
         )))
-    }
-
-    fn object_store_registry(&self) -> &Arc<ObjectStoreRegistry> {
-        &self.object_store_registry
     }
 }
 
@@ -261,12 +245,8 @@ fn summarize_min_max(
 }
 
 /// Read and parse the metadata of the Parquet file at location `path`
-fn fetch_metadata(
-    object_store_registry: &ObjectStoreRegistry,
-    fmeta: FileMeta,
-) -> Result<(Schema, Statistics)> {
-    let object_store = object_store_registry.get_by_uri(&fmeta.path)?;
-    let obj_reader = ChunkObjectReader(object_store.file_reader(fmeta)?);
+fn fetch_metadata(object_reader: Arc<dyn ObjectReader>) -> Result<(Schema, Statistics)> {
+    let obj_reader = ChunkObjectReader(object_reader);
     let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
     let schema = arrow_reader.get_schema()?;
@@ -345,7 +325,10 @@ impl ChunkReader for ChunkObjectReader {
 #[cfg(test)]
 mod tests {
     use crate::{
-        datasource::object_store::local::{local_file_meta, local_file_meta_stream},
+        datasource::object_store::local::{
+            local_file_meta, local_object_reader, local_object_reader_stream,
+            LocalFileSystem,
+        },
         physical_plan::collect,
     };
 
@@ -605,18 +588,19 @@ mod tests {
         let filename = format!("{}/{}", testdata, file_name);
         let format = ParquetFormat::default();
         let schema = format
-            .infer_schema(local_file_meta_stream(vec![filename.clone()]))
+            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
         let stats = format
-            .infer_stats(local_file_meta(filename.clone()))
+            .infer_stats(local_object_reader(filename.clone()))
             .await
             .expect("Stats inference");
         let files = vec![vec![PartitionedFile {
-            file: local_file_meta(filename.clone()),
+            file_meta: local_file_meta(filename.clone()),
         }]];
         let exec = format
             .create_physical_plan(
+                Arc::new(LocalFileSystem {}),
                 schema,
                 files,
                 stats,

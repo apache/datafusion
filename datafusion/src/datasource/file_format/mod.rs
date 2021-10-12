@@ -34,18 +34,18 @@ use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 
-use super::object_store::{FileMeta, FileMetaStream, ObjectStoreRegistry};
+use super::object_store::{FileMeta, ObjectReader, ObjectReaderStream, ObjectStore};
 
 /// This trait abstracts all the file format specific implementations
 /// from the `TableProvider`. This helps code re-utilization accross
 /// providers that support the the same file formats.
 #[async_trait]
 pub trait FileFormat: Send + Sync {
-    /// Infer the the common schema of the files described by the path stream
-    async fn infer_schema(&self, paths: FileMetaStream) -> Result<SchemaRef>;
+    /// Infer the the common schema of the provided objects
+    async fn infer_schema(&self, readers: ObjectReaderStream) -> Result<SchemaRef>;
 
-    /// Infer the statistics for the file at the given path
-    async fn infer_stats(&self, path: FileMeta) -> Result<Statistics>;
+    /// Infer the statistics for the provided object
+    async fn infer_stats(&self, reader: Arc<dyn ObjectReader>) -> Result<Statistics>;
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.
@@ -54,6 +54,7 @@ pub trait FileFormat: Send + Sync {
     #[allow(clippy::too_many_arguments)]
     async fn create_physical_plan(
         &self,
+        object_store: Arc<dyn ObjectStore>,
         schema: SchemaRef,
         files: Vec<Vec<PartitionedFile>>,
         statistics: Statistics,
@@ -62,9 +63,6 @@ pub trait FileFormat: Send + Sync {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
-
-    /// Get the oject store from which to read this file format
-    fn object_store_registry(&self) -> &Arc<ObjectStoreRegistry>;
 }
 
 /// Get all files as well as the summary statistic
@@ -159,7 +157,7 @@ pub async fn get_statistics_with_limit(
 /// TODO move back to crate::datasource::mod.rs once legacy cleaned up
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
-    pub file: FileMeta,
+    pub file_meta: FileMeta,
     // Values of partition columns to be appended to each row
     // pub partition_value: Option<Vec<ScalarValue>>,
     // We may include row group range here for a more fine-grained parallel execution
@@ -171,7 +169,7 @@ pub type PartitionedFileStream =
 
 impl std::fmt::Display for PartitionedFile {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.file)
+        write!(f, "{}", self.file_meta)
     }
 }
 

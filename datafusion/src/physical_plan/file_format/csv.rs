@@ -18,7 +18,7 @@
 //! Execution plan for reading CSV files
 
 use crate::datasource::file_format::PartitionedFile;
-use crate::datasource::object_store::ObjectStoreRegistry;
+use crate::datasource::object_store::ObjectStore;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -40,7 +40,7 @@ use async_trait::async_trait;
 /// Execution plan for scanning a CSV file
 #[derive(Debug, Clone)]
 pub struct CsvExec {
-    object_store_registry: Arc<ObjectStoreRegistry>,
+    object_store: Arc<dyn ObjectStore>,
     /// List of data files
     files: Vec<PartitionedFile>,
     /// Schema representing the CSV file
@@ -66,7 +66,7 @@ impl CsvExec {
     /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        object_store_registry: Arc<ObjectStoreRegistry>,
+        object_store: Arc<dyn ObjectStore>,
         files: Vec<PartitionedFile>,
         statistics: Statistics,
         schema: SchemaRef,
@@ -84,7 +84,7 @@ impl CsvExec {
         };
 
         Self {
-            object_store_registry,
+            object_store,
             files,
             schema,
             statistics,
@@ -136,9 +136,8 @@ impl ExecutionPlan for CsvExec {
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         let file = self
-            .object_store_registry
-            .get_by_uri(&self.files[partition].file.path)?
-            .file_reader(self.files[partition].file.clone())?
+            .object_store
+            .file_reader(self.files[partition].file_meta.sized_file.clone())?
             .sync_reader()?;
 
         Ok(Box::pin(CsvStream::try_new_from_reader(
@@ -167,7 +166,7 @@ impl ExecutionPlan for CsvExec {
                     self.limit,
                     self.files
                         .iter()
-                        .map(|f| f.file.path.as_str())
+                        .map(|f| f.file_meta.path())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -236,7 +235,8 @@ impl<R: Read + Unpin> RecordBatchStream for CsvStream<R> {
 mod tests {
     use super::*;
     use crate::{
-        datasource::object_store::local::local_file_meta, test::aggr_test_schema,
+        datasource::object_store::local::{local_file_meta, LocalFileSystem},
+        test::aggr_test_schema,
     };
     use futures::StreamExt;
 
@@ -247,9 +247,9 @@ mod tests {
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::new(
-            Arc::new(ObjectStoreRegistry::new()),
+            Arc::new(LocalFileSystem {}),
             vec![PartitionedFile {
-                file: local_file_meta(path),
+                file_meta: local_file_meta(path),
             }],
             Statistics::default(),
             schema,
@@ -280,9 +280,9 @@ mod tests {
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::new(
-            Arc::new(ObjectStoreRegistry::new()),
+            Arc::new(LocalFileSystem {}),
             vec![PartitionedFile {
-                file: local_file_meta(path),
+                file_meta: local_file_meta(path),
             }],
             Statistics::default(),
             schema,

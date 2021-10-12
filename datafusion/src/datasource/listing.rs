@@ -34,7 +34,7 @@ use crate::{
 use super::{
     datasource::TableProviderFilterPushDown,
     file_format::{FileFormat, PartitionedFileStream},
-    object_store::ObjectStoreRegistry,
+    object_store::{ObjectStore, ObjectStoreRegistry},
     TableProvider,
 };
 
@@ -53,7 +53,7 @@ pub struct ListingOptions {
     /// Note that only `DataType::Utf8` is supported for the column type.
     /// TODO implement case where partitions.len() > 0
     pub partitions: Vec<String>,
-    /// Set true to try to guess statistics from the file parse it.
+    /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it requires files to
     /// be opened and partially parsed.
     pub collect_stat: bool,
@@ -63,18 +63,23 @@ pub struct ListingOptions {
 }
 
 impl ListingOptions {
-    /// Infer the schema of the files at the given path, including the partitioning
+    /// Infer the schema of the files at the given uri, including the partitioning
     /// columns.
     ///
     /// This method will not be called by the table itself but before creating it.
     /// This way when creating the logical plan we can decide to resolve the schema
     /// locally or ask a remote service to do it (e.g a scheduler).
-    pub async fn infer_schema(&self, path: &str) -> Result<SchemaRef> {
-        let object_store = self.format.object_store_registry().get_by_uri(path)?;
+    pub async fn infer_schema(
+        &self,
+        object_store_registry: Arc<ObjectStoreRegistry>,
+        uri: &str,
+    ) -> Result<SchemaRef> {
+        let object_store = object_store_registry.get_by_uri(uri)?;
         let file_stream = object_store
-            .list_file_with_suffix(path, &self.file_extension)
-            .await?;
-        let file_schema = self.format.infer_schema(file_stream).await?;
+            .list_file_with_suffix(uri, &self.file_extension)
+            .await?
+            .map(move |file_meta| object_store.file_reader(file_meta?.sized_file));
+        let file_schema = self.format.infer_schema(Box::pin(file_stream)).await?;
         // Add the partition columns to the file schema
         let mut fields = file_schema.fields().clone();
         for part in &self.partitions {
@@ -87,7 +92,9 @@ impl ListingOptions {
 /// An implementation of `TableProvider` that uses the object store
 /// or file system listing capability to get the list of files.
 pub struct ListingTable {
-    path: String,
+    // TODO pass object_store_registry to scan() instead
+    object_store_registry: Arc<ObjectStoreRegistry>,
+    uri: String,
     schema: SchemaRef,
     options: ListingOptions,
 }
@@ -95,14 +102,17 @@ pub struct ListingTable {
 impl ListingTable {
     /// Create new table that lists the FS to get the files to scan.
     pub fn new(
-        path: impl Into<String>,
+        // TODO pass object_store_registry to scan() instead
+        object_store_registry: Arc<ObjectStoreRegistry>,
+        uri: impl Into<String>,
         // the schema must be resolved before creating the table
         schema: SchemaRef,
         options: ListingOptions,
     ) -> Self {
-        let path: String = path.into();
+        let uri: String = uri.into();
         Self {
-            path,
+            object_store_registry,
+            uri,
             schema,
             options,
         }
@@ -126,12 +136,16 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let (partitioned_file_lists, statistics) =
-            self.list_files_for_scan(filters, limit).await?;
+        // TODO object_store_registry should be provided as param here
+        let object_store = self.object_store_registry.get_by_uri(&self.uri)?;
+        let (partitioned_file_lists, statistics) = self
+            .list_files_for_scan(Arc::clone(&object_store), filters.to_vec(), limit)
+            .await?;
         // create the execution plan
         self.options
             .format
             .create_physical_plan(
+                object_store,
                 self.schema(),
                 partitioned_file_lists,
                 statistics,
@@ -154,31 +168,35 @@ impl TableProvider for ListingTable {
 impl ListingTable {
     async fn list_files_for_scan(
         &self,
-        filters: &[Expr],
+        object_store: Arc<dyn ObjectStore>,
+        // `Vec` required here for lifetime reasons
+        filters: Vec<Expr>,
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
         // list files (with partitions)
         let file_list = pruned_partition_list(
-            self.options.format.object_store_registry(),
-            &self.path,
-            filters,
+            object_store.as_ref(),
+            &self.uri,
+            &filters,
             &self.options.file_extension,
             &self.options.partitions,
         )
         .await?;
 
         // collect the statistics if required by the config
-        let files = file_list.then(|part_file| async {
-            let part_file = part_file?;
-            let statistics = if self.options.collect_stat {
-                self.options
-                    .format
-                    .infer_stats(part_file.file.clone())
-                    .await?
-            } else {
-                Statistics::default()
-            };
-            Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
+        let files = file_list.then(move |part_file| {
+            let object_store = object_store.clone();
+            async move {
+                let part_file = part_file?;
+                let statistics = if self.options.collect_stat {
+                    let object_reader = object_store
+                        .file_reader(part_file.file_meta.sized_file.clone())?;
+                    self.options.format.infer_stats(object_reader).await?
+                } else {
+                    Statistics::default()
+                };
+                Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
+            }
         });
 
         let (files, statistics) =
@@ -187,7 +205,7 @@ impl ListingTable {
         if files.is_empty() {
             return Err(DataFusionError::Plan(format!(
                 "No files found at {} with file extension {}",
-                self.path, self.options.file_extension,
+                self.uri, self.options.file_extension,
             )));
         }
 
@@ -198,7 +216,7 @@ impl ListingTable {
 /// Discover the partitions on the given path and prune out files
 /// relative to irrelevant partitions using `filters` expressions
 async fn pruned_partition_list(
-    registry: &ObjectStoreRegistry,
+    store: &dyn ObjectStore,
     path: &str,
     _filters: &[Expr],
     file_extension: &str,
@@ -206,11 +224,10 @@ async fn pruned_partition_list(
 ) -> Result<PartitionedFileStream> {
     if partition_names.is_empty() {
         Ok(Box::pin(
-            registry
-                .get_by_uri(path)?
+            store
                 .list_file_with_suffix(path, file_extension)
                 .await?
-                .map(|f| Ok(PartitionedFile { file: f? })),
+                .map(|f| Ok(PartitionedFile { file_meta: f? })),
         ))
     } else {
         todo!("use filters to prune partitions")
@@ -233,9 +250,16 @@ fn split_files(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+
+    use futures::AsyncRead;
+
     use crate::datasource::{
         file_format::{avro::AvroFormat, parquet::ParquetFormat},
-        object_store::{FileMeta, FileMetaStream, ListEntryStream, ObjectStore},
+        object_store::{
+            FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
+            SizedFile,
+        },
     };
 
     use super::*;
@@ -243,9 +267,11 @@ mod tests {
     #[test]
     fn test_split_files() {
         let new_partitioned_file = |path: &str| PartitionedFile {
-            file: FileMeta {
-                path: path.to_owned(),
-                size: 10,
+            file_meta: FileMeta {
+                sized_file: SizedFile {
+                    path: path.to_owned(),
+                    size: 10,
+                },
                 last_modified: None,
             },
         };
@@ -321,9 +347,13 @@ mod tests {
             max_partitions: 2,
             collect_stat: true,
         };
+        let object_store_reg = Arc::new(ObjectStoreRegistry::new());
         // here we resolve the schema locally
-        let schema = opt.infer_schema(&filename).await.expect("Infer schema");
-        let table = ListingTable::new(&filename, schema, opt);
+        let schema = opt
+            .infer_schema(Arc::clone(&object_store_reg), &filename)
+            .await
+            .expect("Infer schema");
+        let table = ListingTable::new(object_store_reg, &filename, schema, opt);
         Ok(Arc::new(table))
     }
 
@@ -333,12 +363,11 @@ mod tests {
         output_partitioning: usize,
     ) -> Result<()> {
         let registry = ObjectStoreRegistry::new();
-        registry.register_store(
-            "mock".to_owned(),
-            Arc::new(MockObjectStore { files_in_folder }),
-        );
+        let mock_store: Arc<dyn ObjectStore> =
+            Arc::new(MockObjectStore { files_in_folder });
+        registry.register_store("mock".to_owned(), Arc::clone(&mock_store));
 
-        let format = AvroFormat::new(Arc::new(registry));
+        let format = AvroFormat {};
 
         let opt = ListingOptions {
             file_extension: "".to_owned(),
@@ -348,11 +377,18 @@ mod tests {
             collect_stat: true,
         };
 
+        let object_store_reg = Arc::new(ObjectStoreRegistry::new());
+
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
-        let table = ListingTable::new("mock://bucket/key-prefix", Arc::new(schema), opt);
+        let table = ListingTable::new(
+            object_store_reg,
+            "mock://bucket/key-prefix",
+            Arc::new(schema),
+            opt,
+        );
 
-        let (file_list, _) = table.list_files_for_scan(&[], None).await?;
+        let (file_list, _) = table.list_files_for_scan(mock_store, vec![], None).await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 
@@ -370,8 +406,10 @@ mod tests {
             let prefix = prefix.to_owned();
             let files = (0..self.files_in_folder).map(move |i| {
                 Ok(FileMeta {
-                    path: format!("{}file{}", prefix, i),
-                    size: 100,
+                    sized_file: SizedFile {
+                        path: format!("{}file{}", prefix, i),
+                        size: 100,
+                    },
                     last_modified: None,
                 })
             });
@@ -386,10 +424,32 @@ mod tests {
             unimplemented!()
         }
 
-        fn file_reader(
+        fn file_reader(&self, _file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
+            Ok(Arc::new(MockObjectReader {}))
+        }
+    }
+
+    struct MockObjectReader {}
+
+    #[async_trait]
+    impl ObjectReader for MockObjectReader {
+        async fn chunk_reader(
             &self,
-            _file: FileMeta,
-        ) -> Result<Arc<dyn crate::datasource::object_store::ObjectReader>> {
+            _start: u64,
+            _length: usize,
+        ) -> Result<Box<dyn AsyncRead>> {
+            unimplemented!()
+        }
+
+        fn sync_chunk_reader(
+            &self,
+            _start: u64,
+            _length: usize,
+        ) -> Result<Box<dyn Read + Send + Sync>> {
+            unimplemented!()
+        }
+
+        fn length(&self) -> u64 {
             unimplemented!()
         }
     }
