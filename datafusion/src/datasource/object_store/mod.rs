@@ -37,27 +37,27 @@ Object Reader for one file in an object store
 */
 #[async_trait]
 pub trait ObjectReader {
-    /// Get reader for a part [start, start + length] in the file asynchronously
+    /// Get reader for a part [start, start + length] in the file
     fn chunk_reader(
         &self,
         start: u64,
         length: usize,
     ) -> Result<Box<dyn Read + Send + Sync>>;
 
-    /// Get length for the file
+    /// Get the size of the file
     fn length(&self) -> u64;
 }
 
 /// Represents a file or a prefix that may require further resolution
 #[derive(Debug)]
 pub enum ListEntry {
-    /// File metadata
+    /// Complete file path with size
     SizedFile(SizedFile),
     /// Prefix to be further resolved during partition discovery
     Prefix(String),
 }
 
-/// File meta we got from object store
+/// Complete file path with size we got from object store
 #[derive(Debug, Clone)]
 pub struct SizedFile {
     /// Path of the file
@@ -72,11 +72,11 @@ impl std::fmt::Display for SizedFile {
     }
 }
 
-/// Stream of files get listed from object store
+/// Stream of files listed from object store
 pub type SizedFileStream =
     Pin<Box<dyn Stream<Item = Result<SizedFile>> + Send + Sync + 'static>>;
 
-/// Stream of list entries get from object store
+/// Stream of list entries obtained from object store
 pub type ListEntryStream =
     Pin<Box<dyn Stream<Item = Result<ListEntry>> + Send + Sync + 'static>>;
 

@@ -32,7 +32,7 @@ use crate::logical_plan::Expr;
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 
 use super::object_store::{ObjectStoreRegistry, SizedFile, SizedFileStream};
 
@@ -81,12 +81,12 @@ pub trait FileFormat: Send + Sync {
 /// needed to read up to `limit` number of rows
 /// TODO fix case where `num_rows` and `total_byte_size` are not defined (stat should be None instead of Some(0))
 /// TODO move back to crate::datasource::mod.rs once legacy cleaned up
-pub fn get_statistics_with_limit(
-    all_files: &[(PartitionedFile, Statistics)],
+pub async fn get_statistics_with_limit(
+    all_files: impl Stream<Item = Result<(PartitionedFile, Statistics)>>,
     schema: SchemaRef,
     limit: Option<usize>,
-) -> (Vec<PartitionedFile>, Statistics) {
-    let mut all_files = all_files.to_vec();
+) -> Result<(Vec<PartitionedFile>, Statistics)> {
+    let mut result_files = vec![];
 
     let mut total_byte_size = 0;
     let mut null_counts = vec![0; schema.fields().len()];
@@ -94,10 +94,11 @@ pub fn get_statistics_with_limit(
     let (mut max_values, mut min_values) = create_max_min_accs(&schema);
 
     let mut num_rows = 0;
-    let mut num_files = 0;
     let mut is_exact = true;
-    for (_, file_stats) in &all_files {
-        num_files += 1;
+    let mut all_files = Box::pin(all_files);
+    while let Some(res) = all_files.next().await {
+        let (file, file_stats) = res?;
+        result_files.push(file);
         is_exact &= file_stats.is_exact;
         num_rows += file_stats.num_rows.unwrap_or(0);
         total_byte_size += file_stats.total_byte_size.unwrap_or(0);
@@ -133,9 +134,11 @@ pub fn get_statistics_with_limit(
             break;
         }
     }
-    if num_files < all_files.len() {
+    // if we still have files in the stream, it means that the limit kicked
+    // in and that the statistic could have been different if we processed
+    // the files in a different order.
+    if all_files.next().await.is_some() {
         is_exact = false;
-        all_files.truncate(num_files);
     }
 
     let column_stats = if has_statistics {
@@ -156,9 +159,7 @@ pub fn get_statistics_with_limit(
         is_exact,
     };
 
-    let files = all_files.into_iter().map(|(f, _)| f).collect();
-
-    (files, statistics)
+    Ok((result_files, statistics))
 }
 
 #[derive(Debug, Clone)]

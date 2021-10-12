@@ -135,7 +135,7 @@ async fn list_all(prefix: String) -> Result<SizedFileStream> {
     }
 }
 
-/// Create a stream of `SizedFile` applying `local_sized_file` to each path
+/// Create a stream of `SizedFile` applying `local_sized_file` to each path in `files`
 pub fn local_sized_file_stream(files: Vec<String>) -> SizedFileStream {
     Box::pin(futures::stream::iter(files).map(|f| Ok(local_sized_file(f))))
 }

@@ -22,7 +22,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 
 use crate::{
     datasource::file_format::{self, PartitionedFile},
@@ -137,24 +137,21 @@ impl TableProvider for ListingTable {
         .await?;
 
         // collect the statistics if required by the config
-        let files = file_list
-            .then(|part_file| async {
-                let part_file = part_file?;
-                let statistics = if self.options.collect_stat {
-                    self.options
-                        .format
-                        .infer_stats(part_file.file.clone())
-                        .await?
-                } else {
-                    Statistics::default()
-                };
-                Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
-            })
-            .try_collect::<Vec<_>>()
-            .await?;
+        let files = file_list.then(|part_file| async {
+            let part_file = part_file?;
+            let statistics = if self.options.collect_stat {
+                self.options
+                    .format
+                    .infer_stats(part_file.file.clone())
+                    .await?
+            } else {
+                Statistics::default()
+            };
+            Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
+        });
 
         let (files, statistics) =
-            file_format::get_statistics_with_limit(&files, self.schema(), limit);
+            file_format::get_statistics_with_limit(files, self.schema(), limit).await?;
 
         let partitioned_file_lists = split_files(files, self.options.max_partitions);
 
