@@ -40,7 +40,6 @@ use std::pin::Pin;
 /// if the optional `limit` is provided, includes only sufficient files
 /// needed to read up to `limit` number of rows
 /// TODO fix case where `num_rows` and `total_byte_size` are not defined (stat should be None instead of Some(0))
-/// TODO move back to crate::datasource::mod.rs once legacy cleaned up
 pub async fn get_statistics_with_limit(
     all_files: impl Stream<Item = Result<(PartitionedFile, Statistics)>>,
     schema: SchemaRef,
@@ -126,7 +125,6 @@ pub async fn get_statistics_with_limit(
 #[derive(Debug, Clone)]
 /// A single file that should be read, along with its schema, statistics
 /// and partition column values that need to be appended to each row.
-/// TODO move back to crate::datasource::mod.rs once legacy cleaned up
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
     pub file_meta: FileMeta,
@@ -159,7 +157,6 @@ impl std::fmt::Display for PartitionedFile {
 
 #[derive(Debug, Clone)]
 /// A collection of files that should be read in a single task
-/// TODO move back to crate::datasource::mod.rs once legacy cleaned up
 pub struct FilePartition {
     /// The index of the partition among all partitions
     pub index: usize,

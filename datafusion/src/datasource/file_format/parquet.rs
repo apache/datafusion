@@ -36,9 +36,9 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::FileFormat;
 use super::PhysicalPlanConfig;
-use super::{create_max_min_accs, get_col_stats};
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
+use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::logical_plan::combine_filters;

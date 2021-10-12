@@ -239,7 +239,7 @@ impl BallistaContext {
     /// Create a DataFrame from a SQL statement.
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
-    /// might require the schema to be infered.
+    /// might require the schema to be inferred.
     pub async fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let mut ctx = {
             let state = self.state.lock().unwrap();

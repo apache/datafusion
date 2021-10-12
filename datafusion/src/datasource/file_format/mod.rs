@@ -27,7 +27,6 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::arrow::datatypes::SchemaRef;
-use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::{ExecutionPlan, Statistics};
@@ -44,15 +43,15 @@ pub struct PhysicalPlanConfig {
     pub object_store: Arc<dyn ObjectStore>,
     /// Schema before projection
     pub schema: SchemaRef,
-    /// Partitioned fields to process in the executor
+    /// List of files to be processed, grouped into partitions
     pub files: Vec<Vec<PartitionedFile>>,
-    /// Estimated overall statistics of source plan
+    /// Estimated overall statistics of the plan, taking `filters` into account
     pub statistics: Statistics,
     /// Columns on which to project the data
     pub projection: Option<Vec<usize>>,
     /// The maximum number of records per arrow column
     pub batch_size: usize,
-    /// The filters that where pushed down to this execution plan
+    /// The filters that were pushed down to this execution plan
     pub filters: Vec<Expr>,
     /// The minimum number of records required from this source plan
     pub limit: Option<usize>,

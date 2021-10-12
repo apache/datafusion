@@ -183,7 +183,7 @@ impl ExecutionContext {
     /// Creates a dataframe that will execute a SQL query.
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
-    /// might require the schema to be infered.
+    /// might require the schema to be inferred.
     pub async fn sql(&mut self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let plan = self.create_logical_plan(sql)?;
         match plan {

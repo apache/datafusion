@@ -152,12 +152,13 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
     }
 }
 
-/// Create a stream of `ObjectReader` by opening each file in the `files` vector
+/// Create a stream of `ObjectReader` by converting each file in the `files` vector
+/// into instances of `LocalFileReader`
 pub fn local_object_reader_stream(files: Vec<String>) -> ObjectReaderStream {
     Box::pin(futures::stream::iter(files).map(|f| Ok(local_object_reader(f))))
 }
 
-/// Helper method to convert a file location to an ObjectReader
+/// Helper method to convert a file location to a `LocalFileReader`
 pub fn local_object_reader(file: String) -> Arc<dyn ObjectReader> {
     LocalFileSystem
         .file_reader(local_file_meta(file).sized_file)

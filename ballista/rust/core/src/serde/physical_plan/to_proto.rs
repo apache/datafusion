@@ -261,7 +261,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                             .as_ref()
                             .ok_or_else(|| {
                                 BallistaError::General(
-                                    "projection in CsvExec dosn not exist.".to_owned(),
+                                    "projection in CsvExec does not exist.".to_owned(),
                                 )
                             })?
                             .iter()
@@ -320,7 +320,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                             .as_ref()
                             .ok_or_else(|| {
                                 BallistaError::General(
-                                    "projection in AvroExec dosn not exist.".to_owned(),
+                                    "projection in AvroExec does not exist.".to_owned(),
                                 )
                             })?
                             .iter()

@@ -46,7 +46,7 @@ pub struct ListingOptions {
     pub file_extension: String,
     /// The file format
     pub format: Arc<dyn FileFormat>,
-    /// The expected partition column names.
+    /// The expected partition column names in the folder structure.
     /// For example `Vec["a", "b"]` means that the two first levels of
     /// partitioning expected should be named "a" and "b":
     /// - If there is a third level of partitioning it will be ignored.
@@ -55,11 +55,11 @@ pub struct ListingOptions {
     /// TODO implement case where partitions.len() > 0
     pub partitions: Vec<String>,
     /// Set true to try to guess statistics from the files.
-    /// This can add a lot of overhead as it requires files to
-    /// be opened and partially parsed.
+    /// This can add a lot of overhead as it will usually require files
+    /// to be opened and at least partially parsed.
     pub collect_stat: bool,
-    /// Group files to avoid that the number of partitions
-    /// exceeds this limit
+    /// Group files to avoid that the number of partitions exceeds
+    /// this limit
     pub target_partitions: usize,
 }
 
@@ -80,8 +80,8 @@ impl ListingOptions {
         }
     }
 
-    /// Infer the schema of the files at the given uri, including the partitioning
-    /// columns.
+    /// Infer the schema of the files at the given path on the provided object store.
+    /// The inferred schema should include the partitioning columns.
     ///
     /// This method will not be called by the table itself but before creating it.
     /// This way when creating the logical plan we can decide to resolve the schema

@@ -73,7 +73,7 @@ pub enum ListEntry {
 #[derive(Debug, Clone)]
 pub struct SizedFile {
     /// Path of the file. It is relative to the current object
-    /// store (it does not specify the xx:// scheme).
+    /// store (it does not specify the `xx://` scheme).
     pub path: String,
     /// File size in total
     pub size: u64,
