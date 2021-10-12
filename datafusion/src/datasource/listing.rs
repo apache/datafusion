@@ -26,7 +26,7 @@ use futures::StreamExt;
 
 use crate::{
     datasource::file_format::{self, PartitionedFile},
-    error::Result,
+    error::{DataFusionError, Result},
     logical_plan::Expr,
     physical_plan::{ExecutionPlan, Statistics},
 };
@@ -126,6 +126,37 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let (partitioned_file_lists, statistics) =
+            self.list_files_for_scan(filters, limit).await?;
+        // create the execution plan
+        self.options
+            .format
+            .create_physical_plan(
+                self.schema(),
+                partitioned_file_lists,
+                statistics,
+                projection,
+                batch_size,
+                filters,
+                limit,
+            )
+            .await
+    }
+
+    fn supports_filter_pushdown(
+        &self,
+        _filter: &Expr,
+    ) -> Result<TableProviderFilterPushDown> {
+        Ok(TableProviderFilterPushDown::Inexact)
+    }
+}
+
+impl ListingTable {
+    async fn list_files_for_scan(
+        &self,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
         // list files (with partitions)
         let file_list = pruned_partition_list(
             self.options.format.object_store_registry(),
@@ -153,28 +184,14 @@ impl TableProvider for ListingTable {
         let (files, statistics) =
             file_format::get_statistics_with_limit(files, self.schema(), limit).await?;
 
-        let partitioned_file_lists = split_files(files, self.options.max_partitions);
+        if files.is_empty() {
+            return Err(DataFusionError::Plan(format!(
+                "No files found at {} with file extension {}",
+                self.path, self.options.file_extension,
+            )));
+        }
 
-        // create the execution plan
-        self.options
-            .format
-            .create_physical_plan(
-                self.schema(),
-                partitioned_file_lists,
-                statistics,
-                projection,
-                batch_size,
-                filters,
-                limit,
-            )
-            .await
-    }
-
-    fn supports_filter_pushdown(
-        &self,
-        _filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
-        Ok(TableProviderFilterPushDown::Inexact)
+        Ok((split_files(files, self.options.max_partitions), statistics))
     }
 }
 
@@ -217,7 +234,8 @@ fn split_files(
 #[cfg(test)]
 mod tests {
     use crate::datasource::{
-        file_format::parquet::ParquetFormat, object_store::SizedFile,
+        file_format::{avro::AvroFormat, parquet::ParquetFormat},
+        object_store::{ListEntryStream, ObjectStore, SizedFile, SizedFileStream},
     };
 
     use super::*;
@@ -302,7 +320,14 @@ mod tests {
         Ok(())
     }
 
-    // TODO add tests on listing once the ObjectStore abstraction is added
+    #[tokio::test]
+    async fn file_listings() -> Result<()> {
+        assert_partitioning(5, 12, 5).await?;
+        assert_partitioning(4, 4, 4).await?;
+        assert_partitioning(5, 2, 2).await?;
+        assert_partitioning(0, 2, 0).await.expect_err("no files");
+        Ok(())
+    }
 
     async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
@@ -318,5 +343,71 @@ mod tests {
         let schema = opt.infer_schema(&filename).await.expect("Infer schema");
         let table = ListingTable::new(&filename, schema, opt);
         Ok(Arc::new(table))
+    }
+
+    async fn assert_partitioning(
+        files_in_folder: usize,
+        max_partitions: usize,
+        output_partitioning: usize,
+    ) -> Result<()> {
+        let registry = ObjectStoreRegistry::new();
+        registry.register_store(
+            "mock".to_owned(),
+            Arc::new(MockObjectStore { files_in_folder }),
+        );
+
+        let format = AvroFormat::new(Arc::new(registry));
+
+        let opt = ListingOptions {
+            file_extension: "".to_owned(),
+            format: Arc::new(format),
+            partitions: vec![],
+            max_partitions,
+            collect_stat: true,
+        };
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+
+        let table = ListingTable::new("mock://bucket/key-prefix", Arc::new(schema), opt);
+
+        let (file_list, _) = table.list_files_for_scan(&[], None).await?;
+
+        assert_eq!(file_list.len(), output_partitioning);
+
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct MockObjectStore {
+        pub files_in_folder: usize,
+    }
+
+    #[async_trait]
+    impl ObjectStore for MockObjectStore {
+        async fn list_file(&self, prefix: &str) -> Result<SizedFileStream> {
+            let prefix = prefix.to_owned();
+            let files = (0..self.files_in_folder).map(move |i| {
+                Ok(SizedFile {
+                    path: format!("{}file{}", prefix, i),
+                    size: 100,
+                })
+            });
+            Ok(Box::pin(futures::stream::iter(files)))
+        }
+
+        async fn list_dir(
+            &self,
+            _prefix: &str,
+            _delimiter: Option<String>,
+        ) -> Result<ListEntryStream> {
+            unimplemented!()
+        }
+
+        fn file_reader(
+            &self,
+            _file: SizedFile,
+        ) -> Result<Arc<dyn crate::datasource::object_store::ObjectReader>> {
+            unimplemented!()
+        }
     }
 }
