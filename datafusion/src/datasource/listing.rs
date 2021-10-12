@@ -20,7 +20,8 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 
 use crate::{
@@ -32,6 +33,7 @@ use crate::{
 
 use super::{
     datasource::TableProviderFilterPushDown, format::FileFormat, PartitionedFile,
+    TableProvider,
 };
 
 /// Options for creating a `ListingTable`
@@ -75,7 +77,13 @@ impl ListingOptions {
                     &self.file_extension, path
                 ))
             })?;
-        self.format.infer_schema(&first_file).await
+        let file_schema = self.format.infer_schema(&first_file).await?;
+        // Add the partition columns to the file schema
+        let mut fields = file_schema.fields().clone();
+        for part in &self.partitions {
+            fields.push(Field::new(part, DataType::Utf8, false));
+        }
+        Ok(Arc::new(Schema::new(fields)))
     }
 }
 
@@ -104,9 +112,8 @@ impl ListingTable {
     }
 }
 
-// TODO add back impl ExecutionPlan
-#[allow(dead_code)]
-impl ListingTable {
+#[async_trait]
+impl TableProvider for ListingTable {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -122,7 +129,7 @@ impl ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // 1. list files (with partitions)
+        // list files (with partitions)
         let file_list = pruned_partition_list(
             &self.path,
             filters,
@@ -214,47 +221,47 @@ fn split_files(
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
-    // use futures::StreamExt;
+    use super::*;
+    use futures::StreamExt;
 
-    // #[tokio::test]
-    // async fn read_small_batches() -> Result<()> {
-    //     let table = load_table("alltypes_plain.parquet").await?;
-    //     let projection = None;
-    //     let exec = table.scan(&projection, 2, &[], None)?;
-    //     let stream = exec.execute(0).await?;
+    #[tokio::test]
+    async fn read_small_batches() -> Result<()> {
+        let table = load_table("alltypes_plain.parquet").await?;
+        let projection = None;
+        let exec = table.scan(&projection, 2, &[], None).await?;
+        let stream = exec.execute(0).await?;
 
-    //     let _ = stream
-    //         .map(|batch| {
-    //             let batch = batch.unwrap();
-    //             assert_eq!(11, batch.num_columns());
-    //             assert_eq!(2, batch.num_rows());
-    //         })
-    //         .fold(0, |acc, _| async move { acc + 1i32 })
-    //         .await;
+        let _ = stream
+            .map(|batch| {
+                let batch = batch.unwrap();
+                assert_eq!(11, batch.num_columns());
+                assert_eq!(2, batch.num_rows());
+            })
+            .fold(0, |acc, _| async move { acc + 1i32 })
+            .await;
 
-    //     // test metadata
-    //     assert_eq!(exec.statistics().num_rows, Some(8));
-    //     assert_eq!(exec.statistics().total_byte_size, Some(671));
+        // test metadata
+        assert_eq!(exec.statistics().num_rows, Some(8));
+        assert_eq!(exec.statistics().total_byte_size, Some(671));
 
-    //     Ok(())
-    // }
+        Ok(())
+    }
 
-    // async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
-    //     let testdata = crate::test_util::parquet_test_data();
-    //     let filename = format!("{}/{}", testdata, name);
-    //     let opt = ListingOptions {
-    //         file_extension: "parquet".to_owned(),
-    //         format: Arc::new(format::parquet::ParquetFormat {
-    //             enable_pruning: true,
-    //         }),
-    //         partitions: vec![],
-    //         max_partitions: 2,
-    //         collect_stat: true,
-    //     };
-    //     // here we resolve the schema locally
-    //     let schema = opt.infer_schema(&filename).await?;
-    //     let table = ListingTable::try_new(&filename, schema, opt)?;
-    //     Ok(Arc::new(table))
-    // }
+    async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, name);
+        let opt = ListingOptions {
+            file_extension: "parquet".to_owned(),
+            format: Arc::new(format::parquet::ParquetFormat {
+                enable_pruning: true,
+            }),
+            partitions: vec![],
+            max_partitions: 2,
+            collect_stat: true,
+        };
+        // here we resolve the schema locally
+        let schema = opt.infer_schema(&filename).await?;
+        let table = ListingTable::try_new(&filename, schema, opt)?;
+        Ok(Arc::new(table))
+    }
 }
