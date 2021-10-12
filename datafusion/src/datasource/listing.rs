@@ -33,7 +33,7 @@ use crate::{
 
 use super::{
     datasource::TableProviderFilterPushDown,
-    file_format::{FileFormat, PartitionedFileStream},
+    file_format::{FileFormat, PartitionedFileStream, PhysicalPlanConfig},
     object_store::{ObjectStore, ObjectStoreRegistry},
     TableProvider,
 };
@@ -139,21 +139,21 @@ impl TableProvider for ListingTable {
         // TODO object_store_registry should be provided as param here
         let object_store = self.object_store_registry.get_by_uri(&self.uri)?;
         let (partitioned_file_lists, statistics) = self
-            .list_files_for_scan(Arc::clone(&object_store), filters.to_vec(), limit)
+            .list_files_for_scan(Arc::clone(&object_store), filters, limit)
             .await?;
         // create the execution plan
         self.options
             .format
-            .create_physical_plan(
+            .create_physical_plan(PhysicalPlanConfig {
                 object_store,
-                self.schema(),
-                partitioned_file_lists,
+                schema: self.schema(),
+                files: partitioned_file_lists,
                 statistics,
-                projection,
+                projection: projection.clone(),
                 batch_size,
-                filters,
+                filters: filters.to_vec(),
                 limit,
-            )
+            })
             .await
     }
 
@@ -166,18 +166,17 @@ impl TableProvider for ListingTable {
 }
 
 impl ListingTable {
-    async fn list_files_for_scan(
-        &self,
+    async fn list_files_for_scan<'a>(
+        &'a self,
         object_store: Arc<dyn ObjectStore>,
-        // `Vec` required here for lifetime reasons
-        filters: Vec<Expr>,
+        filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
         // list files (with partitions)
         let file_list = pruned_partition_list(
             object_store.as_ref(),
             &self.uri,
-            &filters,
+            filters,
             &self.options.file_extension,
             &self.options.partitions,
         )
@@ -388,7 +387,7 @@ mod tests {
             opt,
         );
 
-        let (file_list, _) = table.list_files_for_scan(mock_store, vec![], None).await?;
+        let (file_list, _) = table.list_files_for_scan(mock_store, &[], None).await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 

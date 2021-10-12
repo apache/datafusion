@@ -24,11 +24,9 @@ use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
 
-use super::FileFormat;
-use super::PartitionedFile;
-use crate::datasource::object_store::{ObjectReader, ObjectReaderStream, ObjectStore};
+use super::{FileFormat, PhysicalPlanConfig};
+use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
-use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::CsvExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
@@ -108,26 +106,19 @@ impl FileFormat for CsvFormat {
 
     async fn create_physical_plan(
         &self,
-        object_store: Arc<dyn ObjectStore>,
-        schema: SchemaRef,
-        files: Vec<Vec<PartitionedFile>>,
-        statistics: Statistics,
-        projection: &Option<Vec<usize>>,
-        batch_size: usize,
-        _filters: &[Expr],
-        limit: Option<usize>,
+        conf: PhysicalPlanConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = CsvExec::new(
-            object_store,
+            conf.object_store,
             // flattening this for now because CsvExec does not support partitioning yet
-            files.into_iter().flatten().collect(),
-            statistics,
-            schema,
+            conf.files.into_iter().flatten().collect(),
+            conf.statistics,
+            conf.schema,
             self.has_header,
             self.delimiter,
-            projection.clone(),
-            batch_size,
-            limit,
+            conf.projection,
+            conf.batch_size,
+            conf.limit,
         );
         Ok(Arc::new(exec))
     }
@@ -139,9 +130,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        datasource::object_store::local::{
-            local_file_meta, local_object_reader, local_object_reader_stream,
-            LocalFileSystem,
+        datasource::{
+            file_format::{PartitionedFile, PhysicalPlanConfig},
+            object_store::local::{
+                local_file_meta, local_object_reader, local_object_reader_stream,
+                LocalFileSystem,
+            },
         },
         physical_plan::collect,
     };
@@ -255,7 +249,7 @@ mod tests {
             .infer_schema(local_object_reader_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
-        let stats = format
+        let statistics = format
             .infer_stats(local_object_reader(filename.clone()))
             .await
             .expect("Stats inference");
@@ -263,16 +257,16 @@ mod tests {
             file_meta: local_file_meta(filename.to_owned()),
         }]];
         let exec = format
-            .create_physical_plan(
-                Arc::new(LocalFileSystem {}),
+            .create_physical_plan(PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
                 schema,
                 files,
-                stats,
-                projection,
+                statistics,
+                projection: projection.clone(),
                 batch_size,
-                &[],
+                filters: vec![],
                 limit,
-            )
+            })
             .await?;
         Ok(exec)
     }

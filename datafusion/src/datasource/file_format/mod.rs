@@ -36,32 +36,47 @@ use futures::{Stream, StreamExt};
 
 use super::object_store::{FileMeta, ObjectReader, ObjectReaderStream, ObjectStore};
 
+/// The configurations to be passed when creating a physical plan for
+/// a given file format.
+pub struct PhysicalPlanConfig {
+    /// Store from which the `files` should be fetched
+    pub object_store: Arc<dyn ObjectStore>,
+    /// Schema before projection
+    pub schema: SchemaRef,
+    /// Partitioned fields to process in the executor
+    pub files: Vec<Vec<PartitionedFile>>,
+    /// Estimated overall statistics of source plan
+    pub statistics: Statistics,
+    /// Columns on which to project the data
+    pub projection: Option<Vec<usize>>,
+    /// The maximum number of records per arrow column
+    pub batch_size: usize,
+    /// The filters that where pushed down to this execution plan
+    pub filters: Vec<Expr>,
+    /// The minimum number of records required from this source plan
+    pub limit: Option<usize>,
+}
+
 /// This trait abstracts all the file format specific implementations
 /// from the `TableProvider`. This helps code re-utilization accross
 /// providers that support the the same file formats.
 #[async_trait]
 pub trait FileFormat: Send + Sync {
-    /// Infer the the common schema of the provided objects
+    /// Infer the common schema of the provided objects. The objects will usually
+    /// be analysed up to a given number of records or files (as specified in the
+    /// format config) then give the estimated common schema. This might fail if
+    /// the files have schemas that cannot be merged.
     async fn infer_schema(&self, readers: ObjectReaderStream) -> Result<SchemaRef>;
 
-    /// Infer the statistics for the provided object
+    /// Infer the statistics for the provided object. The cost and accuracy of the
+    /// estimated statistics might vary greatly between file formats.
     async fn infer_stats(&self, reader: Arc<dyn ObjectReader>) -> Result<Statistics>;
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.
-    /// TODO group params into TableDescription(schema,files,stats) and
-    /// ScanOptions(projection,batch_size,filters) to avoid too_many_arguments
-    #[allow(clippy::too_many_arguments)]
     async fn create_physical_plan(
         &self,
-        object_store: Arc<dyn ObjectStore>,
-        schema: SchemaRef,
-        files: Vec<Vec<PartitionedFile>>,
-        statistics: Statistics,
-        projection: &Option<Vec<usize>>,
-        batch_size: usize,
-        filters: &[Expr],
-        limit: Option<usize>,
+        conf: PhysicalPlanConfig,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
