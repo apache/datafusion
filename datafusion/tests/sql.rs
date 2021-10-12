@@ -984,7 +984,7 @@ async fn csv_query_count() -> Result<()> {
 #[tokio::test]
 async fn csv_query_approx_count() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
