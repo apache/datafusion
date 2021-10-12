@@ -20,7 +20,8 @@
 use async_trait::async_trait;
 use std::{
     any::Any,
-    sync::Arc,
+    pin::Pin,
+    sync::{Arc, Weak},
     task::{Context, Poll},
 };
 use tokio::sync::Barrier;
@@ -470,5 +471,116 @@ impl ExecutionPlan for StatisticsExec {
                 )
             }
         }
+    }
+}
+
+/// Execution plan that emits streams that block forever.
+///
+/// This is useful to test shutdown / cancelation behavior of certain execution plans.
+#[derive(Debug)]
+pub struct BlockingExec {
+    /// Schema that is mocked by this plan.
+    schema: SchemaRef,
+
+    /// Ref-counting helper to check if the plan and the produced stream are still in memory.
+    refs: Arc<()>,
+}
+
+impl BlockingExec {
+    /// Create new [`BlockingExec`] with a give schema.
+    pub fn new(schema: SchemaRef) -> Self {
+        Self {
+            schema,
+            refs: Default::default(),
+        }
+    }
+
+    /// Weak pointer that can be used for ref-counting this execution plan and its streams.
+    ///
+    /// Use [`Weak::strong_count`] to determine if the plan itself and its streams are dropped (should be 0 in that
+    /// case). Note that tokio might take some time to cancel spawned tasks, so you need to wrap this check into a retry
+    /// loop.
+    pub fn refs(&self) -> Weak<()> {
+        Arc::downgrade(&self.refs)
+    }
+}
+
+#[async_trait]
+impl ExecutionPlan for BlockingExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        // this is a leaf node and has no children
+        vec![]
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(1)
+    }
+
+    fn with_new_children(
+        &self,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Err(DataFusionError::Internal(format!(
+            "Children cannot be replaced in {:?}",
+            self
+        )))
+    }
+
+    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(BlockingStream {
+            schema: Arc::clone(&self.schema),
+            refs: Arc::clone(&self.refs),
+        }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "BlockingExec",)
+            }
+        }
+    }
+
+    fn statistics(&self) -> Statistics {
+        unimplemented!()
+    }
+}
+
+/// A [`RecordBatchStream`] that is pending forever.
+#[derive(Debug)]
+pub struct BlockingStream {
+    /// Schema mocked by this stream.
+    schema: SchemaRef,
+
+    /// Ref-counting helper to check if the stream are still in memory.
+    refs: Arc<()>,
+}
+
+impl Stream for BlockingStream {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        Poll::Pending
+    }
+}
+
+impl RecordBatchStream for BlockingStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
     }
 }
