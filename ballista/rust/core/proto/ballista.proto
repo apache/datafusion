@@ -167,6 +167,7 @@ enum AggregateFunction {
   SUM = 2;
   AVG = 3;
   COUNT = 4;
+  APPROX_DISTINCT = 5;
 }
 
 message AggregateExprNode {

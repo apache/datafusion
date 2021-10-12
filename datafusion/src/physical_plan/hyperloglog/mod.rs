@@ -34,9 +34,6 @@
 //!
 //! This module also borrows some code structure from [pdatastructs.rs](https://github.com/crepererum/pdatastructs.rs/blob/3997ed50f6b6871c9e53c4c5e0f48f431405fc63/src/hyperloglog.rs).
 
-// TODO remove this when hooked up with the rest
-#![allow(dead_code)]
-
 use ahash::{AHasher, RandomState};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
@@ -58,7 +55,12 @@ where
     phantom: PhantomData<T>,
 }
 
-/// fixed seed for the hashing so that values are consistent across runs
+/// Fixed seed for the hashing so that values are consistent across runs
+///
+/// Note that when we later move on to have serialized HLL register binaries
+/// shared across cluster, this SEED will have to be consistent across all
+/// parties otherwise we might have corruption. So ideally for later this seed
+/// shall be part of the serialized form (or stay unchanged across versions).
 const SEED: RandomState = RandomState::with_seeds(
     0x885f6cab121d01a3_u64,
     0x71e4379f2976ad8f_u64,
@@ -73,6 +75,13 @@ where
     /// Creates a new, empty HyperLogLog.
     pub fn new() -> Self {
         let registers = [0; NUM_REGISTERS];
+        Self::new_with_registers(registers)
+    }
+
+    /// Creates a HyperLogLog from already populated registers
+    /// note that this method should not be invoked in untrusted environment
+    /// because the internal structure of registers are not examined.
+    pub(crate) fn new_with_registers(registers: [u8; NUM_REGISTERS]) -> Self {
         Self {
             registers,
             phantom: PhantomData,
@@ -107,6 +116,19 @@ where
             histogram[r as usize] += 1;
         }
         histogram
+    }
+
+    /// Merge the other [`HyperLogLog`] into this one
+    pub fn merge(&mut self, other: &HyperLogLog<T>) {
+        assert!(
+            self.registers.len() == other.registers.len(),
+            "unexpected got unequal register size, expect {}, got {}",
+            self.registers.len(),
+            other.registers.len()
+        );
+        for i in 0..self.registers.len() {
+            self.registers[i] = self.registers[i].max(other.registers[i]);
+        }
     }
 
     /// Guess the number of unique elements seen by the HyperLogLog.
@@ -168,6 +190,15 @@ fn hll_tau(x: f64) -> f64 {
             }
         }
         z / 3.0
+    }
+}
+
+impl<T> AsRef<[u8]> for HyperLogLog<T>
+where
+    T: Hash + ?Sized,
+{
+    fn as_ref(&self) -> &[u8] {
+        &self.registers
     }
 }
 
@@ -298,6 +329,34 @@ mod tests {
     fn test_string() {
         let mut hll = HyperLogLog::<String>::new();
         hll.extend((0..1000).map(|i| i.to_string()));
+        compare_with_delta(hll.count(), 1000);
+    }
+
+    #[test]
+    fn test_empty_merge() {
+        let mut hll = HyperLogLog::<u64>::new();
+        hll.merge(&HyperLogLog::<u64>::new());
+        assert_eq!(hll.count(), 0);
+    }
+
+    #[test]
+    fn test_merge_overlapped() {
+        let mut hll = HyperLogLog::<String>::new();
+        hll.extend((0..1000).map(|i| i.to_string()));
+
+        let mut other = HyperLogLog::<String>::new();
+        other.extend((0..1000).map(|i| i.to_string()));
+
+        hll.merge(&other);
+        compare_with_delta(hll.count(), 1000);
+    }
+
+    #[test]
+    fn test_repetition() {
+        let mut hll = HyperLogLog::<u32>::new();
+        for i in 0..1_000_000 {
+            hll.add(&(i % 1000));
+        }
         compare_with_delta(hll.count(), 1000);
     }
 }
