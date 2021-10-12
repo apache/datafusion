@@ -4079,6 +4079,10 @@ async fn test_crypto_expressions() -> Result<()> {
         "digest('tom','blake2s')",
         "5fc3f2b3a07cade5023c3df566e4d697d3823ba1b72bfb3e84cf7e768b2e7529"
     );
+    test_expression!(
+        "digest('','blake3')",
+        "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    );
     Ok(())
 }
 

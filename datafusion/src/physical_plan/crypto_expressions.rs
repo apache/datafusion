@@ -29,6 +29,7 @@ use arrow::{
     datatypes::DataType,
 };
 use blake2::{Blake2b, Blake2s, Digest};
+use blake3::Hasher as Blake3;
 use md5::Md5;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 use std::any::type_name;
@@ -51,6 +52,7 @@ enum DigestAlgorithm {
     Sha512,
     Blake2s,
     Blake2b,
+    Blake3,
 }
 
 fn digest_process(
@@ -117,6 +119,11 @@ impl DigestAlgorithm {
             Self::Sha512 => digest_to_scalar!(Sha512, value),
             Self::Blake2b => digest_to_scalar!(Blake2b, value),
             Self::Blake2s => digest_to_scalar!(Blake2s, value),
+            Self::Blake3 => ScalarValue::Binary(value.as_ref().map(|v| {
+                let mut digest = Blake3::default();
+                digest.update(v.as_bytes());
+                digest.finalize().as_bytes().to_vec()
+            })),
         })
     }
 
@@ -142,6 +149,19 @@ impl DigestAlgorithm {
             Self::Sha512 => digest_to_array!(Sha512, input_value),
             Self::Blake2b => digest_to_array!(Blake2b, input_value),
             Self::Blake2s => digest_to_array!(Blake2s, input_value),
+            Self::Blake3 => {
+                let binary_array: BinaryArray = input_value
+                    .iter()
+                    .map(|opt| {
+                        opt.map(|x| {
+                            let mut digest = Blake3::default();
+                            digest.update(x.as_bytes());
+                            digest.finalize().as_bytes().to_vec()
+                        })
+                    })
+                    .collect();
+                Arc::new(binary_array)
+            }
         };
         Ok(ColumnarValue::Array(array))
     }
@@ -164,11 +184,27 @@ impl FromStr for DigestAlgorithm {
             "sha512" => Self::Sha512,
             "blake2b" => Self::Blake2b,
             "blake2s" => Self::Blake2s,
+            "blake3" => Self::Blake3,
             _ => {
+                let options = [
+                    Self::Md5,
+                    Self::Sha224,
+                    Self::Sha256,
+                    Self::Sha384,
+                    Self::Sha512,
+                    Self::Blake2s,
+                    Self::Blake2b,
+                    Self::Blake3,
+                ]
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
                 return Err(DataFusionError::Plan(format!(
-                    "There is no built-in digest algorithm named {}",
-                    name
-                )))
+                    "There is no built-in digest algorithm named '{}', currently supported algorithms are: {}",
+                    name,
+                    options,
+                )));
             }
         })
     }
@@ -270,6 +306,11 @@ define_digest_function!(
     blake2s,
     Blake2s,
     "computes blake2s hash digest of the given input"
+);
+define_digest_function!(
+    blake3,
+    Blake3,
+    "computes blake3 hash digest of the given input"
 );
 
 /// Digest computes a binary hash of the given data, accepts Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
