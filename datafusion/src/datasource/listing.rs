@@ -18,18 +18,22 @@
 //! A table that uses the files system / table store listing capability
 //! to get the list of files to process.
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, collections::HashSet, sync::Arc};
 
-use arrow::datatypes::SchemaRef;
+use arrow::{
+    datatypes::{DataType, Field, Schema, SchemaRef},
+    record_batch::RecordBatch,
+};
 
 use crate::{
     datasource::format::{self},
     error::{DataFusionError, Result},
-    logical_plan::{combine_filters, Expr},
+    logical_plan::{combine_filters, Column, Expr},
+    optimizer,
     physical_plan::{common, parquet::ParquetExec, ExecutionPlan, Statistics},
 };
 
-use super::{PartitionedFile, TableProvider};
+use super::{datasource::TableProviderFilterPushDown, PartitionedFile, TableProvider};
 
 /// The supported file types with the associated options.
 pub enum FormatOptions {
@@ -70,9 +74,16 @@ pub enum FormatOptions {
 pub struct ListingOptions {
     /// A suffix on which files should be filtered (leave empty to
     /// keep all files on the path)
-    pub extension: String,
+    pub file_extension: String,
     /// The file format
     pub format: FormatOptions,
+    /// The expected partition column names.
+    /// For example `Vec["a", "b"]` means that the two first levels of
+    /// partitioning expected should be named "a" and "b":
+    /// - If there is a third level of partitioning it will be ignored.
+    /// - Files that don't follow this partitioning will be ignored.
+    /// Note that only `DataType::Utf8` is supported for the column type.
+    pub partitions: Vec<String>,
 }
 
 impl ListingOptions {
@@ -83,22 +94,29 @@ impl ListingOptions {
         // We currently get the schema information from the first file rather than do
         // schema merging and this is a limitation.
         // See https://issues.apache.org/jira/browse/ARROW-11017
-        let first_file = common::build_file_list(path, &self.extension)?
+        let first_file = common::build_file_list(path, &self.file_extension)?
             .into_iter()
             .next()
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "No file (with .{} extension) found at path {}",
-                    &self.extension, path
+                    &self.file_extension, path
                 ))
             })?;
-        match self.format {
+        // Infer the schema according to the rules specific to this file format
+        let schema = match self.format {
             FormatOptions::Parquet { .. } => {
                 let (schema, _) = format::parquet::fetch_metadata(&first_file)?;
-                Ok(Arc::new(schema))
+                schema
             }
             _ => todo!("other file formats"),
+        };
+        // Add the partition columns to the file schema
+        let mut fields = schema.fields().clone();
+        for part in &self.partitions {
+            fields.push(Field::new(part, DataType::Utf8, false));
         }
+        Ok(Arc::new(Schema::new(fields)))
     }
 
     fn create_executor(
@@ -210,8 +228,12 @@ impl TableProvider for ListingTable {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // 1. list files (with partitions)
-        let file_list =
-            pruned_partition_list(&self.path, filters, &self.options.extension)?;
+        let file_list = pruned_partition_list(
+            &self.path,
+            filters,
+            &self.options.file_extension,
+            &self.options.partitions,
+        )?;
         // 2. create the plan
         self.options.create_executor(
             self.schema(),
@@ -222,6 +244,13 @@ impl TableProvider for ListingTable {
             limit,
         )
     }
+
+    fn supports_filter_pushdown(
+        &self,
+        _filter: &Expr,
+    ) -> Result<TableProviderFilterPushDown> {
+        Ok(TableProviderFilterPushDown::Inexact)
+    }
 }
 
 /// Discover the partitions on the given path and prune out files
@@ -229,18 +258,67 @@ impl TableProvider for ListingTable {
 fn pruned_partition_list(
     // registry: &ObjectStoreRegistry,
     path: &str,
-    _filters: &[Expr],
+    filters: &[Expr],
     file_extension: &str,
+    partition_names: &[String],
 ) -> Result<Vec<PartitionedFile>> {
-    // TODO: parse folder names first to get partitions and apply the `filters`
-    // to list only relevant ones
-    Ok(common::build_file_list(path, file_extension)?
-        .into_iter()
-        .map(|f| PartitionedFile {
-            path: f,
-            statistics: Statistics::default(),
-        })
-        .collect())
+    let list_all = || {
+        Ok(common::build_file_list(path, file_extension)?
+            .into_iter()
+            .map(|f| PartitionedFile {
+                path: f,
+                statistics: Statistics::default(),
+            })
+            .collect::<Vec<PartitionedFile>>())
+    };
+    if partition_names.is_empty() {
+        list_all()
+    } else {
+        let mut applicable_exprs = vec![];
+        let partition_set = partition_names.iter().collect::<HashSet<_>>();
+        'expr: for expr in filters {
+            let mut columns: HashSet<Column> = HashSet::new();
+            optimizer::utils::expr_to_columns(expr, &mut columns)?;
+            for col in columns {
+                if !partition_set.contains(&col.name) {
+                    continue 'expr;
+                }
+            }
+            applicable_exprs.push(expr.clone());
+        }
+
+        if applicable_exprs.is_empty() {
+            list_all()
+        } else {
+            // 1) could be to run the filters on the partition values
+
+            // let partition_values = list_partitions(path, partition_names)?;
+            // let df = ExecutionContext::new()
+            //     .read_table(Arc::new(MemTable::try_new(
+            //         partition_values.schema(),
+            //         vec![vec![partition_values]],
+            //     )?))?
+            //     .filter(combine_filters(&applicable_exprs).unwrap())?
+            //     .collect()
+            //     .await?;
+
+            // this requires `fn scan()` to be async
+
+            // 2) take the filtered partition lines and list the files
+            // contained in the associated folders
+
+            todo!()
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn list_partitions(
+    // registry: &ObjectStoreRegistry,
+    _path: &str,
+    _partitions: &[String],
+) -> Result<RecordBatch> {
+    todo!()
 }
 
 fn split_files(
@@ -289,12 +367,13 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
         let opt = ListingOptions {
-            extension: ".parquet".to_owned(),
+            file_extension: "parquet".to_owned(),
             format: FormatOptions::Parquet {
                 collect_stat: true,
                 enable_pruning: true,
                 max_partitions: 2,
             },
+            partitions: vec![],
         };
         // here we resolve the schema locally
         let schema = opt.infer_schema(&filename)?;
