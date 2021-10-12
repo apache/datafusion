@@ -83,6 +83,7 @@ impl FileFormat for JsonFormat {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = NdJsonExec::try_new(
+            // flattening this for now because NdJsonExec does not support partitioning yet
             files.into_iter().flatten().map(|f| f.path).collect(),
             statistics,
             schema,
