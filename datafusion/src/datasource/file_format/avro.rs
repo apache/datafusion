@@ -33,6 +33,7 @@ use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
 /// Avro `FileFormat` implementation.
+#[derive(Default)]
 pub struct AvroFormat;
 
 #[async_trait]

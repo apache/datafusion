@@ -63,7 +63,7 @@ impl Default for ParquetFormat {
 impl ParquetFormat {
     /// Activate statistics based row group level pruning
     /// - defaults to true
-    pub fn with_enable_pruning(&mut self, enable: bool) -> &mut Self {
+    pub fn with_enable_pruning(mut self, enable: bool) -> Self {
         self.enable_pruning = enable;
         self
     }

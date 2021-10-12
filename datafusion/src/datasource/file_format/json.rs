@@ -51,7 +51,7 @@ impl Default for JsonFormat {
 impl JsonFormat {
     /// Set a limit in terms of records to scan to infer the schema
     /// - defaults to `None` (no limit)
-    pub fn with_schema_infer_max_rec(&mut self, max_rec: Option<usize>) -> &mut Self {
+    pub fn with_schema_infer_max_rec(mut self, max_rec: Option<usize>) -> Self {
         self.schema_infer_max_rec = max_rec;
         self
     }

@@ -51,21 +51,21 @@ impl Default for CsvFormat {
 impl CsvFormat {
     /// Set a limit in terms of records to scan to infer the schema
     /// - default to `None` (no limit)
-    pub fn with_schema_infer_max_rec(&mut self, max_rec: Option<usize>) -> &mut Self {
+    pub fn with_schema_infer_max_rec(mut self, max_rec: Option<usize>) -> Self {
         self.schema_infer_max_rec = max_rec;
         self
     }
 
     /// Set true to indicate that the first line is a header.
     /// - default to true
-    pub fn with_has_header(&mut self, has_header: bool) -> &mut Self {
+    pub fn with_has_header(mut self, has_header: bool) -> Self {
         self.has_header = has_header;
         self
     }
 
     /// The character separating values within a row.
     /// - default to ','
-    pub fn with_delimiter(&mut self, delimiter: u8) -> &mut Self {
+    pub fn with_delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = delimiter;
         self
     }
