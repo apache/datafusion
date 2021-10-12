@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
 
 use crate::datasource::object_store::{
-    ListEntryStream, ObjectReader, ObjectStore, SizedFile, SizedFileStream,
+    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
 use crate::error::DataFusionError;
 use crate::error::Result;
@@ -36,7 +36,7 @@ pub struct LocalFileSystem;
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn list_file(&self, prefix: &str) -> Result<SizedFileStream> {
+    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
         list_all(prefix.to_owned()).await
     }
 
@@ -48,17 +48,17 @@ impl ObjectStore for LocalFileSystem {
         todo!()
     }
 
-    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
+    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 }
 
 struct LocalFileReader {
-    file: SizedFile,
+    file: FileMeta,
 }
 
 impl LocalFileReader {
-    fn new(file: SizedFile) -> Result<Self> {
+    fn new(file: FileMeta) -> Result<Self> {
         Ok(Self { file })
     }
 }
@@ -92,9 +92,9 @@ impl ObjectReader for LocalFileReader {
     }
 }
 
-async fn list_all(prefix: String) -> Result<SizedFileStream> {
-    fn get_meta(path: String, metadata: Metadata) -> SizedFile {
-        SizedFile {
+async fn list_all(prefix: String) -> Result<FileMetaStream> {
+    fn get_meta(path: String, metadata: Metadata) -> FileMeta {
+        FileMeta {
             path,
             size: metadata.len(),
             last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
@@ -104,7 +104,7 @@ async fn list_all(prefix: String) -> Result<SizedFileStream> {
     async fn find_files_in_dir(
         path: String,
         to_visit: &mut Vec<String>,
-    ) -> Result<Vec<SizedFile>> {
+    ) -> Result<Vec<FileMeta>> {
         let mut dir = tokio::fs::read_dir(path).await?;
         let mut files = Vec::new();
 
@@ -148,15 +148,15 @@ async fn list_all(prefix: String) -> Result<SizedFileStream> {
     }
 }
 
-/// Create a stream of `SizedFile` applying `local_sized_file` to each path in `files`
-pub fn local_sized_file_stream(files: Vec<String>) -> SizedFileStream {
-    Box::pin(futures::stream::iter(files).map(|f| Ok(local_sized_file(f))))
+/// Create a stream of `FileMeta` applying `local_file_meta` to each path in `files`
+pub fn local_file_meta_stream(files: Vec<String>) -> FileMetaStream {
+    Box::pin(futures::stream::iter(files).map(|f| Ok(local_file_meta(f))))
 }
 
-/// Helper method to fetch the file size at given path and create a `SizedFile`
-pub fn local_sized_file(file: String) -> SizedFile {
+/// Helper method to fetch the file size at given path and create a `FileMeta`
+pub fn local_file_meta(file: String) -> FileMeta {
     let metadata = fs::metadata(&file).expect("Local file metadata");
-    SizedFile {
+    FileMeta {
         size: metadata.len(),
         path: file,
         last_modified: metadata.modified().map(chrono::DateTime::from).ok(),

@@ -27,7 +27,7 @@ use futures::StreamExt;
 use super::FileFormat;
 use super::PartitionedFile;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
-use crate::datasource::object_store::{ObjectStoreRegistry, SizedFile, SizedFileStream};
+use crate::datasource::object_store::{FileMeta, FileMetaStream, ObjectStoreRegistry};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::AvroExec;
@@ -59,7 +59,7 @@ impl AvroFormat {
 
 #[async_trait]
 impl FileFormat for AvroFormat {
-    async fn infer_schema(&self, mut file_stream: SizedFileStream) -> Result<SchemaRef> {
+    async fn infer_schema(&self, mut file_stream: FileMetaStream) -> Result<SchemaRef> {
         let mut schemas = vec![];
         while let Some(fmeta_res) = file_stream.next().await {
             let fmeta = fmeta_res?;
@@ -75,7 +75,7 @@ impl FileFormat for AvroFormat {
         Ok(Arc::new(merged_schema))
     }
 
-    async fn infer_stats(&self, _path: SizedFile) -> Result<Statistics> {
+    async fn infer_stats(&self, _path: FileMeta) -> Result<Statistics> {
         Ok(Statistics::default())
     }
 
@@ -111,7 +111,7 @@ impl FileFormat for AvroFormat {
 #[cfg(feature = "avro")]
 mod tests {
     use crate::{
-        datasource::object_store::local::{local_sized_file, local_sized_file_stream},
+        datasource::object_store::local::{local_file_meta, local_file_meta_stream},
         physical_plan::collect,
     };
 
@@ -376,15 +376,15 @@ mod tests {
         let filename = format!("{}/avro/{}", testdata, file_name);
         let format = AvroFormat::default();
         let schema = format
-            .infer_schema(local_sized_file_stream(vec![filename.clone()]))
+            .infer_schema(local_file_meta_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
         let stats = format
-            .infer_stats(local_sized_file(filename.clone()))
+            .infer_stats(local_file_meta(filename.clone()))
             .await
             .expect("Stats inference");
         let files = vec![vec![PartitionedFile {
-            file: local_sized_file(filename.to_owned()),
+            file: local_file_meta(filename.to_owned()),
         }]];
         let exec = format
             .create_physical_plan(
@@ -406,7 +406,7 @@ mod tests {
 mod tests {
     use super::*;
 
-    use crate::datasource::object_store::local::local_sized_file_stream;
+    use crate::datasource::object_store::local::local_file_meta_stream;
     use crate::error::DataFusionError;
 
     #[tokio::test]
@@ -414,7 +414,7 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let schema_result = AvroFormat::default()
-            .infer_schema(local_sized_file_stream(vec![filename]))
+            .infer_schema(local_file_meta_stream(vec![filename]))
             .await;
         assert!(matches!(
             schema_result,

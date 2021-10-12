@@ -62,14 +62,14 @@ pub trait ObjectReader {
 #[derive(Debug)]
 pub enum ListEntry {
     /// Complete file path with size
-    SizedFile(SizedFile),
+    FileMeta(FileMeta),
     /// Prefix to be further resolved during partition discovery
     Prefix(String),
 }
 
 /// Complete file path with size we got from object store
 #[derive(Debug, Clone)]
-pub struct SizedFile {
+pub struct FileMeta {
     /// Path of the file
     pub path: String,
     /// File size in total
@@ -81,15 +81,15 @@ pub struct SizedFile {
     pub last_modified: Option<DateTime<Utc>>,
 }
 
-impl std::fmt::Display for SizedFile {
+impl std::fmt::Display for FileMeta {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{} (size: {})", self.path, self.size)
     }
 }
 
 /// Stream of files listed from object store
-pub type SizedFileStream =
-    Pin<Box<dyn Stream<Item = Result<SizedFile>> + Send + Sync + 'static>>;
+pub type FileMetaStream =
+    Pin<Box<dyn Stream<Item = Result<FileMeta>> + Send + Sync + 'static>>;
 
 /// Stream of list entries obtained from object store
 pub type ListEntryStream =
@@ -100,14 +100,14 @@ pub type ListEntryStream =
 #[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
     /// Returns all the files in path `prefix`
-    async fn list_file(&self, prefix: &str) -> Result<SizedFileStream>;
+    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream>;
 
     /// Calls `list_file` with a suffix filter
     async fn list_file_with_suffix(
         &self,
         prefix: &str,
         suffix: &str,
-    ) -> Result<SizedFileStream> {
+    ) -> Result<FileMetaStream> {
         let file_stream = self.list_file(prefix).await?;
         let suffix = suffix.to_owned();
         Ok(Box::pin(file_stream.filter(move |fr| {
@@ -128,7 +128,7 @@ pub trait ObjectStore: Sync + Send + Debug {
     ) -> Result<ListEntryStream>;
 
     /// Get object reader for one file
-    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
+    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
 }
 
 static LOCAL_SCHEME: &str = "file";

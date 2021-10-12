@@ -37,10 +37,10 @@ use super::FileFormat;
 use super::PartitionedFile;
 use super::{create_max_min_accs, get_col_stats};
 use crate::arrow::datatypes::{DataType, Field};
+use crate::datasource::object_store::FileMeta;
+use crate::datasource::object_store::FileMetaStream;
 use crate::datasource::object_store::ObjectReader;
 use crate::datasource::object_store::ObjectStoreRegistry;
-use crate::datasource::object_store::SizedFile;
-use crate::datasource::object_store::SizedFileStream;
 use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::logical_plan::combine_filters;
@@ -85,7 +85,7 @@ impl ParquetFormat {
 
 #[async_trait]
 impl FileFormat for ParquetFormat {
-    async fn infer_schema(&self, mut paths: SizedFileStream) -> Result<SchemaRef> {
+    async fn infer_schema(&self, mut paths: FileMetaStream) -> Result<SchemaRef> {
         // We currently get the schema information from the first file rather than do
         // schema merging and this is a limitation.
         // See https://issues.apache.org/jira/browse/ARROW-11017
@@ -97,7 +97,7 @@ impl FileFormat for ParquetFormat {
         Ok(Arc::new(schema))
     }
 
-    async fn infer_stats(&self, path: SizedFile) -> Result<Statistics> {
+    async fn infer_stats(&self, path: FileMeta) -> Result<Statistics> {
         let (_, stats) = fetch_metadata(&self.object_store_registry, path)?;
         Ok(stats)
     }
@@ -263,7 +263,7 @@ fn summarize_min_max(
 /// Read and parse the metadata of the Parquet file at location `path`
 fn fetch_metadata(
     object_store_registry: &ObjectStoreRegistry,
-    fmeta: SizedFile,
+    fmeta: FileMeta,
 ) -> Result<(Schema, Statistics)> {
     let object_store = object_store_registry.get_by_uri(&fmeta.path)?;
     let obj_reader = ChunkObjectReader(object_store.file_reader(fmeta)?);
@@ -345,7 +345,7 @@ impl ChunkReader for ChunkObjectReader {
 #[cfg(test)]
 mod tests {
     use crate::{
-        datasource::object_store::local::{local_sized_file, local_sized_file_stream},
+        datasource::object_store::local::{local_file_meta, local_file_meta_stream},
         physical_plan::collect,
     };
 
@@ -605,15 +605,15 @@ mod tests {
         let filename = format!("{}/{}", testdata, file_name);
         let format = ParquetFormat::default();
         let schema = format
-            .infer_schema(local_sized_file_stream(vec![filename.clone()]))
+            .infer_schema(local_file_meta_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
         let stats = format
-            .infer_stats(local_sized_file(filename.clone()))
+            .infer_stats(local_file_meta(filename.clone()))
             .await
             .expect("Stats inference");
         let files = vec![vec![PartitionedFile {
-            file: local_sized_file(filename.clone()),
+            file: local_file_meta(filename.clone()),
         }]];
         let exec = format
             .create_physical_plan(

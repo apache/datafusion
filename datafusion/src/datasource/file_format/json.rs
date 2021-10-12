@@ -29,9 +29,9 @@ use futures::StreamExt;
 
 use super::FileFormat;
 use super::PartitionedFile;
+use crate::datasource::object_store::FileMeta;
+use crate::datasource::object_store::FileMetaStream;
 use crate::datasource::object_store::ObjectStoreRegistry;
-use crate::datasource::object_store::SizedFile;
-use crate::datasource::object_store::SizedFileStream;
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
@@ -72,7 +72,7 @@ impl JsonFormat {
 
 #[async_trait]
 impl FileFormat for JsonFormat {
-    async fn infer_schema(&self, mut file_stream: SizedFileStream) -> Result<SchemaRef> {
+    async fn infer_schema(&self, mut file_stream: FileMetaStream) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
         while let Some(fmeta_res) = file_stream.next().await {
@@ -99,7 +99,7 @@ impl FileFormat for JsonFormat {
         Ok(Arc::new(schema))
     }
 
-    async fn infer_stats(&self, _path: SizedFile) -> Result<Statistics> {
+    async fn infer_stats(&self, _path: FileMeta) -> Result<Statistics> {
         Ok(Statistics::default())
     }
 
@@ -137,7 +137,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        datasource::object_store::local::{local_sized_file, local_sized_file_stream},
+        datasource::object_store::local::{local_file_meta, local_file_meta_stream},
         physical_plan::collect,
     };
 
@@ -230,15 +230,15 @@ mod tests {
         let filename = "tests/jsons/2.json";
         let format = JsonFormat::default();
         let schema = format
-            .infer_schema(local_sized_file_stream(vec![filename.to_owned()]))
+            .infer_schema(local_file_meta_stream(vec![filename.to_owned()]))
             .await
             .expect("Schema inference");
         let stats = format
-            .infer_stats(local_sized_file(filename.to_owned()))
+            .infer_stats(local_file_meta(filename.to_owned()))
             .await
             .expect("Stats inference");
         let files = vec![vec![PartitionedFile {
-            file: local_sized_file(filename.to_owned()),
+            file: local_file_meta(filename.to_owned()),
         }]];
         let exec = format
             .create_physical_plan(

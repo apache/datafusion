@@ -235,7 +235,7 @@ fn split_files(
 mod tests {
     use crate::datasource::{
         file_format::{avro::AvroFormat, parquet::ParquetFormat},
-        object_store::{ListEntryStream, ObjectStore, SizedFile, SizedFileStream},
+        object_store::{FileMeta, FileMetaStream, ListEntryStream, ObjectStore},
     };
 
     use super::*;
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn test_split_files() {
         let new_partitioned_file = |path: &str| PartitionedFile {
-            file: SizedFile {
+            file: FileMeta {
                 path: path.to_owned(),
                 size: 10,
                 last_modified: None,
@@ -366,10 +366,10 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockObjectStore {
-        async fn list_file(&self, prefix: &str) -> Result<SizedFileStream> {
+        async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
             let prefix = prefix.to_owned();
             let files = (0..self.files_in_folder).map(move |i| {
-                Ok(SizedFile {
+                Ok(FileMeta {
                     path: format!("{}file{}", prefix, i),
                     size: 100,
                     last_modified: None,
@@ -388,7 +388,7 @@ mod tests {
 
         fn file_reader(
             &self,
-            _file: SizedFile,
+            _file: FileMeta,
         ) -> Result<Arc<dyn crate::datasource::object_store::ObjectReader>> {
             unimplemented!()
         }

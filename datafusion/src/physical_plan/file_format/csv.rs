@@ -236,7 +236,7 @@ impl<R: Read + Unpin> RecordBatchStream for CsvStream<R> {
 mod tests {
     use super::*;
     use crate::{
-        datasource::object_store::local::local_sized_file, test::aggr_test_schema,
+        datasource::object_store::local::local_file_meta, test::aggr_test_schema,
     };
     use futures::StreamExt;
 
@@ -249,7 +249,7 @@ mod tests {
         let csv = CsvExec::new(
             Arc::new(ObjectStoreRegistry::new()),
             vec![PartitionedFile {
-                file: local_sized_file(path),
+                file: local_file_meta(path),
             }],
             Statistics::default(),
             schema,
@@ -282,7 +282,7 @@ mod tests {
         let csv = CsvExec::new(
             Arc::new(ObjectStoreRegistry::new()),
             vec![PartitionedFile {
-                file: local_sized_file(path),
+                file: local_file_meta(path),
             }],
             Statistics::default(),
             schema,

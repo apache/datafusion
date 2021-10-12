@@ -229,7 +229,7 @@ mod tests {
 
     use crate::datasource::{
         file_format::{json::JsonFormat, FileFormat},
-        object_store::local::{local_sized_file, local_sized_file_stream},
+        object_store::local::{local_file_meta, local_file_meta_stream},
     };
 
     use super::*;
@@ -238,7 +238,7 @@ mod tests {
 
     async fn infer_schema(path: String) -> Result<SchemaRef> {
         JsonFormat::default()
-            .infer_schema(local_sized_file_stream(vec![path]))
+            .infer_schema(local_file_meta_stream(vec![path]))
             .await
     }
 
@@ -249,7 +249,7 @@ mod tests {
         let exec = NdJsonExec::new(
             Arc::new(ObjectStoreRegistry::new()),
             vec![PartitionedFile {
-                file: local_sized_file(path.clone()),
+                file: local_file_meta(path.clone()),
             }],
             Default::default(),
             infer_schema(path).await?,
@@ -304,7 +304,7 @@ mod tests {
         let exec = NdJsonExec::new(
             Arc::new(ObjectStoreRegistry::new()),
             vec![PartitionedFile {
-                file: local_sized_file(path.clone()),
+                file: local_file_meta(path.clone()),
             }],
             Default::default(),
             infer_schema(path).await?,

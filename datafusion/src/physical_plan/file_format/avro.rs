@@ -244,7 +244,7 @@ impl<R: Read + Unpin> RecordBatchStream for AvroStream<'_, R> {
 mod tests {
 
     use crate::datasource::object_store::local::{
-        local_sized_file, local_sized_file_stream,
+        local_file_meta, local_file_meta_stream,
     };
 
     use super::*;
@@ -260,11 +260,11 @@ mod tests {
         let avro_exec = AvroExec::new(
             Arc::new(ObjectStoreRegistry::new()),
             vec![PartitionedFile {
-                file: local_sized_file(filename.clone()),
+                file: local_file_meta(filename.clone()),
             }],
             Statistics::default(),
             AvroFormat::default()
-                .infer_schema(local_sized_file_stream(vec![filename]))
+                .infer_schema(local_file_meta_stream(vec![filename]))
                 .await?,
             Some(vec![0, 1, 2]),
             1024,

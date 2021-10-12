@@ -26,7 +26,7 @@ use futures::StreamExt;
 
 use super::FileFormat;
 use super::PartitionedFile;
-use crate::datasource::object_store::{ObjectStoreRegistry, SizedFile, SizedFileStream};
+use crate::datasource::object_store::{FileMeta, FileMetaStream, ObjectStoreRegistry};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::CsvExec;
@@ -85,7 +85,7 @@ impl CsvFormat {
 
 #[async_trait]
 impl FileFormat for CsvFormat {
-    async fn infer_schema(&self, mut file_stream: SizedFileStream) -> Result<SchemaRef> {
+    async fn infer_schema(&self, mut file_stream: FileMetaStream) -> Result<SchemaRef> {
         let mut schemas = vec![];
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(std::usize::MAX);
 
@@ -116,7 +116,7 @@ impl FileFormat for CsvFormat {
         Ok(Arc::new(merged_schema))
     }
 
-    async fn infer_stats(&self, _path: SizedFile) -> Result<Statistics> {
+    async fn infer_stats(&self, _path: FileMeta) -> Result<Statistics> {
         Ok(Statistics::default())
     }
 
@@ -156,7 +156,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        datasource::object_store::local::{local_sized_file, local_sized_file_stream},
+        datasource::object_store::local::{local_file_meta, local_file_meta_stream},
         physical_plan::collect,
     };
 
@@ -266,15 +266,15 @@ mod tests {
         let filename = format!("{}/csv/{}", testdata, file_name);
         let format = CsvFormat::default();
         let schema = format
-            .infer_schema(local_sized_file_stream(vec![filename.clone()]))
+            .infer_schema(local_file_meta_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
         let stats = format
-            .infer_stats(local_sized_file(filename.clone()))
+            .infer_stats(local_file_meta(filename.clone()))
             .await
             .expect("Stats inference");
         let files = vec![vec![PartitionedFile {
-            file: local_sized_file(filename.to_owned()),
+            file: local_file_meta(filename.to_owned()),
         }]];
         let exec = format
             .create_physical_plan(

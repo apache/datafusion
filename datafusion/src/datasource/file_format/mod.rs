@@ -34,7 +34,7 @@ use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 
-use super::object_store::{ObjectStoreRegistry, SizedFile, SizedFileStream};
+use super::object_store::{FileMeta, FileMetaStream, ObjectStoreRegistry};
 
 /// This trait abstracts all the file format specific implementations
 /// from the `TableProvider`. This helps code re-utilization accross
@@ -42,10 +42,10 @@ use super::object_store::{ObjectStoreRegistry, SizedFile, SizedFileStream};
 #[async_trait]
 pub trait FileFormat: Send + Sync {
     /// Infer the the common schema of the files described by the path stream
-    async fn infer_schema(&self, paths: SizedFileStream) -> Result<SchemaRef>;
+    async fn infer_schema(&self, paths: FileMetaStream) -> Result<SchemaRef>;
 
     /// Infer the statistics for the file at the given path
-    async fn infer_stats(&self, path: SizedFile) -> Result<Statistics>;
+    async fn infer_stats(&self, path: FileMeta) -> Result<Statistics>;
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.
@@ -159,7 +159,7 @@ pub async fn get_statistics_with_limit(
 /// TODO move back to crate::datasource::mod.rs once legacy cleaned up
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
-    pub file: SizedFile,
+    pub file: FileMeta,
     // Values of partition columns to be appended to each row
     // pub partition_value: Option<Vec<ScalarValue>>,
     // We may include row group range here for a more fine-grained parallel execution
