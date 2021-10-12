@@ -22,7 +22,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::{stream, StreamExt};
+use futures::{stream, AsyncRead, StreamExt};
 
 use crate::datasource::object_store::{
     ListEntryStream, ObjectReader, ObjectStore, SizedFile, SizedFileStream,
@@ -65,7 +65,17 @@ impl LocalFileReader {
 
 #[async_trait]
 impl ObjectReader for LocalFileReader {
-    fn chunk_reader(
+    async fn chunk_reader(
+        &self,
+        _start: u64,
+        _length: usize,
+    ) -> Result<Box<dyn AsyncRead>> {
+        todo!(
+            "implement once async file readers are available (arrow-rs#78, arrow-rs#111)"
+        )
+    }
+
+    fn sync_chunk_reader(
         &self,
         start: u64,
         length: usize,

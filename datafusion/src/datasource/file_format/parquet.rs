@@ -337,7 +337,7 @@ impl ChunkReader for ChunkObjectReader {
 
     fn get_read(&self, start: u64, length: usize) -> ParquetResult<Self::T> {
         self.0
-            .chunk_reader(start, length)
+            .sync_chunk_reader(start, length)
             .map_err(|e| ParquetError::ArrowError(e.to_string()))
     }
 }

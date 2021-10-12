@@ -81,7 +81,7 @@ impl FileFormat for JsonFormat {
                 .object_store_registry
                 .get_by_uri(&fmeta.path)?
                 .file_reader(fmeta)?
-                .reader()?;
+                .sync_reader()?;
             let mut reader = BufReader::new(reader);
             let iter = ValueIter::new(&mut reader, None);
             let schema = infer_json_schema_from_iterator(iter.take_while(|_| {

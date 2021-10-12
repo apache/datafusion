@@ -26,7 +26,7 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
+use futures::{AsyncRead, Stream, StreamExt};
 
 use local::LocalFileSystem;
 
@@ -37,16 +37,20 @@ use crate::error::{DataFusionError, Result};
 /// have some performance impacts.
 #[async_trait]
 pub trait ObjectReader {
+    /// Get reader for a part [start, start + length] in the file asynchronously
+    async fn chunk_reader(&self, start: u64, length: usize)
+        -> Result<Box<dyn AsyncRead>>;
+
     /// Get reader for a part [start, start + length] in the file
-    fn chunk_reader(
+    fn sync_chunk_reader(
         &self,
         start: u64,
         length: usize,
     ) -> Result<Box<dyn Read + Send + Sync>>;
 
     /// Get reader for the entire file
-    fn reader(&self) -> Result<Box<dyn Read + Send + Sync>> {
-        self.chunk_reader(0, self.length() as usize)
+    fn sync_reader(&self) -> Result<Box<dyn Read + Send + Sync>> {
+        self.sync_chunk_reader(0, self.length() as usize)
     }
 
     /// Get the size of the file

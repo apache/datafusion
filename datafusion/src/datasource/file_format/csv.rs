@@ -95,7 +95,7 @@ impl FileFormat for CsvFormat {
                 .object_store_registry
                 .get_by_uri(&fmeta.path)?
                 .file_reader(fmeta)?
-                .reader()?;
+                .sync_reader()?;
             let (schema, records_read) = arrow::csv::reader::infer_reader_schema(
                 &mut reader,
                 self.delimiter,

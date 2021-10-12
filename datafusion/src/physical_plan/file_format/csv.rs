@@ -196,7 +196,7 @@ impl CsvStream<Box<dyn Read + Send + Sync>> {
         let file = object_store_registry
             .get_by_uri(&file.path)?
             .file_reader(file.clone())?
-            .reader()?;
+            .sync_reader()?;
         Self::try_new_from_reader(
             file, schema, has_header, delimiter, projection, batch_size, limit,
         )

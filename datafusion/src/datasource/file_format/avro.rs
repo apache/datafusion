@@ -67,7 +67,7 @@ impl FileFormat for AvroFormat {
                 .object_store_registry
                 .get_by_uri(&fmeta.path)?
                 .file_reader(fmeta)?
-                .reader()?;
+                .sync_reader()?;
             let schema = read_avro_schema_from_reader(&mut reader)?;
             schemas.push(schema);
         }
