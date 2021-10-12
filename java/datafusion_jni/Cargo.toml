@@ -1,0 +1,18 @@
+[package]
+name = "datafusion_jni"
+version = "0.1.0"
+homepage = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/arrow-datafusion"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+description = "Build and run queries against data"
+readme = "README.md"
+license = "Apache-2.0"
+edition = "2018"
+
+
+[dependencies]
+jni = "0.19.0"
+datafusion = { path = "../../datafusion", version = "5.1.0" }
+
+[lib]
+crate_type = ["cdylib"]

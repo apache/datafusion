@@ -26,6 +26,7 @@ members = [
     "ballista/rust/executor",
     "ballista/rust/scheduler",
     "ballista-examples",
+    "java/datafusion_jni"
 ]
 
 exclude = ["python"]
