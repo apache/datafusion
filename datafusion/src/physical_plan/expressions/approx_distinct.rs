@@ -88,6 +88,7 @@ impl AggregateExpr for ApproxDistinct {
         let accumulator: Box<dyn Accumulator> = match &self.input_data_type {
             // TODO u8, i8, u16, i16 shall really be done using bitmap, not HLL
             // TODO support for boolean (trivial case)
+            // https://github.com/apache/arrow-datafusion/issues/1109
             DataType::UInt8 => Box::new(NumericHLLAccumulator::<UInt8Type>::new()),
             DataType::UInt16 => Box::new(NumericHLLAccumulator::<UInt16Type>::new()),
             DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
@@ -102,7 +103,7 @@ impl AggregateExpr for ApproxDistinct {
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Support for count_distinct for data type {} is not implemented",
+                    "Support for 'approx_distinct' for data type {} is not implemented",
                     other
                 )))
             }
