@@ -25,13 +25,11 @@ pub mod parquet;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::arrow::datatypes::{Schema, SchemaRef};
+use crate::arrow::datatypes::SchemaRef;
+use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::logical_plan::Expr;
-use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::{Accumulator, ColumnStatistics, ExecutionPlan, Statistics};
-
-use super::PartitionedFile;
+use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 
 use async_trait::async_trait;
 use futures::Stream;
@@ -77,8 +75,9 @@ pub trait FileFormat: Send + Sync {
 /// if the optional `limit` is provided, includes only sufficient files
 /// needed to read up to `limit` number of rows
 /// TODO fix case where `num_rows` and `total_byte_size` are not defined (stat should be None instead of Some(0))
+/// TODO move back to crate::datasource::mod.rs once legacy cleaned up
 pub fn get_statistics_with_limit(
-    all_files: &[PartitionedFile],
+    all_files: &[(PartitionedFile, Statistics)],
     schema: SchemaRef,
     limit: Option<usize>,
 ) -> (Vec<PartitionedFile>, Statistics) {
@@ -92,9 +91,8 @@ pub fn get_statistics_with_limit(
     let mut num_rows = 0;
     let mut num_files = 0;
     let mut is_exact = true;
-    for file in &all_files {
+    for (_, file_stats) in &all_files {
         num_files += 1;
-        let file_stats = &file.statistics;
         is_exact &= file_stats.is_exact;
         num_rows += file_stats.num_rows.unwrap_or(0);
         total_byte_size += file_stats.total_byte_size.unwrap_or(0);
@@ -152,47 +150,43 @@ pub fn get_statistics_with_limit(
         column_statistics: column_stats,
         is_exact,
     };
-    (all_files, statistics)
+
+    let files = all_files.into_iter().map(|(f, _)| f).collect();
+
+    (files, statistics)
 }
 
-fn create_max_min_accs(
-    schema: &Schema,
-) -> (Vec<Option<MaxAccumulator>>, Vec<Option<MinAccumulator>>) {
-    let max_values: Vec<Option<MaxAccumulator>> = schema
-        .fields()
-        .iter()
-        .map(|field| MaxAccumulator::try_new(field.data_type()).ok())
-        .collect::<Vec<_>>();
-    let min_values: Vec<Option<MinAccumulator>> = schema
-        .fields()
-        .iter()
-        .map(|field| MinAccumulator::try_new(field.data_type()).ok())
-        .collect::<Vec<_>>();
-    (max_values, min_values)
+#[derive(Debug, Clone)]
+/// A single file that should be read, along with its schema, statistics
+/// and partition column values that need to be appended to each row.
+/// TODO move back to crate::datasource::mod.rs once legacy cleaned up
+pub struct PartitionedFile {
+    /// Path for the file (e.g. URL, filesystem path, etc)
+    pub path: String,
+    // Values of partition columns to be appended to each row
+    // pub partition_value: Option<Vec<ScalarValue>>,
+    // We may include row group range here for a more fine-grained parallel execution
 }
 
-fn get_col_stats(
-    schema: &Schema,
-    null_counts: Vec<usize>,
-    max_values: &mut Vec<Option<MaxAccumulator>>,
-    min_values: &mut Vec<Option<MinAccumulator>>,
-) -> Vec<ColumnStatistics> {
-    (0..schema.fields().len())
-        .map(|i| {
-            let max_value = match &max_values[i] {
-                Some(max_value) => max_value.evaluate().ok(),
-                None => None,
-            };
-            let min_value = match &min_values[i] {
-                Some(min_value) => min_value.evaluate().ok(),
-                None => None,
-            };
-            ColumnStatistics {
-                null_count: Some(null_counts[i] as usize),
-                max_value,
-                min_value,
-                distinct_count: None,
-            }
-        })
-        .collect()
+impl std::fmt::Display for PartitionedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.path)
+    }
+}
+
+#[derive(Debug, Clone)]
+/// A collection of files that should be read in a single task
+/// TODO move back to crate::datasource::mod.rs once legacy cleaned up
+pub struct FilePartition {
+    /// The index of the partition among all partitions
+    pub index: usize,
+    /// The contained files of the partition
+    pub files: Vec<PartitionedFile>,
+}
+
+impl std::fmt::Display for FilePartition {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let files: Vec<String> = self.files.iter().map(|f| f.to_string()).collect();
+        write!(f, "{}", files.join(", "))
+    }
 }

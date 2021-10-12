@@ -15,33 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution plan for reading line-delimited JSON files
-use async_trait::async_trait;
-use futures::Stream;
-
+//! Execution plan for reading line-delimited Avro files
 use crate::error::{DataFusionError, Result};
+#[cfg(feature = "avro")]
+use crate::physical_plan::RecordBatchStream;
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use arrow::{
-    datatypes::{Schema, SchemaRef},
-    error::Result as ArrowResult,
-    json,
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::{Schema, SchemaRef};
+#[cfg(feature = "avro")]
+use arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
+use async_trait::async_trait;
+#[cfg(feature = "avro")]
+use futures::Stream;
 use std::any::Any;
-use std::fs::File;
+use std::sync::Arc;
+#[cfg(feature = "avro")]
 use std::{
+    fs::File,
     io::Read,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
-/// Execution plan for scanning NdJson data source
+/// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
-pub struct NdJsonExec {
+pub struct AvroExec {
     files: Vec<String>,
     statistics: Statistics,
     schema: SchemaRef,
@@ -51,7 +50,7 @@ pub struct NdJsonExec {
     limit: Option<usize>,
 }
 
-impl NdJsonExec {
+impl AvroExec {
     /// Create a new JSON reader execution plan provided file list and schema
     /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
     pub fn new(
@@ -82,7 +81,7 @@ impl NdJsonExec {
 }
 
 #[async_trait]
-impl ExecutionPlan for NdJsonExec {
+impl ExecutionPlan for AvroExec {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -104,7 +103,7 @@ impl ExecutionPlan for NdJsonExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.is_empty() {
-            Ok(Arc::new(self.clone()) as Arc<dyn ExecutionPlan>)
+            Ok(Arc::new(self.clone()))
         } else {
             Err(DataFusionError::Internal(format!(
                 "Children cannot be replaced in {:?}",
@@ -113,8 +112,16 @@ impl ExecutionPlan for NdJsonExec {
         }
     }
 
+    #[cfg(not(feature = "avro"))]
+    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+        Err(DataFusionError::NotImplemented(
+            "Cannot execute avro plan without avro feature enabled".to_string(),
+        ))
+    }
+
+    #[cfg(feature = "avro")]
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        let mut builder = json::ReaderBuilder::new()
+        let mut builder = crate::avro_to_arrow::ReaderBuilder::new()
             .with_schema(self.schema.clone())
             .with_batch_size(self.batch_size);
         if let Some(proj) = &self.projection {
@@ -128,10 +135,7 @@ impl ExecutionPlan for NdJsonExec {
 
         let file = File::open(&self.files[partition])?;
 
-        Ok(Box::pin(NdJsonStream::new(
-            builder.build(file)?,
-            self.limit,
-        )))
+        Ok(Box::pin(AvroStream::new(builder.build(file)?, self.limit)))
     }
 
     fn fmt_as(
@@ -143,7 +147,7 @@ impl ExecutionPlan for NdJsonExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "JsonExec: batch_size={}, limit={:?}, partitions=[{}]",
+                    "AvroExec: batch_size={}, limit={:?}, partitions=[{}]",
                     self.batch_size,
                     self.limit,
                     self.files.join(", ")
@@ -157,13 +161,15 @@ impl ExecutionPlan for NdJsonExec {
     }
 }
 
-struct NdJsonStream<R: Read> {
-    reader: json::Reader<R>,
+#[cfg(feature = "avro")]
+struct AvroStream<'a, R: Read> {
+    reader: crate::avro_to_arrow::Reader<'a, R>,
     remain: Option<usize>,
 }
 
-impl<R: Read> NdJsonStream<R> {
-    fn new(reader: json::Reader<R>, limit: Option<usize>) -> Self {
+#[cfg(feature = "avro")]
+impl<'a, R: Read> AvroStream<'a, R> {
+    fn new(reader: crate::avro_to_arrow::Reader<'a, R>, limit: Option<usize>) -> Self {
         Self {
             reader,
             remain: limit,
@@ -171,7 +177,8 @@ impl<R: Read> NdJsonStream<R> {
     }
 }
 
-impl<R: Read + Unpin> Stream for NdJsonStream<R> {
+#[cfg(feature = "avro")]
+impl<R: Read + Unpin> Stream for AvroStream<'_, R> {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
@@ -211,114 +218,59 @@ impl<R: Read + Unpin> Stream for NdJsonStream<R> {
     }
 }
 
-impl<R: Read + Unpin> RecordBatchStream for NdJsonStream<R> {
+#[cfg(feature = "avro")]
+impl<R: Read + Unpin> RecordBatchStream for AvroStream<'_, R> {
     fn schema(&self) -> SchemaRef {
         self.reader.schema()
     }
 }
 
 #[cfg(test)]
+#[cfg(feature = "avro")]
 mod tests {
-    use futures::StreamExt;
-
-    use crate::datasource::format::{json::JsonFormat, FileFormat};
 
     use super::*;
 
-    const TEST_DATA_BASE: &str = "tests/jsons";
-
-    async fn infer_schema(path: String) -> Result<SchemaRef> {
-        JsonFormat {
-            schema_infer_max_rec: None,
-        }
-        .infer_schema(Box::pin(futures::stream::once(async { path })))
-        .await
-    }
-
     #[tokio::test]
-    async fn nd_json_exec_file_without_projection() -> Result<()> {
-        use arrow::datatypes::DataType;
-        let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = NdJsonExec::new(
-            vec![path.clone()],
-            Default::default(),
-            infer_schema(path).await?,
-            None,
-            1024,
-            Some(3),
-        );
+    async fn test() -> Result<()> {
+        use futures::StreamExt;
 
-        // TODO: this is not where schema inference should be tested
+        use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
 
-        let inferred_schema = exec.schema();
-        assert_eq!(inferred_schema.fields().len(), 4);
-
-        // a,b,c,d should be inferred
-        inferred_schema.field_with_name("a").unwrap();
-        inferred_schema.field_with_name("b").unwrap();
-        inferred_schema.field_with_name("c").unwrap();
-        inferred_schema.field_with_name("d").unwrap();
-
-        assert_eq!(
-            inferred_schema.field_with_name("a").unwrap().data_type(),
-            &DataType::Int64
-        );
-        assert!(matches!(
-            inferred_schema.field_with_name("b").unwrap().data_type(),
-            DataType::List(_)
-        ));
-        assert_eq!(
-            inferred_schema.field_with_name("d").unwrap().data_type(),
-            &DataType::Utf8
-        );
-
-        let mut it = exec.execute(0).await?;
-        let batch = it.next().await.unwrap()?;
-
-        assert_eq!(batch.num_rows(), 3);
-        let values = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
-        assert_eq!(values.value(0), 1);
-        assert_eq!(values.value(1), -10);
-        assert_eq!(values.value(2), 2);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn nd_json_exec_file_projection() -> Result<()> {
-        let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = NdJsonExec::new(
-            vec![path.clone()],
-            Default::default(),
-            infer_schema(path).await?,
-            Some(vec![0, 2]),
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = format!("{}/avro/alltypes_plain.avro", testdata);
+        let avro_exec = AvroExec::new(
+            vec![filename.clone()],
+            Statistics::default(),
+            AvroFormat {}
+                .infer_schema(Box::pin(futures::stream::once(async { filename })))
+                .await?,
+            Some(vec![0, 1, 2]),
             1024,
             None,
         );
-        let inferred_schema = exec.schema();
-        assert_eq!(inferred_schema.fields().len(), 2);
+        assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        inferred_schema.field_with_name("a").unwrap();
-        inferred_schema.field_with_name("b").unwrap_err();
-        inferred_schema.field_with_name("c").unwrap();
-        inferred_schema.field_with_name("d").unwrap_err();
+        let mut results = avro_exec.execute(0).await?;
+        let batch = results.next().await.unwrap()?;
 
-        let mut it = exec.execute(0).await?;
-        let batch = it.next().await.unwrap()?;
+        assert_eq!(8, batch.num_rows());
+        assert_eq!(3, batch.num_columns());
 
-        assert_eq!(batch.num_rows(), 4);
-        let values = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
-        assert_eq!(values.value(0), 1);
-        assert_eq!(values.value(1), -10);
-        assert_eq!(values.value(2), 2);
+        let schema = batch.schema();
+        let field_names: Vec<&str> =
+            schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(vec!["id", "bool_col", "tinyint_col"], field_names);
+
+        let batch = results.next().await;
+        assert!(batch.is_none());
+
+        let batch = results.next().await;
+        assert!(batch.is_none());
+
+        let batch = results.next().await;
+        assert!(batch.is_none());
+
         Ok(())
     }
 }

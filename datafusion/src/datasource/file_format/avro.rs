@@ -25,12 +25,12 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use std::fs::File;
 
+use super::PartitionedFile;
 use super::{FileFormat, StringStream};
 use crate::avro_to_arrow::read_avro_schema_from_reader;
-use crate::datasource::PartitionedFile;
 use crate::error::Result;
 use crate::logical_plan::Expr;
-use crate::physical_plan::format::AvroExec;
+use crate::physical_plan::file_format::AvroExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
@@ -80,7 +80,7 @@ impl FileFormat for AvroFormat {
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
-    use crate::datasource::format::string_stream;
+    use crate::datasource::file_format::string_stream;
     use crate::physical_plan::collect;
 
     use super::*;
@@ -336,10 +336,7 @@ mod tests {
             .infer_stats(&filename)
             .await
             .expect("Stats inference");
-        let files = vec![vec![PartitionedFile {
-            path: filename,
-            statistics: stats.clone(),
-        }]];
+        let files = vec![vec![PartitionedFile { path: filename }]];
         let exec = format
             .create_executor(schema, files, stats, projection, batch_size, &[], None)
             .await?;
@@ -352,7 +349,7 @@ mod tests {
 mod tests {
     use super::*;
 
-    use crate::datasource::format::string_stream;
+    use crate::datasource::file_format::string_stream;
     use crate::error::DataFusionError;
 
     #[tokio::test]

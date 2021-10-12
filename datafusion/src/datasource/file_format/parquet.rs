@@ -30,15 +30,15 @@ use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::FileFormat;
+use super::PartitionedFile;
 use super::{create_max_min_accs, get_col_stats, StringStream};
 use crate::arrow::datatypes::{DataType, Field};
-use crate::datasource::PartitionedFile;
 use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::logical_plan::combine_filters;
 use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::format::ParquetExec;
+use crate::physical_plan::file_format::ParquetExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{Accumulator, Statistics};
 use crate::scalar::ScalarValue;
@@ -284,7 +284,7 @@ fn fetch_metadata(path: &str) -> Result<(Schema, Statistics)> {
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::format::string_stream;
+    use crate::datasource::file_format::string_stream;
     use crate::physical_plan::collect;
 
     use super::*;
@@ -532,10 +532,7 @@ mod tests {
             .infer_stats(&filename.clone())
             .await
             .expect("Stats inference");
-        let files = vec![vec![PartitionedFile {
-            path: filename,
-            statistics: stats.clone(),
-        }]];
+        let files = vec![vec![PartitionedFile { path: filename }]];
         let exec = format
             .create_executor(schema, files, stats, projection, batch_size, &[], None)
             .await?;

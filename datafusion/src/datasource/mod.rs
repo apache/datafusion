@@ -21,7 +21,7 @@ pub mod avro;
 pub mod csv;
 pub mod datasource;
 pub mod empty;
-pub mod format;
+pub mod file_format;
 pub mod json;
 pub mod listing;
 pub mod memory;

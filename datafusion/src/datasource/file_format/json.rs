@@ -15,30 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! CSV format abstractions
+//! Line delimited JSON format abstractions
 
+use std::io::BufReader;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use arrow::{self, datatypes::SchemaRef};
+use arrow::datatypes::SchemaRef;
+use arrow::json::reader::infer_json_schema_from_iterator;
+use arrow::json::reader::ValueIter;
 use async_trait::async_trait;
 use futures::StreamExt;
 use std::fs::File;
 
+use super::PartitionedFile;
 use super::{FileFormat, StringStream};
-use crate::datasource::PartitionedFile;
 use crate::error::Result;
 use crate::logical_plan::Expr;
-use crate::physical_plan::format::CsvExec;
+use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
-/// Character Separated Value `FileFormat` implementation.
-pub struct CsvFormat {
-    /// Set true to indicate that the first line is a header.
-    pub has_header: bool,
-    /// The character seprating values within a row.
-    pub delimiter: u8,
+/// New line delimited JSON `FileFormat` implementation.
+pub struct JsonFormat {
     /// If no schema was provided for the table, it will be
     /// infered from the data itself, this limits the number
     /// of lines used in the process.
@@ -46,30 +45,27 @@ pub struct CsvFormat {
 }
 
 #[async_trait]
-impl FileFormat for CsvFormat {
+impl FileFormat for JsonFormat {
     async fn infer_schema(&self, mut paths: StringStream) -> Result<SchemaRef> {
-        let mut schemas = vec![];
-        let mut records_to_read = self.schema_infer_max_rec.unwrap_or(std::usize::MAX);
-
-        while let Some(fname) = paths.next().await {
-            let (schema, records_read) = arrow::csv::reader::infer_file_schema(
-                &mut File::open(fname)?,
-                self.delimiter,
-                Some(records_to_read),
-                self.has_header,
-            )?;
-            if records_read == 0 {
-                continue;
-            }
-            schemas.push(schema.clone());
-            records_to_read -= records_read;
+        let mut schemas = Vec::new();
+        let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
+        while let Some(file) = paths.next().await {
+            let file = File::open(file)?;
+            let mut reader = BufReader::new(file);
+            let iter = ValueIter::new(&mut reader, None);
+            let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
+                let should_take = records_to_read > 0;
+                records_to_read -= 1;
+                should_take
+            }))?;
             if records_to_read == 0 {
                 break;
             }
+            schemas.push(schema);
         }
 
-        let merged_schema = Schema::try_merge(schemas)?;
-        Ok(Arc::new(merged_schema))
+        let schema = Schema::try_merge(schemas)?;
+        Ok(Arc::new(schema))
     }
 
     async fn infer_stats(&self, _path: &str) -> Result<Statistics> {
@@ -86,13 +82,11 @@ impl FileFormat for CsvFormat {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = CsvExec::new(
-            // flattening this for now because CsvExec does not support partitioning yet
+        let exec = NdJsonExec::new(
+            // flattening this for now because NdJsonExec does not support partitioning yet
             files.into_iter().flatten().map(|f| f.path).collect(),
             statistics,
             schema,
-            self.has_header,
-            self.delimiter,
             projection.clone(),
             batch_size,
             limit,
@@ -103,28 +97,27 @@ impl FileFormat for CsvFormat {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::StringArray;
+    use arrow::array::Int64Array;
 
     use super::*;
-    use crate::{datasource::format::string_stream, physical_plan::collect};
+    use crate::{datasource::file_format::string_stream, physical_plan::collect};
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
-        // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
-        let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
-        let exec = get_exec("aggregate_test_100.csv", &projection, 2).await?;
+        let projection = None;
+        let exec = get_exec(&projection, 2).await?;
         let stream = exec.execute(0).await?;
 
         let tt_rows: i32 = stream
             .map(|batch| {
                 let batch = batch.unwrap();
-                assert_eq!(12, batch.num_columns());
+                assert_eq!(4, batch.num_columns());
                 assert_eq!(2, batch.num_rows());
             })
             .fold(0, |acc, _| async move { acc + 1i32 })
             .await;
 
-        assert_eq!(tt_rows, 50 /* 100/2 */);
+        assert_eq!(tt_rows, 6 /* 12/2 */);
 
         // test metadata
         assert_eq!(exec.statistics().num_rows, None);
@@ -136,7 +129,7 @@ mod tests {
     #[tokio::test]
     async fn infer_schema() -> Result<()> {
         let projection = None;
-        let exec = get_exec("aggregate_test_100.csv", &projection, 1024).await?;
+        let exec = get_exec(&projection, 1024).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -144,77 +137,55 @@ mod tests {
             .iter()
             .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
             .collect();
-        assert_eq!(
-            vec![
-                "c1: Utf8",
-                "c2: Int64",
-                "c3: Int64",
-                "c4: Int64",
-                "c5: Int64",
-                "c6: Int64",
-                "c7: Int64",
-                "c8: Int64",
-                "c9: Int64",
-                "c10: Int64",
-                "c11: Float64",
-                "c12: Float64",
-                "c13: Utf8"
-            ],
-            x
-        );
+        assert_eq!(vec!["a: Int64", "b: Float64", "c: Boolean", "d: Utf8",], x);
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn read_char_column() -> Result<()> {
+    async fn read_int_column() -> Result<()> {
         let projection = Some(vec![0]);
-        let exec = get_exec("aggregate_test_100.csv", &projection, 1024).await?;
+        let exec = get_exec(&projection, 1024).await?;
 
         let batches = collect(exec).await.expect("Collect batches");
 
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
-        assert_eq!(100, batches[0].num_rows());
+        assert_eq!(12, batches[0].num_rows());
 
         let array = batches[0]
             .column(0)
             .as_any()
-            .downcast_ref::<StringArray>()
+            .downcast_ref::<Int64Array>()
             .unwrap();
-        let mut values: Vec<&str> = vec![];
-        for i in 0..5 {
+        let mut values: Vec<i64> = vec![];
+        for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
         }
 
-        assert_eq!(vec!["c", "d", "b", "a", "b"], values);
+        assert_eq!(
+            vec![1, -10, 2, 1, 7, 1, 1, 5, 1, 1, 1, 100000000000000],
+            values
+        );
 
         Ok(())
     }
 
     async fn get_exec(
-        file_name: &str,
         projection: &Option<Vec<usize>>,
         batch_size: usize,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/csv/{}", testdata, file_name);
-        let format = CsvFormat {
-            has_header: true,
+        let filename = "tests/jsons/2.json";
+        let format = JsonFormat {
             schema_infer_max_rec: Some(1000),
-            delimiter: b',',
         };
         let schema = format
-            .infer_schema(string_stream(vec![filename.clone()]))
+            .infer_schema(string_stream(vec![filename.to_owned()]))
             .await
             .expect("Schema inference");
-        let stats = format
-            .infer_stats(&filename)
-            .await
-            .expect("Stats inference");
+        let stats = format.infer_stats(filename).await.expect("Stats inference");
         let files = vec![vec![PartitionedFile {
-            path: filename,
-            statistics: stats.clone(),
+            path: filename.to_owned(),
         }]];
         let exec = format
             .create_executor(schema, files, stats, projection, batch_size, &[], None)

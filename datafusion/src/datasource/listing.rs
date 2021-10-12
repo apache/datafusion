@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A table that uses the files system / table store listing capability
+//! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
 use std::{any::Any, sync::Arc};
@@ -25,15 +25,14 @@ use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 
 use crate::{
-    datasource::format::{self},
+    datasource::file_format::{self, PartitionedFile},
     error::Result,
     logical_plan::Expr,
     physical_plan::{common, ExecutionPlan, Statistics},
 };
 
 use super::{
-    datasource::TableProviderFilterPushDown, format::FileFormat, PartitionedFile,
-    TableProvider,
+    datasource::TableProviderFilterPushDown, file_format::FileFormat, TableProvider,
 };
 
 /// Options for creating a `ListingTable`
@@ -61,6 +60,9 @@ pub struct ListingOptions {
 }
 
 impl ListingOptions {
+    /// Infer the schema of the files at the given path, including the partitioning
+    /// columns.
+    ///
     /// This method will not be called by the table itself but before creating it.
     /// This way when creating the logical plan we can decide to resolve the schema
     /// locally or ask a remote service to do it (e.g a scheduler).
@@ -128,26 +130,24 @@ impl TableProvider for ListingTable {
         )?;
 
         // collect the statistics if required by the config
-        let mut files = file_list;
-        if self.options.collect_stat {
-            files = futures::stream::iter(files)
-                .then(|file| async {
-                    let statistics = self.options.format.infer_stats(&file.path).await?;
-                    Ok(PartitionedFile {
-                        statistics,
-                        path: file.path,
-                    }) as Result<PartitionedFile>
-                })
-                .try_collect::<Vec<_>>()
-                .await?;
-        }
+        let files = futures::stream::iter(file_list)
+            .then(|file| async {
+                let statistics = if self.options.collect_stat {
+                    self.options.format.infer_stats(&file.path).await?
+                } else {
+                    Statistics::default()
+                };
+                Ok((file, statistics)) as Result<(PartitionedFile, Statistics)>
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
 
         let (files, statistics) =
-            format::get_statistics_with_limit(&files, self.schema(), limit);
+            file_format::get_statistics_with_limit(&files, self.schema(), limit);
 
         let partitioned_file_lists = split_files(files, self.options.max_partitions);
 
-        // 2. create the plan
+        // create the execution plan
         self.options
             .format
             .create_executor(
@@ -182,10 +182,7 @@ fn pruned_partition_list(
     let list_all = || {
         Ok(common::build_file_list(path, file_extension)?
             .into_iter()
-            .map(|f| PartitionedFile {
-                path: f,
-                statistics: Statistics::default(),
-            })
+            .map(|f| PartitionedFile { path: f })
             .collect::<Vec<PartitionedFile>>())
     };
     if partition_names.is_empty() {
@@ -216,11 +213,21 @@ mod tests {
     #[test]
     fn test_split_files() {
         let files = vec![
-            PartitionedFile::from("a".to_string()),
-            PartitionedFile::from("b".to_string()),
-            PartitionedFile::from("c".to_string()),
-            PartitionedFile::from("d".to_string()),
-            PartitionedFile::from("e".to_string()),
+            PartitionedFile {
+                path: "a".to_owned(),
+            },
+            PartitionedFile {
+                path: "b".to_owned(),
+            },
+            PartitionedFile {
+                path: "c".to_owned(),
+            },
+            PartitionedFile {
+                path: "d".to_owned(),
+            },
+            PartitionedFile {
+                path: "e".to_owned(),
+            },
         ];
 
         let chunks = split_files(files.clone(), 1);
@@ -275,7 +282,7 @@ mod tests {
         let filename = format!("{}/{}", testdata, name);
         let opt = ListingOptions {
             file_extension: "parquet".to_owned(),
-            format: Arc::new(format::parquet::ParquetFormat {
+            format: Arc::new(file_format::parquet::ParquetFormat {
                 enable_pruning: true,
             }),
             partitions: vec![],

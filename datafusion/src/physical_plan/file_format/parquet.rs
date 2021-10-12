@@ -58,7 +58,7 @@ use tokio::{
 
 use async_trait::async_trait;
 
-use crate::datasource::{FilePartition, PartitionedFile};
+use crate::datasource::file_format::{FilePartition, PartitionedFile};
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
@@ -526,7 +526,7 @@ fn read_partition(
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::format::{parquet::ParquetFormat, FileFormat};
+    use crate::datasource::file_format::{parquet::ParquetFormat, FileFormat};
 
     use super::*;
     use arrow::datatypes::{DataType, Field};
@@ -544,7 +544,6 @@ mod tests {
         let parquet_exec = ParquetExec::new(
             vec![vec![PartitionedFile {
                 path: filename.clone(),
-                statistics: Statistics::default(),
             }]],
             Statistics::default(),
             ParquetFormat {
