@@ -36,24 +36,15 @@ use futures::{Stream, StreamExt};
 
 use super::object_store::{ObjectStoreRegistry, SizedFile, SizedFileStream};
 
-// /// A stream of String that can be used accross await calls
-// pub type StringStream = Pin<Box<dyn Stream<Item = String> + Send + Sync>>;
-
-// /// Convert a vector into a stream
-// pub fn string_stream(strings: Vec<String>) -> StringStream {
-//     Box::pin(futures::stream::iter(strings))
-// }
-
 /// This trait abstracts all the file format specific implementations
 /// from the `TableProvider`. This helps code re-utilization accross
 /// providers that support the the same file formats.
 #[async_trait]
 pub trait FileFormat: Send + Sync {
-    /// Open the files at the paths provided by iterator and infer the
-    /// common schema
+    /// Infer the the common schema of the files described by the path stream
     async fn infer_schema(&self, paths: SizedFileStream) -> Result<SchemaRef>;
 
-    /// Open the file at the given path and infer its statistics
+    /// Infer the statistics for the file at the given path
     async fn infer_stats(&self, path: SizedFile) -> Result<Statistics>;
 
     /// Take a list of files and convert it to the appropriate executor
