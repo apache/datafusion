@@ -32,9 +32,9 @@ use local::LocalFileSystem;
 
 use crate::error::{DataFusionError, Result};
 
-/**
-Object Reader for one file in an object store
-*/
+/// Object Reader for one file in an object store
+/// Note that the dynamic dispatch on the reader might
+/// have some performance impacts.
 #[async_trait]
 pub trait ObjectReader {
     /// Get reader for a part [start, start + length] in the file

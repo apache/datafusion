@@ -70,6 +70,8 @@ impl ObjectReader for LocalFileReader {
         start: u64,
         length: usize,
     ) -> Result<Box<dyn Read + Send + Sync>> {
+        // A new file descriptor is opened for each chunk reader.
+        // This okay because chunks are usually fairly large.
         let mut file = File::open(&self.file.path)?;
         file.seek(SeekFrom::Start(start))?;
         Ok(Box::new(file.take(length as u64)))
