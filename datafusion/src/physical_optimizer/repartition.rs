@@ -109,28 +109,23 @@ mod tests {
     use arrow::datatypes::Schema;
 
     use super::*;
+    use crate::datasource::object_store::local::LocalFileSystem;
     use crate::datasource::PartitionedFile;
-    use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
-    use crate::physical_plan::parquet::{ParquetExec, ParquetPartition};
+    use crate::physical_plan::file_format::ParquetExec;
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::Statistics;
 
     #[test]
     fn added_repartition_to_single_partition() -> Result<()> {
         let schema = Arc::new(Schema::empty());
-        let metrics = ExecutionPlanMetricsSet::new();
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ParquetExec::new(
-                vec![ParquetPartition::new(
-                    vec![PartitionedFile::from("x".to_string())],
-                    0,
-                    metrics.clone(),
-                )],
+                Arc::new(LocalFileSystem {}),
+                vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+                Statistics::default(),
                 schema,
                 None,
-                Statistics::default(),
-                metrics,
                 None,
                 2048,
                 None,
@@ -157,21 +152,16 @@ mod tests {
     #[test]
     fn repartition_deepest_node() -> Result<()> {
         let schema = Arc::new(Schema::empty());
-        let metrics = ExecutionPlanMetricsSet::new();
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ProjectionExec::try_new(
                 vec![],
                 Arc::new(ParquetExec::new(
-                    vec![ParquetPartition::new(
-                        vec![PartitionedFile::from("x".to_string())],
-                        0,
-                        metrics.clone(),
-                    )],
+                    Arc::new(LocalFileSystem {}),
+                    vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+                    Statistics::default(),
                     schema,
                     None,
-                    Statistics::default(),
-                    metrics,
                     None,
                     2048,
                     None,

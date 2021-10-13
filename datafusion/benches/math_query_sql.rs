@@ -40,7 +40,7 @@ fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
-    let df = ctx.lock().unwrap().sql(sql).unwrap();
+    let df = rt.block_on(ctx.lock().unwrap().sql(sql)).unwrap();
     rt.block_on(df.collect()).unwrap();
 }
 

@@ -484,7 +484,7 @@ pub fn binary_operator_data_type(
     rhs_type: &DataType,
 ) -> Result<DataType> {
     // validate that it is possible to perform the operation on incoming types.
-    // (or the return datatype cannot be infered)
+    // (or the return datatype cannot be inferred)
     let common_type = common_binary_type(lhs_type, op, rhs_type)?;
 
     match op {

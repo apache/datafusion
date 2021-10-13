@@ -211,7 +211,7 @@ async fn sql_basic() -> Result<()> {
     let (stats, schema) = fully_defined();
     let mut ctx = init_ctx(stats.clone(), schema)?;
 
-    let df = ctx.sql("SELECT * from stats_table").unwrap();
+    let df = ctx.sql("SELECT * from stats_table").await.unwrap();
 
     let physical_plan = ctx
         .create_physical_plan(&df.to_logical_plan())
@@ -229,7 +229,10 @@ async fn sql_filter() -> Result<()> {
     let (stats, schema) = fully_defined();
     let mut ctx = init_ctx(stats, schema)?;
 
-    let df = ctx.sql("SELECT * FROM stats_table WHERE c1 = 5").unwrap();
+    let df = ctx
+        .sql("SELECT * FROM stats_table WHERE c1 = 5")
+        .await
+        .unwrap();
 
     let physical_plan = ctx
         .create_physical_plan(&df.to_logical_plan())
@@ -247,7 +250,7 @@ async fn sql_limit() -> Result<()> {
     let (stats, schema) = fully_defined();
     let mut ctx = init_ctx(stats.clone(), schema)?;
 
-    let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").unwrap();
+    let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").await.unwrap();
     let physical_plan = ctx
         .create_physical_plan(&df.to_logical_plan())
         .await
@@ -263,7 +266,10 @@ async fn sql_limit() -> Result<()> {
         physical_plan.statistics()
     );
 
-    let df = ctx.sql("SELECT * FROM stats_table LIMIT 100").unwrap();
+    let df = ctx
+        .sql("SELECT * FROM stats_table LIMIT 100")
+        .await
+        .unwrap();
     let physical_plan = ctx
         .create_physical_plan(&df.to_logical_plan())
         .await
@@ -281,6 +287,7 @@ async fn sql_window() -> Result<()> {
 
     let df = ctx
         .sql("SELECT c2, sum(c1) over (partition by c2) FROM stats_table")
+        .await
         .unwrap();
 
     let physical_plan = ctx

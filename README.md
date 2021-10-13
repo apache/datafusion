@@ -76,10 +76,10 @@ use datafusion::arrow::record_batch::RecordBatch;
 async fn main() -> datafusion::error::Result<()> {
   // register the table
   let mut ctx = ExecutionContext::new();
-  ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new())?;
+  ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
 
   // create a plan to run a SQL query
-  let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")?;
+  let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
 
   // execute and print results
   df.show().await?;
@@ -98,7 +98,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 async fn main() -> datafusion::error::Result<()> {
   // create the dataframe
   let mut ctx = ExecutionContext::new();
-  let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
+  let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 
   let df = df.filter(col("a").lt_eq(col("b")))?
           .aggregate(vec![col("a")], vec![min(col("b"))])?;

@@ -27,21 +27,23 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::error::{DataFusionError, Result};
-use crate::{datasource::TableProvider, logical_plan::plan::ToStringifiedPlan};
-use crate::{
-    datasource::{empty::EmptyTable, parquet::ParquetTable, CsvFile, MemTable},
-    prelude::CsvReadOptions,
+use crate::datasource::{
+    empty::EmptyTable,
+    file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
+    listing::{ListingOptions, ListingTable},
+    object_store::ObjectStore,
+    MemTable, TableProvider,
 };
+use crate::error::{DataFusionError, Result};
+use crate::logical_plan::plan::ToStringifiedPlan;
+use crate::prelude::*;
 
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
-use crate::datasource::avro::AvroFile;
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
     DFSchemaRef, Partitioning,
 };
-use crate::physical_plan::avro::AvroReadOptions;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -120,66 +122,146 @@ impl LogicalPlanBuilder {
     }
 
     /// Scan a CSV data source
-    pub fn scan_csv(
+    pub async fn scan_csv(
+        object_store: Arc<dyn ObjectStore>,
         path: impl Into<String>,
-        options: CsvReadOptions,
+        options: CsvReadOptions<'_>,
         projection: Option<Vec<usize>>,
+        target_partitions: usize,
     ) -> Result<Self> {
         let path = path.into();
-        Self::scan_csv_with_name(path.clone(), options, projection, path)
+        Self::scan_csv_with_name(
+            object_store,
+            path.clone(),
+            options,
+            projection,
+            path,
+            target_partitions,
+        )
+        .await
     }
 
     /// Scan a CSV data source and register it with a given table name
-    pub fn scan_csv_with_name(
+    pub async fn scan_csv_with_name(
+        object_store: Arc<dyn ObjectStore>,
         path: impl Into<String>,
-        options: CsvReadOptions,
+        options: CsvReadOptions<'_>,
         projection: Option<Vec<usize>>,
         table_name: impl Into<String>,
+        target_partitions: usize,
     ) -> Result<Self> {
-        let provider = Arc::new(CsvFile::try_new(path, options)?);
-        Self::scan(table_name, provider, projection)
+        let listing_options = options.to_listing_options(target_partitions);
+
+        let path: String = path.into();
+
+        let resolved_schema = match options.schema {
+            Some(s) => Arc::new(s.to_owned()),
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let provider =
+            ListingTable::new(object_store, path, resolved_schema, listing_options);
+
+        Self::scan(table_name, Arc::new(provider), projection)
     }
 
     /// Scan a Parquet data source
-    pub fn scan_parquet(
+    pub async fn scan_parquet(
+        object_store: Arc<dyn ObjectStore>,
         path: impl Into<String>,
         projection: Option<Vec<usize>>,
         target_partitions: usize,
     ) -> Result<Self> {
         let path = path.into();
-        Self::scan_parquet_with_name(path.clone(), projection, target_partitions, path)
+        Self::scan_parquet_with_name(
+            object_store,
+            path.clone(),
+            projection,
+            target_partitions,
+            path,
+        )
+        .await
     }
 
     /// Scan a Parquet data source and register it with a given table name
-    pub fn scan_parquet_with_name(
+    pub async fn scan_parquet_with_name(
+        object_store: Arc<dyn ObjectStore>,
         path: impl Into<String>,
         projection: Option<Vec<usize>>,
         target_partitions: usize,
         table_name: impl Into<String>,
     ) -> Result<Self> {
-        let provider = Arc::new(ParquetTable::try_new(path, target_partitions)?);
-        Self::scan(table_name, provider, projection)
+        // TODO remove hard coded enable_pruning
+        let file_format = ParquetFormat::default().with_enable_pruning(true);
+
+        let listing_options = ListingOptions {
+            format: Arc::new(file_format),
+            collect_stat: true,
+            file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
+            target_partitions,
+            partitions: vec![],
+        };
+
+        let path: String = path.into();
+
+        // with parquet we resolve the schema in all cases
+        let resolved_schema = listing_options
+            .infer_schema(Arc::clone(&object_store), &path)
+            .await?;
+
+        let provider =
+            ListingTable::new(object_store, path, resolved_schema, listing_options);
+        Self::scan(table_name, Arc::new(provider), projection)
     }
 
     /// Scan an Avro data source
-    pub fn scan_avro(
+    pub async fn scan_avro(
+        object_store: Arc<dyn ObjectStore>,
         path: impl Into<String>,
-        options: AvroReadOptions,
+        options: AvroReadOptions<'_>,
         projection: Option<Vec<usize>>,
+        target_partitions: usize,
     ) -> Result<Self> {
         let path = path.into();
-        Self::scan_avro_with_name(path.clone(), options, projection, path)
+        Self::scan_avro_with_name(
+            object_store,
+            path.clone(),
+            options,
+            projection,
+            path,
+            target_partitions,
+        )
+        .await
     }
 
     /// Scan an Avro data source and register it with a given table name
-    pub fn scan_avro_with_name(
+    pub async fn scan_avro_with_name(
+        object_store: Arc<dyn ObjectStore>,
         path: impl Into<String>,
-        options: AvroReadOptions,
+        options: AvroReadOptions<'_>,
         projection: Option<Vec<usize>>,
         table_name: impl Into<String>,
+        target_partitions: usize,
     ) -> Result<Self> {
-        let provider = Arc::new(AvroFile::try_new(&path.into(), options)?);
-        Self::scan(table_name, provider, projection)
+        let listing_options = options.to_listing_options(target_partitions);
+
+        let path: String = path.into();
+
+        let resolved_schema = match options.schema {
+            Some(s) => s,
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let provider =
+            ListingTable::new(object_store, path, resolved_schema, listing_options);
+
+        Self::scan(table_name, Arc::new(provider), projection)
     }
 
     /// Scan an empty data source, mainly used in tests
@@ -198,6 +280,16 @@ impl LogicalPlanBuilder {
         table_name: impl Into<String>,
         provider: Arc<dyn TableProvider>,
         projection: Option<Vec<usize>>,
+    ) -> Result<Self> {
+        Self::scan_with_filters(table_name, provider, projection, vec![])
+    }
+
+    /// Convert a table provider into a builder with a TableScan
+    pub fn scan_with_filters(
+        table_name: impl Into<String>,
+        provider: Arc<dyn TableProvider>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
     ) -> Result<Self> {
         let table_name = table_name.into();
 
@@ -229,7 +321,7 @@ impl LogicalPlanBuilder {
             source: provider,
             projected_schema: Arc::new(projected_schema),
             projection,
-            filters: vec![],
+            filters,
             limit: None,
         };
 

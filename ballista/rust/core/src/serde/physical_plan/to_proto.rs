@@ -26,21 +26,27 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::logical_plan::JoinType;
-use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion::physical_plan::cross_join::CrossJoinExec;
-use datafusion::physical_plan::csv::CsvExec;
-use datafusion::physical_plan::expressions::{
-    CaseExpr, InListExpr, IsNotNullExpr, IsNullExpr, NegativeExpr, NotExpr,
-};
-use datafusion::physical_plan::expressions::{CastExpr, TryCastExpr};
-use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::AggregateMode;
 use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sort::SortExec;
+use datafusion::physical_plan::{cross_join::CrossJoinExec, ColumnStatistics};
+use datafusion::physical_plan::{
+    expressions::{
+        CaseExpr, InListExpr, IsNotNullExpr, IsNullExpr, NegativeExpr, NotExpr,
+    },
+    Statistics,
+};
+use datafusion::physical_plan::{
+    expressions::{CastExpr, TryCastExpr},
+    file_format::ParquetExec,
+};
+use datafusion::physical_plan::{file_format::AvroExec, filter::FilterExec};
+use datafusion::{
+    datasource::PartitionedFile, physical_plan::coalesce_batches::CoalesceBatchesExec,
+};
+use datafusion::{logical_plan::JoinType, physical_plan::file_format::CsvExec};
 use datafusion::{
     physical_plan::expressions::{Count, Literal},
     scalar::ScalarValue,
@@ -56,13 +62,13 @@ use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
 use protobuf::physical_plan_node::PhysicalPlanType;
 
-use crate::execution_plans::{
-    ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
-};
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{protobuf, BallistaError};
-use datafusion::physical_plan::avro::AvroExec;
+use crate::{
+    execution_plans::{ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec},
+    serde::byte_to_string,
+};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::functions::{BuiltinScalarFunction, ScalarFunctionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -238,44 +244,54 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 ))),
             })
         } else if let Some(exec) = plan.downcast_ref::<CsvExec>() {
-            let delimiter = [*exec.delimiter().ok_or_else(|| {
-                BallistaError::General("Delimeter is not set for CsvExec".to_owned())
-            })?];
-            let delimiter = std::str::from_utf8(&delimiter).map_err(|_| {
-                BallistaError::General("Invalid CSV delimiter".to_owned())
-            })?;
-
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::CsvScan(
                     protobuf::CsvScanExecNode {
-                        path: exec.path().to_owned(),
-                        filename: exec.filenames().to_vec(),
+                        files: exec
+                            .files()
+                            .iter()
+                            .map(|f| f.into())
+                            .collect::<Vec<protobuf::PartitionedFile>>(),
+                        statistics: Some((&exec.statistics()).into()),
+                        limit: exec
+                            .limit()
+                            .map(|l| protobuf::ScanLimit { limit: l as u32 }),
                         projection: exec
                             .projection()
+                            .as_ref()
                             .ok_or_else(|| {
                                 BallistaError::General(
-                                    "projection in CsvExec dosn not exist.".to_owned(),
+                                    "projection in CsvExec does not exist.".to_owned(),
                                 )
                             })?
                             .iter()
                             .map(|n| *n as u32)
                             .collect(),
-                        file_extension: exec.file_extension().to_owned(),
                         schema: Some(exec.file_schema().as_ref().into()),
                         has_header: exec.has_header(),
-                        delimiter: delimiter.to_string(),
+                        delimiter: byte_to_string(exec.delimiter())?,
                         batch_size: exec.batch_size() as u32,
                     },
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
-            let partitions = exec.partitions().iter().map(|p| p.into()).collect();
+            let partitions = exec
+                .partitions()
+                .into_iter()
+                .map(|p| protobuf::FilePartition {
+                    files: p.iter().map(|f| f.into()).collect(),
+                })
+                .collect();
 
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
                         partitions,
-                        schema: Some(exec.schema.as_ref().into()),
+                        statistics: Some((&exec.statistics()).into()),
+                        limit: exec
+                            .limit()
+                            .map(|l| protobuf::ScanLimit { limit: l as u32 }),
+                        schema: Some(exec.schema().as_ref().into()),
                         projection: exec
                             .projection()
                             .as_ref()
@@ -290,19 +306,26 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::AvroScan(
                     protobuf::AvroScanExecNode {
-                        path: exec.path().to_owned(),
-                        filename: exec.filenames().to_vec(),
+                        files: exec
+                            .files()
+                            .iter()
+                            .map(|f| f.into())
+                            .collect::<Vec<protobuf::PartitionedFile>>(),
+                        statistics: Some((&exec.statistics()).into()),
+                        limit: exec
+                            .limit()
+                            .map(|l| protobuf::ScanLimit { limit: l as u32 }),
                         projection: exec
                             .projection()
+                            .as_ref()
                             .ok_or_else(|| {
                                 BallistaError::General(
-                                    "projection in AvroExec doesn't exist.".to_owned(),
+                                    "projection in AvroExec does not exist.".to_owned(),
                                 )
                             })?
                             .iter()
                             .map(|n| *n as u32)
                             .collect(),
-                        file_extension: exec.file_extension().to_owned(),
                         schema: Some(exec.file_schema().as_ref().into()),
                         batch_size: exec.batch_size() as u32,
                     },
@@ -641,16 +664,6 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
     }
 }
 
-impl From<&ParquetPartition> for protobuf::ParquetPartition {
-    fn from(p: &ParquetPartition) -> protobuf::ParquetPartition {
-        let files = p.file_partition.files.iter().map(|f| f.into()).collect();
-        protobuf::ParquetPartition {
-            index: p.file_partition.index as u32,
-            files,
-        }
-    }
-}
-
 fn try_parse_when_then_expr(
     when_expr: &Arc<dyn PhysicalExpr>,
     then_expr: &Arc<dyn PhysicalExpr>,
@@ -659,4 +672,45 @@ fn try_parse_when_then_expr(
         when_expr: Some(when_expr.clone().try_into()?),
         then_expr: Some(then_expr.clone().try_into()?),
     })
+}
+
+impl From<&PartitionedFile> for protobuf::PartitionedFile {
+    fn from(pf: &PartitionedFile) -> protobuf::PartitionedFile {
+        protobuf::PartitionedFile {
+            path: pf.file_meta.path().to_owned(),
+            size: pf.file_meta.size(),
+            last_modified_ns: pf
+                .file_meta
+                .last_modified
+                .map(|ts| ts.timestamp_nanos() as u64)
+                .unwrap_or(0),
+        }
+    }
+}
+
+impl From<&ColumnStatistics> for protobuf::ColumnStats {
+    fn from(cs: &ColumnStatistics) -> protobuf::ColumnStats {
+        protobuf::ColumnStats {
+            min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
+            max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
+            null_count: cs.null_count.map(|n| n as u32).unwrap_or(0),
+            distinct_count: cs.distinct_count.map(|n| n as u32).unwrap_or(0),
+        }
+    }
+}
+
+impl From<&Statistics> for protobuf::Statistics {
+    fn from(s: &Statistics) -> protobuf::Statistics {
+        let none_value = -1_i64;
+        let column_stats = match &s.column_statistics {
+            None => vec![],
+            Some(column_stats) => column_stats.iter().map(|s| s.into()).collect(),
+        };
+        protobuf::Statistics {
+            num_rows: s.num_rows.map(|n| n as i64).unwrap_or(none_value),
+            total_byte_size: s.total_byte_size.map(|n| n as i64).unwrap_or(none_value),
+            column_stats,
+            is_exact: s.is_exact,
+        }
+    }
 }

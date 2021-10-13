@@ -18,7 +18,6 @@
 use datafusion::arrow::util::pretty;
 
 use datafusion::error::Result;
-use datafusion::physical_plan::avro::AvroReadOptions;
 use datafusion::prelude::*;
 
 /// This example demonstrates executing a simple query against an Arrow data source (Avro) and
@@ -32,14 +31,17 @@ async fn main() -> Result<()> {
 
     // register avro file with the execution context
     let avro_file = &format!("{}/avro/alltypes_plain.avro", testdata);
-    ctx.register_avro("alltypes_plain", avro_file, AvroReadOptions::default())?;
+    ctx.register_avro("alltypes_plain", avro_file, AvroReadOptions::default())
+        .await?;
 
     // execute the query
-    let df = ctx.sql(
-        "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
+    let df = ctx
+        .sql(
+            "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
         FROM alltypes_plain \
         WHERE id > 1 AND tinyint_col < double_col",
-    )?;
+        )
+        .await?;
     let results = df.collect().await?;
 
     // print the results

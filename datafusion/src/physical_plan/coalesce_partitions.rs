@@ -195,8 +195,9 @@ impl RecordBatchStream for MergeStream {
 mod tests {
 
     use super::*;
+    use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::common;
-    use crate::physical_plan::csv::{CsvExec, CsvReadOptions};
+    use crate::physical_plan::file_format::CsvExec;
     use crate::test;
 
     #[tokio::test]
@@ -204,16 +205,19 @@ mod tests {
         let schema = test::aggr_test_schema();
 
         let num_partitions = 4;
-        let path =
+        let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", num_partitions)?;
-
-        let csv = CsvExec::try_new(
-            &path,
-            CsvReadOptions::new().schema(&schema),
+        let csv = CsvExec::new(
+            Arc::new(LocalFileSystem {}),
+            files,
+            Statistics::default(),
+            schema,
+            true,
+            b',',
             None,
             1024,
             None,
-        )?;
+        );
 
         // input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);

@@ -15,29 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::error::Result;
-use datafusion::prelude::*;
+//! Execution plans that read file formats
 
-/// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
-/// fetching results, using the DataFrame trait
-#[tokio::main]
-async fn main() -> Result<()> {
-    // create local execution context
-    let mut ctx = ExecutionContext::new();
+mod avro;
+mod csv;
+mod json;
+mod parquet;
 
-    let testdata = datafusion::arrow::util::test_util::parquet_test_data();
-
-    let filename = &format!("{}/alltypes_plain.parquet", testdata);
-
-    // define the query using the DataFrame trait
-    let df = ctx
-        .read_parquet(filename)
-        .await?
-        .select_columns(&["id", "bool_col", "timestamp_col"])?
-        .filter(col("id").gt(lit(1)))?;
-
-    // print the results
-    df.show().await?;
-
-    Ok(())
-}
+pub use self::parquet::ParquetExec;
+pub use avro::AvroExec;
+pub use csv::CsvExec;
+pub use json::NdJsonExec;
