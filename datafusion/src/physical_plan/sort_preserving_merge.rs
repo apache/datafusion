@@ -38,6 +38,7 @@ use futures::channel::mpsc;
 use futures::stream::FusedStream;
 use futures::{Stream, StreamExt};
 use hashbrown::HashMap;
+use tokio::task::JoinHandle;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
@@ -151,17 +152,19 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 self.input.execute(0).await
             }
             _ => {
-                let streams = (0..input_partitions)
+                let (receivers, join_handles) = (0..input_partitions)
                     .into_iter()
                     .map(|part_i| {
                         let (sender, receiver) = mpsc::channel(1);
-                        spawn_execution(self.input.clone(), sender, part_i);
-                        receiver
+                        let join_handle =
+                            spawn_execution(self.input.clone(), sender, part_i);
+                        (receiver, join_handle)
                     })
-                    .collect();
+                    .unzip();
 
                 Ok(Box::pin(SortPreservingMergeStream::new(
-                    streams,
+                    receivers,
+                    join_handles,
                     self.schema(),
                     &self.expr,
                     self.target_batch_size,
@@ -338,23 +341,34 @@ struct RowIndex {
 struct SortPreservingMergeStream {
     /// The schema of the RecordBatches yielded by this stream
     schema: SchemaRef,
+
     /// The sorted input streams to merge together
-    streams: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
+    receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
+
+    /// Join handles for tasks feeding the [`receivers`](Self::receivers)
+    join_handles: Vec<JoinHandle<()>>,
+
     /// For each input stream maintain a dequeue of SortKeyCursor
     ///
     /// Exhausted cursors will be popped off the front once all
     /// their rows have been yielded to the output
     cursors: Vec<VecDeque<SortKeyCursor>>,
+
     /// The accumulated row indexes for the next record batch
     in_progress: Vec<RowIndex>,
+
     /// The physical expressions to sort by
     column_expressions: Vec<Arc<dyn PhysicalExpr>>,
+
     /// The sort options for each expression
     sort_options: Vec<SortOptions>,
+
     /// The desired RecordBatch size to yield
     target_batch_size: usize,
+
     /// used to record execution metrics
     baseline_metrics: BaselineMetrics,
+
     /// If the stream has encountered an error
     aborted: bool,
 
@@ -364,13 +378,14 @@ struct SortPreservingMergeStream {
 
 impl SortPreservingMergeStream {
     fn new(
-        streams: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
+        receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
+        join_handles: Vec<JoinHandle<()>>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
         target_batch_size: usize,
         baseline_metrics: BaselineMetrics,
     ) -> Self {
-        let cursors = (0..streams.len())
+        let cursors = (0..receivers.len())
             .into_iter()
             .map(|_| VecDeque::new())
             .collect();
@@ -378,7 +393,8 @@ impl SortPreservingMergeStream {
         Self {
             schema,
             cursors,
-            streams,
+            receivers,
+            join_handles,
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             sort_options: expressions.iter().map(|x| x.options).collect(),
             target_batch_size,
@@ -404,7 +420,7 @@ impl SortPreservingMergeStream {
             }
         }
 
-        let stream = &mut self.streams[idx];
+        let stream = &mut self.receivers[idx];
         if stream.is_terminated() {
             return Poll::Ready(Ok(()));
         }
@@ -551,6 +567,14 @@ impl SortPreservingMergeStream {
     }
 }
 
+impl Drop for SortPreservingMergeStream {
+    fn drop(&mut self) {
+        for join_handle in &self.join_handles {
+            join_handle.abort();
+        }
+    }
+}
+
 impl Stream for SortPreservingMergeStream {
     type Item = ArrowResult<RecordBatch>;
 
@@ -644,7 +668,9 @@ impl RecordBatchStream for SortPreservingMergeStream {
 mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::metrics::MetricValue;
+    use crate::test::exec::BlockingExec;
     use std::iter::FromIterator;
+    use std::sync::Weak;
 
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::assert_batches_eq;
@@ -657,7 +683,8 @@ mod tests {
     use crate::test;
 
     use super::*;
-    use futures::SinkExt;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use futures::{FutureExt, SinkExt};
     use tokio_stream::StreamExt;
 
     #[tokio::test]
@@ -1172,28 +1199,30 @@ mod tests {
         let batches = sorted_partitioned_input(sort.clone(), &[5, 7, 3]).await;
 
         let partition_count = batches.output_partitioning().partition_count();
-        let mut tasks = Vec::with_capacity(partition_count);
-        let mut streams = Vec::with_capacity(partition_count);
+        let mut join_handles = Vec::with_capacity(partition_count);
+        let mut receivers = Vec::with_capacity(partition_count);
 
         for partition in 0..partition_count {
             let (mut sender, receiver) = mpsc::channel(1);
             let mut stream = batches.execute(partition).await.unwrap();
-            let task = tokio::spawn(async move {
+            let join_handle = tokio::spawn(async move {
                 while let Some(batch) = stream.next().await {
                     sender.send(batch).await.unwrap();
                     // This causes the MergeStream to wait for more input
                     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 }
             });
-            tasks.push(task);
-            streams.push(receiver);
+            join_handles.push(join_handle);
+            receivers.push(receiver);
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
         let baseline_metrics = BaselineMetrics::new(&metrics, 0);
 
         let merge_stream = SortPreservingMergeStream::new(
-            streams,
+            receivers,
+            // Use empty vector since we want to use the join handles ourselves
+            vec![],
             batches.schema(),
             sort.as_slice(),
             1024,
@@ -1203,8 +1232,8 @@ mod tests {
         let mut merged = common::collect(Box::pin(merge_stream)).await.unwrap();
 
         // Propagate any errors
-        for task in tasks {
-            task.await.unwrap();
+        for join_handle in join_handles {
+            join_handle.await.unwrap();
         }
 
         assert_eq!(merged.len(), 1);
@@ -1270,5 +1299,44 @@ mod tests {
 
         assert!(saw_start);
         assert!(saw_end);
+    }
+
+    #[tokio::test]
+    async fn test_drop_cancel() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
+        let refs = blocking_exec.refs();
+        let sort_exec = Arc::new(SortPreservingMergeExec::new(
+            vec![PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions::default(),
+            }],
+            blocking_exec,
+            1,
+        ));
+
+        let fut = collect(sort_exec);
+        let mut fut = fut.boxed();
+
+        let waker = futures::task::noop_waker();
+        let mut cx = futures::task::Context::from_waker(&waker);
+        let poll = fut.poll_unpin(&mut cx);
+
+        assert!(poll.is_pending());
+        drop(fut);
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if dbg!(Weak::strong_count(&refs)) == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        Ok(())
     }
 }
