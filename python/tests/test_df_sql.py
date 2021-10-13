@@ -61,4 +61,4 @@ def test_create_dataframe_registers_unique_table_name(ctx):
     # only hexadecimal numbers
     for c in tables[0][1:]:
         assert c in "0123456789abcdef"
-
+        
