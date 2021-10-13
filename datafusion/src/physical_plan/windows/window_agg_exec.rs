@@ -39,6 +39,7 @@ use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use tokio::task::JoinHandle;
 
 /// Window execution plan
 #[derive(Debug)]
@@ -219,14 +220,21 @@ fn compute_window_aggregates(
 }
 
 pin_project! {
-  /// stream for window aggregation plan
-  pub struct WindowAggStream {
-      schema: SchemaRef,
-      #[pin]
-      output: futures::channel::oneshot::Receiver<ArrowResult<RecordBatch>>,
-      finished: bool,
-      baseline_metrics: BaselineMetrics,
-  }
+    /// stream for window aggregation plan
+    pub struct WindowAggStream {
+        schema: SchemaRef,
+        join_handle: JoinHandle<()>,
+        #[pin]
+        output: futures::channel::oneshot::Receiver<ArrowResult<RecordBatch>>,
+        finished: bool,
+        baseline_metrics: BaselineMetrics,
+    }
+
+    impl PinnedDrop for WindowAggStream {
+        fn drop(this: Pin<&mut Self>) {
+            this.join_handle.abort();
+        }
+    }
 }
 
 impl WindowAggStream {
@@ -240,16 +248,19 @@ impl WindowAggStream {
         let (tx, rx) = futures::channel::oneshot::channel();
         let schema_clone = schema.clone();
         let elapsed_compute = baseline_metrics.elapsed_compute().clone();
-        tokio::spawn(async move {
+        let join_handle = tokio::spawn(async move {
             let schema = schema_clone.clone();
             let result =
                 WindowAggStream::process(input, window_expr, schema, elapsed_compute)
                     .await;
-            tx.send(result)
+
+            // failing here is OK, the receiver is gone and does not care about the result
+            tx.send(result).ok();
         });
 
         Self {
             schema,
+            join_handle,
             output: rx,
             finished: false,
             baseline_metrics,

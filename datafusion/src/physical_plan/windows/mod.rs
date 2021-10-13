@@ -174,16 +174,20 @@ pub(crate) fn find_ranges_in_range<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Weak;
+
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::CsvExec;
     use crate::physical_plan::{collect, Statistics};
+    use crate::test::exec::BlockingExec;
     use crate::test::{self, aggr_test_schema};
     use arrow::array::*;
-    use arrow::datatypes::SchemaRef;
+    use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
+    use futures::FutureExt;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
         let schema = test::aggr_test_schema();
@@ -261,6 +265,50 @@ mod tests {
         let min: &Int8Array = as_primitive_array(&columns[2]);
         assert_eq!(min.value(0), -117);
         assert_eq!(min.value(99), -117);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drop_cancel() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
+        let refs = blocking_exec.refs();
+        let sort_exec = Arc::new(WindowAggExec::try_new(
+            vec![create_window_expr(
+                &WindowFunction::AggregateFunction(AggregateFunction::Count),
+                "count".to_owned(),
+                &[col("a", &schema)?],
+                &[],
+                &[],
+                Some(WindowFrame::default()),
+                schema.as_ref(),
+            )?],
+            blocking_exec,
+            schema,
+        )?);
+
+        let fut = collect(sort_exec);
+        let mut fut = fut.boxed();
+
+        let waker = futures::task::noop_waker();
+        let mut cx = futures::task::Context::from_waker(&waker);
+        let poll = fut.poll_unpin(&mut cx);
+
+        assert!(poll.is_pending());
+        drop(fut);
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if dbg!(Weak::strong_count(&refs)) == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
 
         Ok(())
     }
