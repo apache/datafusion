@@ -91,7 +91,7 @@ use datafusion::logical_plan::DFSchemaRef;
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.
 async fn exec_sql(ctx: &mut ExecutionContext, sql: &str) -> Result<String> {
-    let df = ctx.sql(sql)?;
+    let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
     pretty_format_batches(&batches).map_err(DataFusionError::ArrowError)
 }
@@ -216,9 +216,9 @@ async fn topk_plan() -> Result<()> {
     let mut ctx = setup_table(make_topk_context()).await?;
 
     let expected = vec![
-        "| logical_plan after topk                            | TopK: k=3                                                                                |",
-        "|                                                    |   Projection: #sales.customer_id, #sales.revenue                                         |",
-        "|                                                    |     TableScan: sales projection=Some([0, 1])                                             |",
+        "| logical_plan after topk                            | TopK: k=3                                                                                  |",
+        "|                                                    |   Projection: #sales.customer_id, #sales.revenue                                           |",
+        "|                                                    |     TableScan: sales projection=Some([0, 1])                                               |",
     ].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {}", QUERY);

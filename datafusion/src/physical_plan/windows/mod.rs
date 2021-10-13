@@ -175,25 +175,31 @@ pub(crate) fn find_ranges_in_range<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::aggregates::AggregateFunction;
-    use crate::physical_plan::collect;
-    use crate::physical_plan::csv::{CsvExec, CsvReadOptions};
     use crate::physical_plan::expressions::col;
-    use crate::test;
+    use crate::physical_plan::file_format::CsvExec;
+    use crate::physical_plan::{collect, Statistics};
+    use crate::test::{self, aggr_test_schema};
     use arrow::array::*;
     use arrow::datatypes::SchemaRef;
     use arrow::record_batch::RecordBatch;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
         let schema = test::aggr_test_schema();
-        let path = test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
-        let csv = CsvExec::try_new(
-            &path,
-            CsvReadOptions::new().schema(&schema),
+        let (_, files) =
+            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
+        let csv = CsvExec::new(
+            Arc::new(LocalFileSystem {}),
+            files,
+            Statistics::default(),
+            aggr_test_schema(),
+            true,
+            b',',
             None,
             1024,
             None,
-        )?;
+        );
 
         let input = Arc::new(csv);
         Ok((input, schema))

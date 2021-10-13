@@ -31,14 +31,17 @@ async fn main() -> Result<()> {
     ctx.register_parquet(
         "alltypes_plain",
         &format!("{}/alltypes_plain.parquet", testdata),
-    )?;
+    )
+    .await?;
 
     // execute the query
-    let df = ctx.sql(
-        "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
+    let df = ctx
+        .sql(
+            "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
         FROM alltypes_plain \
         WHERE id > 1 AND tinyint_col < double_col",
-    )?;
+        )
+        .await?;
 
     // print the results
     df.show().await?;

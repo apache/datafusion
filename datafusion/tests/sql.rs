@@ -35,17 +35,12 @@ use arrow::{
 use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::logical_plan::LogicalPlan;
-#[cfg(feature = "avro")]
-use datafusion::physical_plan::avro::AvroReadOptions;
 use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
 use datafusion::prelude::*;
-use datafusion::{
-    datasource::{csv::CsvReadOptions, MemTable},
-    physical_plan::collect,
-};
+use datafusion::{datasource::MemTable, physical_plan::collect};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::ColumnarValue,
@@ -124,7 +119,8 @@ async fn nyc() -> Result<()> {
         "tripdata",
         "file.csv",
         CsvReadOptions::new().schema(&schema),
-    )?;
+    )
+    .await?;
 
     let logical_plan = ctx.create_logical_plan(
         "SELECT passenger_count, MIN(fare_amount), MAX(fare_amount) \
@@ -157,7 +153,7 @@ async fn nyc() -> Result<()> {
 #[tokio::test]
 async fn parquet_query() {
     let mut ctx = ExecutionContext::new();
-    register_alltypes_parquet(&mut ctx);
+    register_alltypes_parquet(&mut ctx).await;
     // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
     // so we need an explicit cast
     let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
@@ -185,6 +181,7 @@ async fn parquet_single_nan_schema() {
     let mut ctx = ExecutionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet("single_nan", &format!("{}/single_nan.parquet", testdata))
+        .await
         .unwrap();
     let sql = "SELECT mycol FROM single_nan";
     let plan = ctx.create_logical_plan(sql).unwrap();
@@ -206,6 +203,7 @@ async fn parquet_list_columns() {
         "list_columns",
         &format!("{}/list_columns.parquet", testdata),
     )
+    .await
     .unwrap();
 
     let schema = Arc::new(Schema::new(vec![
@@ -299,7 +297,7 @@ async fn parquet_list_columns() {
 #[tokio::test]
 async fn csv_select_nested() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT o1, o2, c3
                FROM (
                  SELECT c1 AS o1, c2 + 1 AS o2, c3
@@ -331,7 +329,7 @@ async fn csv_select_nested() -> Result<()> {
 #[tokio::test]
 async fn csv_count_star() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT COUNT(*), COUNT(1) AS c, COUNT(c1) FROM aggregate_test_100";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -348,7 +346,7 @@ async fn csv_count_star() -> Result<()> {
 #[tokio::test]
 async fn csv_query_with_predicate() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, c12 FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.4";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -366,7 +364,7 @@ async fn csv_query_with_predicate() -> Result<()> {
 #[tokio::test]
 async fn csv_query_with_negative_predicate() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, c4 FROM aggregate_test_100 WHERE c3 < -55 AND -c4 > 30000";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -384,7 +382,7 @@ async fn csv_query_with_negative_predicate() -> Result<()> {
 #[tokio::test]
 async fn csv_query_with_negated_predicate() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100 WHERE NOT(c1 != 'a')";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -401,7 +399,7 @@ async fn csv_query_with_negated_predicate() -> Result<()> {
 #[tokio::test]
 async fn csv_query_with_is_not_null_predicate() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100 WHERE c1 IS NOT NULL";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -418,7 +416,7 @@ async fn csv_query_with_is_not_null_predicate() -> Result<()> {
 #[tokio::test]
 async fn csv_query_with_is_null_predicate() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100 WHERE c1 IS NULL";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -435,7 +433,7 @@ async fn csv_query_with_is_null_predicate() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_int_min_max() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c2, MIN(c12), MAX(c12) FROM aggregate_test_100 GROUP BY c2";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -456,7 +454,7 @@ async fn csv_query_group_by_int_min_max() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_float32() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_simple_csv(&mut ctx)?;
+    register_aggregate_simple_csv(&mut ctx).await?;
 
     let sql =
         "SELECT COUNT(*) as cnt, c1 FROM aggregate_simple GROUP BY c1 ORDER BY cnt DESC";
@@ -481,7 +479,7 @@ async fn csv_query_group_by_float32() -> Result<()> {
 #[tokio::test]
 async fn select_all() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_simple_csv(&mut ctx)?;
+    register_aggregate_simple_csv(&mut ctx).await?;
 
     let sql = "SELECT c1 FROM aggregate_simple order by c1";
     let actual_no_all = execute(&mut ctx, sql).await;
@@ -497,7 +495,7 @@ async fn select_all() -> Result<()> {
 #[tokio::test]
 async fn select_distinct() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_simple_csv(&mut ctx)?;
+    register_aggregate_simple_csv(&mut ctx).await?;
 
     let sql = "SELECT DISTINCT * FROM aggregate_simple";
     let mut actual = execute(&mut ctx, sql).await;
@@ -514,7 +512,7 @@ async fn select_distinct() -> Result<()> {
 #[tokio::test]
 async fn select_distinct_simple_1() {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_simple_csv(&mut ctx).unwrap();
+    register_aggregate_simple_csv(&mut ctx).await.unwrap();
 
     let sql = "SELECT DISTINCT c1 FROM aggregate_simple order by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
@@ -536,7 +534,7 @@ async fn select_distinct_simple_1() {
 #[tokio::test]
 async fn select_distinct_simple_2() {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_simple_csv(&mut ctx).unwrap();
+    register_aggregate_simple_csv(&mut ctx).await.unwrap();
 
     let sql = "SELECT DISTINCT c1, c2 FROM aggregate_simple order by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
@@ -558,7 +556,7 @@ async fn select_distinct_simple_2() {
 #[tokio::test]
 async fn select_distinct_simple_3() {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_simple_csv(&mut ctx).unwrap();
+    register_aggregate_simple_csv(&mut ctx).await.unwrap();
 
     let sql = "SELECT distinct c3 FROM aggregate_simple order by c3";
     let actual = execute_to_batches(&mut ctx, sql).await;
@@ -577,7 +575,7 @@ async fn select_distinct_simple_3() {
 #[tokio::test]
 async fn select_distinct_simple_4() {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_simple_csv(&mut ctx).unwrap();
+    register_aggregate_simple_csv(&mut ctx).await.unwrap();
 
     let sql = "SELECT distinct c1+c2 as a FROM aggregate_simple";
     let actual = execute_to_batches(&mut ctx, sql).await;
@@ -612,7 +610,7 @@ async fn projection_same_fields() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_float64() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_simple_csv(&mut ctx)?;
+    register_aggregate_simple_csv(&mut ctx).await?;
 
     let sql =
         "SELECT COUNT(*) as cnt, c2 FROM aggregate_simple GROUP BY c2 ORDER BY cnt DESC";
@@ -637,7 +635,7 @@ async fn csv_query_group_by_float64() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_boolean() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_simple_csv(&mut ctx)?;
+    register_aggregate_simple_csv(&mut ctx).await?;
 
     let sql =
         "SELECT COUNT(*) as cnt, c3 FROM aggregate_simple GROUP BY c3 ORDER BY cnt DESC";
@@ -659,7 +657,7 @@ async fn csv_query_group_by_boolean() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_two_columns() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, c2, MIN(c3) FROM aggregate_test_100 GROUP BY c1, c2";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -700,7 +698,7 @@ async fn csv_query_group_by_two_columns() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_and_having() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, MIN(c3) AS m FROM aggregate_test_100 GROUP BY c1 HAVING m < -100 AND MAX(c3) > 70";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -718,7 +716,7 @@ async fn csv_query_group_by_and_having() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_and_having_and_where() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, MIN(c3) AS m
                FROM aggregate_test_100
                WHERE c1 IN ('a', 'b')
@@ -739,7 +737,7 @@ async fn csv_query_group_by_and_having_and_where() -> Result<()> {
 #[tokio::test]
 async fn all_where_empty() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT *
                FROM aggregate_test_100
                WHERE 1=2";
@@ -752,7 +750,7 @@ async fn all_where_empty() -> Result<()> {
 #[tokio::test]
 async fn csv_query_having_without_group_by() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, c2, c3 FROM aggregate_test_100 HAVING c2 >= 4 AND c3 > 90";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -773,7 +771,7 @@ async fn csv_query_having_without_group_by() -> Result<()> {
 #[tokio::test]
 async fn csv_query_avg_sqrt() -> Result<()> {
     let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
@@ -788,7 +786,7 @@ async fn csv_query_avg_sqrt() -> Result<()> {
 #[tokio::test]
 async fn csv_query_custom_udf_with_cast() -> Result<()> {
     let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["0.6584408483418833"]];
@@ -800,7 +798,7 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
 #[tokio::test]
 async fn sqrt_f32_vs_f64() -> Result<()> {
     let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     // sqrt(f32)'s plan passes
     let sql = "SELECT avg(sqrt(c11)) FROM aggregate_test_100";
     let actual = execute(&mut ctx, sql).await;
@@ -818,7 +816,7 @@ async fn sqrt_f32_vs_f64() -> Result<()> {
 async fn csv_query_error() -> Result<()> {
     // sin(utf8) should error
     let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT sin(c1) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql);
     assert!(plan.is_err());
@@ -829,7 +827,7 @@ async fn csv_query_error() -> Result<()> {
 #[tokio::test]
 async fn csv_query_sqrt_sqrt() -> Result<()> {
     let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT sqrt(sqrt(c12)) FROM aggregate_test_100 LIMIT 1";
     let actual = execute(&mut ctx, sql).await;
     // sqrt(sqrt(c12=0.9294097332465232)) = 0.9818650561397431
@@ -872,7 +870,7 @@ fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 #[tokio::test]
 async fn csv_query_avg() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT avg(c12) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
@@ -884,7 +882,7 @@ async fn csv_query_avg() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_avg() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, avg(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -905,7 +903,7 @@ async fn csv_query_group_by_avg() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_avg_with_projection() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT avg(c12), c1 FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -926,7 +924,7 @@ async fn csv_query_group_by_avg_with_projection() -> Result<()> {
 #[tokio::test]
 async fn csv_query_avg_multi_batch() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT avg(c12) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
@@ -946,7 +944,7 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
 #[tokio::test]
 async fn csv_query_nullif_divide_by_0() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c8/nullif(c7, 0) FROM aggregate_test_100";
     let actual = execute(&mut ctx, sql).await;
     let actual = &actual[80..90]; // We just want to compare rows 80-89
@@ -969,7 +967,7 @@ async fn csv_query_nullif_divide_by_0() -> Result<()> {
 #[tokio::test]
 async fn csv_query_count() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT count(c12) FROM aggregate_test_100";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -986,7 +984,7 @@ async fn csv_query_count() -> Result<()> {
 #[tokio::test]
 async fn csv_query_approx_count() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -1004,7 +1002,7 @@ async fn csv_query_approx_count() -> Result<()> {
 #[tokio::test]
 async fn csv_query_window_with_empty_over() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "select \
                c9, \
                count(c5) over (), \
@@ -1033,7 +1031,7 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
 #[tokio::test]
 async fn csv_query_window_with_partition_by() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "select \
                c9, \
                sum(cast(c4 as Int)) over (partition by c3), \
@@ -1063,7 +1061,7 @@ async fn csv_query_window_with_partition_by() -> Result<()> {
 #[tokio::test]
 async fn csv_query_window_with_order_by() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "select \
                c9, \
                sum(c5) over (order by c9), \
@@ -1096,7 +1094,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
 #[tokio::test]
 async fn csv_query_window_with_partition_by_order_by() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "select \
                c9, \
                sum(c5) over (partition by c4 order by c9), \
@@ -1129,7 +1127,7 @@ async fn csv_query_window_with_partition_by_order_by() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_int_count() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, count(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -1150,7 +1148,7 @@ async fn csv_query_group_by_int_count() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_with_aliased_aggregate() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, count(c12) AS count FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -1171,7 +1169,7 @@ async fn csv_query_group_with_aliased_aggregate() -> Result<()> {
 #[tokio::test]
 async fn csv_query_group_by_string_min_max() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, MIN(c12), MAX(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -1194,7 +1192,7 @@ async fn csv_query_group_by_string_min_max() -> Result<()> {
 #[tokio::test]
 async fn csv_query_cast() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT CAST(c12 AS float) FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.4";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["0.39144436569161134"], vec!["0.38870280983958583"]];
@@ -1205,7 +1203,7 @@ async fn csv_query_cast() -> Result<()> {
 #[tokio::test]
 async fn csv_query_cast_literal() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql =
         "SELECT c12, CAST(1 AS float) FROM aggregate_test_100 WHERE c12 > CAST(0 AS float) LIMIT 2";
     let actual = execute(&mut ctx, sql).await;
@@ -1412,7 +1410,7 @@ async fn union_all() -> Result<()> {
 #[tokio::test]
 async fn csv_union_all() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql =
         "SELECT c1 FROM aggregate_test_100 UNION ALL SELECT c1 FROM aggregate_test_100";
     let actual = execute(&mut ctx, sql).await;
@@ -1423,7 +1421,7 @@ async fn csv_union_all() -> Result<()> {
 #[tokio::test]
 async fn csv_query_limit() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 2";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["c"], vec!["d"]];
@@ -1434,7 +1432,7 @@ async fn csv_query_limit() -> Result<()> {
 #[tokio::test]
 async fn csv_query_limit_bigger_than_nbr_of_rows() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c2 FROM aggregate_test_100 LIMIT 200";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![
@@ -1546,7 +1544,7 @@ async fn csv_query_limit_bigger_than_nbr_of_rows() -> Result<()> {
 #[tokio::test]
 async fn csv_query_limit_with_same_nbr_of_rows() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c2 FROM aggregate_test_100 LIMIT 100";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![
@@ -1658,7 +1656,7 @@ async fn csv_query_limit_with_same_nbr_of_rows() -> Result<()> {
 #[tokio::test]
 async fn csv_query_limit_zero() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 0";
     let actual = execute(&mut ctx, sql).await;
     let expected: Vec<Vec<String>> = vec![];
@@ -2445,14 +2443,14 @@ async fn csv_explain() {
             "logical_plan",
             "Projection: #aggregate_test_100.c1\
              \n  Filter: #aggregate_test_100.c2 > Int64(10)\
-             \n    TableScan: aggregate_test_100 projection=Some([0, 1])"
+             \n    TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]"
         ],
         vec!["physical_plan",
              "ProjectionExec: expr=[c1@0 as c1]\
               \n  CoalesceBatchesExec: target_batch_size=4096\
               \n    FilterExec: CAST(c2@1 AS Int64) > 10\
               \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-              \n        CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true\
+              \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None\
               \n"
     ]];
     assert_eq!(expected, actual);
@@ -2756,7 +2754,7 @@ async fn csv_explain_plans() {
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: #aggregate_test_100.c1 [c1:Utf8]",
         "    Filter: #aggregate_test_100.c2 > Int64(10) [c1:Utf8, c2:Int32]",
-        "      TableScan: aggregate_test_100 projection=Some([0, 1]) [c1:Utf8, c2:Int32]",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)] [c1:Utf8, c2:Int32]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2771,7 +2769,7 @@ async fn csv_explain_plans() {
         "Explain",
         "  Projection: #aggregate_test_100.c1",
         "    Filter: #aggregate_test_100.c2 > Int64(10)",
-        "      TableScan: aggregate_test_100 projection=Some([0, 1])",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]",
     ];
     let formatted = plan.display_indent().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2793,7 +2791,7 @@ async fn csv_explain_plans() {
         "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
         "    4[shape=box label=\"Filter: #aggregate_test_100.c2 > Int64(10)\"]",
         "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\"]",
+        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]\"]",
         "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "  subgraph cluster_6",
@@ -2804,7 +2802,7 @@ async fn csv_explain_plans() {
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
         "    9[shape=box label=\"Filter: #aggregate_test_100.c2 > Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\\nSchema: [c1:Utf8, c2:Int32]\"]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "}",
@@ -2953,7 +2951,7 @@ async fn csv_explain_verbose_plans() {
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: #aggregate_test_100.c1 [c1:Utf8]",
         "    Filter: #aggregate_test_100.c2 > Int64(10) [c1:Utf8, c2:Int32]",
-        "      TableScan: aggregate_test_100 projection=Some([0, 1]) [c1:Utf8, c2:Int32]",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)] [c1:Utf8, c2:Int32]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2968,7 +2966,7 @@ async fn csv_explain_verbose_plans() {
         "Explain",
         "  Projection: #aggregate_test_100.c1",
         "    Filter: #aggregate_test_100.c2 > Int64(10)",
-        "      TableScan: aggregate_test_100 projection=Some([0, 1])",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]",
     ];
     let formatted = plan.display_indent().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2990,7 +2988,7 @@ async fn csv_explain_verbose_plans() {
         "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
         "    4[shape=box label=\"Filter: #aggregate_test_100.c2 > Int64(10)\"]",
         "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\"]",
+        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]\"]",
         "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "  subgraph cluster_6",
@@ -3001,7 +2999,7 @@ async fn csv_explain_verbose_plans() {
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
         "    9[shape=box label=\"Filter: #aggregate_test_100.c2 > Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1])\\nSchema: [c1:Utf8, c2:Int32]\"]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "}",
@@ -3040,7 +3038,7 @@ async fn explain_analyze_runs_optimizers() {
     // repro for https://github.com/apache/arrow-datafusion/issues/917
     // where EXPLAIN ANALYZE was not correctly running optiimizer
     let mut ctx = ExecutionContext::new();
-    register_alltypes_parquet(&mut ctx);
+    register_alltypes_parquet(&mut ctx).await;
 
     // This happens as an optimization pass where count(*) can be
     // answered using statistics only.
@@ -3105,6 +3103,7 @@ async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
     ",
             testdata
         ))
+        .await
         .expect("Creating dataframe for CREATE EXTERNAL TABLE");
 
     // Mimic the CLI and execute the resulting plan -- even though it
@@ -3116,18 +3115,19 @@ async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
     );
 }
 
-fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
+async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
     let testdata = datafusion::test_util::arrow_test_data();
     let schema = aggr_test_schema();
     ctx.register_csv(
         "aggregate_test_100",
         &format!("{}/csv/aggregate_test_100.csv", testdata),
         CsvReadOptions::new().schema(&schema),
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
-fn register_aggregate_simple_csv(ctx: &mut ExecutionContext) -> Result<()> {
+async fn register_aggregate_simple_csv(ctx: &mut ExecutionContext) -> Result<()> {
     // It's not possible to use aggregate_test_100, not enought similar values to test grouping on floats
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Float32, false),
@@ -3139,27 +3139,30 @@ fn register_aggregate_simple_csv(ctx: &mut ExecutionContext) -> Result<()> {
         "aggregate_simple",
         "tests/aggregate_simple.csv",
         CsvReadOptions::new().schema(&schema),
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
-fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
+async fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "alltypes_plain",
         &format!("{}/alltypes_plain.parquet", testdata),
     )
+    .await
     .unwrap();
 }
 
 #[cfg(feature = "avro")]
-fn register_alltypes_avro(ctx: &mut ExecutionContext) {
+async fn register_alltypes_avro(ctx: &mut ExecutionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
     ctx.register_avro(
         "alltypes_plain",
         &format!("{}/avro/alltypes_plain.avro", testdata),
         AvroReadOptions::default(),
     )
+    .await
     .unwrap();
 }
 
@@ -3892,7 +3895,7 @@ where
 #[tokio::test]
 async fn csv_between_expr() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c4 FROM aggregate_test_100 WHERE c12 BETWEEN 0.995 AND 1.0";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
@@ -3904,7 +3907,7 @@ async fn csv_between_expr() -> Result<()> {
 #[tokio::test]
 async fn csv_between_expr_negated() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c4 FROM aggregate_test_100 WHERE c12 NOT BETWEEN 0 AND 0.995";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
@@ -4550,7 +4553,7 @@ async fn inner_join_nulls() {
 #[tokio::test]
 async fn qualified_table_references() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
 
     for table_ref in &[
         "aggregate_test_100",
@@ -4567,7 +4570,7 @@ async fn qualified_table_references() -> Result<()> {
 #[tokio::test]
 async fn invalid_qualified_table_references() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
 
     for table_ref in &[
         "nonexistentschema.aggregate_test_100",
@@ -4575,7 +4578,7 @@ async fn invalid_qualified_table_references() -> Result<()> {
         "way.too.many.namespaces.as.ident.prefixes.aggregate_test_100",
     ] {
         let sql = format!("SELECT COUNT(*) FROM {}", table_ref);
-        assert!(matches!(ctx.sql(&sql), Err(DataFusionError::Plan(_))));
+        assert!(matches!(ctx.sql(&sql).await, Err(DataFusionError::Plan(_))));
     }
     Ok(())
 }
@@ -4651,7 +4654,7 @@ async fn test_random_expression() -> Result<()> {
 async fn test_cast_expressions_error() -> Result<()> {
     // sin(utf8) should error
     let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
@@ -4675,7 +4678,7 @@ async fn test_physical_plan_display_indent() {
     // Hard code target_partitions as it appears in the RepartitionExec output
     let config = ExecutionConfig::new().with_target_partitions(3);
     let mut ctx = ExecutionContext::with_config(config);
-    register_aggregate_csv(&mut ctx).unwrap();
+    register_aggregate_csv(&mut ctx).await.unwrap();
     let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
                FROM aggregate_test_100 \
                WHERE c12 < 10 \
@@ -4698,7 +4701,7 @@ async fn test_physical_plan_display_indent() {
         "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < CAST(10 AS Float64)",
         "                    RepartitionExec: partitioning=RoundRobinBatch(3)",
-        "                      CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+        "                      CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None",
     ];
 
     let data_path = datafusion::test_util::arrow_test_data();
@@ -4722,7 +4725,7 @@ async fn test_physical_plan_display_indent_multi_children() {
     let config = ExecutionConfig::new().with_target_partitions(3);
     let mut ctx = ExecutionContext::with_config(config);
     // ensure indenting works for nodes with multiple children
-    register_aggregate_csv(&mut ctx).unwrap();
+    register_aggregate_csv(&mut ctx).await.unwrap();
     let sql = "SELECT c1 \
                FROM (select c1 from aggregate_test_100) AS a \
                JOIN\
@@ -4743,13 +4746,13 @@ async fn test_physical_plan_display_indent_multi_children() {
         "          ProjectionExec: expr=[c1@0 as c1]",
         "            ProjectionExec: expr=[c1@0 as c1]",
         "              RepartitionExec: partitioning=RoundRobinBatch(3)",
-        "                CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 3)",
         "          ProjectionExec: expr=[c2@0 as c2]",
         "            ProjectionExec: expr=[c1@0 as c2]",
         "              RepartitionExec: partitioning=RoundRobinBatch(3)",
-        "                CsvExec: source=Path(ARROW_TEST_DATA/csv/aggregate_test_100.csv: [ARROW_TEST_DATA/csv/aggregate_test_100.csv]), has_header=true",
+        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None",
     ];
 
     let data_path = datafusion::test_util::arrow_test_data();
@@ -4770,7 +4773,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 #[tokio::test]
 async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx)?;
+    register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
     let logical_plan = ctx.create_logical_plan(sql)?;
     let physical_plan = ctx.create_physical_plan(&logical_plan).await;
@@ -5001,7 +5004,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
 #[tokio::test]
 async fn avro_query() {
     let mut ctx = ExecutionContext::new();
-    register_alltypes_avro(&mut ctx);
+    register_alltypes_avro(&mut ctx).await;
     // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
     // so we need an explicit cast
     let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
@@ -5048,6 +5051,7 @@ async fn avro_query_multiple_files() {
         table_path.display().to_string().as_str(),
         AvroReadOptions::default(),
     )
+    .await
     .unwrap();
     // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
     // so we need an explicit cast
@@ -5089,6 +5093,7 @@ async fn avro_single_nan_schema() {
         &format!("{}/avro/single_nan.avro", testdata),
         AvroReadOptions::default(),
     )
+    .await
     .unwrap();
     let sql = "SELECT mycol FROM single_nan";
     let plan = ctx.create_logical_plan(sql).unwrap();
@@ -5105,7 +5110,7 @@ async fn avro_single_nan_schema() {
 #[tokio::test]
 async fn avro_explain() {
     let mut ctx = ExecutionContext::new();
-    register_alltypes_avro(&mut ctx);
+    register_alltypes_avro(&mut ctx).await;
 
     let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
     let actual = execute(&mut ctx, sql).await;
@@ -5124,7 +5129,7 @@ async fn avro_explain() {
             \n    CoalescePartitionsExec\
             \n      HashAggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
             \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-            \n          AvroExec: source=Path(ARROW_TEST_DATA/avro/alltypes_plain.avro: [ARROW_TEST_DATA/avro/alltypes_plain.avro]), batch_size=8192, limit=None\
+            \n          AvroExec: files=[ARROW_TEST_DATA/avro/alltypes_plain.avro], batch_size=8192, limit=None\
             \n",
         ],
     ];

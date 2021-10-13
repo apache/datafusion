@@ -31,8 +31,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::dataframe_impl::DataFrameImpl;
 use datafusion::logical_plan::LogicalPlan;
-use datafusion::physical_plan::avro::AvroReadOptions;
-use datafusion::physical_plan::csv::CsvReadOptions;
+use datafusion::prelude::{AvroReadOptions, CsvReadOptions};
 use datafusion::sql::parser::FileType;
 
 struct BallistaContextState {
@@ -128,11 +127,11 @@ impl BallistaContext {
     }
 
     /// Create a DataFrame representing an Avro table scan
-
-    pub fn read_avro(
+    /// TODO fetch schema from scheduler instead of resolving locally
+    pub async fn read_avro(
         &self,
         path: &str,
-        options: AvroReadOptions,
+        options: AvroReadOptions<'_>,
     ) -> Result<Arc<dyn DataFrame>> {
         // convert to absolute path because the executor likely has a different working directory
         let path = PathBuf::from(path);
@@ -147,13 +146,13 @@ impl BallistaContext {
                 guard.config(),
             )
         };
-        let df = ctx.read_avro(path.to_str().unwrap(), options)?;
+        let df = ctx.read_avro(path.to_str().unwrap(), options).await?;
         Ok(df)
     }
 
     /// Create a DataFrame representing a Parquet table scan
-
-    pub fn read_parquet(&self, path: &str) -> Result<Arc<dyn DataFrame>> {
+    /// TODO fetch schema from scheduler instead of resolving locally
+    pub async fn read_parquet(&self, path: &str) -> Result<Arc<dyn DataFrame>> {
         // convert to absolute path because the executor likely has a different working directory
         let path = PathBuf::from(path);
         let path = fs::canonicalize(&path)?;
@@ -167,16 +166,16 @@ impl BallistaContext {
                 guard.config(),
             )
         };
-        let df = ctx.read_parquet(path.to_str().unwrap())?;
+        let df = ctx.read_parquet(path.to_str().unwrap()).await?;
         Ok(df)
     }
 
     /// Create a DataFrame representing a CSV table scan
-
-    pub fn read_csv(
+    /// TODO fetch schema from scheduler instead of resolving locally
+    pub async fn read_csv(
         &self,
         path: &str,
-        options: CsvReadOptions,
+        options: CsvReadOptions<'_>,
     ) -> Result<Arc<dyn DataFrame>> {
         // convert to absolute path because the executor likely has a different working directory
         let path = PathBuf::from(path);
@@ -191,7 +190,7 @@ impl BallistaContext {
                 guard.config(),
             )
         };
-        let df = ctx.read_csv(path.to_str().unwrap(), options)?;
+        let df = ctx.read_csv(path.to_str().unwrap(), options).await?;
         Ok(df)
     }
 
@@ -206,39 +205,42 @@ impl BallistaContext {
         Ok(())
     }
 
-    pub fn register_csv(
+    pub async fn register_csv(
         &self,
         name: &str,
         path: &str,
-        options: CsvReadOptions,
+        options: CsvReadOptions<'_>,
     ) -> Result<()> {
-        match self.read_csv(path, options)?.to_logical_plan() {
+        match self.read_csv(path, options).await?.to_logical_plan() {
             LogicalPlan::TableScan { source, .. } => self.register_table(name, source),
             _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
         }
     }
 
-    pub fn register_parquet(&self, name: &str, path: &str) -> Result<()> {
-        match self.read_parquet(path)?.to_logical_plan() {
+    pub async fn register_parquet(&self, name: &str, path: &str) -> Result<()> {
+        match self.read_parquet(path).await?.to_logical_plan() {
             LogicalPlan::TableScan { source, .. } => self.register_table(name, source),
             _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
         }
     }
 
-    pub fn register_avro(
+    pub async fn register_avro(
         &self,
         name: &str,
         path: &str,
-        options: AvroReadOptions,
+        options: AvroReadOptions<'_>,
     ) -> Result<()> {
-        match self.read_avro(path, options)?.to_logical_plan() {
+        match self.read_avro(path, options).await?.to_logical_plan() {
             LogicalPlan::TableScan { source, .. } => self.register_table(name, source),
             _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
         }
     }
 
-    /// Create a DataFrame from a SQL statement
-    pub fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
+    /// Create a DataFrame from a SQL statement.
+    ///
+    /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
+    /// might require the schema to be inferred.
+    pub async fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let mut ctx = {
             let state = self.state.lock().unwrap();
             create_df_ctx_with_ballista_query_planner(
@@ -275,15 +277,17 @@ impl BallistaContext {
                         CsvReadOptions::new()
                             .schema(&schema.as_ref().to_owned().into())
                             .has_header(*has_header),
-                    )?;
+                    )
+                    .await?;
                     Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
                 }
                 FileType::Parquet => {
-                    self.register_parquet(name, location)?;
+                    self.register_parquet(name, location).await?;
                     Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
                 }
                 FileType::Avro => {
-                    self.register_avro(name, location, AvroReadOptions::default())?;
+                    self.register_avro(name, location, AvroReadOptions::default())
+                        .await?;
                     Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
                 }
                 _ => Err(DataFusionError::NotImplemented(format!(
@@ -292,7 +296,7 @@ impl BallistaContext {
                 ))),
             },
 
-            _ => ctx.sql(sql),
+            _ => ctx.sql(sql).await,
         }
     }
 }
@@ -306,7 +310,7 @@ mod tests {
         let context = BallistaContext::standalone(&BallistaConfig::new().unwrap(), 1)
             .await
             .unwrap();
-        let df = context.sql("SELECT 1;").unwrap();
+        let df = context.sql("SELECT 1;").await.unwrap();
         df.collect().await.unwrap();
     }
 }

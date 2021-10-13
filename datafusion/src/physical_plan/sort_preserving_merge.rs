@@ -642,15 +642,15 @@ impl RecordBatchStream for SortPreservingMergeStream {
 
 #[cfg(test)]
 mod tests {
+    use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::metrics::MetricValue;
     use std::iter::FromIterator;
 
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::assert_batches_eq;
-    use crate::datasource::CsvReadOptions;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use crate::physical_plan::csv::CsvExec;
     use crate::physical_plan::expressions::col;
+    use crate::physical_plan::file_format::CsvExec;
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::sort::SortExec;
     use crate::physical_plan::{collect, common};
@@ -914,18 +914,20 @@ mod tests {
     async fn test_partition_sort() {
         let schema = test::aggr_test_schema();
         let partitions = 4;
-        let path =
+        let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
-        let csv = Arc::new(
-            CsvExec::try_new(
-                &path,
-                CsvReadOptions::new().schema(&schema),
-                None,
-                1024,
-                None,
-            )
-            .unwrap(),
-        );
+
+        let csv = Arc::new(CsvExec::new(
+            Arc::new(LocalFileSystem {}),
+            files,
+            Statistics::default(),
+            Arc::clone(&schema),
+            true,
+            b',',
+            None,
+            1024,
+            None,
+        ));
 
         let sort = vec![
             PhysicalSortExpr {
@@ -984,18 +986,20 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let schema = test::aggr_test_schema();
         let partitions = 4;
-        let path =
+        let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
-        let csv = Arc::new(
-            CsvExec::try_new(
-                &path,
-                CsvReadOptions::new().schema(&schema),
-                None,
-                1024,
-                None,
-            )
-            .unwrap(),
-        );
+
+        let csv = Arc::new(CsvExec::new(
+            Arc::new(LocalFileSystem {}),
+            files,
+            Statistics::default(),
+            schema,
+            true,
+            b',',
+            None,
+            1024,
+            None,
+        ));
 
         let sorted = basic_sort(csv, sort).await;
         let split: Vec<_> = sizes.iter().map(|x| split_batch(&sorted, *x)).collect();

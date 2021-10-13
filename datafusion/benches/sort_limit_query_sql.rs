@@ -18,6 +18,9 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::listing::{ListingOptions, ListingTable};
+use datafusion::datasource::object_store::local::LocalFileSystem;
 
 use std::sync::{Arc, Mutex};
 
@@ -26,7 +29,7 @@ extern crate datafusion;
 
 use arrow::datatypes::{DataType, Field, Schema};
 
-use datafusion::datasource::{CsvFile, CsvReadOptions, MemTable};
+use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionContext;
 
 use tokio::runtime::Runtime;
@@ -35,7 +38,7 @@ fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
-    let df = ctx.lock().unwrap().sql(sql).unwrap();
+    let df = rt.block_on(ctx.lock().unwrap().sql(sql)).unwrap();
     rt.block_on(df.collect()).unwrap();
 }
 
@@ -60,11 +63,13 @@ fn create_context() -> Arc<Mutex<ExecutionContext>> {
     let testdata = datafusion::test_util::arrow_test_data();
 
     // create CSV data source
-    let csv = CsvFile::try_new(
-        &format!("{}/csv/aggregate_test_100.csv", testdata),
-        CsvReadOptions::new().schema(&schema),
-    )
-    .unwrap();
+    let listing_options = ListingOptions::new(Arc::new(CsvFormat::default()));
+    let csv = ListingTable::new(
+        Arc::new(LocalFileSystem {}),
+        format!("{}/csv/aggregate_test_100.csv", testdata),
+        schema,
+        listing_options,
+    );
 
     let rt = Runtime::new().unwrap();
 

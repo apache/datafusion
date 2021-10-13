@@ -318,15 +318,12 @@ mod tests {
     use std::sync::Weak;
 
     use super::*;
+    use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::{
-        collect,
-        csv::{CsvExec, CsvReadOptions},
-    };
-    use crate::test;
-    use crate::test::exec::BlockingExec;
+    use crate::physical_plan::{collect, file_format::CsvExec};
+    use crate::test::{self, aggr_test_schema, exec::BlockingExec};
     use arrow::array::*;
     use arrow::datatypes::*;
     use futures::FutureExt;
@@ -335,14 +332,20 @@ mod tests {
     async fn test_sort() -> Result<()> {
         let schema = test::aggr_test_schema();
         let partitions = 4;
-        let path = test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
-        let csv = CsvExec::try_new(
-            &path,
-            CsvReadOptions::new().schema(&schema),
+        let (_, files) =
+            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
+
+        let csv = CsvExec::new(
+            Arc::new(LocalFileSystem {}),
+            files,
+            Statistics::default(),
+            aggr_test_schema(),
+            true,
+            b',',
             None,
             1024,
             None,
-        )?;
+        );
 
         let sort_exec = Arc::new(SortExec::try_new(
             vec![

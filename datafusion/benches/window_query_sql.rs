@@ -30,7 +30,7 @@ use tokio::runtime::Runtime;
 
 fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
-    let df = ctx.lock().unwrap().sql(sql).unwrap();
+    let df = rt.block_on(ctx.lock().unwrap().sql(sql)).unwrap();
     criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
 

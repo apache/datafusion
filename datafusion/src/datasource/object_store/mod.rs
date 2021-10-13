@@ -20,56 +20,109 @@
 pub mod local;
 
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
+use std::io::Read;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use futures::{AsyncRead, Stream};
+use chrono::{DateTime, Utc};
+use futures::{AsyncRead, Stream, StreamExt};
 
 use local::LocalFileSystem;
 
 use crate::error::{DataFusionError, Result};
-use chrono::Utc;
 
-/// Object Reader for one file in a object store
+/// Object Reader for one file in an object store.
+///
+/// Note that the dynamic dispatch on the reader might
+/// have some performance impacts.
 #[async_trait]
-pub trait ObjectReader {
+pub trait ObjectReader: Send + Sync {
     /// Get reader for a part [start, start + length] in the file asynchronously
     async fn chunk_reader(&self, start: u64, length: usize)
-        -> Result<Arc<dyn AsyncRead>>;
+        -> Result<Box<dyn AsyncRead>>;
 
-    /// Get length for the file
+    /// Get reader for a part [start, start + length] in the file
+    fn sync_chunk_reader(
+        &self,
+        start: u64,
+        length: usize,
+    ) -> Result<Box<dyn Read + Send + Sync>>;
+
+    /// Get reader for the entire file
+    fn sync_reader(&self) -> Result<Box<dyn Read + Send + Sync>> {
+        self.sync_chunk_reader(0, self.length() as usize)
+    }
+
+    /// Get the size of the file
     fn length(&self) -> u64;
 }
 
-/// Represents a file or a prefix that may require further resolution
+/// Represents a specific file or a prefix (folder) that may
+/// require further resolution
 #[derive(Debug)]
 pub enum ListEntry {
-    /// File metadata
+    /// Specific file with metadata
     FileMeta(FileMeta),
     /// Prefix to be further resolved during partition discovery
     Prefix(String),
 }
 
-/// File meta we got from object store
-#[derive(Debug)]
-pub struct FileMeta {
-    /// Path of the file
+/// The path and size of the file.
+#[derive(Debug, Clone)]
+pub struct SizedFile {
+    /// Path of the file. It is relative to the current object
+    /// store (it does not specify the `xx://` scheme).
     pub path: String,
-    /// Last time the file was modified in UTC
-    pub last_modified: Option<chrono::DateTime<Utc>>,
     /// File size in total
     pub size: u64,
 }
 
-/// Stream of files get listed from object store
+/// Description of a file as returned by the listing command of a
+/// given object store. The resulting path is relative to the
+/// object store that generated it.
+#[derive(Debug, Clone)]
+pub struct FileMeta {
+    /// The path and size of the file.
+    pub sized_file: SizedFile,
+    /// The last modification time of the file according to the
+    /// object store metadata. This information might be used by
+    /// catalog systems like Delta Lake for time travel (see
+    /// https://github.com/delta-io/delta/issues/192)
+    pub last_modified: Option<DateTime<Utc>>,
+}
+
+impl FileMeta {
+    /// The path that describes this file. It is relative to the
+    /// associated object store.
+    pub fn path(&self) -> &str {
+        &self.sized_file.path
+    }
+
+    /// The size of the file.
+    pub fn size(&self) -> u64 {
+        self.sized_file.size
+    }
+}
+
+impl std::fmt::Display for FileMeta {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{} (size: {})", self.path(), self.size())
+    }
+}
+
+/// Stream of files listed from object store
 pub type FileMetaStream =
     Pin<Box<dyn Stream<Item = Result<FileMeta>> + Send + Sync + 'static>>;
 
-/// Stream of list entries get from object store
+/// Stream of list entries obtained from object store
 pub type ListEntryStream =
     Pin<Box<dyn Stream<Item = Result<ListEntry>> + Send + Sync + 'static>>;
+
+/// Stream readers opened on a given object store
+pub type ObjectReaderStream =
+    Pin<Box<dyn Stream<Item = Result<Arc<dyn ObjectReader>>> + Send + Sync + 'static>>;
 
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
@@ -77,6 +130,23 @@ pub type ListEntryStream =
 pub trait ObjectStore: Sync + Send + Debug {
     /// Returns all the files in path `prefix`
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream>;
+
+    /// Calls `list_file` with a suffix filter
+    async fn list_file_with_suffix(
+        &self,
+        prefix: &str,
+        suffix: &str,
+    ) -> Result<FileMetaStream> {
+        let file_stream = self.list_file(prefix).await?;
+        let suffix = suffix.to_owned();
+        Ok(Box::pin(file_stream.filter(move |fr| {
+            let has_suffix = match fr {
+                Ok(f) => f.path().ends_with(&suffix),
+                Err(_) => true,
+            };
+            async move { has_suffix }
+        })))
+    }
 
     /// Returns all the files in `prefix` if the `prefix` is already a leaf dir,
     /// or all paths between the `prefix` and the first occurrence of the `delimiter` if it is provided.
@@ -87,7 +157,7 @@ pub trait ObjectStore: Sync + Send + Debug {
     ) -> Result<ListEntryStream>;
 
     /// Get object reader for one file
-    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>>;
+    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
 }
 
 static LOCAL_SCHEME: &str = "file";
@@ -98,6 +168,22 @@ static LOCAL_SCHEME: &str = "file";
 pub struct ObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
     pub object_stores: RwLock<HashMap<String, Arc<dyn ObjectStore>>>,
+}
+
+impl fmt::Debug for ObjectStoreRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObjectStoreRegistry")
+            .field(
+                "schemes",
+                &self
+                    .object_stores
+                    .read()
+                    .unwrap()
+                    .keys()
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 impl ObjectStoreRegistry {
@@ -130,12 +216,17 @@ impl ObjectStoreRegistry {
     }
 
     /// Get a suitable store for the URI based on it's scheme. For example:
-    /// URI with scheme file or no schema will return the default LocalFS store,
-    /// URI with scheme s3 will return the S3 store if it's registered.
-    pub fn get_by_uri(&self, uri: &str) -> Result<Arc<dyn ObjectStore>> {
-        if let Some((scheme, _)) = uri.split_once(':') {
+    /// - URI with scheme `file://` or no schema will return the default LocalFS store
+    /// - URI with scheme `s3://` will return the S3 store if it's registered
+    /// Returns a tuple with the store and the path of the file in that store
+    /// (URI=scheme://path).
+    pub fn get_by_uri<'a>(
+        &self,
+        uri: &'a str,
+    ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
+        if let Some((scheme, path)) = uri.split_once("://") {
             let stores = self.object_stores.read().unwrap();
-            stores
+            let store = stores
                 .get(&*scheme.to_lowercase())
                 .map(Clone::clone)
                 .ok_or_else(|| {
@@ -143,9 +234,10 @@ impl ObjectStoreRegistry {
                         "No suitable object store found for {}",
                         scheme
                     ))
-                })
+                })?;
+            Ok((store, path))
         } else {
-            Ok(Arc::new(LocalFileSystem))
+            Ok((Arc::new(LocalFileSystem), uri))
         }
     }
 }

@@ -31,7 +31,7 @@ async fn query(ctx: &mut ExecutionContext, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
-    let df = ctx.sql(sql).unwrap();
+    let df = rt.block_on(ctx.sql(sql)).unwrap();
     criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
 

@@ -259,6 +259,7 @@ async fn optimizers_catch_all_statistics() {
 
     let df = ctx
         .sql("SELECT count(*), min(c1), max(c1) from test")
+        .await
         .unwrap();
 
     let physical_plan = ctx

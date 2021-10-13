@@ -201,7 +201,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 ///   let mut ctx = ExecutionContext::with_config(config);
 ///
 ///   // register the a table
-///   ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).unwrap();
+///   ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await.unwrap();
 ///
 ///   // create a plan to run a SQL query
 ///   let plan = ctx
@@ -218,7 +218,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 ///              \n  CoalesceBatchesExec: target_batch_size=4096\
 ///              \n    FilterExec: a@0 < 5\
 ///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
-///              \n        CsvExec: source=Path(tests/example.csv: [tests/example.csv]), has_header=true",
+///              \n        CsvExec: files=[tests/example.csv], has_header=true, batch_size=8192, limit=None",
 ///               plan_string.trim());
 /// }
 /// ```
@@ -606,20 +606,19 @@ pub trait Accumulator: Send + Sync + Debug {
 pub mod aggregates;
 pub mod analyze;
 pub mod array_expressions;
-pub mod avro;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
 pub mod common;
 pub mod cross_join;
 #[cfg(feature = "crypto_expressions")]
 pub mod crypto_expressions;
-pub mod csv;
 pub mod datetime_expressions;
 pub mod display;
 pub mod distinct_expressions;
 pub mod empty;
 pub mod explain;
 pub mod expressions;
+pub mod file_format;
 pub mod filter;
 pub mod functions;
 pub mod hash_aggregate;
@@ -627,12 +626,10 @@ pub mod hash_join;
 pub mod hash_utils;
 pub(crate) mod hyperloglog;
 pub mod join_utils;
-pub mod json;
 pub mod limit;
 pub mod math_expressions;
 pub mod memory;
 pub mod metrics;
-pub mod parquet;
 pub mod planner;
 pub mod projection;
 #[cfg(feature = "regex_expressions")]
@@ -640,7 +637,6 @@ pub mod regex_expressions;
 pub mod repartition;
 pub mod sort;
 pub mod sort_preserving_merge;
-pub mod source;
 pub mod stream;
 pub mod string_expressions;
 pub mod type_coercion;

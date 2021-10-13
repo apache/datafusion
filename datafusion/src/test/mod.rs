@@ -17,7 +17,8 @@
 
 //! Common unit test utility methods
 
-use crate::datasource::{MemTable, TableProvider};
+use crate::datasource::object_store::local::local_file_meta;
+use crate::datasource::{MemTable, PartitionedFile, TableProvider};
 use crate::error::Result;
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use array::{
@@ -51,19 +52,24 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
 }
 
 /// Generated partitioned copy of a CSV file
-pub fn create_partitioned_csv(filename: &str, partitions: usize) -> Result<String> {
+pub fn create_partitioned_csv(
+    filename: &str,
+    partitions: usize,
+) -> Result<(String, Vec<PartitionedFile>)> {
     let testdata = crate::test_util::arrow_test_data();
     let path = format!("{}/csv/{}", testdata, filename);
 
     let tmp_dir = TempDir::new()?;
 
     let mut writers = vec![];
+    let mut files = vec![];
     for i in 0..partitions {
         let filename = format!("partition-{}.csv", i);
         let filename = tmp_dir.path().join(&filename);
 
         let writer = BufWriter::new(File::create(&filename).unwrap());
         writers.push(writer);
+        files.push(filename);
     }
 
     let f = File::open(&path)?;
@@ -88,7 +94,15 @@ pub fn create_partitioned_csv(filename: &str, partitions: usize) -> Result<Strin
         w.flush().unwrap();
     }
 
-    Ok(tmp_dir.into_path().to_str().unwrap().to_string())
+    Ok((
+        tmp_dir.into_path().to_str().unwrap().to_string(),
+        files
+            .into_iter()
+            .map(|f| PartitionedFile {
+                file_meta: local_file_meta(f.to_str().unwrap().to_owned()),
+            })
+            .collect(),
+    ))
 }
 
 /// Get the schema for the aggregate_test_* csv files

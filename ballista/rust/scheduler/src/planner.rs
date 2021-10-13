@@ -271,15 +271,17 @@ mod test {
 
     #[tokio::test]
     async fn distributed_hash_aggregate_plan() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata")?;
+        let mut ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
-        let df = ctx.sql(
-            "select l_returnflag, sum(l_extendedprice * 1) as sum_disc_price
+        let df = ctx
+            .sql(
+                "select l_returnflag, sum(l_extendedprice * 1) as sum_disc_price
             from lineitem
             group by l_returnflag
             order by l_returnflag",
-        )?;
+            )
+            .await?;
 
         let plan = df.to_logical_plan();
         let plan = ctx.optimize(&plan)?;
@@ -356,11 +358,12 @@ mod test {
 
     #[tokio::test]
     async fn distributed_join_plan() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata")?;
+        let mut ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 12
-        let df = ctx.sql(
-            "select
+        let df = ctx
+            .sql(
+                "select
     l_shipmode,
     sum(case
             when o_orderpriority = '1-URGENT'
@@ -391,7 +394,8 @@ group by
 order by
     l_shipmode;
 ",
-        )?;
+            )
+            .await?;
 
         let plan = df.to_logical_plan();
         let plan = ctx.optimize(&plan)?;
@@ -529,15 +533,17 @@ order by
 
     #[tokio::test]
     async fn roundtrip_serde_hash_aggregate() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata")?;
+        let mut ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
-        let df = ctx.sql(
-            "select l_returnflag, sum(l_extendedprice * 1) as sum_disc_price
+        let df = ctx
+            .sql(
+                "select l_returnflag, sum(l_extendedprice * 1) as sum_disc_price
             from lineitem
             group by l_returnflag
             order by l_returnflag",
-        )?;
+            )
+            .await?;
 
         let plan = df.to_logical_plan();
         let plan = ctx.optimize(&plan)?;
