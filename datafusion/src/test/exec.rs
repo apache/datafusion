@@ -482,15 +482,19 @@ pub struct BlockingExec {
     /// Schema that is mocked by this plan.
     schema: SchemaRef,
 
+    /// Number of output partitions.
+    n_partitions: usize,
+
     /// Ref-counting helper to check if the plan and the produced stream are still in memory.
     refs: Arc<()>,
 }
 
 impl BlockingExec {
-    /// Create new [`BlockingExec`] with a give schema.
-    pub fn new(schema: SchemaRef) -> Self {
+    /// Create new [`BlockingExec`] with a give schema and number of partitions.
+    pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
         Self {
             schema,
+            n_partitions,
             refs: Default::default(),
         }
     }
@@ -521,7 +525,7 @@ impl ExecutionPlan for BlockingExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
+        Partitioning::UnknownPartitioning(self.n_partitions)
     }
 
     fn with_new_children(
