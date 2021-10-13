@@ -503,7 +503,7 @@ impl BlockingExec {
     ///
     /// Use [`Weak::strong_count`] to determine if the plan itself and its streams are dropped (should be 0 in that
     /// case). Note that tokio might take some time to cancel spawned tasks, so you need to wrap this check into a retry
-    /// loop.
+    /// loop. Use [`assert_strong_count_converges_to_zero`] to archive this.
     pub fn refs(&self) -> Weak<()> {
         Arc::downgrade(&self.refs)
     }
@@ -587,4 +587,20 @@ impl RecordBatchStream for BlockingStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
+}
+
+/// Asserts that the strong count of the given [`Weak`] pointer converges to zero.
+///
+/// This might take a while but has a timeout.
+pub async fn assert_strong_count_converges_to_zero<T>(refs: Weak<T>) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if dbg!(Weak::strong_count(&refs)) == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 }

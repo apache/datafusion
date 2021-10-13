@@ -28,9 +28,11 @@ use array::{
 use arrow::array::{self, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
+use std::pin::Pin;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -289,6 +291,15 @@ pub fn make_timestamps() -> RecordBatch {
         ],
     )
     .unwrap()
+}
+
+/// Asserts that given future is pending.
+pub fn assert_is_pending<'a, T>(fut: &mut Pin<Box<dyn Future<Output = T> + Send + 'a>>) {
+    let waker = futures::task::noop_waker();
+    let mut cx = futures::task::Context::from_waker(&waker);
+    let poll = fut.poll_unpin(&mut cx);
+
+    assert!(poll.is_pending());
 }
 
 pub mod exec;

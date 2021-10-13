@@ -668,9 +668,8 @@ impl RecordBatchStream for SortPreservingMergeStream {
 mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::metrics::MetricValue;
-    use crate::test::exec::BlockingExec;
+    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use std::iter::FromIterator;
-    use std::sync::Weak;
 
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::assert_batches_eq;
@@ -680,7 +679,7 @@ mod tests {
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::sort::SortExec;
     use crate::physical_plan::{collect, common};
-    use crate::test;
+    use crate::test::{self, assert_is_pending};
 
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1320,22 +1319,9 @@ mod tests {
         let fut = collect(sort_exec);
         let mut fut = fut.boxed();
 
-        let waker = futures::task::noop_waker();
-        let mut cx = futures::task::Context::from_waker(&waker);
-        let poll = fut.poll_unpin(&mut cx);
-
-        assert!(poll.is_pending());
+        assert_is_pending(&mut fut);
         drop(fut);
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                if dbg!(Weak::strong_count(&refs)) == 0 {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
+        assert_strong_count_converges_to_zero(refs).await;
 
         Ok(())
     }

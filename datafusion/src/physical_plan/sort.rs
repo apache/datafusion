@@ -315,14 +315,14 @@ impl RecordBatchStream for SortStream {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
-
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::{collect, file_format::CsvExec};
+    use crate::test::assert_is_pending;
+    use crate::test::exec::assert_strong_count_converges_to_zero;
     use crate::test::{self, aggr_test_schema, exec::BlockingExec};
     use arrow::array::*;
     use arrow::datatypes::*;
@@ -510,22 +510,9 @@ mod tests {
         let fut = collect(sort_exec);
         let mut fut = fut.boxed();
 
-        let waker = futures::task::noop_waker();
-        let mut cx = futures::task::Context::from_waker(&waker);
-        let poll = fut.poll_unpin(&mut cx);
-
-        assert!(poll.is_pending());
+        assert_is_pending(&mut fut);
         drop(fut);
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                if dbg!(Weak::strong_count(&refs)) == 0 {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
+        assert_strong_count_converges_to_zero(refs).await;
 
         Ok(())
     }

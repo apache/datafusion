@@ -174,16 +174,14 @@ pub(crate) fn find_ranges_in_range<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
-
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::CsvExec;
     use crate::physical_plan::{collect, Statistics};
-    use crate::test::exec::BlockingExec;
-    use crate::test::{self, aggr_test_schema};
+    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::{self, aggr_test_schema, assert_is_pending};
     use arrow::array::*;
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
@@ -293,22 +291,9 @@ mod tests {
         let fut = collect(sort_exec);
         let mut fut = fut.boxed();
 
-        let waker = futures::task::noop_waker();
-        let mut cx = futures::task::Context::from_waker(&waker);
-        let poll = fut.poll_unpin(&mut cx);
-
-        assert!(poll.is_pending());
+        assert_is_pending(&mut fut);
         drop(fut);
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                if dbg!(Weak::strong_count(&refs)) == 0 {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
+        assert_strong_count_converges_to_zero(refs).await;
 
         Ok(())
     }
