@@ -83,7 +83,10 @@ impl ExecutionContext {
 
         // generate a random (unique) name for this table
         // table name cannot start with numeric digit
-        let name = "c".to_owned() + &Uuid::new_v4().to_simple().to_string();
+        let name = "c".to_owned()
+            + &Uuid::new_v4()
+                .to_simple()
+                .encode_lower(&mut Uuid::encode_buffer());
 
         errors::wrap(self.ctx.register_table(&*name, Arc::new(table)))?;
         Ok(dataframe::DataFrame::new(
