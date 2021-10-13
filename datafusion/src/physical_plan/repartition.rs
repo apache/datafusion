@@ -36,8 +36,9 @@ use super::{RecordBatchStream, SendableRecordBatchStream};
 use async_trait::async_trait;
 
 use futures::stream::Stream;
-use futures::StreamExt;
+use futures::{Future, StreamExt};
 use hashbrown::HashMap;
+use pin_project_lite::pin_project;
 use tokio::sync::{
     mpsc::{self, UnboundedReceiver, UnboundedSender},
     Mutex,
@@ -55,11 +56,14 @@ pub struct RepartitionExec {
     /// Partitioning scheme to use
     partitioning: Partitioning,
     /// Channels for sending batches from input partitions to output partitions.
-    /// Key is the partition number
-    channels: Arc<
-        Mutex<
+    /// Key is the partition number.
+    ///
+    /// Stored alongside is an abort marker that will kill the background job once it's no longer needed.
+    channels_and_abort_helper: Arc<
+        Mutex<(
             HashMap<usize, (UnboundedSender<MaybeBatch>, UnboundedReceiver<MaybeBatch>)>,
-        >,
+            Arc<AbortOnDrop>,
+        )>,
     >,
 
     /// Execution metrics
@@ -156,13 +160,13 @@ impl ExecutionPlan for RepartitionExec {
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         // lock mutexes
-        let mut channels = self.channels.lock().await;
+        let mut channels_and_abort_helper = self.channels_and_abort_helper.lock().await;
 
         let num_input_partitions = self.input.output_partitioning().partition_count();
         let num_output_partitions = self.partitioning.partition_count();
 
         // if this is the first partition to be invoked then we need to set up initial state
-        if channels.is_empty() {
+        if channels_and_abort_helper.0.is_empty() {
             // create one channel per *output* partition
             for partition in 0..num_output_partitions {
                 // Note that this operator uses unbounded channels to avoid deadlocks because
@@ -173,14 +177,18 @@ impl ExecutionPlan for RepartitionExec {
                 // for this would be to add spill-to-disk capabilities.
                 let (sender, receiver) =
                     mpsc::unbounded_channel::<Option<ArrowResult<RecordBatch>>>();
-                channels.insert(partition, (sender, receiver));
+                channels_and_abort_helper
+                    .0
+                    .insert(partition, (sender, receiver));
             }
             // Use fixed random state
             let random = ahash::RandomState::with_seeds(0, 0, 0, 0);
 
             // launch one async task per *input* partition
+            let mut join_handles = Vec::with_capacity(num_input_partitions);
             for i in 0..num_input_partitions {
-                let txs: HashMap<_, _> = channels
+                let txs: HashMap<_, _> = channels_and_abort_helper
+                    .0
                     .iter()
                     .map(|(partition, (tx, _rx))| (*partition, tx.clone()))
                     .collect();
@@ -199,8 +207,11 @@ impl ExecutionPlan for RepartitionExec {
 
                 // In a separate task, wait for each input to be done
                 // (and pass along any errors, including panic!s)
-                tokio::spawn(Self::wait_for_task(input_task, txs));
+                let join_handle = tokio::spawn(WaitForTask { input_task, txs });
+                join_handles.push(join_handle);
             }
+
+            channels_and_abort_helper.1 = Arc::new(AbortOnDrop(join_handles))
         }
 
         // now return stream for the specified *output* partition which will
@@ -209,7 +220,10 @@ impl ExecutionPlan for RepartitionExec {
             num_input_partitions,
             num_input_partitions_processed: 0,
             schema: self.input.schema(),
-            input: UnboundedReceiverStream::new(channels.remove(&partition).unwrap().1),
+            input: UnboundedReceiverStream::new(
+                channels_and_abort_helper.0.remove(&partition).unwrap().1,
+            ),
+            drop_helper: Arc::clone(&channels_and_abort_helper.1),
         }))
     }
 
@@ -243,7 +257,10 @@ impl RepartitionExec {
         Ok(RepartitionExec {
             input,
             partitioning,
-            channels: Arc::new(Mutex::new(HashMap::new())),
+            channels_and_abort_helper: Arc::new(Mutex::new((
+                HashMap::new(),
+                Arc::new(AbortOnDrop(vec![])),
+            ))),
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -365,43 +382,78 @@ impl RepartitionExec {
 
         Ok(())
     }
+}
 
+#[derive(Debug)]
+struct AbortOnDrop(Vec<JoinHandle<()>>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        for join_handle in &self.0 {
+            join_handle.abort();
+        }
+    }
+}
+
+pin_project! {
     /// Waits for `input_task` which is consuming one of the inputs to
     /// complete. Upon each successful completion, sends a `None` to
     /// each of the output tx channels to signal one of the inputs is
     /// complete. Upon error, propagates the errors to all output tx
     /// channels.
-    async fn wait_for_task(
+    struct WaitForTask {
+        #[pin]
         input_task: JoinHandle<Result<()>>,
         txs: HashMap<usize, UnboundedSender<Option<ArrowResult<RecordBatch>>>>,
-    ) {
+    }
+
+    impl PinnedDrop for WaitForTask {
+        fn drop(this: Pin<&mut Self>) {
+            this.input_task.abort();
+        }
+    }
+}
+
+impl Future for WaitForTask {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+
         // wait for completion, and propagate error
         // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
-        match input_task.await {
+        match this.input_task.poll(cx) {
             // Error in joining task
-            Err(e) => {
-                for (_, tx) in txs {
+            Poll::Ready(Err(e)) => {
+                for (_, tx) in this.txs {
                     let err = DataFusionError::Execution(format!("Join Error: {}", e));
                     let err = Err(err.into_arrow_external_error());
                     tx.send(Some(err)).ok();
                 }
+
+                Poll::Ready(())
             }
             // Error from running input task
-            Ok(Err(e)) => {
-                for (_, tx) in txs {
+            Poll::Ready(Ok(Err(e))) => {
+                for (_, tx) in this.txs {
                     // wrap it because need to send error to all output partitions
                     let err = DataFusionError::Execution(e.to_string());
                     let err = Err(err.into_arrow_external_error());
                     tx.send(Some(err)).ok();
                 }
+
+                Poll::Ready(())
             }
             // Input task completed successfully
-            Ok(Ok(())) => {
+            Poll::Ready(Ok(Ok(()))) => {
                 // notify each output partition that this input partition has no more data
-                for (_, tx) in txs {
+                for (_, tx) in this.txs {
                     tx.send(None).ok();
                 }
+
+                Poll::Ready(())
             }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -409,12 +461,19 @@ impl RepartitionExec {
 struct RepartitionStream {
     /// Number of input partitions that will be sending batches to this output channel
     num_input_partitions: usize,
+
     /// Number of input partitions that have finished sending batches to this output channel
     num_input_partitions_processed: usize,
+
     /// Schema
     schema: SchemaRef,
+
     /// channel containing the repartitioned batches
     input: UnboundedReceiverStream<Option<ArrowResult<RecordBatch>>>,
+
+    /// Handle to ensure background tasks are killed when no longer needed.
+    #[allow(dead_code)]
+    drop_helper: Arc<AbortOnDrop>,
 }
 
 impl Stream for RepartitionStream {
@@ -454,8 +513,14 @@ mod tests {
     use super::*;
     use crate::{
         assert_batches_sorted_eq,
-        physical_plan::{expressions::col, memory::MemoryExec},
-        test::exec::{BarrierExec, ErrorExec, MockExec},
+        physical_plan::{collect, expressions::col, memory::MemoryExec},
+        test::{
+            assert_is_pending,
+            exec::{
+                assert_strong_count_converges_to_zero, BarrierExec, BlockingExec,
+                ErrorExec, MockExec,
+            },
+        },
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -463,6 +528,7 @@ mod tests {
         array::{ArrayRef, StringArray, UInt32Array},
         error::ArrowError,
     };
+    use futures::FutureExt;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
@@ -852,5 +918,27 @@ mod tests {
         // requires the input to wait at least once)
         let schema = batch1.schema();
         BarrierExec::new(vec![vec![batch1, batch2], vec![batch3, batch4]], schema)
+    }
+
+    #[tokio::test]
+    async fn test_drop_cancel() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
+        let refs = blocking_exec.refs();
+        let sort_exec = Arc::new(RepartitionExec::try_new(
+            blocking_exec,
+            Partitioning::UnknownPartitioning(1),
+        )?);
+
+        let fut = collect(sort_exec);
+        let mut fut = fut.boxed();
+
+        assert_is_pending(&mut fut);
+        drop(fut);
+        assert_strong_count_converges_to_zero(refs).await;
+
+        Ok(())
     }
 }
