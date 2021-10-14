@@ -25,6 +25,7 @@ use arrow::datatypes::Schema;
 use crate::error::Result;
 use crate::{logical_plan::Expr, physical_plan::PhysicalExpr};
 
+use super::functions::Volatility;
 use super::{
     functions::{
         ReturnTypeFunction, ScalarFunctionExpr, ScalarFunctionImplementation, Signature,
@@ -94,6 +95,10 @@ impl ScalarUDF {
             return_type: return_type.clone(),
             fun: fun.clone(),
         }
+    }
+    ///Returns the volatilaty of the UDF
+    pub fn volatility(&self)->Volatility{
+        self.signature.volatility
     }
 
     /// creates a logical expression with a call of the UDF
