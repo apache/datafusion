@@ -297,8 +297,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(3)])),
-                Arc::new(Int32Array::from(vec![Some(4), None, Some(5), Some(6)])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), None])),
+                Arc::new(Int32Array::from(vec![Some(4), None, Some(5)])),
             ],
         )?;
 
@@ -314,6 +314,7 @@ mod tests {
         let conf = ExecutionConfig::new();
         let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
 
+        // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
         let result = common::collect(optimized.execute(0).await?).await?;
         assert_eq!(
@@ -332,35 +333,6 @@ mod tests {
                 .unwrap()
                 .values(),
             &[3]
-        );
-        Ok(())
-    }
-
-    /// Checks that the count optimization was applied and we still get the right result
-    async fn assert_count_with_nulls_optim_success(
-        plan: HashAggregateExec,
-    ) -> Result<()> {
-        let conf = ExecutionConfig::new();
-        let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
-
-        assert!(optimized.as_any().is::<ProjectionExec>());
-        let result = common::collect(optimized.execute(0).await?).await?;
-        assert_eq!(
-            result[0].schema(),
-            Arc::new(Schema::new(vec![Field::new(
-                "COUNT(Uint8(1))",
-                DataType::UInt64,
-                false
-            )]))
-        );
-        assert_eq!(
-            result[0]
-                .column(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .values(),
-            &[4]
         );
         Ok(())
     }
@@ -422,7 +394,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        assert_count_with_nulls_optim_success(final_agg).await?;
+        assert_count_optim_success(final_agg).await?;
 
         Ok(())
     }
@@ -480,7 +452,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        assert_count_with_nulls_optim_success(final_agg).await?;
+        assert_count_optim_success(final_agg).await?;
 
         Ok(())
     }
