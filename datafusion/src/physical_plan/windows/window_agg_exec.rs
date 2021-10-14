@@ -18,6 +18,7 @@
 //! Stream and channel implementations for window function expressions.
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
@@ -39,7 +40,6 @@ use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::task::JoinHandle;
 
 /// Window execution plan
 #[derive(Debug)]
@@ -223,17 +223,11 @@ pin_project! {
     /// stream for window aggregation plan
     pub struct WindowAggStream {
         schema: SchemaRef,
-        join_handle: JoinHandle<()>,
+        drop_helper: AbortOnDropSingle<()>,
         #[pin]
         output: futures::channel::oneshot::Receiver<ArrowResult<RecordBatch>>,
         finished: bool,
         baseline_metrics: BaselineMetrics,
-    }
-
-    impl PinnedDrop for WindowAggStream {
-        fn drop(this: Pin<&mut Self>) {
-            this.join_handle.abort();
-        }
     }
 }
 
@@ -260,7 +254,7 @@ impl WindowAggStream {
 
         Self {
             schema,
-            join_handle,
+            drop_helper: AbortOnDropSingle::new(join_handle),
             output: rx,
             finished: false,
             baseline_metrics,

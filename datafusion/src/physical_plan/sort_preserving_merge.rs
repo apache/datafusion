@@ -17,6 +17,7 @@
 
 //! Defines the sort preserving merge plan
 
+use super::common::AbortOnDropMany;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use std::any::Any;
 use std::cmp::Ordering;
@@ -38,7 +39,6 @@ use futures::channel::mpsc;
 use futures::stream::FusedStream;
 use futures::{Stream, StreamExt};
 use hashbrown::HashMap;
-use tokio::task::JoinHandle;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
@@ -164,7 +164,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
                 Ok(Box::pin(SortPreservingMergeStream::new(
                     receivers,
-                    join_handles,
+                    AbortOnDropMany(join_handles),
                     self.schema(),
                     &self.expr,
                     self.target_batch_size,
@@ -345,8 +345,8 @@ struct SortPreservingMergeStream {
     /// The sorted input streams to merge together
     receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
 
-    /// Join handles for tasks feeding the [`receivers`](Self::receivers)
-    join_handles: Vec<JoinHandle<()>>,
+    /// Drop helper for tasks feeding the [`receivers`](Self::receivers)
+    drop_helper: AbortOnDropMany<()>,
 
     /// For each input stream maintain a dequeue of SortKeyCursor
     ///
@@ -379,7 +379,7 @@ struct SortPreservingMergeStream {
 impl SortPreservingMergeStream {
     fn new(
         receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
-        join_handles: Vec<JoinHandle<()>>,
+        drop_helper: AbortOnDropMany<()>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
         target_batch_size: usize,
@@ -394,7 +394,7 @@ impl SortPreservingMergeStream {
             schema,
             cursors,
             receivers,
-            join_handles,
+            drop_helper,
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             sort_options: expressions.iter().map(|x| x.options).collect(),
             target_batch_size,
@@ -564,14 +564,6 @@ impl SortPreservingMergeStream {
         }
 
         RecordBatch::try_new(self.schema.clone(), columns)
-    }
-}
-
-impl Drop for SortPreservingMergeStream {
-    fn drop(&mut self) {
-        for join_handle in &self.join_handles {
-            join_handle.abort();
-        }
     }
 }
 
@@ -1221,7 +1213,7 @@ mod tests {
         let merge_stream = SortPreservingMergeStream::new(
             receivers,
             // Use empty vector since we want to use the join handles ourselves
-            vec![],
+            AbortOnDropMany(vec![]),
             batches.schema(),
             sort.as_slice(),
             1024,

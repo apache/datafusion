@@ -31,14 +31,14 @@ use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+use super::common::{AbortOnDropMany, AbortOnDropSingle};
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use async_trait::async_trait;
 
 use futures::stream::Stream;
-use futures::{Future, StreamExt};
+use futures::StreamExt;
 use hashbrown::HashMap;
-use pin_project_lite::pin_project;
 use tokio::sync::{
     mpsc::{self, UnboundedReceiver, UnboundedSender},
     Mutex,
@@ -56,7 +56,7 @@ struct RepartitionExecState {
         HashMap<usize, (UnboundedSender<MaybeBatch>, UnboundedReceiver<MaybeBatch>)>,
 
     /// Helper that ensures that that background job is killed once it is no longer needed.
-    abort_helper: Arc<AbortOnDrop>,
+    abort_helper: Arc<AbortOnDropMany<()>>,
 }
 
 /// The repartition operator maps N input partitions to M output partitions based on a
@@ -211,11 +211,14 @@ impl ExecutionPlan for RepartitionExec {
 
                 // In a separate task, wait for each input to be done
                 // (and pass along any errors, including panic!s)
-                let join_handle = tokio::spawn(WaitForTask { input_task, txs });
+                let join_handle = tokio::spawn(Self::wait_for_task(
+                    AbortOnDropSingle::new(input_task),
+                    txs,
+                ));
                 join_handles.push(join_handle);
             }
 
-            state.abort_helper = Arc::new(AbortOnDrop(join_handles))
+            state.abort_helper = Arc::new(AbortOnDropMany(join_handles))
         }
 
         // now return stream for the specified *output* partition which will
@@ -263,7 +266,7 @@ impl RepartitionExec {
             partitioning,
             state: Arc::new(Mutex::new(RepartitionExecState {
                 channels: HashMap::new(),
-                abort_helper: Arc::new(AbortOnDrop(vec![])),
+                abort_helper: Arc::new(AbortOnDropMany::<()>(vec![])),
             })),
             metrics: ExecutionPlanMetricsSet::new(),
         })
@@ -386,78 +389,43 @@ impl RepartitionExec {
 
         Ok(())
     }
-}
 
-#[derive(Debug)]
-struct AbortOnDrop(Vec<JoinHandle<()>>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        for join_handle in &self.0 {
-            join_handle.abort();
-        }
-    }
-}
-
-pin_project! {
     /// Waits for `input_task` which is consuming one of the inputs to
     /// complete. Upon each successful completion, sends a `None` to
     /// each of the output tx channels to signal one of the inputs is
     /// complete. Upon error, propagates the errors to all output tx
     /// channels.
-    struct WaitForTask {
-        #[pin]
-        input_task: JoinHandle<Result<()>>,
+    async fn wait_for_task(
+        input_task: AbortOnDropSingle<Result<()>>,
         txs: HashMap<usize, UnboundedSender<Option<ArrowResult<RecordBatch>>>>,
-    }
-
-    impl PinnedDrop for WaitForTask {
-        fn drop(this: Pin<&mut Self>) {
-            this.input_task.abort();
-        }
-    }
-}
-
-impl Future for WaitForTask {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-
+    ) {
         // wait for completion, and propagate error
         // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
-        match this.input_task.poll(cx) {
+        match input_task.await {
             // Error in joining task
-            Poll::Ready(Err(e)) => {
-                for (_, tx) in this.txs {
+            Err(e) => {
+                for (_, tx) in txs {
                     let err = DataFusionError::Execution(format!("Join Error: {}", e));
                     let err = Err(err.into_arrow_external_error());
                     tx.send(Some(err)).ok();
                 }
-
-                Poll::Ready(())
             }
             // Error from running input task
-            Poll::Ready(Ok(Err(e))) => {
-                for (_, tx) in this.txs {
+            Ok(Err(e)) => {
+                for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
                     let err = DataFusionError::Execution(e.to_string());
                     let err = Err(err.into_arrow_external_error());
                     tx.send(Some(err)).ok();
                 }
-
-                Poll::Ready(())
             }
             // Input task completed successfully
-            Poll::Ready(Ok(Ok(()))) => {
+            Ok(Ok(())) => {
                 // notify each output partition that this input partition has no more data
-                for (_, tx) in this.txs {
+                for (_, tx) in txs {
                     tx.send(None).ok();
                 }
-
-                Poll::Ready(())
             }
-            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -477,7 +445,7 @@ struct RepartitionStream {
 
     /// Handle to ensure background tasks are killed when no longer needed.
     #[allow(dead_code)]
-    drop_helper: Arc<AbortOnDrop>,
+    drop_helper: Arc<AbortOnDropMany<()>>,
 }
 
 impl Stream for RepartitionStream {

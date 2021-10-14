@@ -17,6 +17,7 @@
 
 //! Defines the SORT plan
 
+use super::common::AbortOnDropSingle;
 use super::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
@@ -40,7 +41,6 @@ use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::task::JoinHandle;
 
 /// Sort execution plan
 #[derive(Debug)]
@@ -229,13 +229,7 @@ pin_project! {
         output: futures::channel::oneshot::Receiver<ArrowResult<Option<RecordBatch>>>,
         finished: bool,
         schema: SchemaRef,
-        join_handle: JoinHandle<()>,
-    }
-
-    impl PinnedDrop for SortStream {
-        fn drop(this: Pin<&mut Self>) {
-            this.join_handle.abort();
-        }
+        drop_helper: AbortOnDropSingle<()>,
     }
 }
 
@@ -273,7 +267,7 @@ impl SortStream {
             output: rx,
             finished: false,
             schema,
-            join_handle,
+            drop_helper: AbortOnDropSingle::new(join_handle),
         }
     }
 }

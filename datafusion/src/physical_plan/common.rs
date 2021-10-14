@@ -26,7 +26,8 @@ use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use futures::channel::mpsc;
-use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
+use futures::{Future, SinkExt, Stream, StreamExt, TryStreamExt};
+use pin_project_lite::pin_project;
 use std::fs;
 use std::fs::metadata;
 use std::sync::Arc;
@@ -222,6 +223,53 @@ pub fn compute_record_batch_statistics(
         total_byte_size: Some(total_byte_size),
         column_statistics: Some(column_statistics),
         is_exact: true,
+    }
+}
+
+pin_project! {
+    /// Helper that aborts the given join handle on drop.
+    ///
+    /// Useful to kill background tasks when the consumer is dropped.
+    #[derive(Debug)]
+    pub struct AbortOnDropSingle<T>{
+        #[pin]
+        join_handle: JoinHandle<T>,
+    }
+
+    impl<T> PinnedDrop for AbortOnDropSingle<T> {
+        fn drop(this: Pin<&mut Self>) {
+            this.join_handle.abort();
+        }
+    }
+}
+
+impl<T> AbortOnDropSingle<T> {
+    /// Create new abort helper from join handle.
+    pub fn new(join_handle: JoinHandle<T>) -> Self {
+        Self { join_handle }
+    }
+}
+
+impl<T> Future for AbortOnDropSingle<T> {
+    type Output = std::result::Result<T, tokio::task::JoinError>;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        this.join_handle.poll(cx)
+    }
+}
+
+/// Helper that aborts the given join handles on drop.
+///
+/// Useful to kill background tasks when the consumer is dropped.
+#[derive(Debug)]
+pub struct AbortOnDropMany<T>(pub Vec<JoinHandle<T>>);
+
+impl<T> Drop for AbortOnDropMany<T> {
+    fn drop(&mut self) {
+        for join_handle in &self.0 {
+            join_handle.abort();
+        }
     }
 }
 
