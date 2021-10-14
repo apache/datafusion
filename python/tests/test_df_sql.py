@@ -41,3 +41,23 @@ def test_register_record_batches(ctx):
 
     assert result[0].column(0) == pa.array([5, 7, 9])
     assert result[0].column(1) == pa.array([-3, -3, -3])
+
+
+def test_create_dataframe_registers_unique_table_name(ctx):
+    # create a RecordBatch and register it as memtable
+    batch = pa.RecordBatch.from_arrays(
+        [pa.array([1, 2, 3]), pa.array([4, 5, 6])],
+        names=["a", "b"],
+    )
+
+    df = ctx.create_dataframe([[batch]])
+    tables = list(ctx.tables())
+
+    assert df
+    assert len(tables) == 1
+    assert len(tables[0]) == 33
+    assert tables[0].startswith("c")
+    # ensure that the rest of the table name contains
+    # only hexadecimal numbers
+    for c in tables[0][1:]:
+        assert c in "0123456789abcdef"
