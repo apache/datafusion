@@ -67,10 +67,7 @@ impl OptimizerRule for ConstantFolding {
 
         match plan {
             LogicalPlan::Filter { predicate, input } => Ok(LogicalPlan::Filter {
-                predicate: match rewriter.rewrite(predicate.clone()) {
-                    Ok(e) => e,
-                    _ => predicate.clone(),
-                },
+                predicate: rewriter.rewrite(predicate.clone()) ,
                 input: match self.optimize(input, execution_props) {
                     Ok(plan) => Arc::new(plan.clone()),
                     _ => input.clone(),
@@ -103,10 +100,7 @@ impl OptimizerRule for ConstantFolding {
                 let expr = plan
                     .expressions()
                     .into_iter()
-                    .map(|e| match rewriter.rewrite(e.clone()) {
-                        Ok(expr) => expr,
-                        Err(_) => e,
-                    })
+                    .map(|e| rewriter.rewrite(e))
                     .collect::<Vec<_>>();
 
                 utils::from_plan(plan, &expr, &new_inputs)
@@ -123,7 +117,7 @@ impl OptimizerRule for ConstantFolding {
 }
 
 ///Evaluate calculates the value of scalar expressions. This function may panic if columns are present within the expression
-pub fn evaluate(expr: &Expr, exec_props: &ExecutionProps) -> Result<ScalarValue> {
+pub fn evaluate(expr: &Expr) -> Result<ScalarValue> {
     if let Expr::Literal(s) = expr {
         return Ok(s.clone());
     }
@@ -132,8 +126,8 @@ pub fn evaluate(expr: &Expr, exec_props: &ExecutionProps) -> Result<ScalarValue>
     let dummy_df_schema = DFSchema::empty();
     let dummy_input_schema =
         Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Float64, true)]);
-    let mut ctx_state = ExecutionContextState::new();
-    ctx_state.execution_props = exec_props.clone();
+    let ctx_state = ExecutionContextState::new();
+    
     let planner = DefaultPhysicalPlanner::default();
     let phys_expr = planner.create_physical_expr(
         expr,
@@ -175,45 +169,52 @@ impl<'a> ConstantRewriter<'a> {
         false
     }
 
-    pub fn rewrite(&mut self, mut expr: Expr) -> Result<Expr> {
+    pub fn rewrite(&mut self, mut expr: Expr) -> Expr {
         let name = match &expr {
             Expr::Alias(_, name) => Some(name.clone()),
             _ => None,
         };
 
         let rewrite_root = self.rewrite_const_expr(&mut expr);
-        let expr = if rewrite_root {
-            match evaluate(&expr, self.execution_props) {
-                Ok(s) => Expr::Literal(s),
-                Err(e) => {
-                    println!("Could not rewrite: {}", e);
-                    expr
-                }
+        if rewrite_root{
+            match evaluate(&expr) {
+                Ok(s) => expr= Expr::Literal(s),
+                Err(_) => return expr,
             }
-        } else {
-            expr
-        };
-        Ok(match name {
-            Some(name) => expr.alias(&name),
+        }
+        match name {
+            Some(name) => {
+                let existing_alias = match &expr{
+                    Expr::Alias(_, new_alias) => Some(new_alias),
+                    _ => None
+                };
+                let apply_new_alias = match existing_alias{
+                    Some(new) => *new != name,
+                    None => false,
+                };
+                if apply_new_alias{
+                    expr = Expr::Alias(Box::new(expr), name);
+                }
+                expr
+            },
             None => expr,
-        })
+        }
     }
 
-    fn replace_expr(&self, expr: &mut Box<Expr>, mut replacement: Expr) {
-        std::mem::swap(&mut replacement, expr);
-    }
 
+    ///Evaluates all literal expressions in the list.
     fn const_fold_list_eager(&mut self, args: &mut Vec<Expr>) {
         for arg in args.iter_mut() {
             if self.rewrite_const_expr(arg) {
-                match evaluate(arg, self.execution_props) {
+                match evaluate(arg) {
                     Ok(s) => *arg = Expr::Literal(s),
                     _ => (),
                 }
             }
         }
     }
-
+    ///Tests to see if the list passed in is all literal expressions, if they are then it returns true.
+    ///If some expressions are not literal then the literal expressions are evaluated and it returns false.
     fn const_fold_list(&mut self, args: &mut Vec<Expr>) -> bool {
         let can_rewrite = args
             .iter_mut()
@@ -224,7 +225,7 @@ impl<'a> ConstantRewriter<'a> {
         } else {
             for (rewrite_expr, expr) in can_rewrite.iter().zip(args) {
                 if *rewrite_expr {
-                    match evaluate(expr, self.execution_props) {
+                    match evaluate(expr) {
                         Ok(s) => *expr = Expr::Literal(s),
                         _ => (),
                     }
@@ -234,7 +235,8 @@ impl<'a> ConstantRewriter<'a> {
         false
     }
     ///This attempts to simplify expressions of the form col(Boolean) = Boolean and col(Boolean) != Boolean
-    /// e.g. col(Boolean) = Some(true) -> col(Boolean)
+    /// e.g. col(Boolean) = Some(true) -> col(Boolean). It also handles == and != between two boolean literals as 
+    /// the binary operator physical expression currently doesn't handle them.
 
     fn binary_column_const_fold(
         &mut self,
@@ -307,7 +309,7 @@ impl<'a> ConstantRewriter<'a> {
                     (true, true) => true,
                     (false, false) => false,
                     (true, false) => {
-                        match evaluate(&left, self.execution_props) {
+                        match evaluate(&left) {
                             Ok(s) => {
                                 let left: &mut Expr = left;
                                 *left = Expr::Literal(s);
@@ -317,7 +319,7 @@ impl<'a> ConstantRewriter<'a> {
                         false
                     }
                     (false, true) => {
-                        match evaluate(&right, self.execution_props) {
+                        match evaluate(&right) {
                             Ok(s) => {
                                 let right: &mut Expr = right;
                                 *right = Expr::Literal(s);
@@ -366,18 +368,21 @@ impl<'a> ConstantRewriter<'a> {
                 (true, true, true) => true,
                 (expr_const, low_const, high_const) => {
                     if expr_const {
-                        if let Ok(s) = evaluate(expr, self.execution_props) {
-                            self.replace_expr(expr, Expr::Literal(s));
+                        if let Ok(s) = evaluate(expr) {
+                            let expr: &mut Expr = expr;
+                            *expr = Expr::Literal(s);
                         }
                     }
                     if low_const {
-                        if let Ok(s) = evaluate(expr, self.execution_props) {
-                            self.replace_expr(low, Expr::Literal(s));
+                        if let Ok(s) = evaluate(expr) {
+                            let expr: &mut Expr = expr;
+                            *expr = Expr::Literal(s);
                         }
                     }
                     if high_const {
-                        if let Ok(s) = evaluate(expr, self.execution_props) {
-                            self.replace_expr(high, Expr::Literal(s));
+                        if let Ok(s) = evaluate(expr) {
+                            let expr: &mut Expr = expr;
+                            *expr = Expr::Literal(s);
                         }
                     }
                     false
@@ -394,7 +399,7 @@ impl<'a> ConstantRewriter<'a> {
                     .unwrap_or(false)
                 {
                     let expr_inner = expr.as_mut().unwrap();
-                    match evaluate(expr_inner, self.execution_props) {
+                    match evaluate(expr_inner) {
                         Ok(s) => *expr_inner.as_mut() = Expr::Literal(s),
                         Err(_) => (),
                     }
@@ -406,7 +411,7 @@ impl<'a> ConstantRewriter<'a> {
                     .unwrap_or(false)
                 {
                     let expr_inner = else_expr.as_mut().unwrap();
-                    match evaluate(expr_inner, self.execution_props) {
+                    match evaluate(expr_inner) {
                         Ok(s) => *expr_inner.as_mut() = Expr::Literal(s),
                         Err(_) => (),
                     }
@@ -416,13 +421,13 @@ impl<'a> ConstantRewriter<'a> {
                     let when: &mut Expr = when;
                     let then: &mut Expr = then;
                     if self.rewrite_const_expr(when) {
-                        match evaluate(when, self.execution_props) {
+                        match evaluate(when) {
                             Ok(s) => *when = Expr::Literal(s),
                             _ => (),
                         }
                     }
                     if self.rewrite_const_expr(then) {
-                        match evaluate(then, self.execution_props) {
+                        match evaluate(then) {
                             Ok(s) => *then = Expr::Literal(s),
                             Err(_) => (),
                         }
@@ -434,7 +439,7 @@ impl<'a> ConstantRewriter<'a> {
             Expr::TryCast { expr, .. } => self.rewrite_const_expr(expr),
             Expr::Sort { expr, .. } => {
                 if self.rewrite_const_expr(expr) {
-                    match evaluate(expr, self.execution_props) {
+                    match evaluate(expr) {
                         Ok(s) => {
                             let expr: &mut Expr = expr;
                             *expr = Expr::Literal(s);
@@ -510,7 +515,7 @@ impl<'a> ConstantRewriter<'a> {
 
                     (false, false) => false,
                     (true, false) => {
-                        if let Ok(s) = evaluate(expr, self.execution_props) {
+                        if let Ok(s) = evaluate(expr) {
                             let expr: &mut Expr = expr;
                             *expr = Expr::Literal(s);
                         }
@@ -572,7 +577,7 @@ mod tests {
         };
 
         assert_eq!(
-            rewriter.rewrite(col("c2").not().not().not())?,
+            rewriter.rewrite(col("c2").not().not().not()),
             col("c2").not(),
         );
 
@@ -589,7 +594,7 @@ mod tests {
 
         // x = null is always null
         assert_eq!(
-            rewriter.rewrite(lit(true).eq(lit(ScalarValue::Boolean(None))))?,
+            rewriter.rewrite(lit(true).eq(lit(ScalarValue::Boolean(None)))),
             lit(ScalarValue::Boolean(None)),
         );
 
@@ -597,19 +602,19 @@ mod tests {
         assert_eq!(
             rewriter.rewrite(
                 lit(ScalarValue::Boolean(None)).not_eq(lit(ScalarValue::Boolean(None)))
-            )?,
+            ),
             lit(ScalarValue::Boolean(None)),
         );
 
         // x != null is always null
         assert_eq!(
-            rewriter.rewrite(col("c2").not_eq(lit(ScalarValue::Boolean(None))))?,
+            rewriter.rewrite(col("c2").not_eq(lit(ScalarValue::Boolean(None)))),
             lit(ScalarValue::Boolean(None)),
         );
 
         // null = x is always null
         assert_eq!(
-            rewriter.rewrite(lit(ScalarValue::Boolean(None)).eq(col("c2")))?,
+            rewriter.rewrite(lit(ScalarValue::Boolean(None)).eq(col("c2"))),
             lit(ScalarValue::Boolean(None)),
         );
 
@@ -627,16 +632,16 @@ mod tests {
         assert_eq!(col("c2").get_type(&schema)?, DataType::Boolean);
 
         // true = ture -> true
-        assert_eq!(rewriter.rewrite(lit(true).eq(lit(true)))?, lit(true),);
+        assert_eq!(rewriter.rewrite(lit(true).eq(lit(true))), lit(true),);
 
         // true = false -> false
-        assert_eq!(rewriter.rewrite(lit(true).eq(lit(false)))?, lit(false),);
+        assert_eq!(rewriter.rewrite(lit(true).eq(lit(false))), lit(false),);
 
         // c2 = true -> c2
-        assert_eq!(rewriter.rewrite(col("c2").eq(lit(true)))?, col("c2"),);
+        assert_eq!(rewriter.rewrite(col("c2").eq(lit(true))), col("c2"),);
 
         // c2 = false => !c2
-        assert_eq!(rewriter.rewrite(col("c2").eq(lit(false)))?, col("c2").not(),);
+        assert_eq!(rewriter.rewrite(col("c2").eq(lit(false))), col("c2").not(),);
 
         Ok(())
     }
@@ -657,24 +662,24 @@ mod tests {
 
         // don't fold c1 = true
         assert_eq!(
-            rewriter.rewrite(col("c1").eq(lit(true)))?,
+            rewriter.rewrite(col("c1").eq(lit(true))),
             col("c1").eq(lit(true)),
         );
 
         // don't fold c1 = false
         assert_eq!(
-            rewriter.rewrite(col("c1").eq(lit(false)))?,
+            rewriter.rewrite(col("c1").eq(lit(false))),
             col("c1").eq(lit(false)),
         );
 
         // test constant operands
         assert_eq!(
-            rewriter.rewrite(lit(1).eq(lit(true)))?,
+            rewriter.rewrite(lit(1).eq(lit(true))),
             lit(1).eq(lit(true)),
         );
 
         assert_eq!(
-            rewriter.rewrite(lit("a").eq(lit(false)))?,
+            rewriter.rewrite(lit("a").eq(lit(false))),
             lit("a").eq(lit(false)),
         );
 
@@ -693,17 +698,17 @@ mod tests {
 
         // c2 != true -> !c2
         assert_eq!(
-            rewriter.rewrite(col("c2").not_eq(lit(true)))?,
+            rewriter.rewrite(col("c2").not_eq(lit(true))),
             col("c2").not(),
         );
 
         // c2 != false -> c2
-        assert_eq!(rewriter.rewrite(col("c2").not_eq(lit(false)))?, col("c2"),);
+        assert_eq!(rewriter.rewrite(col("c2").not_eq(lit(false))), col("c2"),);
 
         // test constant
-        assert_eq!(rewriter.rewrite(lit(true).not_eq(lit(true)))?, lit(false),);
+        assert_eq!(rewriter.rewrite(lit(true).not_eq(lit(true))), lit(false),);
 
-        assert_eq!(rewriter.rewrite(lit(true).not_eq(lit(false)))?, lit(true),);
+        assert_eq!(rewriter.rewrite(lit(true).not_eq(lit(false))), lit(true),);
 
         Ok(())
     }
@@ -721,23 +726,23 @@ mod tests {
         assert_eq!(col("c1").get_type(&schema)?, DataType::Utf8);
 
         assert_eq!(
-            rewriter.rewrite(col("c1").not_eq(lit(true)))?,
+            rewriter.rewrite(col("c1").not_eq(lit(true))),
             col("c1").not_eq(lit(true)),
         );
 
         assert_eq!(
-            rewriter.rewrite(col("c1").not_eq(lit(false)))?,
+            rewriter.rewrite(col("c1").not_eq(lit(false))),
             col("c1").not_eq(lit(false)),
         );
 
         // test constants
         assert_eq!(
-            rewriter.rewrite(lit(1).not_eq(lit(true)))?,
+            rewriter.rewrite(lit(1).not_eq(lit(true))),
             lit(1).not_eq(lit(true)),
         );
 
         assert_eq!(
-            rewriter.rewrite(lit("a").not_eq(lit(false)))?,
+            rewriter.rewrite(lit("a").not_eq(lit(false))),
             lit("a").not_eq(lit(false)),
         );
 
@@ -760,7 +765,7 @@ mod tests {
                     Box::new(lit("ok").eq(lit(true))),
                 )],
                 else_expr: Some(Box::new(col("c2").eq(lit(true)))),
-            })?,
+            }),
             Expr::Case {
                 expr: None,
                 when_then_expr: vec![(
