@@ -927,12 +927,12 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
         let refs = blocking_exec.refs();
-        let sort_exec = Arc::new(RepartitionExec::try_new(
+        let repartition_exec = Arc::new(RepartitionExec::try_new(
             blocking_exec,
             Partitioning::UnknownPartitioning(1),
         )?);
 
-        let fut = collect(sort_exec);
+        let fut = collect(repartition_exec);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

@@ -1307,7 +1307,7 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
         let refs = blocking_exec.refs();
-        let sort_exec = Arc::new(SortPreservingMergeExec::new(
+        let sort_preserving_merge_exec = Arc::new(SortPreservingMergeExec::new(
             vec![PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
@@ -1316,7 +1316,7 @@ mod tests {
             1,
         ));
 
-        let fut = collect(sort_exec);
+        let fut = collect(sort_preserving_merge_exec);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

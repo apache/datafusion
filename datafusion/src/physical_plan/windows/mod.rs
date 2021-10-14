@@ -274,7 +274,7 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let sort_exec = Arc::new(WindowAggExec::try_new(
+        let window_agg_exec = Arc::new(WindowAggExec::try_new(
             vec![create_window_expr(
                 &WindowFunction::AggregateFunction(AggregateFunction::Count),
                 "count".to_owned(),
@@ -288,7 +288,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = collect(sort_exec);
+        let fut = collect(window_agg_exec);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
