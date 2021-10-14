@@ -47,24 +47,30 @@ use tokio::task::JoinHandle;
 
 type MaybeBatch = Option<ArrowResult<RecordBatch>>;
 
+/// Inner state of [`RepartitionExec`].
+#[derive(Debug)]
+struct RepartitionExecState {
+    /// Channels for sending batches from input partitions to output partitions.
+    /// Key is the partition number.
+    channels:
+        HashMap<usize, (UnboundedSender<MaybeBatch>, UnboundedReceiver<MaybeBatch>)>,
+
+    /// Helper that ensures that that background job is killed once it is no longer needed.
+    abort_helper: Arc<AbortOnDrop>,
+}
+
 /// The repartition operator maps N input partitions to M output partitions based on a
 /// partitioning scheme. No guarantees are made about the order of the resulting partitions.
 #[derive(Debug)]
 pub struct RepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
+
     /// Partitioning scheme to use
     partitioning: Partitioning,
-    /// Channels for sending batches from input partitions to output partitions.
-    /// Key is the partition number.
-    ///
-    /// Stored alongside is an abort marker that will kill the background job once it's no longer needed.
-    channels_and_abort_helper: Arc<
-        Mutex<(
-            HashMap<usize, (UnboundedSender<MaybeBatch>, UnboundedReceiver<MaybeBatch>)>,
-            Arc<AbortOnDrop>,
-        )>,
-    >,
+
+    /// Inner state that is initialized when the first output stream is created.
+    state: Arc<Mutex<RepartitionExecState>>,
 
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
@@ -160,13 +166,13 @@ impl ExecutionPlan for RepartitionExec {
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         // lock mutexes
-        let mut channels_and_abort_helper = self.channels_and_abort_helper.lock().await;
+        let mut state = self.state.lock().await;
 
         let num_input_partitions = self.input.output_partitioning().partition_count();
         let num_output_partitions = self.partitioning.partition_count();
 
         // if this is the first partition to be invoked then we need to set up initial state
-        if channels_and_abort_helper.0.is_empty() {
+        if state.channels.is_empty() {
             // create one channel per *output* partition
             for partition in 0..num_output_partitions {
                 // Note that this operator uses unbounded channels to avoid deadlocks because
@@ -177,9 +183,7 @@ impl ExecutionPlan for RepartitionExec {
                 // for this would be to add spill-to-disk capabilities.
                 let (sender, receiver) =
                     mpsc::unbounded_channel::<Option<ArrowResult<RecordBatch>>>();
-                channels_and_abort_helper
-                    .0
-                    .insert(partition, (sender, receiver));
+                state.channels.insert(partition, (sender, receiver));
             }
             // Use fixed random state
             let random = ahash::RandomState::with_seeds(0, 0, 0, 0);
@@ -187,8 +191,8 @@ impl ExecutionPlan for RepartitionExec {
             // launch one async task per *input* partition
             let mut join_handles = Vec::with_capacity(num_input_partitions);
             for i in 0..num_input_partitions {
-                let txs: HashMap<_, _> = channels_and_abort_helper
-                    .0
+                let txs: HashMap<_, _> = state
+                    .channels
                     .iter()
                     .map(|(partition, (tx, _rx))| (*partition, tx.clone()))
                     .collect();
@@ -211,7 +215,7 @@ impl ExecutionPlan for RepartitionExec {
                 join_handles.push(join_handle);
             }
 
-            channels_and_abort_helper.1 = Arc::new(AbortOnDrop(join_handles))
+            state.abort_helper = Arc::new(AbortOnDrop(join_handles))
         }
 
         // now return stream for the specified *output* partition which will
@@ -221,9 +225,9 @@ impl ExecutionPlan for RepartitionExec {
             num_input_partitions_processed: 0,
             schema: self.input.schema(),
             input: UnboundedReceiverStream::new(
-                channels_and_abort_helper.0.remove(&partition).unwrap().1,
+                state.channels.remove(&partition).unwrap().1,
             ),
-            drop_helper: Arc::clone(&channels_and_abort_helper.1),
+            drop_helper: Arc::clone(&state.abort_helper),
         }))
     }
 
@@ -257,10 +261,10 @@ impl RepartitionExec {
         Ok(RepartitionExec {
             input,
             partitioning,
-            channels_and_abort_helper: Arc::new(Mutex::new((
-                HashMap::new(),
-                Arc::new(AbortOnDrop(vec![])),
-            ))),
+            state: Arc::new(Mutex::new(RepartitionExecState {
+                channels: HashMap::new(),
+                abort_helper: Arc::new(AbortOnDrop(vec![])),
+            })),
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
