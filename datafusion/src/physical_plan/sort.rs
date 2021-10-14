@@ -17,6 +17,7 @@
 
 //! Defines the SORT plan
 
+use super::common::AbortOnDropSingle;
 use super::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
@@ -40,7 +41,6 @@ use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::task::JoinHandle;
 
 /// Sort execution plan
 #[derive(Debug)]
@@ -229,13 +229,7 @@ pin_project! {
         output: futures::channel::oneshot::Receiver<ArrowResult<Option<RecordBatch>>>,
         finished: bool,
         schema: SchemaRef,
-        join_handle: JoinHandle<()>,
-    }
-
-    impl PinnedDrop for SortStream {
-        fn drop(this: Pin<&mut Self>) {
-            this.join_handle.abort();
-        }
+        drop_helper: AbortOnDropSingle<()>,
     }
 }
 
@@ -273,7 +267,7 @@ impl SortStream {
             output: rx,
             finished: false,
             schema,
-            join_handle,
+            drop_helper: AbortOnDropSingle::new(join_handle),
         }
     }
 }
@@ -315,14 +309,14 @@ impl RecordBatchStream for SortStream {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
-
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::{collect, file_format::CsvExec};
+    use crate::test::assert_is_pending;
+    use crate::test::exec::assert_strong_count_converges_to_zero;
     use crate::test::{self, aggr_test_schema, exec::BlockingExec};
     use arrow::array::*;
     use arrow::datatypes::*;
@@ -497,7 +491,7 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
-        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema)));
+        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
         let sort_exec = Arc::new(SortExec::try_new(
             vec![PhysicalSortExpr {
@@ -510,22 +504,9 @@ mod tests {
         let fut = collect(sort_exec);
         let mut fut = fut.boxed();
 
-        let waker = futures::task::noop_waker();
-        let mut cx = futures::task::Context::from_waker(&waker);
-        let poll = fut.poll_unpin(&mut cx);
-
-        assert!(poll.is_pending());
+        assert_is_pending(&mut fut);
         drop(fut);
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                if dbg!(Weak::strong_count(&refs)) == 0 {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
+        assert_strong_count_converges_to_zero(refs).await;
 
         Ok(())
     }

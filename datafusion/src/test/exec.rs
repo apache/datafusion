@@ -482,15 +482,19 @@ pub struct BlockingExec {
     /// Schema that is mocked by this plan.
     schema: SchemaRef,
 
+    /// Number of output partitions.
+    n_partitions: usize,
+
     /// Ref-counting helper to check if the plan and the produced stream are still in memory.
     refs: Arc<()>,
 }
 
 impl BlockingExec {
-    /// Create new [`BlockingExec`] with a give schema.
-    pub fn new(schema: SchemaRef) -> Self {
+    /// Create new [`BlockingExec`] with a give schema and number of partitions.
+    pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
         Self {
             schema,
+            n_partitions,
             refs: Default::default(),
         }
     }
@@ -499,7 +503,7 @@ impl BlockingExec {
     ///
     /// Use [`Weak::strong_count`] to determine if the plan itself and its streams are dropped (should be 0 in that
     /// case). Note that tokio might take some time to cancel spawned tasks, so you need to wrap this check into a retry
-    /// loop.
+    /// loop. Use [`assert_strong_count_converges_to_zero`] to archive this.
     pub fn refs(&self) -> Weak<()> {
         Arc::downgrade(&self.refs)
     }
@@ -521,7 +525,7 @@ impl ExecutionPlan for BlockingExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
+        Partitioning::UnknownPartitioning(self.n_partitions)
     }
 
     fn with_new_children(
@@ -583,4 +587,20 @@ impl RecordBatchStream for BlockingStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
+}
+
+/// Asserts that the strong count of the given [`Weak`] pointer converges to zero.
+///
+/// This might take a while but has a timeout.
+pub async fn assert_strong_count_converges_to_zero<T>(refs: Weak<T>) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if dbg!(Weak::strong_count(&refs)) == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
