@@ -97,7 +97,7 @@ impl ScalarUDF {
         }
     }
     ///Returns the volatilaty of the UDF
-    pub fn volatility(&self)->Volatility{
+    pub fn volatility(&self) -> Volatility {
         self.signature.volatility
     }
 
