@@ -18,8 +18,7 @@
 use std::path::PathBuf;
 use std::{collections::HashSet, sync::Arc};
 
-use rand::distributions::Alphanumeric;
-use rand::Rng;
+use uuid::Uuid;
 
 use tokio::runtime::Runtime;
 
@@ -91,10 +90,10 @@ impl ExecutionContext {
 
         // generate a random (unique) name for this table
         // table name cannot start with numeric digit
-        let name = std::iter::once('c')
-            .chain(rand::thread_rng().sample_iter(&Alphanumeric))
-            .take(10)
-            .collect::<String>();
+        let name = "c".to_owned()
+            + &Uuid::new_v4()
+                .to_simple()
+                .encode_lower(&mut Uuid::encode_buffer());
 
         errors::wrap(self.ctx.register_table(&*name, Arc::new(table)))?;
         Ok(dataframe::DataFrame::new(
