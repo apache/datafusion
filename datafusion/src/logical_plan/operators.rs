@@ -52,6 +52,10 @@ pub enum Operator {
     Like,
     /// Does not match a wildcard pattern
     NotLike,
+    /// IS DISTINCT FROM
+    IsDistinctFrom,
+    /// IS NOT DISTINCT FROM
+    IsNotDistinctFrom,
     /// Case sensitive regex match
     RegexMatch,
     /// Case insensitive regex match
@@ -84,6 +88,8 @@ impl fmt::Display for Operator {
             Operator::RegexIMatch => "~*",
             Operator::RegexNotMatch => "!~",
             Operator::RegexNotIMatch => "!~*",
+            Operator::IsDistinctFrom => "IS DISTINCT FROM",
+            Operator::IsNotDistinctFrom => "IS NOT DISTINCT FROM",
         };
         write!(f, "{}", display)
     }
