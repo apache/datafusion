@@ -36,7 +36,7 @@ use arrow::compute::kernels::comparison::{
     lt_eq_utf8_scalar, lt_utf8_scalar, neq_utf8_scalar, nlike_utf8_scalar,
     regexp_is_match_utf8_scalar,
 };
-use arrow::datatypes::{DataType, Schema, TimeUnit};
+use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
 use crate::error::{DataFusionError, Result};
@@ -460,6 +460,9 @@ fn common_binary_type(
         | Operator::RegexIMatch
         | Operator::RegexNotMatch
         | Operator::RegexNotIMatch => string_coercion(lhs_type, rhs_type),
+        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
+            eq_coercion(lhs_type, rhs_type)
+        }
     };
 
     // re-write the error message of failed coercions to include the operator's information
@@ -502,7 +505,9 @@ pub fn binary_operator_data_type(
         | Operator::RegexMatch
         | Operator::RegexIMatch
         | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch => Ok(DataType::Boolean),
+        | Operator::RegexNotIMatch
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
         // math operations return the same value as the common coerced type
         Operator::Plus
         | Operator::Minus
@@ -680,6 +685,10 @@ impl BinaryExpr {
             Operator::GtEq => binary_array_op!(left, right, gt_eq),
             Operator::Eq => binary_array_op!(left, right, eq),
             Operator::NotEq => binary_array_op!(left, right, neq),
+            Operator::IsDistinctFrom => binary_array_op!(left, right, is_distinct_from),
+            Operator::IsNotDistinctFrom => {
+                binary_array_op!(left, right, is_not_distinct_from)
+            }
             Operator::Plus => binary_primitive_array_op!(left, right, add),
             Operator::Minus => binary_primitive_array_op!(left, right, subtract),
             Operator::Multiply => binary_primitive_array_op!(left, right, multiply),
@@ -721,6 +730,56 @@ impl BinaryExpr {
             }
         }
     }
+}
+
+fn is_distinct_from<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray>
+where
+    T: ArrowNumericType,
+{
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(x, y)| Some(x != y))
+        .collect())
+}
+
+fn is_distinct_from_utf8<OffsetSize: StringOffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(x, y)| Some(x != y))
+        .collect())
+}
+
+fn is_not_distinct_from<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray>
+where
+    T: ArrowNumericType,
+{
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(x, y)| Some(x == y))
+        .collect())
+}
+
+fn is_not_distinct_from_utf8<OffsetSize: StringOffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(x, y)| Some(x == y))
+        .collect())
 }
 
 /// return two physical expressions that are optionally coerced to a

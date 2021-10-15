@@ -1202,6 +1202,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(expr, schema)?,
             ))),
 
+            SQLExpr::IsDistinctFrom(left, right) => Ok(Expr::BinaryExpr {
+                left: Box::new(self.sql_expr_to_logical_expr(left, schema)?),
+                op: Operator::IsDistinctFrom,
+                right: Box::new(self.sql_expr_to_logical_expr(right, schema)?),
+            }),
+
+            SQLExpr::IsNotDistinctFrom(left, right) => Ok(Expr::BinaryExpr {
+                left: Box::new(self.sql_expr_to_logical_expr(left, schema)?),
+                op: Operator::IsNotDistinctFrom,
+                right: Box::new(self.sql_expr_to_logical_expr(right, schema)?),
+            }),
+
             SQLExpr::UnaryOp { ref op, ref expr } => match op {
                 UnaryOperator::Not => Ok(Expr::Not(Box::new(
                     self.sql_expr_to_logical_expr(expr, schema)?,

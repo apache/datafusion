@@ -595,6 +595,50 @@ async fn select_distinct_simple_4() {
 }
 
 #[tokio::test]
+async fn select_distinct_from() {
+    let mut ctx = ExecutionContext::new();
+
+    let sql = "select 
+        1 IS DISTINCT FROM CAST(NULL as INT) as a,
+        1 IS DISTINCT FROM 1 as b,
+        1 IS NOT DISTINCT FROM CAST(NULL as INT) as c,
+        1 IS NOT DISTINCT FROM 1 as d,
+        NULL IS DISTINCT FROM NULL as e,
+        NULL IS NOT DISTINCT FROM NULL as f
+    ";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+------+-------+-------+------+-------+------+",
+        "| a    | b     | c     | d    | e     | f    |",
+        "+------+-------+-------+------+-------+------+",
+        "| true | false | false | true | false | true |",
+        "+------+-------+-------+------+-------+------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+async fn select_distinct_from_utf8() {
+    let mut ctx = ExecutionContext::new();
+
+    let sql = "select 
+        'x' IS DISTINCT FROM NULL as a,
+        'x' IS DISTINCT FROM 'x' as b,
+        'x' IS NOT DISTINCT FROM NULL as c,
+        'x' IS NOT DISTINCT FROM 'x' as d
+    ";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+------+-------+-------+------+",
+        "| a    | b     | c     | d    |",
+        "+------+-------+-------+------+",
+        "| true | false | false | true |",
+        "+------+-------+-------+------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
 async fn projection_same_fields() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 
