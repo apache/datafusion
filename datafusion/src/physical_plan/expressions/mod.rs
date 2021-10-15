@@ -52,7 +52,60 @@ mod try_cast;
 
 /// Module with some convenient methods used in expression building
 pub mod helpers {
+
     pub use super::min_max::{max, min};
+
+    use crate::error::{DataFusionError, Result};
+    use crate::logical_plan::{DFSchema, Expr};
+    use crate::scalar::ScalarValue;
+    use arrow::datatypes::{DataType, Field};
+    use arrow::record_batch::RecordBatch;
+    ///Evaluate calculates the value of scalar expressions. This function may panic if non-constant expressions are present within the expression
+    pub fn evaluate(expr: &Expr) -> Result<ScalarValue> {
+        if let Expr::Literal(s) = expr {
+            return Ok(s.clone());
+        }
+        //The dummy column name shouldn't really matter as only scalar expressions will be evaluated
+        static DUMMY_COL_NAME: &str = ".";
+        let dummy_df_schema = DFSchema::empty();
+        let dummy_input_schema = arrow::datatypes::Schema::new(vec![Field::new(
+            DUMMY_COL_NAME,
+            DataType::Float64,
+            true,
+        )]);
+        let ctx_state = crate::execution::context::ExecutionContextState::new();
+
+        let planner = crate::physical_plan::planner::DefaultPhysicalPlanner::default();
+        let phys_expr = planner.create_physical_expr(
+            expr,
+            &dummy_df_schema,
+            &dummy_input_schema,
+            &ctx_state,
+        )?;
+        let col = {
+            let mut builder = arrow::array::Float64Array::builder(1);
+            builder.append_null()?;
+            builder.finish()
+        };
+        let record_batch = RecordBatch::try_new(
+            std::sync::Arc::new(dummy_input_schema),
+            vec![std::sync::Arc::new(col)],
+        )?;
+        let col_val = phys_expr.evaluate(&record_batch)?;
+        match col_val {
+            crate::physical_plan::ColumnarValue::Array(a) => {
+                if a.len() != 1 {
+                    Err(DataFusionError::Execution(format!(
+                        "Could not evaluate the expressison, found a result of length {}",
+                        a.len()
+                    )))
+                } else {
+                    Ok(ScalarValue::try_from_array(&a, 0)?)
+                }
+            }
+            crate::physical_plan::ColumnarValue::Scalar(s) => Ok(s),
+        }
+    }
 }
 
 pub use average::{avg_return_type, Avg, AvgAccumulator};

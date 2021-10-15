@@ -19,17 +19,15 @@
 
 use std::sync::Arc;
 
-use arrow::array::Float64Array;
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::DataType;
 
-use crate::error::{DataFusionError, Result};
-use crate::execution::context::{ExecutionContextState, ExecutionProps};
-use crate::logical_plan::{DFSchema, DFSchemaRef, Expr, LogicalPlan, Operator};
+use crate::error::Result;
+use crate::execution::context::ExecutionProps;
+use crate::logical_plan::{DFSchemaRef, Expr, LogicalPlan, Operator};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
+use crate::physical_plan::expressions::helpers::evaluate;
 use crate::physical_plan::functions::{BuiltinScalarFunction, Volatility};
-use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::scalar::ScalarValue;
 
 struct ConstantRewriter<'a> {
@@ -113,48 +111,6 @@ impl OptimizerRule for ConstantFolding {
 
     fn name(&self) -> &str {
         "const_folder"
-    }
-}
-
-///Evaluate calculates the value of scalar expressions. This function may panic if columns are present within the expression
-pub fn evaluate(expr: &Expr) -> Result<ScalarValue> {
-    if let Expr::Literal(s) = expr {
-        return Ok(s.clone());
-    }
-    //The dummy column name shouldn't really matter as only scalar expressions should be evaluated
-    static DUMMY_COL_NAME: &str = ".";
-    let dummy_df_schema = DFSchema::empty();
-    let dummy_input_schema =
-        Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Float64, true)]);
-    let ctx_state = ExecutionContextState::new();
-
-    let planner = DefaultPhysicalPlanner::default();
-    let phys_expr = planner.create_physical_expr(
-        expr,
-        &dummy_df_schema,
-        &dummy_input_schema,
-        &ctx_state,
-    )?;
-    let col = {
-        let mut builder = Float64Array::builder(1);
-        builder.append_null()?;
-        builder.finish()
-    };
-    let record_batch =
-        RecordBatch::try_new(Arc::new(dummy_input_schema), vec![Arc::new(col)])?;
-    let col_val = phys_expr.evaluate(&record_batch)?;
-    match col_val {
-        crate::physical_plan::ColumnarValue::Array(a) => {
-            if a.len() != 1 {
-                Err(DataFusionError::Execution(format!(
-                    "Could not evaluate the expressison, found a result of length {}",
-                    a.len()
-                )))
-            } else {
-                Ok(ScalarValue::try_from_array(&a, 0)?)
-            }
-        }
-        crate::physical_plan::ColumnarValue::Scalar(s) => Ok(s),
     }
 }
 
@@ -525,6 +481,7 @@ mod tests {
         physical_plan::{functions::make_scalar_function, udf::ScalarUDF},
     };
     use arrow::array::{ArrayRef, Float64Array};
+    use arrow::datatypes::{Field, Schema};
 
     use chrono::{DateTime, Utc};
 
