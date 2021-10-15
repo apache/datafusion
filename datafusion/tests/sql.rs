@@ -602,15 +602,17 @@ async fn select_distinct_from() {
         1 IS DISTINCT FROM CAST(NULL as INT) as a,
         1 IS DISTINCT FROM 1 as b,
         1 IS NOT DISTINCT FROM CAST(NULL as INT) as c,
-        1 IS NOT DISTINCT FROM 1 as d
+        1 IS NOT DISTINCT FROM 1 as d,
+        NULL IS DISTINCT FROM NULL as e,
+        NULL IS NOT DISTINCT FROM NULL as f
     ";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+------+-------+-------+------+",
-        "| a    | b     | c     | d    |",
-        "+------+-------+-------+------+",
-        "| true | false | false | true |",
-        "+------+-------+-------+------+",
+        "+------+-------+-------+------+-------+------+",
+        "| a    | b     | c     | d    | e     | f    |",
+        "+------+-------+-------+------+-------+------+",
+        "| true | false | false | true | false | true |",
+        "+------+-------+-------+------+-------+------+",
     ];
     assert_batches_eq!(expected, &actual);
 }
