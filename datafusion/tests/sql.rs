@@ -29,7 +29,7 @@ extern crate datafusion;
 
 use arrow::{
     array::*, datatypes::*, record_batch::RecordBatch,
-    util::display::array_value_to_string,
+    util::display::array_value_to_string, util::pretty::pretty_format_batches,
 };
 
 use datafusion::assert_batches_eq;
@@ -482,12 +482,35 @@ async fn select_all() -> Result<()> {
     register_aggregate_simple_csv(&mut ctx).await?;
 
     let sql = "SELECT c1 FROM aggregate_simple order by c1";
-    let actual_no_all = execute(&mut ctx, sql).await;
+    let results = execute_to_batches(&mut ctx, sql).await;
 
     let sql_all = "SELECT ALL c1 FROM aggregate_simple order by c1";
-    let actual_all = execute(&mut ctx, sql_all).await;
+    let results_all = execute_to_batches(&mut ctx, sql_all).await;
 
-    assert_eq!(actual_no_all, actual_all);
+    let expected = vec![
+        "+---------+",
+        "| c1      |",
+        "+---------+",
+        "| 0.00001 |",
+        "| 0.00002 |",
+        "| 0.00002 |",
+        "| 0.00003 |",
+        "| 0.00003 |",
+        "| 0.00003 |",
+        "| 0.00004 |",
+        "| 0.00004 |",
+        "| 0.00004 |",
+        "| 0.00004 |",
+        "| 0.00005 |",
+        "| 0.00005 |",
+        "| 0.00005 |",
+        "| 0.00005 |",
+        "| 0.00005 |",
+        "+---------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+    assert_batches_eq!(expected, &results_all);
 
     Ok(())
 }
@@ -1238,9 +1261,18 @@ async fn csv_query_cast() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT CAST(c12 AS float) FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.4";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0.39144436569161134"], vec!["0.38870280983958583"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    let expected = vec![
+        "+-----------------------------------------+",
+        "| CAST(aggregate_test_100.c12 AS Float64) |",
+        "+-----------------------------------------+",
+        "| 0.39144436569161134                     |",
+        "| 0.38870280983958583                     |",
+        "+-----------------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
