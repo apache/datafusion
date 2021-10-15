@@ -1343,7 +1343,7 @@ async fn query_cast_timestamp_micros() -> Result<()> {
     let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
     ctx.register_table("t1", Arc::new(t1_table))?;
 
-    let sql = "SELECT to_timestamp_micros(ts) FROM t1 LIMIT 3";
+    let sql = "EXPLAIN ANALYZE SELECT to_timestamp_micros(ts) FROM t1 LIMIT 3";
     let actual = execute_to_batches(&mut ctx, sql).await;
 
     let expected = vec![
@@ -1360,8 +1360,6 @@ async fn query_cast_timestamp_micros() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn query_cast_timestamp_seconds() -> Result<()> {
     let mut ctx = ExecutionContext::new();
@@ -1377,16 +1375,19 @@ async fn query_cast_timestamp_seconds() -> Result<()> {
     ctx.register_table("t1", Arc::new(t1_table))?;
 
     let sql = "SELECT to_timestamp_seconds(ts) FROM t1 LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    let a = execute_to_batches(&mut ctx, sql).await;
-    // println!("{}", pretty_format_batches(&a).unwrap());
+    let actual = execute_to_batches(&mut ctx, sql).await;
 
     let expected = vec![
-        vec!["2009-03-01 00:00:00"],
-        vec!["2009-03-01 00:01:00"],
-        vec!["2009-04-01 00:00:00"],
+        "+---------------------------+",
+        "| totimestampseconds(t1.ts) |",
+        "+---------------------------+",
+        "| 2009-03-01 00:00:00       |",
+        "| 2009-03-01 00:01:00       |",
+        "| 2009-04-01 00:00:00       |",
+        "+---------------------------+",
     ];
-    assert_eq!(expected, actual);
+
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1397,31 +1398,45 @@ async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
 
     // Original column is nanos, convert to millis and check timestamp
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_data LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
     let expected = vec![
-        vec!["2020-09-08 13:42:29.190"],
-        vec!["2020-09-08 12:42:29.190"],
-        vec!["2020-09-08 11:42:29.190"],
+        "+-------------------------------+",
+        "| totimestampmillis(ts_data.ts) |",
+        "+-------------------------------+",
+        "| 2020-09-08 13:42:29.190       |",
+        "| 2020-09-08 12:42:29.190       |",
+        "| 2020-09-08 11:42:29.190       |",
+        "+-------------------------------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT to_timestamp_micros(ts) FROM ts_data LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
     let expected = vec![
-        vec!["2020-09-08 13:42:29.190855"],
-        vec!["2020-09-08 12:42:29.190855"],
-        vec!["2020-09-08 11:42:29.190855"],
+        "+-------------------------------+",
+        "| totimestampmicros(ts_data.ts) |",
+        "+-------------------------------+",
+        "| 2020-09-08 13:42:29.190855    |",
+        "| 2020-09-08 12:42:29.190855    |",
+        "| 2020-09-08 11:42:29.190855    |",
+        "+-------------------------------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT to_timestamp_seconds(ts) FROM ts_data LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["2020-09-08 13:42:29"],
-        vec!["2020-09-08 12:42:29"],
-        vec!["2020-09-08 11:42:29"],
+        "+--------------------------------+",
+        "| totimestampseconds(ts_data.ts) |",
+        "+--------------------------------+",
+        "| 2020-09-08 13:42:29            |",
+        "| 2020-09-08 12:42:29            |",
+        "| 2020-09-08 11:42:29            |",
+        "+--------------------------------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 
     Ok(())
 }
@@ -1433,25 +1448,50 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
 
     // Original column is seconds, convert to millis and check timestamp
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_secs LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["2020-09-08 13:42:29"],
-        vec!["2020-09-08 12:42:29"],
-        vec!["2020-09-08 11:42:29"],
+        "+-------------------------------+",
+        "| totimestampmillis(ts_secs.ts) |",
+        "+-------------------------------+",
+        "| 2020-09-08 13:42:29           |",
+        "| 2020-09-08 12:42:29           |",
+        "| 2020-09-08 11:42:29           |",
+        "+-------------------------------+",
     ];
-    assert_eq!(expected, actual);
+
+    assert_batches_eq!(expected, &actual);
 
     // Original column is seconds, convert to micros and check timestamp
     let sql = "SELECT to_timestamp_micros(ts) FROM ts_secs LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------------+",
+        "| totimestampmicros(ts_secs.ts) |",
+        "+-------------------------------+",
+        "| 2020-09-08 13:42:29           |",
+        "| 2020-09-08 12:42:29           |",
+        "| 2020-09-08 11:42:29           |",
+        "+-------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     // to nanos
     let sql = "SELECT to_timestamp(ts) FROM ts_secs LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------+",
+        "| totimestamp(ts_secs.ts) |",
+        "+-------------------------+",
+        "| 2020-09-08 13:42:29     |",
+        "| 2020-09-08 12:42:29     |",
+        "| 2020-09-08 11:42:29     |",
+        "+-------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn query_cast_timestamp_micros_to_others() -> Result<()> {
@@ -1464,6 +1504,8 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_micros LIMIT 3";
     let actual = execute(&mut ctx, sql).await;
+    // let actual = execute_to_batches(&mut ctx, sql).await;
+    // println!("{}", pretty_format_batches(&a).unwrap());
     let expected = vec![
         vec!["2020-09-08 13:42:29.190"],
         vec!["2020-09-08 12:42:29.190"],
