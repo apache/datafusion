@@ -125,7 +125,7 @@ impl ExecutionPlan for AnalyzeExec {
 
         // Task reads batches the input and when complete produce a
         // RecordBatch with a report that is written to `tx` when done
-        tokio::task::spawn(async move {
+        let join_handle = tokio::task::spawn(async move {
             let start = Instant::now();
             let mut total_rows = 0;
 
@@ -194,7 +194,11 @@ impl ExecutionPlan for AnalyzeExec {
             tx.send(maybe_batch).await.ok();
         });
 
-        Ok(RecordBatchReceiverStream::create(&self.schema, rx))
+        Ok(RecordBatchReceiverStream::create(
+            &self.schema,
+            rx,
+            join_handle,
+        ))
     }
 
     fn fmt_as(
@@ -212,5 +216,40 @@ impl ExecutionPlan for AnalyzeExec {
     fn statistics(&self) -> Statistics {
         // Statistics an an ANALYZE plan are not relevant
         Statistics::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::{DataType, Field, Schema};
+    use futures::FutureExt;
+
+    use crate::{
+        physical_plan::collect,
+        test::{
+            assert_is_pending,
+            exec::{assert_strong_count_converges_to_zero, BlockingExec},
+        },
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_drop_cancel() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
+        let refs = blocking_exec.refs();
+        let analyze_exec = Arc::new(AnalyzeExec::new(true, blocking_exec, schema));
+
+        let fut = collect(analyze_exec);
+        let mut fut = fut.boxed();
+
+        assert_is_pending(&mut fut);
+        drop(fut);
+        assert_strong_count_converges_to_zero(refs).await;
+
+        Ok(())
     }
 }

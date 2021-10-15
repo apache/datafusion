@@ -180,7 +180,7 @@ impl ExecutionPlan for MockExec {
         // task simply sends data in order but in a separate
         // thread (to ensure the batches are not available without the
         // DelayedStream yielding).
-        tokio::task::spawn(async move {
+        let join_handle = tokio::task::spawn(async move {
             for batch in data {
                 println!("Sending batch via delayed stream");
                 if let Err(e) = tx.send(batch).await {
@@ -190,7 +190,11 @@ impl ExecutionPlan for MockExec {
         });
 
         // returned stream simply reads off the rx stream
-        Ok(RecordBatchReceiverStream::create(&self.schema, rx))
+        Ok(RecordBatchReceiverStream::create(
+            &self.schema,
+            rx,
+            join_handle,
+        ))
     }
 
     fn fmt_as(
@@ -297,7 +301,7 @@ impl ExecutionPlan for BarrierExec {
         // task simply sends data in order after barrier is reached
         let data = self.data[partition].clone();
         let b = self.barrier.clone();
-        tokio::task::spawn(async move {
+        let join_handle = tokio::task::spawn(async move {
             println!("Partition {} waiting on barrier", partition);
             b.wait().await;
             for batch in data {
@@ -309,7 +313,11 @@ impl ExecutionPlan for BarrierExec {
         });
 
         // returned stream simply reads off the rx stream
-        Ok(RecordBatchReceiverStream::create(&self.schema, rx))
+        Ok(RecordBatchReceiverStream::create(
+            &self.schema,
+            rx,
+            join_handle,
+        ))
     }
 
     fn fmt_as(

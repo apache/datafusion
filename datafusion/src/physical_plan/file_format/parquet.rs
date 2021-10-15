@@ -312,7 +312,7 @@ impl ExecutionPlan for ParquetExec {
         let limit = self.limit;
         let object_store = Arc::clone(&self.object_store);
 
-        task::spawn_blocking(move || {
+        let join_handle = task::spawn_blocking(move || {
             if let Err(e) = read_partition(
                 object_store.as_ref(),
                 partition_index,
@@ -328,7 +328,11 @@ impl ExecutionPlan for ParquetExec {
             }
         });
 
-        Ok(RecordBatchReceiverStream::create(&self.schema, response_rx))
+        Ok(RecordBatchReceiverStream::create(
+            &self.schema,
+            response_rx,
+            join_handle,
+        ))
     }
 
     fn fmt_as(
