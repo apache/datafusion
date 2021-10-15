@@ -283,16 +283,12 @@ fn split_files(
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
-
-    use futures::AsyncRead;
-
-    use crate::datasource::{
-        file_format::{avro::AvroFormat, parquet::ParquetFormat},
-        object_store::{
-            local::LocalFileSystem, FileMeta, FileMetaStream, ListEntryStream,
-            ObjectReader, ObjectStore, SizedFile,
+    use crate::{
+        datasource::{
+            file_format::{avro::AvroFormat, parquet::ParquetFormat},
+            object_store::{local::LocalFileSystem, FileMeta, ObjectStore, SizedFile},
         },
+        test::object_store::TestObjectStore,
     };
 
     use super::*;
@@ -363,10 +359,67 @@ mod tests {
 
     #[tokio::test]
     async fn file_listings() -> Result<()> {
-        assert_partitioning(5, 12, 5).await?;
-        assert_partitioning(4, 4, 4).await?;
-        assert_partitioning(5, 2, 2).await?;
-        assert_partitioning(0, 2, 0).await.expect_err("no files");
+        // more expected partitions than files
+        assert_partitioning(
+            &[
+                "bucket/key-prefix/file0",
+                "bucket/key-prefix/file1",
+                "bucket/key-prefix/file2",
+                "bucket/key-prefix/file3",
+                "bucket/key-prefix/file4",
+            ],
+            "bucket/key-prefix/",
+            12,
+            5,
+        )
+        .await?;
+
+        // as many expected partitions as files
+        assert_partitioning(
+            &[
+                "bucket/key-prefix/file0",
+                "bucket/key-prefix/file1",
+                "bucket/key-prefix/file2",
+                "bucket/key-prefix/file3",
+            ],
+            "bucket/key-prefix/",
+            4,
+            4,
+        )
+        .await?;
+
+        // more files as expected partitions
+        assert_partitioning(
+            &[
+                "bucket/key-prefix/file0",
+                "bucket/key-prefix/file1",
+                "bucket/key-prefix/file2",
+                "bucket/key-prefix/file3",
+                "bucket/key-prefix/file4",
+            ],
+            "bucket/key-prefix/",
+            2,
+            2,
+        )
+        .await?;
+
+        // no files
+        assert_partitioning(&[], "bucket/key-prefix/", 2, 0)
+            .await
+            .expect_err("no files");
+
+        // files that don't match the prefix
+        assert_partitioning(
+            &[
+                "bucket/key-prefix/file0",
+                "bucket/key-prefix/file1",
+                "bucket/other-prefix/roguefile",
+            ],
+            "bucket/key-prefix/",
+            10,
+            2,
+        )
+        .await?;
         Ok(())
     }
 
@@ -390,13 +443,16 @@ mod tests {
         Ok(Arc::new(table))
     }
 
+    /// Check that the files listed by the table match the specified `output_partitioning`
+    /// when the object store contains `files`.
     async fn assert_partitioning(
-        files_in_folder: usize,
+        files: &[&str],
+        table_prefix: &str,
         target_partitions: usize,
         output_partitioning: usize,
     ) -> Result<()> {
         let mock_store: Arc<dyn ObjectStore> =
-            Arc::new(MockObjectStore { files_in_folder });
+            TestObjectStore::new_arc(&files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
         let format = AvroFormat {};
 
@@ -412,76 +468,17 @@ mod tests {
 
         let table = ListingTable::new(
             Arc::clone(&mock_store),
-            "bucket/key-prefix".to_owned(),
+            table_prefix.to_owned(),
             Arc::new(schema),
             opt,
         );
 
         let (file_list, _) = table
-            .list_files_for_scan(mock_store, "bucket/key-prefix", &[], None)
+            .list_files_for_scan(mock_store, table_prefix, &[], None)
             .await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 
         Ok(())
-    }
-
-    #[derive(Debug)]
-    struct MockObjectStore {
-        pub files_in_folder: usize,
-    }
-
-    #[async_trait]
-    impl ObjectStore for MockObjectStore {
-        async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
-            let prefix = prefix.to_owned();
-            let files = (0..self.files_in_folder).map(move |i| {
-                Ok(FileMeta {
-                    sized_file: SizedFile {
-                        path: format!("{}file{}", prefix, i),
-                        size: 100,
-                    },
-                    last_modified: None,
-                })
-            });
-            Ok(Box::pin(futures::stream::iter(files)))
-        }
-
-        async fn list_dir(
-            &self,
-            _prefix: &str,
-            _delimiter: Option<String>,
-        ) -> Result<ListEntryStream> {
-            unimplemented!()
-        }
-
-        fn file_reader(&self, _file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
-            Ok(Arc::new(MockObjectReader {}))
-        }
-    }
-
-    struct MockObjectReader {}
-
-    #[async_trait]
-    impl ObjectReader for MockObjectReader {
-        async fn chunk_reader(
-            &self,
-            _start: u64,
-            _length: usize,
-        ) -> Result<Box<dyn AsyncRead>> {
-            unimplemented!()
-        }
-
-        fn sync_chunk_reader(
-            &self,
-            _start: u64,
-            _length: usize,
-        ) -> Result<Box<dyn Read + Send + Sync>> {
-            unimplemented!()
-        }
-
-        fn length(&self) -> u64 {
-            unimplemented!()
-        }
     }
 }
