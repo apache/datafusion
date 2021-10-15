@@ -93,6 +93,18 @@ fn random() -> expression::Expression {
     }
 }
 
+/// Computes a binary hash of the given data. type is the algorithm to use.
+/// Standard algorithms are md5, sha224, sha256, sha384, sha512, blake2s, blake2b, and blake3.
+#[pyfunction(value, method)]
+fn digest(
+    value: expression::Expression,
+    method: expression::Expression,
+) -> expression::Expression {
+    expression::Expression {
+        expr: logical_plan::digest(value.expr, method.expr),
+    }
+}
+
 /// Concatenates the text representations of all the arguments.
 /// NULL arguments are ignored.
 #[pyfunction(args = "*")]
@@ -340,6 +352,7 @@ pub fn init(module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ltrim, module)?)?;
     module.add_function(wrap_pyfunction!(max, module)?)?;
     module.add_function(wrap_pyfunction!(md5, module)?)?;
+    module.add_function(wrap_pyfunction!(digest, module)?)?;
     module.add_function(wrap_pyfunction!(min, module)?)?;
     module.add_function(wrap_pyfunction!(now, module)?)?;
     module.add_function(wrap_pyfunction!(octet_length, module)?)?;
