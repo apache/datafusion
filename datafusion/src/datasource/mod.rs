@@ -155,22 +155,6 @@ impl std::fmt::Display for PartitionedFile {
     }
 }
 
-#[derive(Debug, Clone)]
-/// A collection of files that should be read in a single task
-pub struct FilePartition {
-    /// The index of the partition among all partitions
-    pub index: usize,
-    /// The contained files of the partition
-    pub files: Vec<PartitionedFile>,
-}
-
-impl std::fmt::Display for FilePartition {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let files: Vec<String> = self.files.iter().map(|f| f.to_string()).collect();
-        write!(f, "{}", files.join(", "))
-    }
-}
-
 fn create_max_min_accs(
     schema: &Schema,
 ) -> (Vec<Option<MaxAccumulator>>, Vec<Option<MinAccumulator>>) {

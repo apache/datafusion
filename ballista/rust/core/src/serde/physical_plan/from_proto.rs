@@ -37,7 +37,7 @@ use datafusion::catalog::catalog::{
 };
 use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::datasource::object_store::{FileMeta, ObjectStoreRegistry, SizedFile};
-use datafusion::datasource::{FilePartition, PartitionedFile};
+use datafusion::datasource::PartitionedFile;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
@@ -127,8 +127,8 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     Arc::new(LocalFileSystem {}),
                     scan.files
                         .iter()
-                        .map(|f| f.try_into())
-                        .collect::<Result<Vec<PartitionedFile>, _>>()?,
+                        .map(|f| f.into())
+                        .collect::<Vec<PartitionedFile>>(),
                     statistics,
                     schema,
                     scan.has_header,
@@ -145,13 +145,10 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
 
                 Ok(Arc::new(ParquetExec::new(
                     Arc::new(LocalFileSystem {}),
-                    scan.partitions
+                    scan.file_groups
                         .iter()
-                        .map(|p| {
-                            let it = p.files.iter().map(|f| f.try_into());
-                            it.collect::<Result<Vec<PartitionedFile>, _>>()
-                        })
-                        .collect::<Result<Vec<Vec<PartitionedFile>>, _>>()?,
+                        .map(|p| p.into())
+                        .collect::<Vec<Vec<PartitionedFile>>>(),
                     statistics,
                     schema,
                     Some(projection),
@@ -170,8 +167,8 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     Arc::new(LocalFileSystem {}),
                     scan.files
                         .iter()
-                        .map(|f| f.try_into())
-                        .collect::<Result<Vec<PartitionedFile>, _>>()?,
+                        .map(|f| f.into())
+                        .collect::<Vec<PartitionedFile>>(),
                     statistics,
                     schema,
                     Some(projection),
@@ -741,23 +738,27 @@ pub fn parse_protobuf_hash_partitioning(
     }
 }
 
-impl TryInto<PartitionedFile> for &protobuf::PartitionedFile {
-    type Error = BallistaError;
-
-    fn try_into(self) -> Result<PartitionedFile, Self::Error> {
-        Ok(PartitionedFile {
+impl From<&protobuf::PartitionedFile> for PartitionedFile {
+    fn from(val: &protobuf::PartitionedFile) -> Self {
+        PartitionedFile {
             file_meta: FileMeta {
                 sized_file: SizedFile {
-                    path: self.path.clone(),
-                    size: self.size,
+                    path: val.path.clone(),
+                    size: val.size,
                 },
-                last_modified: if self.last_modified_ns == 0 {
+                last_modified: if val.last_modified_ns == 0 {
                     None
                 } else {
-                    Some(Utc.timestamp_nanos(self.last_modified_ns as i64))
+                    Some(Utc.timestamp_nanos(val.last_modified_ns as i64))
                 },
             },
-        })
+        }
+    }
+}
+
+impl From<&protobuf::FileGroup> for Vec<PartitionedFile> {
+    fn from(val: &protobuf::FileGroup) -> Self {
+        val.files.iter().map(|f| f.into()).collect()
     }
 }
 
