@@ -32,7 +32,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v2
         with:
-          python-version: 3.8
+          python-version: "3.9"
       - name: Setup Archery
         run: pip install -e dev/archery[lint]
       - name: Lint
@@ -47,7 +47,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v1
         with:
-          python-version: 3.8
+          python-version: "3.9"
       - name: Audit licenses
         run: ./dev/release/run-rat.sh .
 
