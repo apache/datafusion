@@ -21,8 +21,10 @@ use arrow::{
     datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
 };
 use futures::{Stream, StreamExt};
+use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 
+use super::common::AbortOnDropSingle;
 use super::{RecordBatchStream, SendableRecordBatchStream};
 
 /// Adapter for a tokio [`ReceiverStream`] that implements the
@@ -30,7 +32,11 @@ use super::{RecordBatchStream, SendableRecordBatchStream};
 /// interface
 pub struct RecordBatchReceiverStream {
     schema: SchemaRef,
+
     inner: ReceiverStream<ArrowResult<RecordBatch>>,
+
+    #[allow(dead_code)]
+    drop_helper: AbortOnDropSingle<()>,
 }
 
 impl RecordBatchReceiverStream {
@@ -39,10 +45,15 @@ impl RecordBatchReceiverStream {
     pub fn create(
         schema: &SchemaRef,
         rx: tokio::sync::mpsc::Receiver<ArrowResult<RecordBatch>>,
+        join_handle: JoinHandle<()>,
     ) -> SendableRecordBatchStream {
         let schema = schema.clone();
         let inner = ReceiverStream::new(rx);
-        Box::pin(Self { schema, inner })
+        Box::pin(Self {
+            schema,
+            inner,
+            drop_helper: AbortOnDropSingle::new(join_handle),
+        })
     }
 }
 
