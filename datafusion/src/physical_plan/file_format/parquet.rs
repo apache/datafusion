@@ -23,6 +23,7 @@ use std::{any::Any, convert::TryInto};
 
 use crate::datasource::file_format::parquet::ChunkObjectReader;
 use crate::datasource::object_store::ObjectStore;
+use crate::datasource::PartitionedFile;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, Expr},
@@ -59,14 +60,13 @@ use tokio::{
 
 use async_trait::async_trait;
 
-use crate::datasource::{FilePartition, PartitionedFile};
-
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
     object_store: Arc<dyn ObjectStore>,
-    /// Parquet partitions to read
-    partitions: Vec<ParquetPartition>,
+    /// Grouped list of files. Each group will be processed together by one
+    /// partition of the `ExecutionPlan`.
+    file_groups: Vec<Vec<PartitionedFile>>,
     /// Schema after projection is applied
     schema: SchemaRef,
     /// Projection for which columns to load
@@ -81,23 +81,6 @@ pub struct ParquetExec {
     predicate_builder: Option<PruningPredicate>,
     /// Optional limit of the number of rows
     limit: Option<usize>,
-}
-
-/// Represents one partition of a Parquet data set and this currently means one Parquet file.
-///
-/// In the future it would be good to support subsets of files based on ranges of row groups
-/// so that we can better parallelize reads of large files across available cores (see
-/// [ARROW-10995](https://issues.apache.org/jira/browse/ARROW-10995)).
-///
-/// We may also want to support reading Parquet files that are partitioned based on a key and
-/// in this case we would want this partition struct to represent multiple files for a given
-/// partition key (see [ARROW-11019](https://issues.apache.org/jira/browse/ARROW-11019)).
-#[derive(Debug, Clone)]
-pub struct ParquetPartition {
-    /// The Parquet filename for this partition
-    pub file_partition: FilePartition,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
 }
 
 /// Stores metrics about the parquet execution for a particular parquet file
@@ -115,7 +98,7 @@ impl ParquetExec {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
-        files: Vec<Vec<PartitionedFile>>,
+        file_groups: Vec<Vec<PartitionedFile>>,
         statistics: Statistics,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
@@ -123,16 +106,8 @@ impl ParquetExec {
         batch_size: usize,
         limit: Option<usize>,
     ) -> Self {
-        debug!("Creating ParquetExec, desc: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
-        files, projection, predicate, limit);
-
-        let metrics = ExecutionPlanMetricsSet::new();
-
-        let partitions = files
-            .into_iter()
-            .enumerate()
-            .map(|(i, f)| ParquetPartition::new(f, i, metrics.clone()))
-            .collect::<Vec<_>>();
+        debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
+        file_groups, projection, predicate, limit);
 
         let metrics = ExecutionPlanMetricsSet::new();
         let predicate_creation_errors =
@@ -162,7 +137,7 @@ impl ParquetExec {
 
         Self {
             object_store,
-            partitions,
+            file_groups,
             schema: projected_schema,
             projection,
             metrics,
@@ -204,11 +179,8 @@ impl ParquetExec {
     }
 
     /// List of data files
-    pub fn partitions(&self) -> Vec<&[PartitionedFile]> {
-        self.partitions
-            .iter()
-            .map(|fp| fp.file_partition.files.as_slice())
-            .collect()
+    pub fn file_groups(&self) -> &[Vec<PartitionedFile>] {
+        &self.file_groups
     }
     /// Optional projection for which columns to load
     pub fn projection(&self) -> &[usize] {
@@ -222,20 +194,6 @@ impl ParquetExec {
     /// Limit in nr. of rows
     pub fn limit(&self) -> Option<usize> {
         self.limit
-    }
-}
-
-impl ParquetPartition {
-    /// Create a new parquet partition
-    pub fn new(
-        files: Vec<PartitionedFile>,
-        index: usize,
-        metrics: ExecutionPlanMetricsSet,
-    ) -> Self {
-        Self {
-            file_partition: FilePartition { index, files },
-            metrics,
-        }
     }
 }
 
@@ -279,7 +237,7 @@ impl ExecutionPlan for ParquetExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partitions.len())
+        Partitioning::UnknownPartitioning(self.file_groups.len())
     }
 
     fn with_new_children(
@@ -304,7 +262,7 @@ impl ExecutionPlan for ParquetExec {
             Receiver<ArrowResult<RecordBatch>>,
         ) = channel(2);
 
-        let partition = self.partitions[partition_index].clone();
+        let partition = self.file_groups[partition_index].clone();
         let metrics = self.metrics.clone();
         let projection = self.projection.clone();
         let predicate_builder = self.predicate_builder.clone();
@@ -342,18 +300,12 @@ impl ExecutionPlan for ParquetExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                let files: Vec<_> = self
-                    .partitions
-                    .iter()
-                    .map(|pp| format!("{}", pp.file_partition))
-                    .collect();
-
                 write!(
                     f,
-                    "ParquetExec: batch_size={}, limit={:?}, partitions=[{}]",
+                    "ParquetExec: batch_size={}, limit={:?}, partitions={}",
                     self.batch_size,
                     self.limit,
-                    files.join(", ")
+                    super::FileGroupsDisplay(&self.file_groups)
                 )
             }
         }
@@ -497,7 +449,7 @@ fn build_row_group_predicate(
 fn read_partition(
     object_store: &dyn ObjectStore,
     partition_index: usize,
-    partition: ParquetPartition,
+    partition: Vec<PartitionedFile>,
     metrics: ExecutionPlanMetricsSet,
     projection: &[usize],
     predicate_builder: &Option<PruningPredicate>,
@@ -506,8 +458,7 @@ fn read_partition(
     limit: Option<usize>,
 ) -> Result<()> {
     let mut total_rows = 0;
-    let all_files = partition.file_partition.files;
-    'outer: for partitioned_file in all_files {
+    'outer: for partitioned_file in partition {
         let file_metrics = ParquetFileMetrics::new(
             partition_index,
             &*partitioned_file.file_meta.path(),
