@@ -49,7 +49,7 @@ jobs:
       - name: Run Linters
         run: |
           source venv/bin/activate
-          flake8 python
+          flake8 python --ignore=E501
           black --line-length 79 --check python
       - name: Run tests
         run: |
