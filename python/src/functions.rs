@@ -224,6 +224,7 @@ define_unary_function!(avg);
 define_unary_function!(min);
 define_unary_function!(max);
 define_unary_function!(count);
+define_unary_function!(approx_distinct);
 
 #[pyclass(name = "Volatility", module = "datafusion.functions")]
 #[derive(Clone)]
@@ -323,6 +324,7 @@ pub fn init(module: &PyModule) -> PyResult<()> {
     module.add_class::<PyVolatility>()?;
     module.add_function(wrap_pyfunction!(abs, module)?)?;
     module.add_function(wrap_pyfunction!(acos, module)?)?;
+    module.add_function(wrap_pyfunction!(approx_distinct, module)?)?;
     module.add_function(wrap_pyfunction!(array, module)?)?;
     module.add_function(wrap_pyfunction!(ascii, module)?)?;
     module.add_function(wrap_pyfunction!(asin, module)?)?;
