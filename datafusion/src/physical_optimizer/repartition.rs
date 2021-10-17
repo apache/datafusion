@@ -114,6 +114,7 @@ mod tests {
     use crate::physical_plan::file_format::ParquetExec;
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::Statistics;
+    use crate::test::object_store::TestObjectStore;
 
     #[test]
     fn added_repartition_to_single_partition() -> Result<()> {
@@ -121,7 +122,7 @@ mod tests {
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ParquetExec::new(
-                Arc::new(LocalFileSystem {}),
+                TestObjectStore::new_arc(&[("x", 100)]),
                 vec![vec![PartitionedFile::new("x".to_string(), 100)]],
                 Statistics::default(),
                 schema,

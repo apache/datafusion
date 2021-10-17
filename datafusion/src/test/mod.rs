@@ -303,5 +303,6 @@ pub fn assert_is_pending<'a, T>(fut: &mut Pin<Box<dyn Future<Output = T> + Send 
 }
 
 pub mod exec;
+pub mod object_store;
 pub mod user_defined;
 pub mod variable;
