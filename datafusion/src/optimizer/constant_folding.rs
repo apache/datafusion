@@ -26,7 +26,7 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{DFSchemaRef, Expr, LogicalPlan, Operator};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use crate::physical_plan::expressions::helpers::evaluate;
+use crate::optimizer::utils::evaluate_const_expr_unchecked;
 use crate::physical_plan::functions::{BuiltinScalarFunction, Volatility};
 use crate::scalar::ScalarValue;
 
@@ -133,7 +133,7 @@ impl<'a> ConstantRewriter<'a> {
 
         let rewrite_root = self.rewrite_const_expr(&mut expr);
         if rewrite_root {
-            match evaluate(&expr) {
+            match evaluate_const_expr_unchecked(&expr) {
                 Ok(s) => expr = Expr::Literal(s),
                 Err(_) => return expr,
             }
@@ -161,14 +161,14 @@ impl<'a> ConstantRewriter<'a> {
     fn const_fold_list_eager(&mut self, args: &mut Vec<Expr>) {
         for arg in args.iter_mut() {
             if self.rewrite_const_expr(arg) {
-                if let Ok(s) = evaluate(arg) {
+                if let Ok(s) = evaluate_const_expr_unchecked(arg) {
                     *arg = Expr::Literal(s);
                 }
             }
         }
     }
     ///Tests to see if the list passed in is all literal expressions, if they are then it returns true.
-    ///If some expressions are not literal then the literal expressions are evaluated and it returns false.
+    ///If some expressions are not literal then the literal expressions are evaluate_const_expr_uncheckedd and it returns false.
     fn const_fold_list(&mut self, args: &mut Vec<Expr>) -> bool {
         let can_rewrite = args
             .iter_mut()
@@ -179,7 +179,7 @@ impl<'a> ConstantRewriter<'a> {
         } else {
             for (rewrite_expr, expr) in can_rewrite.iter().zip(args) {
                 if *rewrite_expr {
-                    if let Ok(s) = evaluate(expr) {
+                    if let Ok(s) = evaluate_const_expr_unchecked(expr) {
                         *expr = Expr::Literal(s);
                     }
                 }
@@ -262,13 +262,13 @@ impl<'a> ConstantRewriter<'a> {
                     (true, true) => true,
                     (false, false) => false,
                     (true, false) => {
-                        if let Ok(s) = evaluate(left) {
+                        if let Ok(s) = evaluate_const_expr_unchecked(left) {
                             *left.as_mut() = Expr::Literal(s);
                         }
                         false
                     }
                     (false, true) => {
-                        if let Ok(s) = evaluate(right) {
+                        if let Ok(s) = evaluate_const_expr_unchecked(right) {
                             *right.as_mut() = Expr::Literal(s);
                         }
                         false
@@ -313,19 +313,19 @@ impl<'a> ConstantRewriter<'a> {
                 (true, true, true) => true,
                 (expr_const, low_const, high_const) => {
                     if expr_const {
-                        if let Ok(s) = evaluate(expr) {
+                        if let Ok(s) = evaluate_const_expr_unchecked(expr) {
                             let expr: &mut Expr = expr;
                             *expr = Expr::Literal(s);
                         }
                     }
                     if low_const {
-                        if let Ok(s) = evaluate(expr) {
+                        if let Ok(s) = evaluate_const_expr_unchecked(expr) {
                             let expr: &mut Expr = expr;
                             *expr = Expr::Literal(s);
                         }
                     }
                     if high_const {
-                        if let Ok(s) = evaluate(expr) {
+                        if let Ok(s) = evaluate_const_expr_unchecked(expr) {
                             let expr: &mut Expr = expr;
                             *expr = Expr::Literal(s);
                         }
@@ -344,7 +344,7 @@ impl<'a> ConstantRewriter<'a> {
                     .unwrap_or(false)
                 {
                     let expr_inner = expr.as_mut().unwrap();
-                    if let Ok(s) = evaluate(expr_inner) {
+                    if let Ok(s) = evaluate_const_expr_unchecked(expr_inner) {
                         *expr_inner.as_mut() = Expr::Literal(s);
                     }
                 }
@@ -355,7 +355,7 @@ impl<'a> ConstantRewriter<'a> {
                     .unwrap_or(false)
                 {
                     let expr_inner = else_expr.as_mut().unwrap();
-                    if let Ok(s) = evaluate(expr_inner) {
+                    if let Ok(s) = evaluate_const_expr_unchecked(expr_inner) {
                         *expr_inner.as_mut() = Expr::Literal(s);
                     }
                 }
@@ -364,12 +364,12 @@ impl<'a> ConstantRewriter<'a> {
                     let when: &mut Expr = when;
                     let then: &mut Expr = then;
                     if self.rewrite_const_expr(when) {
-                        if let Ok(s) = evaluate(when) {
+                        if let Ok(s) = evaluate_const_expr_unchecked(when) {
                             *when = Expr::Literal(s);
                         }
                     }
                     if self.rewrite_const_expr(then) {
-                        if let Ok(s) = evaluate(then) {
+                        if let Ok(s) = evaluate_const_expr_unchecked(then) {
                             *then = Expr::Literal(s);
                         }
                     }
@@ -380,7 +380,7 @@ impl<'a> ConstantRewriter<'a> {
             Expr::TryCast { expr, .. } => self.rewrite_const_expr(expr),
             Expr::Sort { expr, .. } => {
                 if self.rewrite_const_expr(expr) {
-                    if let Ok(s) = evaluate(expr) {
+                    if let Ok(s) = evaluate_const_expr_unchecked(expr) {
                         let expr: &mut Expr = expr;
                         *expr = Expr::Literal(s);
                     }
@@ -453,7 +453,7 @@ impl<'a> ConstantRewriter<'a> {
 
                     (false, false) => false,
                     (true, false) => {
-                        if let Ok(s) = evaluate(expr) {
+                        if let Ok(s) = evaluate_const_expr_unchecked(expr) {
                             let expr: &mut Expr = expr;
                             *expr = Expr::Literal(s);
                         }

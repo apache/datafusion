@@ -23,6 +23,7 @@ use crate::logical_plan::{
     build_join_schema, Column, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder,
     Operator, Partitioning, Recursion,
 };
+use crate::physical_plan::functions::Volatility;
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
 use crate::{
@@ -30,6 +31,10 @@ use crate::{
     logical_plan::ExpressionVisitor,
 };
 use std::{collections::HashSet, sync::Arc};
+
+use crate::logical_plan::DFSchema;
+use arrow::datatypes::{DataType, Field};
+use arrow::record_batch::RecordBatch;
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
 const CASE_ELSE_MARKER: &str = "__DATAFUSION_CASE_ELSE__";
@@ -465,6 +470,117 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
         Expr::Wildcard { .. } => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
         )),
+    }
+}
+
+///Tests an expression to see if it contains only literal expressions such as 3+4.5 and immutable scalar builtins or UDFs.
+pub fn expr_is_const(expr: &Expr) -> bool {
+    match expr {
+        Expr::Column(_)
+        | Expr::ScalarVariable(_)
+        | Expr::AggregateFunction { .. }
+        | Expr::WindowFunction { .. }
+        | Expr::AggregateUDF { .. }
+        | Expr::Sort { .. }
+        | Expr::Wildcard => false,
+
+        Expr::Literal(_) => true,
+
+        Expr::Alias(child, _)
+        | Expr::Not(child)
+        | Expr::IsNotNull(child)
+        | Expr::IsNull(child)
+        | Expr::Negative(child)
+        | Expr::Cast { expr: child, .. }
+        | Expr::TryCast { expr: child, .. } => expr_is_const(child),
+
+        Expr::ScalarFunction { fun, args } => match fun.volatility() {
+            Volatility::Immutable => args.iter().all(|arg| expr_is_const(arg)),
+            Volatility::Stable | Volatility::Volatile => false,
+        },
+        Expr::BinaryExpr { left, right, .. } => {
+            expr_is_const(left) && expr_is_const(right)
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => expr_is_const(expr) && expr_is_const(low) && expr_is_const(high),
+        Expr::Case {
+            expr,
+            when_then_expr,
+            else_expr,
+        } => {
+            let expr_constant = expr.as_ref().map(|e| expr_is_const(e)).unwrap_or(true);
+            let else_constant =
+                else_expr.as_ref().map(|e| expr_is_const(e)).unwrap_or(true);
+            let when_then_constant = when_then_expr
+                .iter()
+                .all(|(w, th)| expr_is_const(w) && expr_is_const(th));
+            expr_constant && else_constant && when_then_constant
+        }
+
+        Expr::ScalarUDF { fun, args } => match fun.volatility() {
+            Volatility::Immutable => args.iter().all(|arg| expr_is_const(arg)),
+            Volatility::Stable | Volatility::Volatile => false,
+        },
+
+        Expr::InList { expr, list, .. } => {
+            expr_is_const(expr) && list.iter().all(|e| expr_is_const(e))
+        }
+    }
+}
+
+///Evaluates an expression if it only contains literal expressions. If a non-literal expression or non-immutable function is found then it returns an error.
+pub fn evalute_const_expr(expr: &Expr) -> Result<ScalarValue> {
+    if !expr_is_const(expr) {
+        return Err(DataFusionError::Execution("The expression was not contsant and could not be evaluated. This means it contained stable or volatile functions, aggregates, or column expressions.".to_owned()));
+    }
+    evaluate_const_expr_unchecked(expr)
+}
+
+///Evaluates an expression. Note that this will return incorrect results if the expression contains function calls which change return values call to call, such as Now().
+pub fn evaluate_const_expr_unchecked(expr: &Expr) -> Result<ScalarValue> {
+    if let Expr::Literal(s) = expr {
+        return Ok(s.clone());
+    }
+    //The dummy column name shouldn't really matter as only scalar expressions will be evaluated
+    static DUMMY_COL_NAME: &str = ".";
+    let dummy_df_schema = DFSchema::empty();
+    let dummy_input_schema = arrow::datatypes::Schema::new(vec![Field::new(
+        DUMMY_COL_NAME,
+        DataType::Float64,
+        true,
+    )]);
+    let ctx_state = crate::execution::context::ExecutionContextState::new();
+
+    let planner = crate::physical_plan::planner::DefaultPhysicalPlanner::default();
+    let phys_expr = planner.create_physical_expr(
+        expr,
+        &dummy_df_schema,
+        &dummy_input_schema,
+        &ctx_state,
+    )?;
+    let col = {
+        let mut builder = arrow::array::Float64Array::builder(1);
+        builder.append_null()?;
+        builder.finish()
+    };
+    let record_batch = RecordBatch::try_new(
+        std::sync::Arc::new(dummy_input_schema),
+        vec![std::sync::Arc::new(col)],
+    )?;
+    let col_val = phys_expr.evaluate(&record_batch)?;
+    match col_val {
+        crate::physical_plan::ColumnarValue::Array(a) => {
+            if a.len() != 1 {
+                Err(DataFusionError::Execution(format!(
+                    "Could not evaluate the expressison, found a result of length {}",
+                    a.len()
+                )))
+            } else {
+                Ok(ScalarValue::try_from_array(&a, 0)?)
+            }
+        }
+        crate::physical_plan::ColumnarValue::Scalar(s) => Ok(s),
     }
 }
 
