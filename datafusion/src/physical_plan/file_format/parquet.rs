@@ -64,7 +64,8 @@ use async_trait::async_trait;
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
     object_store: Arc<dyn ObjectStore>,
-    /// List of parquet files, grouped by output partition
+    /// Grouped list of files. Each group will be processed together by one
+    /// partition of the `ExecutionPlan`.
     file_groups: Vec<Vec<PartitionedFile>>,
     /// Schema after projection is applied
     schema: SchemaRef,
