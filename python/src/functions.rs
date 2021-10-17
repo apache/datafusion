@@ -21,7 +21,9 @@ use crate::{expression, types::PyDataType};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_plan;
 use datafusion::physical_plan::functions::Volatility;
-use pyo3::{prelude::*, types::PyTuple, wrap_pyfunction};
+use pyo3::{
+    exceptions::PyTypeError, prelude::*, types::PyTuple, wrap_pyfunction, Python,
+};
 use std::sync::Arc;
 
 /// Expression representing a column on the existing plan.
@@ -36,10 +38,20 @@ fn col(name: &str) -> expression::Expression {
 /// Expression representing a constant value
 #[pyfunction]
 #[pyo3(text_signature = "(value)")]
-fn lit(value: i32) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::lit(value),
-    }
+fn lit(value: &PyAny) -> PyResult<expression::Expression> {
+    let expr = if let Ok(v) = value.extract::<i64>() {
+        logical_plan::lit(v)
+    } else if let Ok(v) = value.extract::<f64>() {
+        logical_plan::lit(v)
+    } else if let Ok(v) = value.extract::<String>() {
+        logical_plan::lit(v)
+    } else {
+        return Err(PyTypeError::new_err(format!(
+            "Unsupported value {}, expected one of i64, f64, or String type",
+            value
+        )));
+    };
+    Ok(expression::Expression { expr })
 }
 
 #[pyfunction]
