@@ -275,18 +275,16 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
-            let partitions = exec
-                .partitions()
-                .into_iter()
-                .map(|p| protobuf::FilePartition {
-                    files: p.iter().map(|f| f.into()).collect(),
-                })
+            let file_groups = exec
+                .file_groups()
+                .iter()
+                .map(|p| p.as_slice().into())
                 .collect();
 
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
-                        partitions,
+                        file_groups,
                         statistics: Some((&exec.statistics()).into()),
                         limit: exec
                             .limit()
@@ -684,6 +682,14 @@ impl From<&PartitionedFile> for protobuf::PartitionedFile {
                 .last_modified
                 .map(|ts| ts.timestamp_nanos() as u64)
                 .unwrap_or(0),
+        }
+    }
+}
+
+impl From<&[PartitionedFile]> for protobuf::FileGroup {
+    fn from(gr: &[PartitionedFile]) -> protobuf::FileGroup {
+        protobuf::FileGroup {
+            files: gr.iter().map(|f| f.into()).collect(),
         }
     }
 }

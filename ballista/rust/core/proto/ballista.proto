@@ -596,7 +596,7 @@ message FilterExecNode {
   PhysicalExprNode expr = 2;
 }
 
-message FilePartition {
+message FileGroup {
   repeated PartitionedFile files = 1;
 }
 
@@ -606,7 +606,7 @@ message ScanLimit {
 }
 
 message ParquetScanExecNode {
-  repeated FilePartition partitions = 1;
+  repeated FileGroup file_groups = 1;
   Schema schema = 2;
   uint32 batch_size = 4;
   repeated uint32 projection = 6;
