@@ -26,7 +26,6 @@ def ctx():
 
 
 def test_register_record_batches(ctx):
-
     # create a RecordBatch and register it as memtable
     batch = pa.RecordBatch.from_arrays(
         [pa.array([1, 2, 3]), pa.array([4, 5, 6])],
