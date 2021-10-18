@@ -27,12 +27,12 @@ additional contributions.
 
 DataFusion and Ballista are part of the [Apache
 Arrow](https://arrow.apache.org/) project and governed by the Apache
-Software Foundation governance model. These projects are entirely driven by
-volunteers, and we welcome contributions for items not on
+Software Foundation governance model. These projects are entirely
+driven by volunteers, and we welcome contributions for items not on
 this roadmap. However, before submitting a large PR, we strongly
-suggest you read the [before
-starting](https://arrow.apache.org/docs/developers/contributing.html#before-starting)
-recommendations to minimize surprises during code review.
+suggest you start a coversation using a github issue or the
+dev@arrow.apache.org mailing list to make review efficient and avoid
+surprises.
 
 # DataFusion
 
@@ -42,11 +42,10 @@ for new analytic applications, by leveraging the unique features of
 to provide:
 
 1. Best-in-class single node query performance
-2. A feature-complete declarative SQL query interface compatible with PostgreSQL
-3. A feature-rich procedural interface for creating and running execution plans
-4. High performance, data race free, erogonomic extensibility points at at every layer
-
-The
+2. A Declarative SQL query interface compatible with PostgreSQL
+3. A Dataframe API, similar to those offered by Pandas and Spark
+4. A Procedural API for programatically creating and running execution plans
+5. High performance, data race free, erogonomic extensibility points at at every layer
 
 ## Additional SQL Language Features
 
