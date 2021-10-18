@@ -67,6 +67,7 @@ to provide:
 - Migrate to some sort of arrow2 based implementation (see [milestone](https://github.com/apache/arrow-datafusion/milestone/3) for more details)
 - Add DataFusion to h2oai/db-benchmark [147](https://github.com/apache/arrow-datafusion/issues/147)
 - Improve build time [348](https://github.com/apache/arrow-datafusion/issues/348)
+
 ## Resource Management
 
 - Finer grain control and limit of runtime memory [#587](https://github.com/apache/arrow-datafusion/issues/587) and CPU usage [#54](https://github.com/apache/arrow-datafusion/issues/64)
