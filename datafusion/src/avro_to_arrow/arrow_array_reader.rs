@@ -484,6 +484,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     .add_buffer(bool_values.into())
                     .null_bit_buffer(bool_nulls.into())
                     .build()
+                    .unwrap()
             }
             DataType::Int8 => self.read_primitive_list_values::<Int8Type>(rows),
             DataType::Int16 => self.read_primitive_list_values::<Int16Type>(rows),
@@ -569,6 +570,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     .null_bit_buffer(buf)
                     .child_data(arrays.into_iter().map(|a| a.data().clone()).collect())
                     .build()
+                    .unwrap()
             }
             datatype => {
                 return Err(ArrowError::SchemaError(format!(
@@ -583,7 +585,8 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(array_data)
             .null_bit_buffer(list_nulls.into())
-            .build();
+            .build()
+            .unwrap();
         Ok(Arc::new(GenericListArray::<OffsetSize>::from(list_data)))
     }
 
@@ -776,7 +779,8 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                             .child_data(
                                 arrays.into_iter().map(|a| a.data().clone()).collect(),
                             )
-                            .build();
+                            .build()
+                            .unwrap();
                         Ok(make_array(data))
                     }
                     _ => Err(ArrowError::SchemaError(format!(
