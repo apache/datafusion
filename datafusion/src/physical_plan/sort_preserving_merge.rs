@@ -971,7 +971,9 @@ mod tests {
         let basic = arrow::util::pretty::pretty_format_batches(&[basic]).unwrap();
         let partition = arrow::util::pretty::pretty_format_batches(&[partition]).unwrap();
 
-        assert_eq!(basic, partition);
+        assert_eq!(basic, partition,
+                   "basic:\n\n{}\n\npartition:\n\n{}\n\n",
+                   basic, partition);
     }
 
     // Split the provided record batch into multiple batch_size record batches
