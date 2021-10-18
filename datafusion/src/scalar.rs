@@ -2436,100 +2436,116 @@ mod tests {
             .values()
             .field_builder::<StringBuilder>(0)
             .unwrap()
-            .append_value("First");
+            .append_value("First")
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(1);
+            .append_value(1)
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(2);
+            .append_value(2)
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(3);
+            .append_value(3)
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
-            .append(true);
-        list_builder.values().append(true);
+            .append(true)
+            .unwrap();
+        list_builder.values().append(true).unwrap();
 
         list_builder
             .values()
             .field_builder::<StringBuilder>(0)
             .unwrap()
-            .append_value("Second");
+            .append_value("Second")
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(4);
+            .append_value(4)
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(5);
+            .append_value(5)
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
-            .append(true);
-        list_builder.values().append(true);
-        list_builder.append(true);
+            .append(true)
+            .unwrap();
+        list_builder.values().append(true).unwrap();
+        list_builder.append(true).unwrap();
 
         list_builder
             .values()
             .field_builder::<StringBuilder>(0)
             .unwrap()
-            .append_value("Third");
+            .append_value("Third")
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(6);
+            .append_value(6)
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
-            .append(true);
-        list_builder.values().append(true);
-        list_builder.append(true);
+            .append(true)
+            .unwrap();
+        list_builder.values().append(true).unwrap();
+        list_builder.append(true).unwrap();
 
         list_builder
             .values()
             .field_builder::<StringBuilder>(0)
             .unwrap()
-            .append_value("Second");
+            .append_value("Second")
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(4);
+            .append_value(4)
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
             .values()
-            .append_value(5);
+            .append_value(5)
+            .unwrap();
         list_builder
             .values()
             .field_builder::<ListBuilder<PrimitiveBuilder<Int32Type>>>(1)
             .unwrap()
-            .append(true);
-        list_builder.values().append(true);
-        list_builder.append(true);
+            .append(true)
+            .unwrap();
+        list_builder.values().append(true).unwrap();
+        list_builder.append(true).unwrap();
 
         let expected = list_builder.finish();
 
@@ -2605,27 +2621,27 @@ mod tests {
         let middle_builder = ListBuilder::new(inner_builder);
         let mut outer_builder = ListBuilder::new(middle_builder);
 
-        outer_builder.values().values().append_value(1);
-        outer_builder.values().values().append_value(2);
-        outer_builder.values().values().append_value(3);
-        outer_builder.values().append(true);
+        outer_builder.values().values().append_value(1).unwrap();
+        outer_builder.values().values().append_value(2).unwrap();
+        outer_builder.values().values().append_value(3).unwrap();
+        outer_builder.values().append(true).unwrap();
 
-        outer_builder.values().values().append_value(4);
-        outer_builder.values().values().append_value(5);
-        outer_builder.values().append(true);
-        outer_builder.append(true);
+        outer_builder.values().values().append_value(4).unwrap();
+        outer_builder.values().values().append_value(5).unwrap();
+        outer_builder.values().append(true).unwrap();
+        outer_builder.append(true).unwrap();
 
-        outer_builder.values().values().append_value(6);
-        outer_builder.values().append(true);
+        outer_builder.values().values().append_value(6).unwrap();
+        outer_builder.values().append(true).unwrap();
 
-        outer_builder.values().values().append_value(7);
-        outer_builder.values().values().append_value(8);
-        outer_builder.values().append(true);
-        outer_builder.append(true);
+        outer_builder.values().values().append_value(7).unwrap();
+        outer_builder.values().values().append_value(8).unwrap();
+        outer_builder.values().append(true).unwrap();
+        outer_builder.append(true).unwrap();
 
-        outer_builder.values().values().append_value(9);
-        outer_builder.values().append(true);
-        outer_builder.append(true);
+        outer_builder.values().values().append_value(9).unwrap();
+        outer_builder.values().append(true).unwrap();
+        outer_builder.append(true).unwrap();
 
         let expected = outer_builder.finish();
 
