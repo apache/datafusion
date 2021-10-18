@@ -106,6 +106,7 @@ jobs:
       - run: cat LICENSE.txt
       - name: Build wheels
         run: |
+          export RUSTFLAGS='-C target-cpu=skylake'
           docker run --rm -v $(pwd)/..:/io \
             --workdir /io/python \
             konstin2/maturin:v0.11.2 \
