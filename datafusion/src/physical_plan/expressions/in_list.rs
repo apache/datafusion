@@ -55,7 +55,7 @@ macro_rules! compare_op_scalar {
                 null_bit_buffer,
                 0,
                 vec![Buffer::from(buffer)],
-            vec![],
+                vec![],
             )
         };
         Ok(BooleanArray::from(data))
