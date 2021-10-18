@@ -79,25 +79,12 @@ impl ExecutionPlan for CollectExec {
         assert_eq!(0, partition);
         let num_partitions = self.plan.output_partitioning().partition_count();
 
-        let mut futures = Vec::with_capacity(num_partitions);
-        for i in 0..num_partitions {
-            futures.push(self.plan.execute(i));
-        }
-
-        let mut streams = Vec::with_capacity(num_partitions);
-        for result in futures::future::join_all(futures).await {
-            match result {
-                Ok(stream) => {
-                    streams.push(stream);
-                }
-                Err(e) => {
-                    return Err(DataFusionError::Execution(format!(
-                        "BallistaError: {:?}",
-                        e
-                    )));
-                }
-            }
-        }
+        let futures = (0..num_partitions).map(|i| self.plan.execute(i));
+        let streams = futures::future::join_all(futures)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .map_err(|e| DataFusionError::Execution(format!("BallistaError: {:?}", e)))?;
 
         Ok(Box::pin(MergedRecordBatchStream {
             schema: self.schema(),
