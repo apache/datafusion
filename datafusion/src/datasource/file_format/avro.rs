@@ -64,8 +64,7 @@ impl FileFormat for AvroFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = AvroExec::new(
             conf.object_store,
-            // flattening this for now because CsvExec does not support partitioning yet
-            conf.files.into_iter().flatten().collect::<Vec<_>>(),
+            conf.files,
             conf.statistics,
             conf.schema,
             conf.projection,
