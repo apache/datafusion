@@ -60,7 +60,7 @@ to provide:
 
 - Additional constant folding / partial evaluation [#1070](https://github.com/apache/arrow-datafusion/issues/1070)
 - More sophisticated cost based optimizer for join ordering
-
+Implement advanced query optimization framework (Tokomak) #440
 ## Runtime / Infrastructure
 
 - Better support for reading data from remote filesystems (e.g. S3) without caching it locally [#907](https://github.com/apache/arrow-datafusion/issues/907) [#1060](https://github.com/apache/arrow-datafusion/issues/1060)
