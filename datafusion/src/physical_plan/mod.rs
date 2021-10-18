@@ -324,7 +324,7 @@ pub async fn execute_stream(
         1 => plan.execute(0).await,
         _ => {
             // merge into a single partition
-            let plan = CoalescePartitionsExec::new(plan.clone());
+            let plan = CoalescePartitionsExec::new(plan.clone(), 1);
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.output_partitioning().partition_count());
             plan.execute(0).await

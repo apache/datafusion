@@ -280,7 +280,7 @@ impl ExecutionPlan for HashJoinExec {
                             let start = Instant::now();
 
                             // merge all left parts into a single stream
-                            let merge = CoalescePartitionsExec::new(self.left.clone());
+                            let merge = CoalescePartitionsExec::new(self.left.clone(), 1);
                             let stream = merge.execute(0).await?;
 
                             // This operation performs 2 steps at once:

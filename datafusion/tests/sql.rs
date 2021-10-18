@@ -2519,7 +2519,7 @@ async fn csv_explain_analyze() {
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
     // in greater depth
-    let needle = "CoalescePartitionsExec, metrics=[output_rows=5, elapsed_compute=";
+    let needle = "CoalescePartitionsExec: output_partitions_size=1, metrics=[output_rows=5, elapsed_compute=";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";
@@ -4736,7 +4736,7 @@ async fn test_physical_plan_display_indent() {
     let expected = vec![
         "GlobalLimitExec: limit=10",
         "  SortExec: [the_min@2 DESC]",
-        "    CoalescePartitionsExec",
+        "    CoalescePartitionsExec: output_partitions_size=1",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",

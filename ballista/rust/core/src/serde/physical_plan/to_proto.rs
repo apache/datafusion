@@ -353,6 +353,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 physical_plan_type: Some(PhysicalPlanType::Merge(Box::new(
                     protobuf::CoalescePartitionsExecNode {
                         input: Some(Box::new(input)),
+                        output_partitions_size: exec.output_partitions_size() as u32,
                     },
                 ))),
             })

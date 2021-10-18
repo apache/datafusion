@@ -738,6 +738,7 @@ message CoalesceBatchesExecNode {
 
 message CoalescePartitionsExecNode {
   PhysicalPlanNode input = 1;
+  uint32 output_partitions_size = 2;
 }
 
 message PhysicalHashRepartition {

@@ -40,21 +40,24 @@ use super::SendableRecordBatchStream;
 use crate::physical_plan::common::spawn_execution;
 use pin_project_lite::pin_project;
 
-/// Merge execution plan executes partitions in parallel and combines them into a single
-/// partition. No guarantees are made about the order of the resulting partition.
+/// Merge execution plan executes partitions in parallel and combines them into [output_partitions_size]
+/// partitions. No guarantees are made about the order of the resulting partition.
 #[derive(Debug)]
 pub struct CoalescePartitionsExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
+    /// The output partitioning size
+    output_partitions_size: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
 
 impl CoalescePartitionsExec {
     /// Create a new CoalescePartitionsExec
-    pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(input: Arc<dyn ExecutionPlan>, output_partitions_size: usize) -> Self {
         CoalescePartitionsExec {
             input,
+            output_partitions_size,
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
@@ -62,6 +65,11 @@ impl CoalescePartitionsExec {
     /// Input execution plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    /// Get the output partitioning size
+    pub fn output_partitions_size(&self) -> usize {
+        self.output_partitions_size
     }
 }
 
@@ -82,7 +90,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
+        Partitioning::UnknownPartitioning(self.output_partitions_size)
     }
 
     fn with_new_children(
@@ -90,7 +98,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match children.len() {
-            1 => Ok(Arc::new(CoalescePartitionsExec::new(children[0].clone()))),
+            1 => Ok(Arc::new(CoalescePartitionsExec::new(
+                children[0].clone(),
+                self.output_partitions_size,
+            ))),
             _ => Err(DataFusionError::Internal(
                 "CoalescePartitionsExec wrong number of children".to_string(),
             )),
@@ -156,7 +167,11 @@ impl ExecutionPlan for CoalescePartitionsExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "CoalescePartitionsExec")
+                write!(
+                    f,
+                    "CoalescePartitionsExec: output_partitions_size={}",
+                    self.output_partitions_size
+                )
             }
         }
     }
@@ -234,7 +249,7 @@ mod tests {
         // input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
-        let merge = CoalescePartitionsExec::new(Arc::new(csv));
+        let merge = CoalescePartitionsExec::new(Arc::new(csv), 1);
 
         // output of CoalescePartitionsExec should have a single partition
         assert_eq!(merge.output_partitioning().partition_count(), 1);
@@ -259,7 +274,7 @@ mod tests {
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
         let refs = blocking_exec.refs();
         let coaelesce_partitions_exec =
-            Arc::new(CoalescePartitionsExec::new(blocking_exec));
+            Arc::new(CoalescePartitionsExec::new(blocking_exec, 1));
 
         let fut = collect(coaelesce_partitions_exec);
         let mut fut = fut.boxed();

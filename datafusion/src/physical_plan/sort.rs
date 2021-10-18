@@ -359,7 +359,7 @@ mod tests {
                     options: SortOptions::default(),
                 },
             ],
-            Arc::new(CoalescePartitionsExec::new(Arc::new(csv))),
+            Arc::new(CoalescePartitionsExec::new(Arc::new(csv), 1)),
         )?);
 
         let result: Vec<RecordBatch> = collect(sort_exec).await?;

@@ -921,7 +921,7 @@ mod tests {
         src: Arc<dyn ExecutionPlan>,
         sort: Vec<PhysicalSortExpr>,
     ) -> RecordBatch {
-        let merge = Arc::new(CoalescePartitionsExec::new(src));
+        let merge = Arc::new(CoalescePartitionsExec::new(src, 1));
         let sort_exec = Arc::new(SortExec::try_new(sort, merge).unwrap());
         let mut result = collect(sort_exec).await.unwrap();
         assert_eq!(result.len(), 1);

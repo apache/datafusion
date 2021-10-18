@@ -147,7 +147,7 @@ impl ExecutionPlan for CrossJoinExec {
                     let start = Instant::now();
 
                     // merge all left parts into a single stream
-                    let merge = CoalescePartitionsExec::new(self.left.clone());
+                    let merge = CoalescePartitionsExec::new(self.left.clone(), 1);
                     let stream = merge.execute(0).await?;
 
                     // Load all batches and count the rows

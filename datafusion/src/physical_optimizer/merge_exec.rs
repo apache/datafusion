@@ -60,7 +60,7 @@ impl PhysicalOptimizerRule for AddCoalescePartitionsExec {
                             if child.output_partitioning().partition_count() == 1 {
                                 child.clone()
                             } else {
-                                Arc::new(CoalescePartitionsExec::new(child.clone()))
+                                Arc::new(CoalescePartitionsExec::new(child.clone(), 1))
                             }
                         })
                         .collect(),

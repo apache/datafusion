@@ -493,7 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn test() -> Result<()> {
-        let input_plan = Arc::new(CoalescePartitionsExec::new(create_input_plan()?));
+        let input_plan = Arc::new(CoalescePartitionsExec::new(create_input_plan()?, 1));
         let work_dir = TempDir::new()?;
         let query_stage = ShuffleWriterExec::try_new(
             "jobOne".to_owned(),

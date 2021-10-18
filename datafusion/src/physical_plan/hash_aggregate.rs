@@ -1090,7 +1090,7 @@ mod tests {
         ];
         assert_batches_sorted_eq!(expected, &result);
 
-        let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
+        let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate, 1));
 
         let final_group: Vec<Arc<dyn PhysicalExpr>> = (0..groups.len())
             .map(|i| col(&groups[i].1, &input_schema))

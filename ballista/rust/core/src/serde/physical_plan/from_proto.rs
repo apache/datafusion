@@ -186,7 +186,10 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
             }
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> = convert_box_required!(merge.input)?;
-                Ok(Arc::new(CoalescePartitionsExec::new(input)))
+                Ok(Arc::new(CoalescePartitionsExec::new(
+                    input,
+                    merge.output_partitions_size as usize,
+                )))
             }
             PhysicalPlanType::Repartition(repart) => {
                 let input: Arc<dyn ExecutionPlan> = convert_box_required!(repart.input)?;

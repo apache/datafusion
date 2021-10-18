@@ -325,7 +325,7 @@ mod tests {
         )?;
 
         // We introduce an intermediate optimization step between the partial and final aggregtator
-        let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg));
+        let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg), 1);
 
         let final_agg = HashAggregateExec::try_new(
             AggregateMode::Final,
