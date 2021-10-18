@@ -1,4 +1,4 @@
-\<!---
+<!--
 Licensed to the Apache Software Foundation (ASF) under one
 or more contributor license agreements. See the NOTICE file
 distributed with this work for additional information
@@ -44,7 +44,7 @@ to provide:
 1. Best-in-class single node query performance
 2. A feature-complete declarative SQL query interface compatible with PostgreSQL
 3. A feature-rich procedural interface for creating and running execution plans
-4. High performance, erogonomic extensibility points at at every layer
+4. High performance, data race free, erogonomic extensibility points at at every layer
 
 The
 
@@ -52,8 +52,8 @@ The
 
 - Complete support list on [status](https://github.com/apache/arrow-datafusion/blob/master/README.md#status)
 - Timestamp Arithmetic [#194](https://github.com/apache/arrow-datafusion/issues/194)
-- SQL Parser extension point
-- Support for nested structures (fields, lists, structs)
+- SQL Parser extension point [#533](https://github.com/apache/arrow-datafusion/issues/533)
+- Support for nested structures (fields, lists, structs) [#119](https://github.com/apache/arrow-datafusion/issues/119)
 - Remaining Set Operators (`INTERSECT` / `EXCEPT`) [#1082](https://github.com/apache/arrow-datafusion/issues/1082)
 - Run all queries from the TPCH benchmark (see [milestone](https://github.com/apache/arrow-datafusion/milestone/2) for more details)
 
@@ -64,9 +64,10 @@ The
 
 ## Runtime / Infrastructure
 
-- Better support for reading data from remote filesystems (e.g. S3) without caching it locally
+- Better support for reading data from remote filesystems (e.g. S3) without caching it locally [#907](https://github.com/apache/arrow-datafusion/issues/907) [#1060](https://github.com/apache/arrow-datafusion/issues/1060)
 - Migrate to some sort of arrow2 based implementation (see [milestone](https://github.com/apache/arrow-datafusion/milestone/3) for more details)
-
+- Add DataFusion to h2oai/db-benchmark [147](https://github.com/apache/arrow-datafusion/issues/147)
+- Improve build time [348](https://github.com/apache/arrow-datafusion/issues/348)
 ## Resource Management
 
 - Finer grain control and limit of runtime memory [#587](https://github.com/apache/arrow-datafusion/issues/587) and CPU usage [#54](https://github.com/apache/arrow-datafusion/issues/64)
