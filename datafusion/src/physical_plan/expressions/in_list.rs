@@ -47,15 +47,17 @@ macro_rules! compare_op_scalar {
         // same as $left.len()
         let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
 
-        let data = ArrayData::new(
-            DataType::Boolean,
-            $left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![Buffer::from(buffer)],
-            vec![],
-        );
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                $left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(buffer)],
+                vec![],
+            )
+        };
         Ok(BooleanArray::from(data))
     }};
 }

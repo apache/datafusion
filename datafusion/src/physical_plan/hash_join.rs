@@ -678,11 +678,13 @@ fn build_join_indexes(
             let left = ArrayData::builder(DataType::UInt64)
                 .len(left_indices.len())
                 .add_buffer(left_indices.finish())
-                .build();
+                .build()
+                .unwrap();
             let right = ArrayData::builder(DataType::UInt32)
                 .len(right_indices.len())
                 .add_buffer(right_indices.finish())
-                .build();
+                .build()
+                .unwrap();
 
             Ok((
                 PrimitiveArray::<UInt64Type>::from(left),
