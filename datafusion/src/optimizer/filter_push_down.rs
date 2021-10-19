@@ -322,16 +322,20 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         } => {
             // A projection is filter-commutable, but re-writes all predicate expressions
             // collect projection.
-            let mut projection = HashMap::new();
-            schema.fields().iter().enumerate().for_each(|(i, field)| {
-                // strip alias, as they should not be part of filters
-                let expr = match &expr[i] {
-                    Expr::Alias(expr, _) => expr.as_ref().clone(),
-                    expr => expr.clone(),
-                };
+            let projection = schema
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(i, field)| {
+                    // strip alias, as they should not be part of filters
+                    let expr = match &expr[i] {
+                        Expr::Alias(expr, _) => expr.as_ref().clone(),
+                        expr => expr.clone(),
+                    };
 
-                projection.insert(field.qualified_name(), expr);
-            });
+                    (field.qualified_name(), expr)
+                })
+                .collect::<HashMap<_, _>>();
 
             // re-write all filters based on this projection
             // E.g. in `Filter: #b\n  Projection: #a > 1 as b`, we can swap them, but the filter must be "#a > 1"

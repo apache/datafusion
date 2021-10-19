@@ -83,13 +83,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             schema,
             alias,
         } => {
-            let mut arrays = vec![];
-            for e in expr {
-                let data_type = e.get_type(input.schema())?;
-                let mut id_array = vec![];
-                expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
-                arrays.push(id_array);
-            }
+            let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[expr],
@@ -138,13 +132,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             window_expr,
             schema,
         } => {
-            let mut arrays = vec![];
-            for e in window_expr {
-                let data_type = e.get_type(input.schema())?;
-                let mut id_array = vec![];
-                expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
-                arrays.push(id_array);
-            }
+            let arrays = to_arrays(window_expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[window_expr],
@@ -167,20 +155,8 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             aggr_expr,
             schema,
         } => {
-            let mut group_arrays = vec![];
-            for e in group_expr {
-                let data_type = e.get_type(input.schema())?;
-                let mut id_array = vec![];
-                expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
-                group_arrays.push(id_array);
-            }
-            let mut aggr_arrays = vec![];
-            for e in aggr_expr {
-                let data_type = e.get_type(input.schema())?;
-                let mut id_array = vec![];
-                expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
-                aggr_arrays.push(id_array);
-            }
+            let group_arrays = to_arrays(group_expr, input, &mut expr_set)?;
+            let aggr_arrays = to_arrays(aggr_expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[group_expr, aggr_expr],
@@ -202,13 +178,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             })
         }
         LogicalPlan::Sort { expr, input } => {
-            let mut arrays = vec![];
-            for e in expr {
-                let data_type = e.get_type(input.schema())?;
-                let mut id_array = vec![];
-                expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
-                arrays.push(id_array);
-            }
+            let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[expr],
@@ -246,6 +216,22 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             utils::from_plan(plan, &expr, &new_inputs)
         }
     }
+}
+
+fn to_arrays(
+    expr: &[Expr],
+    input: &LogicalPlan,
+    mut expr_set: &mut ExprSet,
+) -> Result<Vec<Vec<(usize, String)>>> {
+    expr.iter()
+        .map(|e| {
+            let data_type = e.get_type(input.schema())?;
+            let mut id_array = vec![];
+            expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
+
+            Ok(id_array)
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Build the "intermediate" projection plan that evaluates the extracted common expressions.

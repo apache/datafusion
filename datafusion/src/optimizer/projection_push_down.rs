@@ -105,22 +105,16 @@ fn get_projected_schema(
     }
 
     // create the projected schema
-    let mut projected_fields: Vec<DFField> = Vec::with_capacity(projection.len());
-    match table_name {
-        Some(qualifer) => {
-            for i in &projection {
-                projected_fields.push(DFField::from_qualified(
-                    qualifer,
-                    schema.fields()[*i].clone(),
-                ));
-            }
-        }
-        None => {
-            for i in &projection {
-                projected_fields.push(DFField::from(schema.fields()[*i].clone()));
-            }
-        }
-    }
+    let projected_fields: Vec<DFField> = match table_name {
+        Some(qualifer) => projection
+            .iter()
+            .map(|i| DFField::from_qualified(qualifer, schema.fields()[*i].clone()))
+            .collect(),
+        None => projection
+            .iter()
+            .map(|i| DFField::from(schema.fields()[*i].clone()))
+            .collect(),
+    };
 
     let projection = projection.into_iter().collect::<Vec<_>>();
     Ok((projection, projected_fields.to_dfschema_ref()?))
