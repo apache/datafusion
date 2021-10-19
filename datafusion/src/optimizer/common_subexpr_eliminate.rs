@@ -75,17 +75,6 @@ impl CommonSubexprEliminate {
 
 fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<LogicalPlan> {
     let mut expr_set = ExprSet::new();
-    let mut to_arrays = |expr: &[Expr], input: &LogicalPlan| {
-        expr.iter()
-            .map(|e| {
-                let data_type = e.get_type(input.schema())?;
-                let mut id_array = vec![];
-                expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
-
-                Ok(id_array)
-            })
-            .collect::<Result<Vec<_>>>()
-    };
 
     match plan {
         LogicalPlan::Projection {
@@ -94,7 +83,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             schema,
             alias,
         } => {
-            let arrays = to_arrays(expr, input)?;
+            let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[expr],
@@ -143,7 +132,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             window_expr,
             schema,
         } => {
-            let arrays = to_arrays(window_expr, input)?;
+            let arrays = to_arrays(window_expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[window_expr],
@@ -166,8 +155,8 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             aggr_expr,
             schema,
         } => {
-            let group_arrays = to_arrays(group_expr, input)?;
-            let aggr_arrays = to_arrays(aggr_expr, input)?;
+            let group_arrays = to_arrays(group_expr, input, &mut expr_set)?;
+            let aggr_arrays = to_arrays(aggr_expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[group_expr, aggr_expr],
@@ -189,7 +178,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             })
         }
         LogicalPlan::Sort { expr, input } => {
-            let arrays = to_arrays(expr, input)?;
+            let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
                 &[expr],
@@ -227,6 +216,22 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             utils::from_plan(plan, &expr, &new_inputs)
         }
     }
+}
+
+fn to_arrays(
+    expr: &[Expr],
+    input: &LogicalPlan,
+    mut expr_set: &mut ExprSet,
+) -> Result<Vec<Vec<(usize, String)>>> {
+    expr.iter()
+        .map(|e| {
+            let data_type = e.get_type(input.schema())?;
+            let mut id_array = vec![];
+            expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
+
+            Ok(id_array)
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Build the "intermediate" projection plan that evaluates the extracted common expressions.
