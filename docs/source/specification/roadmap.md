@@ -60,10 +60,16 @@ to provide:
 
 - Additional constant folding / partial evaluation [#1070](https://github.com/apache/arrow-datafusion/issues/1070)
 - More sophisticated cost based optimizer for join ordering
-Implement advanced query optimization framework (Tokomak) #440
-## Runtime / Infrastructure
+- Implement advanced query optimization framework (Tokomak) #440
+
+## Datasources
 
 - Better support for reading data from remote filesystems (e.g. S3) without caching it locally [#907](https://github.com/apache/arrow-datafusion/issues/907) [#1060](https://github.com/apache/arrow-datafusion/issues/1060)
+- Support for partitioned datasources [#1139](https://github.com/apache/arrow-datafusion/issues/1139) and make the integration of other table formats (Delta, Iceberg...) simpler
+- Improve performances of file format datasources (parallelize file listings, async Arrow readers, file chunk prefetching capability...)
+
+## Runtime / Infrastructure
+
 - Migrate to some sort of arrow2 based implementation (see [milestone](https://github.com/apache/arrow-datafusion/milestone/3) for more details)
 - Add DataFusion to h2oai/db-benchmark [147](https://github.com/apache/arrow-datafusion/issues/147)
 - Improve build time [348](https://github.com/apache/arrow-datafusion/issues/348)
