@@ -1491,8 +1491,6 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn query_cast_timestamp_micros_to_others() -> Result<()> {
     let mut ctx = ExecutionContext::new();
@@ -1503,35 +1501,45 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_micros LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    // let actual = execute_to_batches(&mut ctx, sql).await;
-    // println!("{}", pretty_format_batches(&a).unwrap());
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["2020-09-08 13:42:29.190"],
-        vec!["2020-09-08 12:42:29.190"],
-        vec!["2020-09-08 11:42:29.190"],
+        "+---------------------------------+",
+        "| totimestampmillis(ts_micros.ts) |",
+        "+---------------------------------+",
+        "| 2020-09-08 13:42:29.190         |",
+        "| 2020-09-08 12:42:29.190         |",
+        "| 2020-09-08 11:42:29.190         |",
+        "+---------------------------------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 
     // Original column is micros, convert to seconds and check timestamp
     let sql = "SELECT to_timestamp_seconds(ts) FROM ts_micros LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["2020-09-08 13:42:29"],
-        vec!["2020-09-08 12:42:29"],
-        vec!["2020-09-08 11:42:29"],
+        "+----------------------------------+",
+        "| totimestampseconds(ts_micros.ts) |",
+        "+----------------------------------+",
+        "| 2020-09-08 13:42:29              |",
+        "| 2020-09-08 12:42:29              |",
+        "| 2020-09-08 11:42:29              |",
+        "+----------------------------------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 
     // Original column is micros, convert to nanos and check timestamp
     let sql = "SELECT to_timestamp(ts) FROM ts_micros LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["2020-09-08 13:42:29.190855"],
-        vec!["2020-09-08 12:42:29.190855"],
-        vec!["2020-09-08 11:42:29.190855"],
+        "+----------------------------+",
+        "| totimestamp(ts_micros.ts)  |",
+        "+----------------------------+",
+        "| 2020-09-08 13:42:29.190855 |",
+        "| 2020-09-08 12:42:29.190855 |",
+        "| 2020-09-08 11:42:29.190855 |",
+        "+----------------------------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1539,9 +1547,9 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
 async fn union_all() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql = "SELECT 1 as x UNION ALL SELECT 2 as x";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"], vec!["2"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec!["+---+", "| x |", "+---+", "| 1 |", "| 2 |", "+---+"];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1561,9 +1569,9 @@ async fn csv_query_limit() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 2";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["c"], vec!["d"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec!["+----+", "| c1 |", "+----+", "| c  |", "| d  |", "+----+"];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1572,110 +1580,24 @@ async fn csv_query_limit_bigger_than_nbr_of_rows() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c2 FROM aggregate_test_100 LIMIT 200";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    // println!("{}", pretty_format_batches(&a).unwrap());
     let expected = vec![
-        vec!["2"],
-        vec!["5"],
-        vec!["1"],
-        vec!["1"],
-        vec!["5"],
-        vec!["4"],
-        vec!["3"],
-        vec!["3"],
-        vec!["1"],
-        vec!["4"],
-        vec!["1"],
-        vec!["4"],
-        vec!["3"],
-        vec!["2"],
-        vec!["1"],
-        vec!["1"],
-        vec!["2"],
-        vec!["1"],
-        vec!["3"],
-        vec!["2"],
-        vec!["4"],
-        vec!["1"],
-        vec!["5"],
-        vec!["4"],
-        vec!["2"],
-        vec!["1"],
-        vec!["4"],
-        vec!["5"],
-        vec!["2"],
-        vec!["3"],
-        vec!["4"],
-        vec!["2"],
-        vec!["1"],
-        vec!["5"],
-        vec!["3"],
-        vec!["1"],
-        vec!["2"],
-        vec!["3"],
-        vec!["3"],
-        vec!["3"],
-        vec!["2"],
-        vec!["4"],
-        vec!["1"],
-        vec!["3"],
-        vec!["2"],
-        vec!["5"],
-        vec!["2"],
-        vec!["1"],
-        vec!["4"],
-        vec!["1"],
-        vec!["4"],
-        vec!["2"],
-        vec!["5"],
-        vec!["4"],
-        vec!["2"],
-        vec!["3"],
-        vec!["4"],
-        vec!["4"],
-        vec!["4"],
-        vec!["5"],
-        vec!["4"],
-        vec!["2"],
-        vec!["1"],
-        vec!["2"],
-        vec!["4"],
-        vec!["2"],
-        vec!["3"],
-        vec!["5"],
-        vec!["1"],
-        vec!["1"],
-        vec!["4"],
-        vec!["2"],
-        vec!["1"],
-        vec!["2"],
-        vec!["1"],
-        vec!["1"],
-        vec!["5"],
-        vec!["4"],
-        vec!["5"],
-        vec!["2"],
-        vec!["3"],
-        vec!["2"],
-        vec!["4"],
-        vec!["1"],
-        vec!["3"],
-        vec!["4"],
-        vec!["3"],
-        vec!["2"],
-        vec!["5"],
-        vec!["3"],
-        vec!["3"],
-        vec!["2"],
-        vec!["5"],
-        vec!["5"],
-        vec!["4"],
-        vec!["1"],
-        vec!["3"],
-        vec!["3"],
-        vec!["4"],
-        vec!["4"],
+        "+----+", "| c2 |", "+----+", "| 2  |", "| 5  |", "| 1  |", "| 1  |", "| 5  |",
+        "| 4  |", "| 3  |", "| 3  |", "| 1  |", "| 4  |", "| 1  |", "| 4  |", "| 3  |",
+        "| 2  |", "| 1  |", "| 1  |", "| 2  |", "| 1  |", "| 3  |", "| 2  |", "| 4  |",
+        "| 1  |", "| 5  |", "| 4  |", "| 2  |", "| 1  |", "| 4  |", "| 5  |", "| 2  |",
+        "| 3  |", "| 4  |", "| 2  |", "| 1  |", "| 5  |", "| 3  |", "| 1  |", "| 2  |",
+        "| 3  |", "| 3  |", "| 3  |", "| 2  |", "| 4  |", "| 1  |", "| 3  |", "| 2  |",
+        "| 5  |", "| 2  |", "| 1  |", "| 4  |", "| 1  |", "| 4  |", "| 2  |", "| 5  |",
+        "| 4  |", "| 2  |", "| 3  |", "| 4  |", "| 4  |", "| 4  |", "| 5  |", "| 4  |",
+        "| 2  |", "| 1  |", "| 2  |", "| 4  |", "| 2  |", "| 3  |", "| 5  |", "| 1  |",
+        "| 1  |", "| 4  |", "| 2  |", "| 1  |", "| 2  |", "| 1  |", "| 1  |", "| 5  |",
+        "| 4  |", "| 5  |", "| 2  |", "| 3  |", "| 2  |", "| 4  |", "| 1  |", "| 3  |",
+        "| 4  |", "| 3  |", "| 2  |", "| 5  |", "| 3  |", "| 3  |", "| 2  |", "| 5  |",
+        "| 5  |", "| 4  |", "| 1  |", "| 3  |", "| 3  |", "| 4  |", "| 4  |", "+----+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1684,112 +1606,27 @@ async fn csv_query_limit_with_same_nbr_of_rows() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c2 FROM aggregate_test_100 LIMIT 100";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["2"],
-        vec!["5"],
-        vec!["1"],
-        vec!["1"],
-        vec!["5"],
-        vec!["4"],
-        vec!["3"],
-        vec!["3"],
-        vec!["1"],
-        vec!["4"],
-        vec!["1"],
-        vec!["4"],
-        vec!["3"],
-        vec!["2"],
-        vec!["1"],
-        vec!["1"],
-        vec!["2"],
-        vec!["1"],
-        vec!["3"],
-        vec!["2"],
-        vec!["4"],
-        vec!["1"],
-        vec!["5"],
-        vec!["4"],
-        vec!["2"],
-        vec!["1"],
-        vec!["4"],
-        vec!["5"],
-        vec!["2"],
-        vec!["3"],
-        vec!["4"],
-        vec!["2"],
-        vec!["1"],
-        vec!["5"],
-        vec!["3"],
-        vec!["1"],
-        vec!["2"],
-        vec!["3"],
-        vec!["3"],
-        vec!["3"],
-        vec!["2"],
-        vec!["4"],
-        vec!["1"],
-        vec!["3"],
-        vec!["2"],
-        vec!["5"],
-        vec!["2"],
-        vec!["1"],
-        vec!["4"],
-        vec!["1"],
-        vec!["4"],
-        vec!["2"],
-        vec!["5"],
-        vec!["4"],
-        vec!["2"],
-        vec!["3"],
-        vec!["4"],
-        vec!["4"],
-        vec!["4"],
-        vec!["5"],
-        vec!["4"],
-        vec!["2"],
-        vec!["1"],
-        vec!["2"],
-        vec!["4"],
-        vec!["2"],
-        vec!["3"],
-        vec!["5"],
-        vec!["1"],
-        vec!["1"],
-        vec!["4"],
-        vec!["2"],
-        vec!["1"],
-        vec!["2"],
-        vec!["1"],
-        vec!["1"],
-        vec!["5"],
-        vec!["4"],
-        vec!["5"],
-        vec!["2"],
-        vec!["3"],
-        vec!["2"],
-        vec!["4"],
-        vec!["1"],
-        vec!["3"],
-        vec!["4"],
-        vec!["3"],
-        vec!["2"],
-        vec!["5"],
-        vec!["3"],
-        vec!["3"],
-        vec!["2"],
-        vec!["5"],
-        vec!["5"],
-        vec!["4"],
-        vec!["1"],
-        vec!["3"],
-        vec!["3"],
-        vec!["4"],
-        vec!["4"],
+        "+----+", "| c2 |", "+----+", "| 2  |", "| 5  |", "| 1  |", "| 1  |", "| 5  |",
+        "| 4  |", "| 3  |", "| 3  |", "| 1  |", "| 4  |", "| 1  |", "| 4  |", "| 3  |",
+        "| 2  |", "| 1  |", "| 1  |", "| 2  |", "| 1  |", "| 3  |", "| 2  |", "| 4  |",
+        "| 1  |", "| 5  |", "| 4  |", "| 2  |", "| 1  |", "| 4  |", "| 5  |", "| 2  |",
+        "| 3  |", "| 4  |", "| 2  |", "| 1  |", "| 5  |", "| 3  |", "| 1  |", "| 2  |",
+        "| 3  |", "| 3  |", "| 3  |", "| 2  |", "| 4  |", "| 1  |", "| 3  |", "| 2  |",
+        "| 5  |", "| 2  |", "| 1  |", "| 4  |", "| 1  |", "| 4  |", "| 2  |", "| 5  |",
+        "| 4  |", "| 2  |", "| 3  |", "| 4  |", "| 4  |", "| 4  |", "| 5  |", "| 4  |",
+        "| 2  |", "| 1  |", "| 2  |", "| 4  |", "| 2  |", "| 3  |", "| 5  |", "| 1  |",
+        "| 1  |", "| 4  |", "| 2  |", "| 1  |", "| 2  |", "| 1  |", "| 1  |", "| 5  |",
+        "| 4  |", "| 5  |", "| 2  |", "| 3  |", "| 2  |", "| 4  |", "| 1  |", "| 3  |",
+        "| 4  |", "| 3  |", "| 2  |", "| 5  |", "| 3  |", "| 3  |", "| 2  |", "| 5  |",
+        "| 5  |", "| 4  |", "| 1  |", "| 3  |", "| 3  |", "| 4  |", "| 4  |", "+----+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn csv_query_limit_zero() -> Result<()> {
@@ -1797,6 +1634,8 @@ async fn csv_query_limit_zero() -> Result<()> {
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 0";
     let actual = execute(&mut ctx, sql).await;
+    // let actual = execute(&mut ctx, sql).await;
+    // println!("{}", pretty_format_batches(&a).unwrap());
     let expected: Vec<Vec<String>> = vec![];
     assert_eq!(expected, actual);
     Ok(())
