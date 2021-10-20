@@ -44,14 +44,23 @@ pub type FileIter =
     Box<dyn Iterator<Item = DataFusionResult<Box<dyn Read + Send + Sync>>> + Send + Sync>;
 pub type BatchIter = Box<dyn Iterator<Item = ArrowResult<RecordBatch>> + Send + Sync>;
 
-/// A stream that iterates record batch by record batch, file over file.
-pub struct FileStream<F>
-where
-    F: FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter
+/// A closure that creates a file format reader (iterator over `RecordBatch`) from a `Read` object
+/// and an optional number of required records.
+pub trait FormatReaderOpener:
+    FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter + Send + Unpin + 'static
+{
+}
+
+impl<T> FormatReaderOpener for T where
+    T: FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter
         + Send
         + Unpin
-        + 'static,
+        + 'static
 {
+}
+
+/// A stream that iterates record batch by record batch, file over file.
+pub struct FileStream<F: FormatReaderOpener> {
     /// An iterator over record batches of the last file returned by file_iter
     batch_iter: BatchIter,
     /// An iterator over input files
@@ -67,13 +76,7 @@ where
     file_reader: F,
 }
 
-impl<F> FileStream<F>
-where
-    F: FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter
-        + Send
-        + Unpin
-        + 'static,
-{
+impl<F: FormatReaderOpener> FileStream<F> {
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
         files: Vec<PartitionedFile>,
@@ -112,13 +115,7 @@ where
     }
 }
 
-impl<F> Stream for FileStream<F>
-where
-    F: FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter
-        + Send
-        + Unpin
-        + 'static,
-{
+impl<F: FormatReaderOpener> Stream for FileStream<F> {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
@@ -158,13 +155,7 @@ where
     }
 }
 
-impl<F> RecordBatchStream for FileStream<F>
-where
-    F: FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter
-        + Send
-        + Unpin
-        + 'static,
-{
+impl<F: FormatReaderOpener> RecordBatchStream for FileStream<F> {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
