@@ -126,8 +126,7 @@ impl FileFormat for CsvFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = CsvExec::new(
             conf.object_store,
-            // flattening this for now because CsvExec does not support partitioning yet
-            conf.files.into_iter().flatten().collect::<Vec<_>>(),
+            conf.files,
             conf.statistics,
             conf.schema,
             self.has_header,

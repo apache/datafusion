@@ -96,8 +96,7 @@ impl FileFormat for JsonFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = NdJsonExec::new(
             conf.object_store,
-            // flattening this for now because NdJsonExec does not support partitioning yet
-            conf.files.into_iter().flatten().collect::<Vec<_>>(),
+            conf.files,
             conf.statistics,
             conf.schema,
             conf.projection,

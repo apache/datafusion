@@ -615,7 +615,7 @@ message ParquetScanExecNode {
 }
 
 message CsvScanExecNode {
-  repeated PartitionedFile files = 1;
+  repeated FileGroup file_groups = 1;
   Schema schema = 2;
   bool has_header = 3;
   uint32 batch_size = 4;
@@ -626,7 +626,7 @@ message CsvScanExecNode {
 }
 
 message AvroScanExecNode {
-  repeated PartitionedFile files = 1;
+  repeated FileGroup file_groups = 1;
   Schema schema = 2;
   uint32 batch_size = 4;
   repeated uint32 projection = 6;

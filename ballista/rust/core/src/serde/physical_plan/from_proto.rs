@@ -125,10 +125,10 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
 
                 Ok(Arc::new(CsvExec::new(
                     Arc::new(LocalFileSystem {}),
-                    scan.files
+                    scan.file_groups
                         .iter()
-                        .map(|f| f.into())
-                        .collect::<Vec<PartitionedFile>>(),
+                        .map(|p| p.into())
+                        .collect::<Vec<Vec<PartitionedFile>>>(),
                     statistics,
                     schema,
                     scan.has_header,
@@ -165,10 +165,10 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
 
                 Ok(Arc::new(AvroExec::new(
                     Arc::new(LocalFileSystem {}),
-                    scan.files
+                    scan.file_groups
                         .iter()
-                        .map(|f| f.into())
-                        .collect::<Vec<PartitionedFile>>(),
+                        .map(|p| p.into())
+                        .collect::<Vec<Vec<PartitionedFile>>>(),
                     statistics,
                     schema,
                     Some(projection),

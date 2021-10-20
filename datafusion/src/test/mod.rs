@@ -57,7 +57,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
 pub fn create_partitioned_csv(
     filename: &str,
     partitions: usize,
-) -> Result<(String, Vec<PartitionedFile>)> {
+) -> Result<(String, Vec<Vec<PartitionedFile>>)> {
     let testdata = crate::test_util::arrow_test_data();
     let path = format!("{}/csv/{}", testdata, filename);
 
@@ -96,15 +96,16 @@ pub fn create_partitioned_csv(
         w.flush().unwrap();
     }
 
-    Ok((
-        tmp_dir.into_path().to_str().unwrap().to_string(),
-        files
-            .into_iter()
-            .map(|f| PartitionedFile {
+    let groups = files
+        .into_iter()
+        .map(|f| {
+            vec![PartitionedFile {
                 file_meta: local_file_meta(f.to_str().unwrap().to_owned()),
-            })
-            .collect(),
-    ))
+            }]
+        })
+        .collect::<Vec<_>>();
+
+    Ok((tmp_dir.into_path().to_str().unwrap().to_string(), groups))
 }
 
 /// Get the schema for the aggregate_test_* csv files

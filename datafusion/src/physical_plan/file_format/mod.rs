@@ -19,6 +19,7 @@
 
 mod avro;
 mod csv;
+mod file_stream;
 mod json;
 mod parquet;
 
