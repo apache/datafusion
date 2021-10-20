@@ -244,14 +244,15 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 ))),
             })
         } else if let Some(exec) = plan.downcast_ref::<CsvExec>() {
+            let file_groups = exec
+                .file_groups()
+                .iter()
+                .map(|p| p.as_slice().into())
+                .collect();
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::CsvScan(
                     protobuf::CsvScanExecNode {
-                        files: exec
-                            .files()
-                            .iter()
-                            .map(|f| f.into())
-                            .collect::<Vec<protobuf::PartitionedFile>>(),
+                        file_groups,
                         statistics: Some((&exec.statistics()).into()),
                         limit: exec
                             .limit()
@@ -301,14 +302,15 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<AvroExec>() {
+            let file_groups = exec
+                .file_groups()
+                .iter()
+                .map(|p| p.as_slice().into())
+                .collect();
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::AvroScan(
                     protobuf::AvroScanExecNode {
-                        files: exec
-                            .files()
-                            .iter()
-                            .map(|f| f.into())
-                            .collect::<Vec<protobuf::PartitionedFile>>(),
+                        file_groups,
                         statistics: Some((&exec.statistics()).into()),
                         limit: exec
                             .limit()
