@@ -36,7 +36,7 @@ ballista-core = { path = "../core", version = "0.6.0" }
 clap = "2"
 configure_me = "0.4.0"
 datafusion = { path = "../../../datafusion", version = "5.1.0" }
-env_logger = "0.8"
+env_logger = "0.9"
 etcd-client = { version = "0.7", optional = true }
 futures = "0.3"
 http = "0.2"
