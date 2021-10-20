@@ -854,8 +854,7 @@ impl ScalarValue {
             if let ScalarValue::List(values, _) = scalar {
                 match values {
                     Some(values) => {
-                        let element_array =
-                            ScalarValue::iter_to_array(values.as_ref().clone())?;
+                        let element_array = ScalarValue::iter_to_array(*values)?;
 
                         // Add new offset index
                         flat_len += element_array.len() as i32;
@@ -902,7 +901,7 @@ impl ScalarValue {
             .add_buffer(offsets_array.data().buffers()[0].clone())
             .add_child_data(flat_array.data().clone());
 
-        let list_array = ListArray::from(array_data.build());
+        let list_array = ListArray::from(array_data.build()?);
         Ok(list_array)
     }
 
