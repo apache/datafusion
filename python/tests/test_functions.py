@@ -34,7 +34,14 @@ def df():
 
 def test_lit(df):
     """test lit function"""
-    df = df.select(f.lit(1), f.lit("1"), f.lit("OK"), f.lit(3.14))
+    df = df.select(
+        f.lit(1),
+        f.lit("1"),
+        f.lit("OK"),
+        f.lit(3.14),
+        f.lit(True),
+        f.lit(b"hello world"),
+    )
     result = df.collect()
     assert len(result) == 1
     result = result[0]
@@ -42,6 +49,8 @@ def test_lit(df):
     assert result.column(1) == pa.array(["1"] * 3)
     assert result.column(2) == pa.array(["OK"] * 3)
     assert result.column(3) == pa.array([3.14] * 3)
+    assert result.column(4) == pa.array([True] * 3)
+    assert result.column(5) == pa.array([b"hello world"] * 3)
 
 
 def test_lit_arith(df):

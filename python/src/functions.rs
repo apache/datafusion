@@ -39,15 +39,19 @@ fn col(name: &str) -> expression::Expression {
 #[pyfunction]
 #[pyo3(text_signature = "(value)")]
 fn lit(value: &PyAny) -> PyResult<expression::Expression> {
-    let expr = if let Ok(v) = value.extract::<i64>() {
+    let expr = if let Ok(v) = value.extract::<bool>() {
+        logical_plan::lit(v)
+    } else if let Ok(v) = value.extract::<i64>() {
         logical_plan::lit(v)
     } else if let Ok(v) = value.extract::<f64>() {
         logical_plan::lit(v)
     } else if let Ok(v) = value.extract::<String>() {
         logical_plan::lit(v)
+    } else if let Ok(v) = value.extract::<Vec<u8>>() {
+        logical_plan::lit(v)
     } else {
         return Err(PyTypeError::new_err(format!(
-            "Unsupported value {}, expected one of i64, f64, or String type",
+            "Unsupported value {}, expected one of bool, i64, f64, or String type",
             value
         )));
     };
