@@ -187,7 +187,7 @@ mod tests {
         let source_schema = records[0].schema();
 
         let reader = move |_file, _remain: &Option<usize>| {
-            // this reder returns the same batch regardless of the file
+            // this reader returns the same batch regardless of the file
             Box::new(records.clone().into_iter().map(Ok)) as BatchIter
         };
 

@@ -48,7 +48,6 @@ pub struct NdJsonExec {
 
 impl NdJsonExec {
     /// Create a new JSON reader execution plan provided file list and schema
-    /// TODO: support partitiond file list (Vec<Vec<PartitionedFile>>)
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
         file_groups: Vec<Vec<PartitionedFile>>,
@@ -121,7 +120,7 @@ impl ExecutionPlan for NdJsonExec {
         let batch_size = self.batch_size;
         let file_schema = Arc::clone(&self.file_schema);
 
-        // The avro reader cannot limit the number of records, so `remaining` is ignored.
+        // The json reader cannot limit the number of records, so `remaining` is ignored.
         let fun = move |file, _remaining: &Option<usize>| {
             Box::new(json::Reader::new(
                 file,

@@ -49,7 +49,7 @@ pub struct AvroExec {
 }
 
 impl AvroExec {
-    /// Create a new JSON reader execution plan provided file list and schema
+    /// Create a new Avro reader execution plan provided file list and schema
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
         file_groups: Vec<Vec<PartitionedFile>>,
