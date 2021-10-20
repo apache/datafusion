@@ -36,7 +36,7 @@ async-trait = "0.1.36"
 ballista-core = { path = "../core", version = "0.6.0" }
 configure_me = "0.4.0"
 datafusion = { path = "../../../datafusion", version = "5.1.0" }
-env_logger = "0.8"
+env_logger = "0.9"
 futures = "0.3"
 log = "0.4"
 snmalloc-rs = {version = "0.2", features= ["cache-friendly"], optional = true}
