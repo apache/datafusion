@@ -587,21 +587,38 @@ impl ConstEvaluator {
         }
     }
 
-    /// Can the expression be evaluated (assuming all of its children
-    /// can also be evaluated)?
+    /// Can the expression be evaluated at plan time, (assuming all of
+    /// its children can also be evaluated)?
     fn can_evaluate(expr: &Expr) -> bool {
         // check for reasons we can't evaluate this node
+        //
+        // NOTE all expr types are listed here so when new ones are
+        // added they can be checked for their ability to be evaluated
+        // at plan time
         match expr {
             // Has no runtime cost, but needed during planning
             Expr::Alias(..) => false,
             Expr::AggregateFunction { .. } => false,
             Expr::AggregateUDF { .. } => false,
-            // TODO handle in constantant propagator pass
             Expr::ScalarVariable(_) => false,
             Expr::Column(_) => false,
             Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
             Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
-            _ => true,
+            Expr::WindowFunction { .. } => false,
+            Expr::Sort { .. } => false,
+            Expr::Wildcard => false,
+
+            Expr::Literal(_) => true,
+            Expr::BinaryExpr { .. } => true,
+            Expr::Not(_) => true,
+            Expr::IsNotNull(_) => true,
+            Expr::IsNull(_) => true,
+            Expr::Negative(_) => true,
+            Expr::Between { .. } => true,
+            Expr::Case { .. } => true,
+            Expr::Cast { .. } => true,
+            Expr::TryCast { .. } => true,
+            Expr::InList { .. } => true,
         }
     }
 
