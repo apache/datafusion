@@ -714,12 +714,14 @@ mod tests {
     }
 
     #[test]
-    fn row_group_predicate_builder_unsupported_type() -> Result<()> {
+    fn row_group_predicate_builder_null_expr() -> Result<()> {
         use crate::logical_plan::{col, lit};
-        // test row group predicate with unsupported statistics type (boolean)
-        // where a null array is generated for some statistics columns
-        // int > 1 and bool = true => c1_max > 1 and null
-        let expr = col("c1").gt(lit(15)).and(col("c2").eq(lit(true)));
+        // test row group predicate with an unknown (Null) expr
+        //
+        // int > 1 and bool = NULL => c1_max > 1 and null
+        let expr = col("c1")
+            .gt(lit(15))
+            .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),

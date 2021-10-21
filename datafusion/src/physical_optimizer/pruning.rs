@@ -1374,36 +1374,24 @@ mod tests {
 
     #[test]
     fn prune_bool_column_eq_true() {
-        let (schema, statistics, _, _) = bool_setup();
+        let (schema, statistics, expected_true, _) = bool_setup();
 
         // b1 = true
         let expr = col("b1").eq(lit(true));
         let p = PruningPredicate::try_new(&expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap_err();
-        assert!(
-            result.to_string().contains(
-                "Data type Boolean not supported for scalar operation 'lt_eq' on dyn array"
-            ),
-            "{}",
-            result
-        )
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_true);
     }
 
     #[test]
     fn prune_bool_not_column_eq_true() {
-        let (schema, statistics, _, _) = bool_setup();
+        let (schema, statistics, _, expected_false) = bool_setup();
 
         // !b1 = true
         let expr = col("b1").not().eq(lit(true));
         let p = PruningPredicate::try_new(&expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap_err();
-        assert!(
-            result.to_string().contains(
-                "Data type Boolean not supported for scalar operation 'lt_eq' on dyn array"
-            ),
-            "{}",
-            result
-        )
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_false);
     }
 
     /// Creates setup for int32 chunk pruning
