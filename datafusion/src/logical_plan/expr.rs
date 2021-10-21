@@ -1407,6 +1407,18 @@ impl Literal for String {
     }
 }
 
+impl Literal for Vec<u8> {
+    fn lit(&self) -> Expr {
+        Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
+    }
+}
+
+impl Literal for &[u8] {
+    fn lit(&self) -> Expr {
+        Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
+    }
+}
+
 impl Literal for ScalarValue {
     fn lit(&self) -> Expr {
         Expr::Literal(self.clone())
