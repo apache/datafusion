@@ -314,6 +314,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
+        let target_partitions = self.state.lock().unwrap().config.target_partitions;
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_avro(
@@ -321,7 +322,7 @@ impl ExecutionContext {
                 path,
                 options,
                 None,
-                self.state.lock().unwrap().config.target_partitions,
+                target_partitions,
             )
             .await?
             .build()?,
@@ -336,6 +337,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
+        let target_partitions = self.state.lock().unwrap().config.target_partitions;
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_csv(
@@ -343,7 +345,7 @@ impl ExecutionContext {
                 path,
                 options,
                 None,
-                self.state.lock().unwrap().config.target_partitions,
+                target_partitions,
             )
             .await?
             .build()?,
@@ -357,14 +359,11 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
-        let logical_plan = LogicalPlanBuilder::scan_parquet(
-            object_store,
-            path,
-            None,
-            self.state.lock().unwrap().config.target_partitions,
-        )
-        .await?
-        .build()?;
+        let target_partitions = self.state.lock().unwrap().config.target_partitions;
+        let logical_plan =
+            LogicalPlanBuilder::scan_parquet(object_store, path, None, target_partitions)
+                .await?
+                .build()?;
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &logical_plan,
@@ -4137,5 +4136,36 @@ mod tests {
         .await?;
 
         Ok(ctx)
+    }
+
+    // Test for compilation error when calling read_* functions from an #[async_trait] function.
+    // See https://github.com/apache/arrow-datafusion/issues/1154
+    #[async_trait]
+    trait CallReadTrait {
+        async fn call_read_csv(&self) -> Arc<dyn DataFrame>;
+        async fn call_read_avro(&self) -> Arc<dyn DataFrame>;
+        async fn call_read_parquet(&self) -> Arc<dyn DataFrame>;
+    }
+
+    struct CallRead {}
+
+    #[async_trait]
+    impl CallReadTrait for CallRead {
+        async fn call_read_csv(&self) -> Arc<dyn DataFrame> {
+            let mut ctx = ExecutionContext::new();
+            ctx.read_csv("dummy", CsvReadOptions::new()).await.unwrap()
+        }
+
+        async fn call_read_avro(&self) -> Arc<dyn DataFrame> {
+            let mut ctx = ExecutionContext::new();
+            ctx.read_avro("dummy", AvroReadOptions::default())
+                .await
+                .unwrap()
+        }
+
+        async fn call_read_parquet(&self) -> Arc<dyn DataFrame> {
+            let mut ctx = ExecutionContext::new();
+            ctx.read_parquet("dummy").await.unwrap()
+        }
     }
 }
