@@ -145,21 +145,14 @@ impl<'a> Simplifier<'a> {
 }
 
 impl<'a> ExprRewriter for Simplifier<'a> {
-    /// rewrite the expression simplifying any constant expressions
+    /// rewrite the expression using algebriac simplification rules
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         let new_expr = match expr {
-            Expr::BinaryExpr { left, op, right } => match op {
-                Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                    (
-                        Expr::Literal(ScalarValue::Boolean(l)),
-                        Expr::Literal(ScalarValue::Boolean(r)),
-                    ) => match (l, r) {
-                        (Some(l), Some(r)) => {
-                            Expr::Literal(ScalarValue::Boolean(Some(l == r)))
-                        }
-                        _ => Expr::Literal(ScalarValue::Boolean(None)),
-                    },
-                    (Expr::Literal(ScalarValue::Boolean(b)), _)
+            Expr::BinaryExpr { left, op, right } => {
+                match (left.as_ref(), op, right.as_ref()) {
+                    // <true>  = <expr> --> <expr>
+                    // <false> = <expr> --> !<expr>
+                    (Expr::Literal(ScalarValue::Boolean(b)), Operator::Eq, _)
                         if self.is_boolean_type(&right) =>
                     {
                         match b {
@@ -168,7 +161,9 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                             None => Expr::Literal(ScalarValue::Boolean(None)),
                         }
                     }
-                    (_, Expr::Literal(ScalarValue::Boolean(b)))
+                    // <expr> = <true>  --> <expr>
+                    // <expr> = <false> --> !<expr>
+                    (_, Operator::Eq, Expr::Literal(ScalarValue::Boolean(b)))
                         if self.is_boolean_type(&left) =>
                     {
                         match b {
@@ -177,23 +172,9 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                             None => Expr::Literal(ScalarValue::Boolean(None)),
                         }
                     }
-                    _ => Expr::BinaryExpr {
-                        left,
-                        op: Operator::Eq,
-                        right,
-                    },
-                },
-                Operator::NotEq => match (left.as_ref(), right.as_ref()) {
-                    (
-                        Expr::Literal(ScalarValue::Boolean(l)),
-                        Expr::Literal(ScalarValue::Boolean(r)),
-                    ) => match (l, r) {
-                        (Some(l), Some(r)) => {
-                            Expr::Literal(ScalarValue::Boolean(Some(l != r)))
-                        }
-                        _ => Expr::Literal(ScalarValue::Boolean(None)),
-                    },
-                    (Expr::Literal(ScalarValue::Boolean(b)), _)
+                    // <true>  != <expr> --> !<expr>
+                    // <false> != <expr> --> <expr>
+                    (Expr::Literal(ScalarValue::Boolean(b)), Operator::NotEq, _)
                         if self.is_boolean_type(&right) =>
                     {
                         match b {
@@ -202,7 +183,9 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                             None => Expr::Literal(ScalarValue::Boolean(None)),
                         }
                     }
-                    (_, Expr::Literal(ScalarValue::Boolean(b)))
+                    // <expr> != <true>  --> !<expr>
+                    // <expr> != <false> --> <expr>
+                    (_, Operator::NotEq, Expr::Literal(ScalarValue::Boolean(b)))
                         if self.is_boolean_type(&left) =>
                     {
                         match b {
@@ -211,14 +194,9 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                             None => Expr::Literal(ScalarValue::Boolean(None)),
                         }
                     }
-                    _ => Expr::BinaryExpr {
-                        left,
-                        op: Operator::NotEq,
-                        right,
-                    },
-                },
-                _ => Expr::BinaryExpr { left, op, right },
-            },
+                    _ => Expr::BinaryExpr { left, op, right },
+                }
+            }
             // Not(Not(expr)) --> expr
             Expr::Not(inner) => {
                 if let Expr::Not(negated_inner) = *inner {
@@ -419,17 +397,6 @@ mod tests {
         assert_eq!(
             (col("c2").not_eq(lit(false))).rewrite(&mut rewriter)?,
             col("c2"),
-        );
-
-        // test constant
-        assert_eq!(
-            (lit(true).not_eq(lit(true))).rewrite(&mut rewriter)?,
-            lit(false),
-        );
-
-        assert_eq!(
-            (lit(true).not_eq(lit(false))).rewrite(&mut rewriter)?,
-            lit(true),
         );
 
         Ok(())

@@ -712,6 +712,12 @@ mod tests {
             (lit("foo").not_eq(lit("foo"))).or(col("c").eq(lit(1))),
             lit(false).or(col("c").eq(lit(1))),
         );
+        // test boolean constant evaluation
+
+        // true != true --> false
+        test_evaluate(lit(true).not_eq(lit(true)), lit(false));
+        // true != false --> true
+        test_evaluate(lit(true).not_eq(lit(false)), lit(true));
     }
 
     #[test]
