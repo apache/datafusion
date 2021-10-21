@@ -19,11 +19,9 @@ use crate::udaf;
 use crate::udf;
 use crate::{expression, types::PyDataType};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::logical_plan;
+use datafusion::logical_plan::{self, Literal};
 use datafusion::physical_plan::functions::Volatility;
-use pyo3::{
-    exceptions::PyTypeError, prelude::*, types::PyTuple, wrap_pyfunction, Python,
-};
+use pyo3::{prelude::*, types::PyTuple, wrap_pyfunction, Python};
 use std::sync::Arc;
 
 /// Expression representing a column on the existing plan.
@@ -35,22 +33,40 @@ fn col(name: &str) -> expression::Expression {
     }
 }
 
+/// # A bridge type that converts PyAny data into datafusion literal
+///
+/// Note that the ordering here matters because it has to be from
+/// narrow to wider values because Python has duck typing so putting
+/// Int before Boolean results in a premature match.
+#[derive(FromPyObject)]
+enum PythonLiteral<'a> {
+    Boolean(bool),
+    Int(i64),
+    UInt(u64),
+    Float(f64),
+    Str(&'a str),
+    Binary(&'a [u8]),
+}
+
+impl<'a> Literal for PythonLiteral<'a> {
+    fn lit(&self) -> logical_plan::Expr {
+        match self {
+            PythonLiteral::Boolean(val) => val.lit(),
+            PythonLiteral::Int(val) => val.lit(),
+            PythonLiteral::UInt(val) => val.lit(),
+            PythonLiteral::Float(val) => val.lit(),
+            PythonLiteral::Str(val) => val.lit(),
+            PythonLiteral::Binary(val) => val.lit(),
+        }
+    }
+}
+
 /// Expression representing a constant value
 #[pyfunction]
 #[pyo3(text_signature = "(value)")]
 fn lit(value: &PyAny) -> PyResult<expression::Expression> {
-    let expr = if let Ok(v) = value.extract::<i64>() {
-        logical_plan::lit(v)
-    } else if let Ok(v) = value.extract::<f64>() {
-        logical_plan::lit(v)
-    } else if let Ok(v) = value.extract::<String>() {
-        logical_plan::lit(v)
-    } else {
-        return Err(PyTypeError::new_err(format!(
-            "Unsupported value {}, expected one of i64, f64, or String type",
-            value
-        )));
-    };
+    let py_lit = value.extract::<PythonLiteral>()?;
+    let expr = py_lit.lit();
     Ok(expression::Expression { expr })
 }
 
