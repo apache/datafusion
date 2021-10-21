@@ -771,6 +771,40 @@ async fn csv_query_having_without_group_by() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_boolean_eq() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_simple_csv(&mut ctx).await?;
+
+    let sql = "SELECT c3, c3 = c3 as eq, c3 != c3 as neq FROM aggregate_simple";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    let expected = vec![
+        "+-------+------+-------+",
+        "| c3    | eq   | neq   |",
+        "+-------+------+-------+",
+        "| true  | true | false |",
+        "| false | true | false |",
+        "| false | true | false |",
+        "| true  | true | false |",
+        "| true  | true | false |",
+        "| true  | true | false |",
+        "| false | true | false |",
+        "| false | true | false |",
+        "| false | true | false |",
+        "| false | true | false |",
+        "| true  | true | false |",
+        "| true  | true | false |",
+        "| true  | true | false |",
+        "| true  | true | false |",
+        "| true  | true | false |",
+        "+-------+------+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_avg_sqrt() -> Result<()> {
     let mut ctx = create_ctx()?;
     register_aggregate_csv(&mut ctx).await?;
@@ -4012,6 +4046,8 @@ macro_rules! test_expression {
 async fn test_boolean_expressions() -> Result<()> {
     test_expression!("true", "true");
     test_expression!("false", "false");
+    test_expression!("false = false", "true");
+    test_expression!("true = false", "false");
     Ok(())
 }
 
