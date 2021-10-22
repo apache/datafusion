@@ -118,7 +118,8 @@ macro_rules! compute_utf8_op_scalar {
             )?))
         } else {
             Err(DataFusionError::Internal(format!(
-                "compute_utf8_op_scalar failed to cast literal value {}",
+                "compute_utf8_op_scalar for '{}' failed to cast literal value {}",
+                stringify!($OP),
                 $RIGHT
             )))
         }
@@ -171,8 +172,8 @@ macro_rules! binary_string_array_op_scalar {
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
             DataType::Utf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, StringArray),
             other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for scalar operation on string array",
-                other
+                "Data type {:?} not supported for scalar operation '{}' on string array",
+                other, stringify!($OP)
             ))),
         };
         Some(result)
@@ -184,8 +185,8 @@ macro_rules! binary_string_array_op {
         match $LEFT.data_type() {
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
             other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for binary operation on string arrays",
-                other
+                "Data type {:?} not supported for binary operation '{}' on string arrays",
+                other, stringify!($OP)
             ))),
         }
     }};
@@ -208,8 +209,8 @@ macro_rules! binary_primitive_array_op {
             DataType::Float32 => compute_op!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_op!($LEFT, $RIGHT, $OP, Float64Array),
             other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for binary operation on primitive arrays",
-                other
+                "Data type {:?} not supported for binary operation '{}' on primitive arrays",
+                other, stringify!($OP)
             ))),
         }
     }};
@@ -232,8 +233,8 @@ macro_rules! binary_primitive_array_op_scalar {
             DataType::Float32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float64Array),
             other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for scalar operation on primitive array",
-                other
+                "Data type {:?} not supported for scalar operation '{}' on primitive array",
+                other, stringify!($OP)
             ))),
         };
         Some(result)
@@ -276,8 +277,8 @@ macro_rules! binary_array_op_scalar {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, Date64Array)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for scalar operation on dyn array",
-                other
+                "Data type {:?} not supported for scalar operation '{}' on dyn array",
+                other, stringify!($OP)
             ))),
         };
         Some(result)
@@ -320,8 +321,8 @@ macro_rules! binary_array_op {
                 compute_op!($LEFT, $RIGHT, $OP, Date64Array)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for binary operation on dyn arrays",
-                other
+                "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+                other, stringify!($OP)
             ))),
         }
     }};
@@ -352,8 +353,8 @@ macro_rules! binary_string_array_flag_op {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for binary_string_array_flag_op operation on string array",
-                other
+                "Data type {:?} not supported for binary_string_array_flag_op operation '{}' on string array",
+                other, stringify!($OP)
             ))),
         }
     }};
@@ -394,8 +395,8 @@ macro_rules! binary_string_array_flag_op_scalar {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for binary_string_array_flag_op_scalar operation on string array",
-                other
+                "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
+                other, stringify!($OP)
             ))),
         };
         Some(result)
@@ -420,8 +421,8 @@ macro_rules! compute_utf8_flag_op_scalar {
             Ok(Arc::new(array))
         } else {
             Err(DataFusionError::Internal(format!(
-                "compute_utf8_flag_op_scalar failed to cast literal value {}",
-                $RIGHT
+                "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
+                $RIGHT, stringify!($OP)
             )))
         }
     }};

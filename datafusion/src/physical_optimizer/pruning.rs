@@ -1382,7 +1382,7 @@ mod tests {
         let result = p.prune(&statistics).unwrap_err();
         assert!(
             result.to_string().contains(
-                "Data type Boolean not supported for scalar operation on dyn array"
+                "Data type Boolean not supported for scalar operation 'lt_eq' on dyn array"
             ),
             "{}",
             result
@@ -1399,7 +1399,7 @@ mod tests {
         let result = p.prune(&statistics).unwrap_err();
         assert!(
             result.to_string().contains(
-                "Data type Boolean not supported for scalar operation on dyn array"
+                "Data type Boolean not supported for scalar operation 'lt_eq' on dyn array"
             ),
             "{}",
             result
