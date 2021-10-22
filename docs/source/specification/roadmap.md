@@ -107,13 +107,13 @@ remain language-agnostic so that executors can be built in languages other than 
 ## Move query scheduler into DataFusion
 
 The Ballista scheduler has some advantages over DataFusion query execution because it doesn't try to eagerly execute
-the entire query at once but breaks it down into a directionally acyclic graph (DAG) stages executes a configurable
-number of stages and tasks concurrently. It should be possible to push some of this logic down to DataFusion so that
-the same scheduler can be used to scale across cores in-process and across nodes in a cluster.
+the entire query at once but breaks it down into a directionally-acyclic graph (DAG) of stages and executes a
+configurable number of stages and tasks concurrently. It should be possible to push some of this logic down to
+DataFusion so that the same scheduler can be used to scale across cores in-process and across nodes in a cluster.
 
 ## Implement execution-time cost-based optimizations based on statistics
 
-After the execution of a query stage, accurate statistics are available about the resulting data. These statistics
+After the execution of a query stage, accurate statistics are available for the resulting data. These statistics
 could be leveraged by the scheduler to optimize the query during execution. For example, when performing a hash join
 it is desirable to load the smaller side of the join into memory and in some cases we cannot predict which side will
 be smaller until execution time.
