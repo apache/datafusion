@@ -492,6 +492,30 @@ async fn select_values_list() -> Result<()> {
         assert_batches_eq!(expected, &actual);
     }
     {
+        let sql = "VALUES (-1)";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| -1      |",
+            "+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES (2+1,2-1,2>1)";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+---------+---------+",
+            "| column1 | column2 | column3 |",
+            "+---------+---------+---------+",
+            "| 3       | 1       | true    |",
+            "+---------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
         let sql = "VALUES";
         let plan = ctx.create_logical_plan(sql);
         assert!(plan.is_err());

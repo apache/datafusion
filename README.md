@@ -159,6 +159,7 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
 - [x] Common math functions
 - [x] cast
 - [x] try_cast
+- [x] [`VALUES` lists](https://www.postgresql.org/docs/current/queries-values.html)
 - Postgres compatible String functions
   - [x] ascii
   - [x] bit_length
@@ -191,7 +192,7 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
 - Miscellaneous/Boolean functions
   - [x] nullif
 - Approximation functions
-  - [ ] approx_distinct
+  - [x] approx_distinct
 - Common date/time functions
   - [ ] Basic date functions
   - [ ] Basic time functions

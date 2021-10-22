@@ -24,6 +24,7 @@ use crate::physical_plan::{
     Partitioning, PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
+use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -48,10 +49,17 @@ impl ValuesExec {
         if data.is_empty() {
             return Err(DataFusionError::Plan("Values list cannot be empty".into()));
         }
-        // we have this empty batch as a placeholder to satisfy evaluation argument
-        let batch = RecordBatch::new_empty(schema.clone());
         let n_row = data.len();
         let n_col = schema.fields().len();
+        // we have this single row, null, typed batch as a placeholder to satisfy evaluation argument
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            schema
+                .fields()
+                .iter()
+                .map(|field| new_null_array(field.data_type(), 1))
+                .collect::<Vec<_>>(),
+        )?;
         let arr = (0..n_col)
             .map(|j| {
                 (0..n_row)
@@ -59,9 +67,15 @@ impl ValuesExec {
                         let r = data[i][j].evaluate(&batch);
                         match r {
                             Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
-                            Ok(ColumnarValue::Array(_)) => Err(DataFusionError::Plan(
-                                "Cannot have array values in a values list".into(),
-                            )),
+                            Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
+                                ScalarValue::try_from_array(&a, 0)
+                            }
+                            Ok(ColumnarValue::Array(a)) => {
+                                Err(DataFusionError::Plan(format!(
+                                    "Cannot have array values {:?} in a values list",
+                                    a
+                                )))
+                            }
                             Err(err) => Err(err),
                         }
                     })
