@@ -675,6 +675,26 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
     fn try_into(self) -> Result<protobuf::LogicalPlanNode, Self::Error> {
         use protobuf::logical_plan_node::LogicalPlanType;
         match self {
+            LogicalPlan::Values { values, .. } => {
+                let n_cols = if values.is_empty() {
+                    0
+                } else {
+                    values[0].len()
+                } as u64;
+                let values_list = values
+                    .iter()
+                    .flatten()
+                    .map(|v| v.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Values(
+                        protobuf::ValuesNode {
+                            n_cols,
+                            values_list,
+                        },
+                    )),
+                })
+            }
             LogicalPlan::TableScan {
                 table_name,
                 source,

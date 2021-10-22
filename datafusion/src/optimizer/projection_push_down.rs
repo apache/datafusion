@@ -431,6 +431,7 @@ fn optimize_plan(
         | LogicalPlan::Filter { .. }
         | LogicalPlan::Repartition { .. }
         | LogicalPlan::EmptyRelation { .. }
+        | LogicalPlan::Values { .. }
         | LogicalPlan::Sort { .. }
         | LogicalPlan::CreateExternalTable { .. }
         | LogicalPlan::CrossJoin { .. }

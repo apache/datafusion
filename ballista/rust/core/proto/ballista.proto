@@ -255,6 +255,7 @@ message LogicalPlanNode {
     WindowNode window = 13;
     AnalyzeNode analyze = 14;
     CrossJoinNode cross_join = 15;
+    ValuesNode values = 16;
   }
 }
 
@@ -316,12 +317,12 @@ message SelectionNode {
   LogicalExprNode expr = 2;
 }
 
-message SortNode{
+message SortNode {
   LogicalPlanNode input = 1;
   repeated LogicalExprNode expr = 2;
 }
 
-message RepartitionNode{
+message RepartitionNode {
   LogicalPlanNode input = 1;
   oneof partition_method {
     uint64 round_robin = 2;
@@ -334,11 +335,11 @@ message HashRepartition {
   uint64 partition_count = 2;
 }
 
-message EmptyRelationNode{
+message EmptyRelationNode {
   bool produce_one_row = 1;
 }
 
-message CreateExternalTableNode{
+message CreateExternalTableNode {
   string name = 1;
   string location = 2;
   FileType file_type = 3;
@@ -346,7 +347,14 @@ message CreateExternalTableNode{
   DfSchema schema = 5;
 }
 
-enum FileType{
+// a node containing data for defining values list. unlike in SQL where it's two dimensional, here
+// the list is flattened, and with the field n_cols it can be parsed and partitioned into rows
+message ValuesNode {
+  uint64 n_cols = 1;
+  repeated LogicalExprNode values_list = 2;
+}
+
+enum FileType {
   NdJson = 0;
   Parquet = 1;
   CSV = 2;

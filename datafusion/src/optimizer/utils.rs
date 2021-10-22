@@ -124,6 +124,13 @@ pub fn from_plan(
             schema: schema.clone(),
             alias: alias.clone(),
         }),
+        LogicalPlan::Values { schema, .. } => Ok(LogicalPlan::Values {
+            schema: schema.clone(),
+            values: expr
+                .chunks_exact(schema.fields().len())
+                .map(|s| s.to_vec())
+                .collect::<Vec<_>>(),
+        }),
         LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter {
             predicate: expr[0].clone(),
             input: Arc::new(inputs[0].clone()),
