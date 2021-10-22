@@ -35,6 +35,7 @@ use crate::arrow::util::pretty;
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
 };
+use crate::sql::utils::find_window_exprs;
 use async_trait::async_trait;
 
 /// Implementation of DataFrame API
@@ -75,10 +76,17 @@ impl DataFrame for DataFrameImpl {
 
     /// Create a projection based on arbitrary expressions
     fn select(&self, expr_list: Vec<Expr>) -> Result<Arc<dyn DataFrame>> {
-        let plan = LogicalPlanBuilder::from(self.to_logical_plan())
-            .project(expr_list)?
-            .build()?;
-        Ok(Arc::new(DataFrameImpl::new(self.ctx_state.clone(), &plan)))
+        let window_func_exprs = find_window_exprs(&expr_list);
+        let plan = if window_func_exprs.is_empty() {
+            self.to_logical_plan()
+        } else {
+            LogicalPlanBuilder::window_plan(self.to_logical_plan(), window_func_exprs)?
+        };
+        let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
+        Ok(Arc::new(DataFrameImpl::new(
+            self.ctx_state.clone(),
+            &project_plan,
+        )))
     }
 
     /// Create a filter based on a predicate expression
@@ -233,7 +241,7 @@ mod tests {
     use crate::execution::options::CsvReadOptions;
     use crate::logical_plan::*;
     use crate::physical_plan::functions::Volatility;
-    use crate::physical_plan::ColumnarValue;
+    use crate::physical_plan::{window_functions, ColumnarValue};
     use crate::{assert_batches_sorted_eq, execution::context::ExecutionContext};
     use crate::{physical_plan::functions::ScalarFunctionImplementation, test};
     use arrow::datatypes::DataType;
@@ -267,6 +275,31 @@ mod tests {
         // the two plans should be identical
         assert_same_plan(&plan, &sql_plan);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn select_with_window_exprs() -> Result<()> {
+        // build plan using Table API
+        let t = test_table().await?;
+        let first_row = Expr::WindowFunction {
+            fun: window_functions::WindowFunction::BuiltInWindowFunction(
+                window_functions::BuiltInWindowFunction::FirstValue,
+            ),
+            args: vec![col("aggregate_test_100.c1")],
+            partition_by: vec![col("aggregate_test_100.c2")],
+            order_by: vec![],
+            window_frame: None,
+        };
+        let t2 = t.select(vec![col("c1"), first_row])?;
+        let plan = t2.to_logical_plan();
+
+        let sql_plan = create_plan(
+            "select c1, first_value(c1) over (partition by c2) from aggregate_test_100",
+        )
+        .await?;
+
+        assert_same_plan(&plan, &sql_plan);
         Ok(())
     }
 
