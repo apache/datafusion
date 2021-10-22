@@ -60,10 +60,12 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 if let Some((non_null_rows, name)) =
                     take_optimizable_count_with_nulls(&**expr, &stats)
                 {
+                    println!("Using count with nulls opt");
                     projections.push((expressions::lit(non_null_rows), name.to_owned()));
                 } else if let Some((num_rows, name)) =
                     take_optimizable_count(&**expr, &stats)
                 {
+                    println!("Using count opt");
                     projections.push((expressions::lit(num_rows), name.to_owned()));
                 } else if let Some((min, name)) = take_optimizable_min(&**expr, &stats) {
                     projections.push((expressions::lit(min), name.to_owned()));
@@ -169,6 +171,10 @@ fn take_optimizable_count_with_nulls(
         &stats.column_statistics,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
+        println!(
+            "Num rows: {}\nCol Stats: {:?}\nExpr: {:?}",
+            num_rows, col_stats, casted_expr
+        );
         if casted_expr.expressions().len() == 1 {
             // TODO optimize with exprs other than Column
             if let Some(col_expr) = casted_expr.expressions()[0]
@@ -310,21 +316,23 @@ mod tests {
     }
 
     /// Checks that the count optimization was applied and we still get the right result
-    async fn assert_count_optim_success(plan: HashAggregateExec) -> Result<()> {
+    async fn assert_count_optim_success(
+        plan: HashAggregateExec,
+        nulls: bool,
+    ) -> Result<()> {
         let conf = ExecutionConfig::new();
         let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
+        println!("{:?}", optimized);
+
+        let (col, count) = match nulls {
+            false => (Field::new("COUNT(Uint8(1))", DataType::UInt64, false), 3),
+            true => (Field::new("COUNT(a)", DataType::UInt64, false), 2),
+        };
 
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
         let result = common::collect(optimized.execute(0).await?).await?;
-        assert_eq!(
-            result[0].schema(),
-            Arc::new(Schema::new(vec![Field::new(
-                "COUNT(Uint8(1))",
-                DataType::UInt64,
-                false
-            )]))
-        );
+        assert_eq!(result[0].schema(), Arc::new(Schema::new(vec![col])));
         assert_eq!(
             result[0]
                 .column(0)
@@ -332,7 +340,7 @@ mod tests {
                 .downcast_ref::<UInt64Array>()
                 .unwrap()
                 .values(),
-            &[3]
+            &[count]
         );
         Ok(())
     }
@@ -340,6 +348,14 @@ mod tests {
     fn count_expr() -> Arc<dyn AggregateExpr> {
         Arc::new(Count::new(
             expressions::lit(ScalarValue::UInt8(Some(1))),
+            "my_count_alias",
+            DataType::UInt64,
+        ))
+    }
+
+    fn count_expr_with_nulls(schema: &Schema) -> Arc<dyn AggregateExpr> {
+        Arc::new(Count::new(
+            expressions::col("a", schema).unwrap(),
             "my_count_alias",
             DataType::UInt64,
         ))
@@ -367,7 +383,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg).await?;
+        assert_count_optim_success(final_agg, false).await?;
 
         Ok(())
     }
@@ -381,20 +397,22 @@ mod tests {
         let partial_agg = HashAggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr()],
+            vec![count_expr_with_nulls(&schema)],
             source,
             Arc::clone(&schema),
         )?;
 
+        // println!("{:?}", partial_agg);
         let final_agg = HashAggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr()],
+            vec![count_expr_with_nulls(&schema)],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
+        // println!("{:?}", final_agg);
 
-        assert_count_optim_success(final_agg).await?;
+        assert_count_optim_success(final_agg, true).await?;
 
         Ok(())
     }
@@ -423,7 +441,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg).await?;
+        assert_count_optim_success(final_agg, false).await?;
 
         Ok(())
     }
@@ -436,7 +454,7 @@ mod tests {
         let partial_agg = HashAggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr()],
+            vec![count_expr_with_nulls(&schema)],
             source,
             Arc::clone(&schema),
         )?;
@@ -447,12 +465,12 @@ mod tests {
         let final_agg = HashAggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr()],
+            vec![count_expr_with_nulls(&schema)],
             Arc::new(coalesce),
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg).await?;
+        assert_count_optim_success(final_agg, true).await?;
 
         Ok(())
     }
