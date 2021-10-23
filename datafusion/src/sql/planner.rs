@@ -1071,9 +1071,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn parse_sql_binary_op(
         &self,
-        left: &Box<SQLExpr>,
+        left: &SQLExpr,
         op: &BinaryOperator,
-        right: &Box<SQLExpr>,
+        right: &SQLExpr,
         schema: &DFSchema,
     ) -> Result<Expr> {
         let operator = match *op {
@@ -1112,7 +1112,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn parse_sql_unary_op(
         &self,
         op: &UnaryOperator,
-        expr: &Box<SQLExpr>,
+        expr: &SQLExpr,
         schema: &DFSchema,
     ) -> Result<Expr> {
         match op {
@@ -1121,7 +1121,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
             UnaryOperator::Plus => Ok(self.sql_expr_to_logical_expr(expr, schema)?),
             UnaryOperator::Minus => {
-                match expr.as_ref() {
+                match expr {
                     // optimization: if it's a number literal, we apply the negative operator
                     // here directly to calculate the new literal.
                     SQLExpr::Value(Value::Number(n,_)) => match n.parse::<i64>() {
