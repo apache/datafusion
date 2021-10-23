@@ -112,8 +112,8 @@ impl LogicalPlanBuilder {
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
-    /// `value`. See the [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html) 
-    /// documentation for more details. 
+    /// `value`. See the [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
+    /// documentation for more details.
     ///
     /// By default, it assigns the names column1, column2, etc. to the columns of a VALUES table.
     /// The column names are not specified by the SQL standard and different database systems do it differently,

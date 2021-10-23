@@ -203,7 +203,7 @@ pub enum LogicalPlan {
         /// Whether the CSV file contains a header
         has_header: bool,
     },
-    /// Values expression. See 
+    /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
     Values {
@@ -719,12 +719,13 @@ impl LogicalPlan {
                 match &*self.0 {
                     LogicalPlan::EmptyRelation { .. } => write!(f, "EmptyRelation"),
                     LogicalPlan::Values { ref values, .. } => {
-                        let str_values : Vec<_> = values
+                        let str_values: Vec<_> = values
                             .iter()
                             // limit to only 5 values to avoid horrible display
                             .take(5)
                             .map(|row| {
-                                let item = row.iter()
+                                let item = row
+                                    .iter()
                                     .map(|expr| expr.to_string())
                                     .collect::<Vec<_>>()
                                     .join(", ");
