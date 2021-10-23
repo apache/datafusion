@@ -671,6 +671,20 @@ async fn select_values_list() -> Result<()> {
         ];
         assert_batches_eq!(expected, &actual);
     }
+    {
+        let sql = "EXPLAIN VALUES (1, 'a', -1, 1.1),(NULL, 'b', -3, 0.5)";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------------+-----------------------------------------------------------------------------------------------------------+",
+            "| plan_type     | plan                                                                                                      |",
+            "+---------------+-----------------------------------------------------------------------------------------------------------+",
+            "| logical_plan  | Values: (Int64(1), Utf8(\"a\"), Int64(-1), Float64(1.1)), (Int64(NULL), Utf8(\"b\"), Int64(-3), Float64(0.5)) |",
+            "| physical_plan | ValuesExec                                                                                                |",
+            "|               |                                                                                                           |",
+            "+---------------+-----------------------------------------------------------------------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
     Ok(())
 }
 
