@@ -49,7 +49,7 @@ use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query, Select, SelectItem,
     SetExpr, SetOperator, ShowStatementFilter, TableFactor, TableWithJoins,
-    TrimWhereField, UnaryOperator, Value,
+    TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{OrderByExpr, Statement};
@@ -160,6 +160,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         match set_expr {
             SetExpr::Select(s) => self.select_to_plan(s.as_ref(), ctes, alias),
+            SetExpr::Values(v) => self.sql_values_to_plan(v),
             SetExpr::SetOperation {
                 op,
                 left,
@@ -1066,6 +1067,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             FunctionArg::Unnamed(value) => self.sql_expr_to_logical_expr(value, schema),
         }
+    }
+
+    fn sql_values_to_plan(&self, values: &SQLValues) -> Result<LogicalPlan> {
+        let values = values
+            .0
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|v| match v {
+                        SQLExpr::Value(Value::Number(n, _)) => match n.parse::<i64>() {
+                            Ok(n) => Ok(lit(n)),
+                            Err(_) => Ok(lit(n.parse::<f64>().unwrap())),
+                        },
+                        SQLExpr::Value(Value::SingleQuotedString(ref s)) => {
+                            Ok(lit(s.clone()))
+                        }
+                        SQLExpr::Value(Value::Null) => {
+                            Ok(Expr::Literal(ScalarValue::Utf8(None)))
+                        }
+                        SQLExpr::Value(Value::Boolean(n)) => Ok(lit(*n)),
+                        other => Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported value {:?} in a values list expression",
+                            other
+                        ))),
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        LogicalPlanBuilder::values(values)?.build()
     }
 
     fn sql_expr_to_logical_expr(&self, sql: &SQLExpr, schema: &DFSchema) -> Result<Expr> {

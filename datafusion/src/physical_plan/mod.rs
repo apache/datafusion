@@ -645,5 +645,6 @@ pub mod udf;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
 pub mod union;
+pub mod values;
 pub mod window_functions;
 pub mod windows;

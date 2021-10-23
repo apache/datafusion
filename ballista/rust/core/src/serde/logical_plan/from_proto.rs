@@ -60,6 +60,31 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
             ))
         })?;
         match plan {
+            LogicalPlanType::Values(values) => {
+                let n_cols = values.n_cols as usize;
+                let values: Vec<Vec<Expr>> = if values.values_list.is_empty() {
+                    Ok(Vec::new())
+                } else if values.values_list.len() % n_cols != 0 {
+                    Err(BallistaError::General(format!(
+                        "Invalid values list length, expect {} to be divisible by {}",
+                        values.values_list.len(),
+                        n_cols
+                    )))
+                } else {
+                    values
+                        .values_list
+                        .chunks_exact(n_cols)
+                        .map(|r| {
+                            r.iter()
+                                .map(|v| v.try_into())
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                }?;
+                LogicalPlanBuilder::values(values)?
+                    .build()
+                    .map_err(|e| e.into())
+            }
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan = convert_box_required!(projection.input)?;
                 let x: Vec<Expr> = projection
