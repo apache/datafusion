@@ -20,7 +20,7 @@
 use super::analyze::AnalyzeExec;
 use super::{
     aggregates, empty::EmptyExec, expressions::binary, functions,
-    hash_join::PartitionMode, udaf, union::UnionExec, windows,
+    hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::{
@@ -322,6 +322,30 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     source.scan(projection, batch_size, &filters, *limit).await
+                }
+                LogicalPlan::Values {
+                    values,
+                    schema,
+                } => {
+                    let exec_schema = schema.as_ref().to_owned().into();
+                    let exprs = values.iter()
+                        .map(|row| {
+                            row.iter().map(|expr|{
+                                self.create_physical_expr(
+                                    expr,
+                                    schema,
+                                    &exec_schema,
+                                    ctx_state,
+                                )
+                            })
+                            .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let value_exec = ValuesExec::try_new(
+                        SchemaRef::new(exec_schema),
+                        exprs
+                    )?;
+                    Ok(Arc::new(value_exec))
                 }
                 LogicalPlan::Window {
                     input, window_expr, ..

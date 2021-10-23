@@ -203,6 +203,15 @@ pub enum LogicalPlan {
         /// Whether the CSV file contains a header
         has_header: bool,
     },
+    /// Values expression. See
+    /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
+    /// documentation for more details.
+    Values {
+        /// The table schema
+        schema: DFSchemaRef,
+        /// Values
+        values: Vec<Vec<Expr>>,
+    },
     /// Produces a relation with string representations of
     /// various parts of the plan
     Explain {
@@ -237,6 +246,7 @@ impl LogicalPlan {
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
             LogicalPlan::EmptyRelation { schema, .. } => schema,
+            LogicalPlan::Values { schema, .. } => schema,
             LogicalPlan::TableScan {
                 projected_schema, ..
             } => projected_schema,
@@ -263,6 +273,7 @@ impl LogicalPlan {
             LogicalPlan::TableScan {
                 projected_schema, ..
             } => vec![projected_schema],
+            LogicalPlan::Values { schema, .. } => vec![schema],
             LogicalPlan::Window { input, schema, .. }
             | LogicalPlan::Aggregate { input, schema, .. }
             | LogicalPlan::Projection { input, schema, .. } => {
@@ -315,6 +326,9 @@ impl LogicalPlan {
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
         match self {
             LogicalPlan::Projection { expr, .. } => expr.clone(),
+            LogicalPlan::Values { values, .. } => {
+                values.iter().flatten().cloned().collect()
+            }
             LogicalPlan::Filter { predicate, .. } => vec![predicate.clone()],
             LogicalPlan::Repartition {
                 partitioning_scheme,
@@ -369,6 +383,7 @@ impl LogicalPlan {
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
+            | LogicalPlan::Values { .. }
             | LogicalPlan::CreateExternalTable { .. } => vec![],
         }
     }
@@ -515,6 +530,7 @@ impl LogicalPlan {
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
+            | LogicalPlan::Values { .. }
             | LogicalPlan::CreateExternalTable { .. } => true,
         };
         if !recurse {
@@ -702,6 +718,25 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match &*self.0 {
                     LogicalPlan::EmptyRelation { .. } => write!(f, "EmptyRelation"),
+                    LogicalPlan::Values { ref values, .. } => {
+                        let str_values: Vec<_> = values
+                            .iter()
+                            // limit to only 5 values to avoid horrible display
+                            .take(5)
+                            .map(|row| {
+                                let item = row
+                                    .iter()
+                                    .map(|expr| expr.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                format!("({})", item)
+                            })
+                            .collect();
+
+                        let elipse = if values.len() > 5 { "..." } else { "" };
+                        write!(f, "Values: {}{}", str_values.join(", "), elipse)
+                    }
+
                     LogicalPlan::TableScan {
                         ref table_name,
                         ref projection,

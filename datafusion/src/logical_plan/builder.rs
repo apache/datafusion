@@ -17,16 +17,6 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
-use arrow::{
-    datatypes::{Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
-
 use crate::datasource::{
     empty::EmptyTable,
     file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
@@ -37,6 +27,16 @@ use crate::datasource::{
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::ToStringifiedPlan;
 use crate::prelude::*;
+use crate::scalar::ScalarValue;
+use arrow::{
+    datatypes::{DataType, Schema, SchemaRef},
+    record_batch::RecordBatch,
+};
+use std::convert::TryFrom;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
@@ -109,6 +109,80 @@ impl LogicalPlanBuilder {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
         })
+    }
+
+    /// Create a values list based relation, and the schema is inferred from data, consuming
+    /// `value`. See the [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
+    /// documentation for more details.
+    ///
+    /// By default, it assigns the names column1, column2, etc. to the columns of a VALUES table.
+    /// The column names are not specified by the SQL standard and different database systems do it differently,
+    /// so it's usually better to override the default names with a table alias list.
+    pub fn values(mut values: Vec<Vec<Expr>>) -> Result<Self> {
+        if values.is_empty() {
+            return Err(DataFusionError::Plan("Values list cannot be empty".into()));
+        }
+        let n_cols = values[0].len();
+        if n_cols == 0 {
+            return Err(DataFusionError::Plan(
+                "Values list cannot be zero length".into(),
+            ));
+        }
+        let empty_schema = DFSchema::empty();
+        let mut field_types: Vec<Option<DataType>> = Vec::with_capacity(n_cols);
+        for _ in 0..n_cols {
+            field_types.push(None);
+        }
+        // hold all the null holes so that we can correct their data types later
+        let mut nulls: Vec<(usize, usize)> = Vec::new();
+        for (i, row) in values.iter().enumerate() {
+            if row.len() != n_cols {
+                return Err(DataFusionError::Plan(format!(
+                    "Inconsistent data length across values list: got {} values in row {} but expected {}",
+                    row.len(),
+                    i,
+                    n_cols
+                )));
+            }
+            field_types = row
+                .iter()
+                .enumerate()
+                .map(|(j, expr)| {
+                    if let Expr::Literal(ScalarValue::Utf8(None)) = expr {
+                        nulls.push((i, j));
+                        Ok(field_types[j].clone())
+                    } else {
+                        let data_type = expr.get_type(&empty_schema)?;
+                        if let Some(prev_data_type) = &field_types[j] {
+                            if prev_data_type != &data_type {
+                                let err = format!("Inconsistent data type across values list at row {} column {}", i, j);
+                                return Err(DataFusionError::Plan(err));
+                            }
+                        }
+                        Ok(Some(data_type))
+                    }
+                })
+                .collect::<Result<Vec<Option<DataType>>>>()?;
+        }
+        let fields = field_types
+            .iter()
+            .enumerate()
+            .map(|(j, data_type)| {
+                // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
+                let name = &format!("column{}", j + 1);
+                DFField::new(
+                    None,
+                    name,
+                    data_type.clone().unwrap_or(DataType::Utf8),
+                    true,
+                )
+            })
+            .collect::<Vec<_>>();
+        for (i, j) in nulls {
+            values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
+        }
+        let schema = DFSchemaRef::new(DFSchema::new(fields)?);
+        Ok(Self::from(LogicalPlan::Values { schema, values }))
     }
 
     /// Scan a memory data source
