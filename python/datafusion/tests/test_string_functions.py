@@ -18,7 +18,7 @@
 import pyarrow as pa
 import pytest
 
-from datafusion import ExecutionContext
+from datafusion import ExecutionContext, column, literal
 from datafusion import functions as f
 
 
@@ -36,7 +36,7 @@ def df():
 
 
 def test_string_functions(df):
-    df = df.select(f.md5(f.col("a")), f.lower(f.col("a")))
+    df = df.select(f.md5(column("a")), f.lower(column("a")))
     result = df.collect()
     assert len(result) == 1
     result = result[0]
@@ -51,12 +51,11 @@ def test_string_functions(df):
 
 
 def test_hash_functions(df):
-    df = df.select(
-        *[
-            f.digest(f.col("a"), f.lit(m))
-            for m in ("md5", "sha256", "sha512", "blake2s", "blake3")
-        ]
-    )
+    exprs = [
+        f.digest(column("a"), literal(m))
+        for m in ("md5", "sha256", "sha512", "blake2s", "blake3")
+    ]
+    df = df.select(*exprs)
     result = df.collect()
     assert len(result) == 1
     result = result[0]

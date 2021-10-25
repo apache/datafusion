@@ -15,4 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import pyarrow as pa
+
 from .internals import *  # noqa
+from .internals import literal as _literal
+
+
+def literal(value):
+    if not isinstance(value, pa.Scalar):
+        value = pa.scalar(value)
+    return _literal(value)

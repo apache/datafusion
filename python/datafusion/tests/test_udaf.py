@@ -21,7 +21,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 
-from datafusion import ExecutionContext
+from datafusion import ExecutionContext, column
 from datafusion import functions as f
 
 
@@ -71,7 +71,7 @@ def test_aggregate(df):
         f.Volatility.immutable(),
     )
 
-    df = df.aggregate([], [udaf(f.col("a"))])
+    df = df.aggregate([], [udaf(column("a"))])
 
     # execute and collect the first (and only) batch
     result = df.collect()[0]
@@ -88,7 +88,7 @@ def test_group_by(df):
         f.Volatility.immutable(),
     )
 
-    df = df.aggregate([f.col("b")], [udaf(f.col("a"))])
+    df = df.aggregate([column("b")], [udaf(column("a"))])
 
     batches = df.collect()
     arrays = [batch.column(1) for batch in batches]

@@ -18,7 +18,7 @@
 import pyarrow as pa
 import pytest
 
-from datafusion import DataFrame, ExecutionContext
+from datafusion import DataFrame, ExecutionContext, literal, column
 from datafusion import functions as f
 
 
@@ -37,8 +37,8 @@ def df():
 
 def test_select(df):
     df = df.select(
-        f.col("a") + f.col("b"),
-        f.col("a") - f.col("b"),
+        column("a") + column("b"),
+        column("a") - column("b"),
     )
 
     # execute and collect the first (and only) batch
@@ -50,9 +50,9 @@ def test_select(df):
 
 def test_filter(df):
     df = df.select(
-        f.col("a") + f.col("b"),
-        f.col("a") - f.col("b"),
-    ).filter(f.col("a") > f.lit(2))
+        column("a") + column("b"),
+        column("a") - column("b"),
+    ).filter(column("a") > literal(2))
 
     # execute and collect the first (and only) batch
     result = df.collect()[0]
@@ -62,7 +62,7 @@ def test_filter(df):
 
 
 def test_sort(df):
-    df = df.sort(f.col("b").sort(ascending=False))
+    df = df.sort(column("b").sort(ascending=False))
 
     table = pa.Table.from_batches(df.collect())
     expected = {"a": [3, 2, 1], "b": [6, 5, 4]}
@@ -89,7 +89,7 @@ def test_udf(df):
         f.Volatility.immutable(),
     )
 
-    df = df.select(udf(f.col("a")))
+    df = df.select(udf(column("a")))
     result = df.collect()[0].column(0)
 
     assert result == pa.array([False, False, False])
@@ -111,7 +111,7 @@ def test_join():
     df1 = ctx.create_dataframe([[batch]])
 
     df = df.join(df1, on="a", how="inner")
-    df = df.sort(f.col("a").sort(ascending=True))
+    df = df.sort(column("a").sort(ascending=True))
     table = pa.Table.from_batches(df.collect())
 
     expected = {"a": [1, 2], "c": [8, 10], "b": [4, 5]}

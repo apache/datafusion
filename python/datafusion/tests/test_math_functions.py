@@ -19,7 +19,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from datafusion import ExecutionContext
+from datafusion import ExecutionContext, literal, column
 from datafusion import functions as f
 
 
@@ -35,7 +35,7 @@ def df():
 
 def test_math_functions(df):
     values = np.array([0.1, -0.7, 0.55])
-    col_v = f.col("value")
+    col_v = column("value")
     df = df.select(
         f.abs(col_v),
         f.sin(col_v),
@@ -44,9 +44,9 @@ def test_math_functions(df):
         f.asin(col_v),
         f.acos(col_v),
         f.exp(col_v),
-        f.ln(col_v + f.lit(1)),
-        f.log2(col_v + f.lit(1)),
-        f.log10(col_v + f.lit(1)),
+        f.ln(col_v + literal(pa.scalar(1))),
+        f.log2(col_v + literal(pa.scalar(1))),
+        f.log10(col_v + literal(pa.scalar(1))),
         f.random(),
     )
     result = df.collect()

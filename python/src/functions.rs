@@ -32,23 +32,6 @@ use crate::{
     udaf, udf,
 };
 
-/// PyExpr representing a column on the existing plan.
-/// TODO(kszucs): remove col and lit
-#[pyfunction]
-#[pyo3(text_signature = "(name)")]
-fn col(name: &str) -> PyExpr {
-    PyExpr {
-        expr: logical_plan::col(name),
-    }
-}
-
-/// PyExpr representing a constant value
-#[pyfunction]
-#[pyo3(text_signature = "(value)")]
-fn lit(value: i32) -> PyExpr {
-    logical_plan::lit(value).into()
-}
-
 #[pyfunction]
 fn array(value: Vec<PyExpr>) -> PyExpr {
     PyExpr {
@@ -323,6 +306,8 @@ fn udaf(
 }
 
 pub fn init(m: &PyModule) -> PyResult<()> {
+    // TODO(kszucs): implement FromPyObject to PyVolatility
+    m.add_class::<PyVolatility>()?;
     m.add_wrapped(wrap_pyfunction!(abs))?;
     m.add_wrapped(wrap_pyfunction!(acos))?;
     m.add_wrapped(wrap_pyfunction!(array))?;
@@ -335,7 +320,6 @@ pub fn init(m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(ceil))?;
     m.add_wrapped(wrap_pyfunction!(character_length))?;
     m.add_wrapped(wrap_pyfunction!(chr))?;
-    m.add_wrapped(wrap_pyfunction!(col))?;
     m.add_wrapped(wrap_pyfunction!(concat_ws))?;
     m.add_wrapped(wrap_pyfunction!(concat))?;
     m.add_wrapped(wrap_pyfunction!(cos))?;
@@ -346,7 +330,6 @@ pub fn init(m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(in_list))?;
     m.add_wrapped(wrap_pyfunction!(initcap))?;
     m.add_wrapped(wrap_pyfunction!(left))?;
-    m.add_wrapped(wrap_pyfunction!(lit))?;
     m.add_wrapped(wrap_pyfunction!(ln))?;
     m.add_wrapped(wrap_pyfunction!(log10))?;
     m.add_wrapped(wrap_pyfunction!(log2))?;
