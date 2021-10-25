@@ -1069,17 +1069,92 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    fn parse_sql_binary_op(
+        &self,
+        left: &SQLExpr,
+        op: &BinaryOperator,
+        right: &SQLExpr,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        let operator = match *op {
+            BinaryOperator::Gt => Ok(Operator::Gt),
+            BinaryOperator::GtEq => Ok(Operator::GtEq),
+            BinaryOperator::Lt => Ok(Operator::Lt),
+            BinaryOperator::LtEq => Ok(Operator::LtEq),
+            BinaryOperator::Eq => Ok(Operator::Eq),
+            BinaryOperator::NotEq => Ok(Operator::NotEq),
+            BinaryOperator::Plus => Ok(Operator::Plus),
+            BinaryOperator::Minus => Ok(Operator::Minus),
+            BinaryOperator::Multiply => Ok(Operator::Multiply),
+            BinaryOperator::Divide => Ok(Operator::Divide),
+            BinaryOperator::Modulo => Ok(Operator::Modulo),
+            BinaryOperator::And => Ok(Operator::And),
+            BinaryOperator::Or => Ok(Operator::Or),
+            BinaryOperator::Like => Ok(Operator::Like),
+            BinaryOperator::NotLike => Ok(Operator::NotLike),
+            BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
+            BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
+            BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
+            BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported SQL binary operator {:?}",
+                op
+            ))),
+        }?;
+
+        Ok(Expr::BinaryExpr {
+            left: Box::new(self.sql_expr_to_logical_expr(left, schema)?),
+            op: operator,
+            right: Box::new(self.sql_expr_to_logical_expr(right, schema)?),
+        })
+    }
+
+    fn parse_sql_unary_op(
+        &self,
+        op: &UnaryOperator,
+        expr: &SQLExpr,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        match op {
+            UnaryOperator::Not => Ok(Expr::Not(Box::new(
+                self.sql_expr_to_logical_expr(expr, schema)?,
+            ))),
+            UnaryOperator::Plus => Ok(self.sql_expr_to_logical_expr(expr, schema)?),
+            UnaryOperator::Minus => {
+                match expr {
+                    // optimization: if it's a number literal, we apply the negative operator
+                    // here directly to calculate the new literal.
+                    SQLExpr::Value(Value::Number(n,_)) => match n.parse::<i64>() {
+                        Ok(n) => Ok(lit(-n)),
+                        Err(_) => Ok(lit(-n
+                            .parse::<f64>()
+                            .map_err(|_e| {
+                                DataFusionError::Internal(format!(
+                                    "negative operator can be only applied to integer and float operands, got: {}",
+                                n))
+                            })?)),
+                    },
+                    // not a literal, apply negative operator on expression
+                    _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(expr, schema)?))),
+                }
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported SQL unary operator {:?}",
+                op
+            ))),
+        }
+    }
+
     fn sql_values_to_plan(&self, values: &SQLValues) -> Result<LogicalPlan> {
+        // values should not be based on any other schema
+        let schema = DFSchema::empty();
         let values = values
             .0
             .iter()
             .map(|row| {
                 row.iter()
                     .map(|v| match v {
-                        SQLExpr::Value(Value::Number(n, _)) => match n.parse::<i64>() {
-                            Ok(n) => Ok(lit(n)),
-                            Err(_) => Ok(lit(n.parse::<f64>().unwrap())),
-                        },
+                        SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(n),
                         SQLExpr::Value(Value::SingleQuotedString(ref s)) => {
                             Ok(lit(s.clone()))
                         }
@@ -1087,6 +1162,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Ok(Expr::Literal(ScalarValue::Utf8(None)))
                         }
                         SQLExpr::Value(Value::Boolean(n)) => Ok(lit(*n)),
+                        SQLExpr::UnaryOp { ref op, ref expr } => {
+                            self.parse_sql_unary_op(op, expr, &schema)
+                        }
+                        SQLExpr::BinaryOp {
+                            ref left,
+                            ref op,
+                            ref right,
+                        } => self.parse_sql_binary_op(left, op, right, &schema),
                         other => Err(DataFusionError::NotImplemented(format!(
                             "Unsupported value {:?} in a values list expression",
                             other
@@ -1100,14 +1183,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn sql_expr_to_logical_expr(&self, sql: &SQLExpr, schema: &DFSchema) -> Result<Expr> {
         match sql {
-            SQLExpr::Value(Value::Number(n, _)) => match n.parse::<i64>() {
-                Ok(n) => Ok(lit(n)),
-                Err(_) => Ok(lit(n.parse::<f64>().unwrap())),
-            },
+            SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(n),
             SQLExpr::Value(Value::SingleQuotedString(ref s)) => Ok(lit(s.clone())),
-
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(*n)),
-
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Utf8(None))),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: functions::BuiltinScalarFunction::DatePart,
@@ -1244,34 +1322,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 right: Box::new(self.sql_expr_to_logical_expr(right, schema)?),
             }),
 
-            SQLExpr::UnaryOp { ref op, ref expr } => match op {
-                UnaryOperator::Not => Ok(Expr::Not(Box::new(
-                    self.sql_expr_to_logical_expr(expr, schema)?,
-                ))),
-                UnaryOperator::Plus => Ok(self.sql_expr_to_logical_expr(expr, schema)?),
-                UnaryOperator::Minus => {
-                    match expr.as_ref() {
-                        // optimization: if it's a number literal, we apply the negative operator
-                        // here directly to calculate the new literal.
-                        SQLExpr::Value(Value::Number(n,_)) => match n.parse::<i64>() {
-                            Ok(n) => Ok(lit(-n)),
-                            Err(_) => Ok(lit(-n
-                                .parse::<f64>()
-                                .map_err(|_e| {
-                                    DataFusionError::Internal(format!(
-                                        "negative operator can be only applied to integer and float operands, got: {}",
-                                    n))
-                                })?)),
-                        },
-                        // not a literal, apply negative operator on expression
-                        _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(expr, schema)?))),
-                    }
-                }
-                _ => Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported SQL unary operator {:?}",
-                    op
-                ))),
-            },
+            SQLExpr::UnaryOp { ref op, ref expr } => {
+                self.parse_sql_unary_op(op, expr, schema)
+            }
 
             SQLExpr::Between {
                 ref expr,
@@ -1306,39 +1359,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ref left,
                 ref op,
                 ref right,
-            } => {
-                let operator = match *op {
-                    BinaryOperator::Gt => Ok(Operator::Gt),
-                    BinaryOperator::GtEq => Ok(Operator::GtEq),
-                    BinaryOperator::Lt => Ok(Operator::Lt),
-                    BinaryOperator::LtEq => Ok(Operator::LtEq),
-                    BinaryOperator::Eq => Ok(Operator::Eq),
-                    BinaryOperator::NotEq => Ok(Operator::NotEq),
-                    BinaryOperator::Plus => Ok(Operator::Plus),
-                    BinaryOperator::Minus => Ok(Operator::Minus),
-                    BinaryOperator::Multiply => Ok(Operator::Multiply),
-                    BinaryOperator::Divide => Ok(Operator::Divide),
-                    BinaryOperator::Modulo => Ok(Operator::Modulo),
-                    BinaryOperator::And => Ok(Operator::And),
-                    BinaryOperator::Or => Ok(Operator::Or),
-                    BinaryOperator::Like => Ok(Operator::Like),
-                    BinaryOperator::NotLike => Ok(Operator::NotLike),
-                    BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
-                    BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
-                    BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
-                    BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
-                    _ => Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported SQL binary operator {:?}",
-                        op
-                    ))),
-                }?;
-
-                Ok(Expr::BinaryExpr {
-                    left: Box::new(self.sql_expr_to_logical_expr(left, schema)?),
-                    op: operator,
-                    right: Box::new(self.sql_expr_to_logical_expr(right, schema)?),
-                })
-            }
+            } => self.parse_sql_binary_op(left, op, right, schema),
 
             SQLExpr::Trim { expr, trim_where } => {
                 let (fun, where_expr) = match trim_where {
@@ -3628,5 +3649,12 @@ mod tests {
         let expected = "Projection: #public.person.first_name\
             \n  TableScan: public.person projection=None";
         quick_test(sql, expected);
+    }
+}
+
+fn parse_sql_number(n: &str) -> Result<Expr> {
+    match n.parse::<i64>() {
+        Ok(n) => Ok(lit(n)),
+        Err(_) => Ok(lit(n.parse::<f64>().unwrap())),
     }
 }
