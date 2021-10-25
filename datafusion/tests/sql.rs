@@ -1626,43 +1626,33 @@ async fn csv_query_limit_with_same_nbr_of_rows() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn csv_query_limit_zero() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 0";
-    let actual = execute(&mut ctx, sql).await;
-    // let actual = execute(&mut ctx, sql).await;
-    // println!("{}", pretty_format_batches(&a).unwrap());
-    let expected: Vec<Vec<String>> = vec![];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn csv_query_create_external_table() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, 10, c11, c12, c13 FROM aggregate_test_100 LIMIT 1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec![
-        "c",
-        "2",
-        "1",
-        "18109",
-        "2033001162",
-        "-6513304855495910254",
-        "25",
-        "43062",
-        "1491205016",
-        "10",
-        "0.110830784",
-        "0.9294097332465232",
-        "6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW",
-    ]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+----+----+-------+------------+----------------------+----+-------+------------+-----------+-------------+--------------------+--------------------------------+",
+"| c1 | c2 | c3 | c4    | c5         | c6                   | c7 | c8    | c9         | Int64(10) | c11         | c12                | c13                            |",
+"+----+----+----+-------+------------+----------------------+----+-------+------------+-----------+-------------+--------------------+--------------------------------+",
+"| c  | 2  | 1  | 18109 | 2033001162 | -6513304855495910254 | 25 | 43062 | 1491205016 | 10        | 0.110830784 | 0.9294097332465232 | 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW |",
+"+----+----+----+-------+------------+----------------------+----+-------+------------+-----------+-------------+--------------------+--------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -1671,6 +1661,8 @@ async fn csv_query_external_table_count() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT COUNT(c12) FROM aggregate_test_100";
     let actual = execute(&mut ctx, sql).await;
+    // let a = execute_to_batches(&mut ctx, sql).await;
+    // println!("{}", pretty_format_batches(&a).unwrap());
     let expected = vec![vec!["100"]];
     assert_eq!(expected, actual);
 }
