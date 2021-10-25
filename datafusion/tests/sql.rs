@@ -435,6 +435,218 @@ async fn csv_query_group_by_float32() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_values_list() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    {
+        let sql = "VALUES (1)";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| 1       |",
+            "+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES (-1)";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| -1      |",
+            "+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES (2+1,2-1,2>1)";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+---------+---------+",
+            "| column1 | column2 | column3 |",
+            "+---------+---------+---------+",
+            "| 3       | 1       | true    |",
+            "+---------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES";
+        let plan = ctx.create_logical_plan(sql);
+        assert!(plan.is_err());
+    }
+    {
+        let sql = "VALUES ()";
+        let plan = ctx.create_logical_plan(sql);
+        assert!(plan.is_err());
+    }
+    {
+        let sql = "VALUES (1),(2)";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| 1       |",
+            "| 2       |",
+            "+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES (1),()";
+        let plan = ctx.create_logical_plan(sql);
+        assert!(plan.is_err());
+    }
+    {
+        let sql = "VALUES (1,'a'),(2,'b')";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "| 1       | a       |",
+            "| 2       | b       |",
+            "+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES (1),(1,2)";
+        let plan = ctx.create_logical_plan(sql);
+        assert!(plan.is_err());
+    }
+    {
+        let sql = "VALUES (1),('2')";
+        let plan = ctx.create_logical_plan(sql);
+        assert!(plan.is_err());
+    }
+    {
+        let sql = "VALUES (1),(2.0)";
+        let plan = ctx.create_logical_plan(sql);
+        assert!(plan.is_err());
+    }
+    {
+        let sql = "VALUES (1,2), (1,'2')";
+        let plan = ctx.create_logical_plan(sql);
+        assert!(plan.is_err());
+    }
+    {
+        let sql = "VALUES (1,'a'),(NULL,'b'),(3,'c')";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "| 1       | a       |",
+            "|         | b       |",
+            "| 3       | c       |",
+            "+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES (NULL,'a'),(NULL,'b'),(3,'c')";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "|         | a       |",
+            "|         | b       |",
+            "| 3       | c       |",
+            "+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES (NULL,'a'),(NULL,'b'),(NULL,'c')";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "|         | a       |",
+            "|         | b       |",
+            "|         | c       |",
+            "+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES (1,'a'),(2,NULL),(3,'c')";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "| 1       | a       |",
+            "| 2       |         |",
+            "| 3       | c       |",
+            "+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES (1,NULL),(2,NULL),(3,'c')";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "| 1       |         |",
+            "| 2       |         |",
+            "| 3       | c       |",
+            "+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------+---------+---------+---------+---------+---------+---------+---------+---------+----------+----------+----------+----------+----------+----------+----------+",
+            "| column1 | column2 | column3 | column4 | column5 | column6 | column7 | column8 | column9 | column10 | column11 | column12 | column13 | column14 | column15 | column16 |",
+            "+---------+---------+---------+---------+---------+---------+---------+---------+---------+----------+----------+----------+----------+----------+----------+----------+",
+            "| 1       | 2       | 3       | 4       | 5       | 6       | 7       | 8       | 9       | 10       | 11       | 12       | 13       |          | F        | 3.5      |",
+            "+---------+---------+---------+---------+---------+---------+---------+---------+---------+----------+----------+----------+----------+----------+----------+----------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "SELECT * FROM (VALUES (1,'a'),(2,NULL)) AS t(c1, c2)";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+----+----+",
+            "| c1 | c2 |",
+            "+----+----+",
+            "| 1  | a  |",
+            "| 2  |    |",
+            "+----+----+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    {
+        let sql = "EXPLAIN VALUES (1, 'a', -1, 1.1),(NULL, 'b', -3, 0.5)";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------------+-----------------------------------------------------------------------------------------------------------+",
+            "| plan_type     | plan                                                                                                      |",
+            "+---------------+-----------------------------------------------------------------------------------------------------------+",
+            "| logical_plan  | Values: (Int64(1), Utf8(\"a\"), Int64(-1), Float64(1.1)), (Int64(NULL), Utf8(\"b\"), Int64(-3), Float64(0.5)) |",
+            "| physical_plan | ValuesExec                                                                                                |",
+            "|               |                                                                                                           |",
+            "+---------------+-----------------------------------------------------------------------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn select_all() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_simple_csv(&mut ctx).await?;
@@ -5155,6 +5367,16 @@ async fn union_all_with_aggregate() -> Result<()> {
         "SELECT SUM(d) FROM (SELECT 1 as c, 2 as d UNION ALL SELECT 1 as c, 3 AS d) as a";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["5"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn case_with_bool_type_result() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "select case when 'cpu' != 'cpu' then true else false end";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["false"]];
     assert_eq!(expected, actual);
     Ok(())
 }

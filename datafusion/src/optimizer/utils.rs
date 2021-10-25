@@ -117,7 +117,25 @@ pub fn optimize_children(
     from_plan(plan, &new_exprs, &new_inputs)
 }
 
-/// Returns a new logical plan based on the original one with inputs and expressions replaced
+/// Returns a new logical plan based on the original one with inputs
+/// and expressions replaced.
+///
+/// The exprs correspond to the same order of expressions returned by
+/// `LogicalPlan::expressions`. This function is used in optimizers in
+/// the following way:
+///
+/// ```text
+/// let new_inputs = optimize_children(..., plan, props);
+///
+/// // get the plans expressions to optimize
+/// let exprs = plan.expressions();
+///
+/// // potentially rewrite plan expressions
+/// let rewritten_exprs = rewrite_exprs(exprs);
+///
+/// // create new plan using rewritten_exprs in same position
+/// let new_plan = from_plan(&plan, rewritten_exprs, new_inputs);
+/// ```
 pub fn from_plan(
     plan: &LogicalPlan,
     expr: &[Expr],
@@ -129,6 +147,13 @@ pub fn from_plan(
             input: Arc::new(inputs[0].clone()),
             schema: schema.clone(),
             alias: alias.clone(),
+        }),
+        LogicalPlan::Values { schema, .. } => Ok(LogicalPlan::Values {
+            schema: schema.clone(),
+            values: expr
+                .chunks_exact(schema.fields().len())
+                .map(|s| s.to_vec())
+                .collect::<Vec<_>>(),
         }),
         LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter {
             predicate: expr[0].clone(),

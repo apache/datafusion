@@ -227,6 +227,13 @@ fn if_then_else(
             true_values,
             false_values
         ),
+        DataType::Boolean => if_then_else!(
+            array::BooleanBuilder,
+            array::BooleanArray,
+            bools,
+            true_values,
+            false_values
+        ),
         other => Err(DataFusionError::Execution(format!(
             "CASE does not support '{:?}'",
             other
