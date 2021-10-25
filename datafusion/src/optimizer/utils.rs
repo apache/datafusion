@@ -581,14 +581,13 @@ impl ConstEvaluator {
         let ctx_state = ExecutionContextState::new();
         let input_schema = DFSchema::empty();
 
-        // The dummy column name uis used doesn't matter as only scalar
-        // expressions will be evaluated
+        // The dummy column name is unused and doesn't matter as only
+        // expressions without column references can be evaluated
         static DUMMY_COL_NAME: &str = ".";
-        let schema =
-            Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Float64, true)]);
+        let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
 
-        let col = new_null_array(&DataType::Float64, 1);
-
+        // Need a single "input" row to produce a single output row
+        let col = new_null_array(&DataType::Null, 1);
         let input_batch =
             RecordBatch::try_new(std::sync::Arc::new(schema), vec![col]).unwrap();
 
