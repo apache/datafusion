@@ -506,7 +506,10 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
 /// ```
 /// # use datafusion::prelude::*;
 /// # use datafusion::optimizer::utils::ConstEvaluator;
-/// let mut const_evaluator = ConstEvaluator::new();
+/// # use datafusion::execution::context::ExecutionProps;
+///
+/// let execution_props = ExecutionProps::new();
+/// let mut const_evaluator = ConstEvaluator::new(&execution_props);
 ///
 /// // (1 + 2) + a
 /// let expr = (lit(1) + lit(2)) + col("a");
@@ -575,10 +578,15 @@ impl ExprRewriter for ConstEvaluator {
 }
 
 impl ConstEvaluator {
-    /// Create a new `ConstantEvaluator`.
-    pub fn new() -> Self {
+    /// Create a new `ConstantEvaluator`. Session constants (such as
+    /// the time for `now()` are taken from the passed
+    /// `execution_props`.
+    pub fn new(execution_props: &ExecutionProps) -> Self {
         let planner = DefaultPhysicalPlanner::default();
-        let ctx_state = ExecutionContextState::new();
+        let ctx_state = ExecutionContextState {
+            execution_props: execution_props.clone(),
+            ..ExecutionContextState::new()
+        };
         let input_schema = DFSchema::empty();
 
         // The dummy column name is unused and doesn't matter as only
@@ -604,9 +612,8 @@ impl ConstEvaluator {
     fn volatility_ok(volatility: Volatility) -> bool {
         match volatility {
             Volatility::Immutable => true,
-            // To evaluate stable functions, need ExecutionProps, see
-            // Simplifier for code that does that.
-            Volatility::Stable => false,
+            // Values for functions such as now() are taken from ExecutionProps
+            Volatility::Stable => true,
             Volatility::Volatile => false,
         }
     }
@@ -689,6 +696,7 @@ mod tests {
         array::{ArrayRef, Int32Array},
         datatypes::DataType,
     };
+    use chrono::{DateTime, TimeZone, Utc};
     use std::collections::HashSet;
 
     #[test]
@@ -799,42 +807,69 @@ mod tests {
         let rand = Expr::ScalarFunction { args: vec![], fun };
         let expr = (rand + lit(1)) + lit(2);
         test_evaluate(expr.clone(), expr);
-
-        // volatile / stable functions should not be evaluated
-        // now() + (1 + 2) --> now() + 3
-        let fun = BuiltinScalarFunction::Now;
-        assert_eq!(fun.volatility(), Volatility::Stable);
-        let now = Expr::ScalarFunction { args: vec![], fun };
-        let expr = now.clone() + (lit(1) + lit(2));
-        let expected = now + lit(3);
-        test_evaluate(expr, expected);
     }
 
     #[test]
-    fn test_const_evaluator_udfs() {
+    fn test_const_evaluator_now() {
+        let ts_nanos = 1599566400000000000i64;
+        let time = chrono::Utc.timestamp_nanos(ts_nanos);
+        let ts_string = "2020-09-08T12:05:00+00:00";
+
+        // now() --> ts
+        test_evaluate_with_start_time(now_expr(), lit_timestamp_nano(ts_nanos), &time);
+
+        // CAST(now() as int64) + 100 --> ts + 100
+        let expr = cast_to_int64_expr(now_expr()) + lit(100);
+        test_evaluate_with_start_time(expr, lit(ts_nanos + 100), &time);
+
+        //  now() < cast(to_timestamp(...) as int) + 50000 ---> true
+        let expr = cast_to_int64_expr(now_expr())
+            .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000));
+        test_evaluate_with_start_time(expr, lit(true), &time);
+    }
+
+    fn now_expr() -> Expr {
+        Expr::ScalarFunction {
+            args: vec![],
+            fun: BuiltinScalarFunction::Now,
+        }
+    }
+
+    fn cast_to_int64_expr(expr: Expr) -> Expr {
+        Expr::Cast {
+            expr: expr.into(),
+            data_type: DataType::Int64,
+        }
+    }
+
+    fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
+        Expr::ScalarFunction {
+            args: vec![lit(arg.into())],
+            fun: BuiltinScalarFunction::ToTimestamp,
+        }
+    }
+
+    #[test]
+    fn test_evaluator_udfs() {
         let args = vec![lit(1) + lit(2), lit(30) + lit(40)];
         let folded_args = vec![lit(3), lit(70)];
 
         // immutable UDF should get folded
-        // udf_add(1+2, 30+40) --> 70
+        // udf_add(1+2, 30+40) --> 73
         let expr = Expr::ScalarUDF {
             args: args.clone(),
             fun: make_udf_add(Volatility::Immutable),
         };
         test_evaluate(expr, lit(73));
 
-        // stable UDF should have args folded
-        // udf_add(1+2, 30+40) --> udf_add(3, 70)
+        // stable UDF should be entirely folded
+        // udf_add(1+2, 30+40) --> 73
         let fun = make_udf_add(Volatility::Stable);
         let expr = Expr::ScalarUDF {
             args: args.clone(),
             fun: Arc::clone(&fun),
         };
-        let expected_expr = Expr::ScalarUDF {
-            args: folded_args.clone(),
-            fun: Arc::clone(&fun),
-        };
-        test_evaluate(expr, expected_expr);
+        test_evaluate(expr, lit(73));
 
         // volatile UDF should have args folded
         // udf_add(1+2, 30+40) --> udf_add(3, 70)
@@ -892,11 +927,16 @@ mod tests {
         ))
     }
 
-    // udfs
-    // validate that even a volatile function's arguments will be evaluated
+    fn test_evaluate_with_start_time(
+        input_expr: Expr,
+        expected_expr: Expr,
+        date_time: &DateTime<Utc>,
+    ) {
+        let execution_props = ExecutionProps {
+            query_execution_start_time: *date_time,
+        };
 
-    fn test_evaluate(input_expr: Expr, expected_expr: Expr) {
-        let mut const_evaluator = ConstEvaluator::new();
+        let mut const_evaluator = ConstEvaluator::new(&execution_props);
         let evaluated_expr = input_expr
             .clone()
             .rewrite(&mut const_evaluator)
@@ -907,5 +947,9 @@ mod tests {
             "Mismatch evaluating {}\n  Expected:{}\n  Got:{}",
             input_expr, expected_expr, evaluated_expr
         );
+    }
+
+    fn test_evaluate(input_expr: Expr, expected_expr: Expr) {
+        test_evaluate_with_start_time(input_expr, expected_expr, &Utc::now())
     }
 }

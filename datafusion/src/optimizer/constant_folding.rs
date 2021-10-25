@@ -17,8 +17,6 @@
 
 //! Constant folding and algebraic simplification
 
-use std::sync::Arc;
-
 use arrow::datatypes::DataType;
 
 use crate::error::Result;
@@ -26,7 +24,6 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{DFSchemaRef, Expr, ExprRewriter, LogicalPlan, Operator};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
 
 /// Simplifies plans by rewriting [`Expr`]`s evaluating constants
@@ -61,18 +58,14 @@ impl OptimizerRule for ConstantFolding {
         // children plans.
         let mut simplifier = Simplifier {
             schemas: plan.all_schemas(),
-            execution_props,
         };
 
-        let mut const_evaluator = utils::ConstEvaluator::new();
+        let mut const_evaluator = utils::ConstEvaluator::new(execution_props);
 
         match plan {
-            LogicalPlan::Filter { predicate, input } => Ok(LogicalPlan::Filter {
-                predicate: predicate.clone().rewrite(&mut simplifier)?,
-                input: Arc::new(self.optimize(input, execution_props)?),
-            }),
-            // Rest: recurse into plan, apply optimization where possible
-            LogicalPlan::Projection { .. }
+            // Recurse into plan, apply optimization where possible
+            LogicalPlan::Filter { .. }
+            | LogicalPlan::Projection { .. }
             | LogicalPlan::Window { .. }
             | LogicalPlan::Aggregate { .. }
             | LogicalPlan::Repartition { .. }
@@ -130,7 +123,6 @@ impl OptimizerRule for ConstantFolding {
 struct Simplifier<'a> {
     /// input schemas
     schemas: Vec<&'a DFSchemaRef>,
-    execution_props: &'a ExecutionProps,
 }
 
 impl<'a> Simplifier<'a> {
@@ -228,15 +220,6 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                     Expr::Not(inner)
                 }
             }
-            // convert now() --> the time in `ExecutionProps`
-            Expr::ScalarFunction {
-                fun: BuiltinScalarFunction::Now,
-                ..
-            } => Expr::Literal(ScalarValue::TimestampNanosecond(Some(
-                self.execution_props
-                    .query_execution_start_time
-                    .timestamp_nanos(),
-            ))),
             expr => {
                 // no additional rewrites possible
                 expr
@@ -248,10 +231,13 @@ impl<'a> ExprRewriter for Simplifier<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{
         assert_contains,
         logical_plan::{col, lit, max, min, DFField, DFSchema, LogicalPlanBuilder},
+        physical_plan::functions::BuiltinScalarFunction,
     };
 
     use arrow::datatypes::*;
@@ -282,7 +268,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(
@@ -298,7 +283,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         // x = null is always null
@@ -334,7 +318,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(col("c2").get_type(&schema)?, DataType::Boolean);
@@ -365,7 +348,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         // When one of the operand is not of boolean type, folding the other boolean constant will
@@ -405,7 +387,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(col("c2").get_type(&schema)?, DataType::Boolean);
@@ -441,7 +422,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         // when one of the operand is not of boolean type, folding the other boolean constant will
@@ -477,7 +457,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(
@@ -754,27 +733,6 @@ mod tests {
     }
 
     #[test]
-    fn single_now_expr() {
-        let table_scan = test_table_scan().unwrap();
-        let proj = vec![now_expr()];
-        let time = Utc::now();
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let expected = format!(
-            "Projection: TimestampNanosecond({})\
-            \n  TableScan: test projection=None",
-            time.timestamp_nanos()
-        );
-        let actual = get_optimized_plan_formatted(&plan, &time);
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
     fn multiple_now_expr() {
         let table_scan = test_table_scan().unwrap();
         let time = Utc::now();
@@ -838,17 +796,16 @@ mod tests {
         //  now() < cast(to_timestamp(...) as int) + 5000000000
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(
-                now_expr()
+                cast_to_int64_expr(now_expr())
                     .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000)),
             )
             .unwrap()
             .build()
             .unwrap();
 
-        // Note that constant folder should be able to run again and fold
-        // this whole expression down to a single constant;
-        // https://github.com/apache/arrow-datafusion/issues/1160
-        let expected = "Filter: TimestampNanosecond(1599566400000000000) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Int64) + Int32(50000)\
+        // Note that constant folder runs and folds the entire
+        // expression down to a single constant (true)
+        let expected = "Filter: Boolean(true)\
                         \n  TableScan: test projection=None";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
