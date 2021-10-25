@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::{collections::HashSet, sync::Arc};
 
+use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use pyo3::exceptions::{PyKeyError, PyValueError};
@@ -32,7 +34,16 @@ use datafusion::prelude::CsvReadOptions;
 use crate::catalog::PyCatalog;
 use crate::dataframe::PyDataFrame;
 use crate::errors::DataFusionError;
-use crate::functions::{PyVolatility, create_udf};
+use crate::functions::{create_udf, PyVolatility};
+
+fn wait_for_future<F: Future>(py: Python, f: F) -> F::Output
+where
+    F: Send,
+    F::Output: Send,
+{
+    let rt = Runtime::new().unwrap();
+    py.allow_threads(|| rt.block_on(f))
+}
 
 /// `PyExecutionContext` is able to plan and execute DataFusion plans.
 /// It has a powerful optimizer, a physical planner for local execution, and a
@@ -53,8 +64,9 @@ impl PyExecutionContext {
     }
 
     /// Returns a PyDataFrame whose plan corresponds to the SQL statement.
-    fn sql(&mut self, query: &str) -> PyResult<PyDataFrame> {
-        let df = self.ctx.sql(query).map_err(DataFusionError::from)?;
+    fn sql(&mut self, query: &str, py: Python) -> PyResult<PyDataFrame> {
+        let result = self.ctx.sql(query);
+        let df = wait_for_future(py, result).map_err(DataFusionError::from)?;
         Ok(PyDataFrame::new(df))
     }
 
@@ -94,10 +106,9 @@ impl PyExecutionContext {
         Ok(())
     }
 
-    fn register_parquet(&mut self, name: &str, path: &str) -> PyResult<()> {
-        self.ctx
-            .register_parquet(name, path)
-            .map_err(DataFusionError::from)?;
+    fn register_parquet(&mut self, name: &str, path: &str, py: Python) -> PyResult<()> {
+        let result = self.ctx.register_parquet(name, path);
+        wait_for_future(py, result).map_err(DataFusionError::from)?;
         Ok(())
     }
 
@@ -136,9 +147,9 @@ impl PyExecutionContext {
             .file_extension(file_extension);
         options.schema = schema.as_ref();
 
-        self.ctx
-            .register_csv(name, path, options)
-            .map_err(DataFusionError::from)?;
+        let result = self.ctx.register_csv(name, path, options);
+        wait_for_future(py, result).map_err(DataFusionError::from)?;
+
         Ok(())
     }
 

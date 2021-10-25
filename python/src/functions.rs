@@ -86,12 +86,9 @@ fn random() -> PyExpr {
 /// Computes a binary hash of the given data. type is the algorithm to use.
 /// Standard algorithms are md5, sha224, sha256, sha384, sha512, blake2s, blake2b, and blake3.
 #[pyfunction(value, method)]
-fn digest(
-    value: PyExpr,
-    method: PyExpr,
-) -> PyExpr {
+fn digest(value: PyExpr, method: PyExpr) -> PyExpr {
     PyExpr {
-        expr: logical_plan::digest(value.expr, method.expr)
+        expr: logical_plan::digest(value.expr, method.expr),
     }
 }
 
@@ -343,6 +340,7 @@ pub fn init(m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(concat))?;
     m.add_wrapped(wrap_pyfunction!(cos))?;
     m.add_wrapped(wrap_pyfunction!(count))?;
+    m.add_wrapped(wrap_pyfunction!(digest))?;
     m.add_wrapped(wrap_pyfunction!(exp))?;
     m.add_wrapped(wrap_pyfunction!(floor))?;
     m.add_wrapped(wrap_pyfunction!(in_list))?;
