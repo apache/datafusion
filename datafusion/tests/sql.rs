@@ -29,7 +29,7 @@ extern crate datafusion;
 
 use arrow::{
     array::*, datatypes::*, record_batch::RecordBatch,
-    util::display::array_value_to_string, util::pretty::pretty_format_batches,
+    util::display::array_value_to_string,
 };
 
 use datafusion::assert_batches_eq;
@@ -1343,7 +1343,7 @@ async fn query_cast_timestamp_micros() -> Result<()> {
     let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
     ctx.register_table("t1", Arc::new(t1_table))?;
 
-    let sql = "EXPLAIN ANALYZE SELECT to_timestamp_micros(ts) FROM t1 LIMIT 3";
+    let sql = "SELECT to_timestamp_micros(ts) FROM t1 LIMIT 3";
     let actual = execute_to_batches(&mut ctx, sql).await;
 
     let expected = vec![
