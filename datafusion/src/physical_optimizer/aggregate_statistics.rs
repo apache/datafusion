@@ -60,12 +60,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 if let Some((non_null_rows, name)) =
                     take_optimizable_count_with_nulls(&**expr, &stats)
                 {
-                    println!("Using count with nulls opt");
                     projections.push((expressions::lit(non_null_rows), name.to_owned()));
                 } else if let Some((num_rows, name)) =
                     take_optimizable_count(&**expr, &stats)
                 {
-                    println!("Using count opt");
                     projections.push((expressions::lit(num_rows), name.to_owned()));
                 } else if let Some((min, name)) = take_optimizable_min(&**expr, &stats) {
                     projections.push((expressions::lit(min), name.to_owned()));
@@ -171,10 +169,6 @@ fn take_optimizable_count_with_nulls(
         &stats.column_statistics,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
-        println!(
-            "Num rows: {}\nCol Stats: {:?}\nExpr: {:?}",
-            num_rows, col_stats, casted_expr
-        );
         if casted_expr.expressions().len() == 1 {
             // TODO optimize with exprs other than Column
             if let Some(col_expr) = casted_expr.expressions()[0]
@@ -282,29 +276,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(Int32Array::from(vec![4, 5, 6])),
-            ],
-        )?;
-
-        Ok(Arc::new(MemoryExec::try_new(
-            &[vec![batch]],
-            Arc::clone(&schema),
-            None,
-        )?))
-    }
-
-    fn mock_data_with_nulls() -> Result<Arc<MemoryExec>> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]));
-
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
                 Arc::new(Int32Array::from(vec![Some(1), Some(2), None])),
-                Arc::new(Int32Array::from(vec![Some(4), None, Some(5)])),
+                Arc::new(Int32Array::from(vec![Some(4), None, Some(6)])),
             ],
         )?;
 
@@ -322,7 +295,6 @@ mod tests {
     ) -> Result<()> {
         let conf = ExecutionConfig::new();
         let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
-        println!("{:?}", optimized);
 
         let (col, count) = match nulls {
             false => (Field::new("COUNT(Uint8(1))", DataType::UInt64, false), 3),
@@ -384,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn test_count_partial_with_nulls_direct_child() -> Result<()> {
         // basic test case with the aggregation applied on a source with exact statistics
-        let source = mock_data_with_nulls()?;
+        let source = mock_data()?;
         let schema = source.schema();
 
         let partial_agg = HashAggregateExec::try_new(
@@ -395,7 +367,6 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        // println!("{:?}", partial_agg);
         let final_agg = HashAggregateExec::try_new(
             AggregateMode::Final,
             vec![],
@@ -403,7 +374,6 @@ mod tests {
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
-        // println!("{:?}", final_agg);
 
         assert_count_optim_success(final_agg, true).await?;
 
@@ -441,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_count_partial_with_nulls_indirect_child() -> Result<()> {
-        let source = mock_data_with_nulls()?;
+        let source = mock_data()?;
         let schema = source.schema();
 
         let partial_agg = HashAggregateExec::try_new(
@@ -512,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_count_with_nulls_inexact_stat() -> Result<()> {
-        let source = mock_data_with_nulls()?;
+        let source = mock_data()?;
         let schema = source.schema();
 
         // adding a filter makes the statistics inexact
