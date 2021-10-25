@@ -345,20 +345,13 @@ mod tests {
         Ok(())
     }
 
-    fn count_expr() -> Arc<dyn AggregateExpr> {
-        Arc::new(Count::new(
-            expressions::lit(ScalarValue::UInt8(Some(1))),
-            "my_count_alias",
-            DataType::UInt64,
-        ))
-    }
-
-    fn count_expr_with_nulls(schema: &Schema) -> Arc<dyn AggregateExpr> {
-        Arc::new(Count::new(
-            expressions::col("a", schema).unwrap(),
-            "my_count_alias",
-            DataType::UInt64,
-        ))
+    fn count_expr(schema: Option<&Schema>, col: Option<&str>) -> Arc<dyn AggregateExpr> {
+        // Return appropriate expr depending if COUNT is for col or table
+        let expr = match schema {
+            None => expressions::lit(ScalarValue::UInt8(Some(1))),
+            Some(s) => expressions::col(col.unwrap(), s).unwrap(),
+        };
+        Arc::new(Count::new(expr, "my_count_alias", DataType::UInt64))
     }
 
     #[tokio::test]
@@ -370,7 +363,7 @@ mod tests {
         let partial_agg = HashAggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr()],
+            vec![count_expr(None, None)],
             source,
             Arc::clone(&schema),
         )?;
@@ -378,7 +371,7 @@ mod tests {
         let final_agg = HashAggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr()],
+            vec![count_expr(None, None)],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
@@ -397,7 +390,7 @@ mod tests {
         let partial_agg = HashAggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr_with_nulls(&schema)],
+            vec![count_expr(Some(&schema), Some("a"))],
             source,
             Arc::clone(&schema),
         )?;
@@ -406,7 +399,7 @@ mod tests {
         let final_agg = HashAggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr_with_nulls(&schema)],
+            vec![count_expr(Some(&schema), Some("a"))],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
@@ -425,7 +418,7 @@ mod tests {
         let partial_agg = HashAggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr()],
+            vec![count_expr(None, None)],
             source,
             Arc::clone(&schema),
         )?;
@@ -436,7 +429,7 @@ mod tests {
         let final_agg = HashAggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr()],
+            vec![count_expr(None, None)],
             Arc::new(coalesce),
             Arc::clone(&schema),
         )?;
@@ -454,7 +447,7 @@ mod tests {
         let partial_agg = HashAggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr_with_nulls(&schema)],
+            vec![count_expr(Some(&schema), Some("a"))],
             source,
             Arc::clone(&schema),
         )?;
@@ -465,7 +458,7 @@ mod tests {
         let final_agg = HashAggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr_with_nulls(&schema)],
+            vec![count_expr(Some(&schema), Some("a"))],
             Arc::new(coalesce),
             Arc::clone(&schema),
         )?;
@@ -494,7 +487,7 @@ mod tests {
         let partial_agg = HashAggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr()],
+            vec![count_expr(None, None)],
             filter,
             Arc::clone(&schema),
         )?;
@@ -502,7 +495,7 @@ mod tests {
         let final_agg = HashAggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr()],
+            vec![count_expr(None, None)],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
@@ -536,7 +529,7 @@ mod tests {
         let partial_agg = HashAggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
-            vec![count_expr_with_nulls(&schema)],
+            vec![count_expr(Some(&schema), Some("a"))],
             filter,
             Arc::clone(&schema),
         )?;
@@ -544,7 +537,7 @@ mod tests {
         let final_agg = HashAggregateExec::try_new(
             AggregateMode::Final,
             vec![],
-            vec![count_expr_with_nulls(&schema)],
+            vec![count_expr(Some(&schema), Some("a"))],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
