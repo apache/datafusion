@@ -33,6 +33,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use std::convert::TryFrom;
+use std::iter;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -426,7 +427,10 @@ impl LogicalPlanBuilder {
         Ok(plan)
     }
     /// Apply a projection without alias.
-    pub fn project(&self, expr: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Self> {
+    pub fn project(
+        &self,
+        expr: impl IntoIterator<Item = impl Into<Expr>>,
+    ) -> Result<Self> {
         self.project_with_alias(expr, None)
     }
 
@@ -477,7 +481,7 @@ impl LogicalPlanBuilder {
     pub fn distinct(&self) -> Result<Self> {
         let projection_expr = expand_wildcard(self.plan.schema(), &self.plan)?;
         let plan = LogicalPlanBuilder::from(self.plan.clone())
-            .aggregate(projection_expr, vec![])?
+            .aggregate(projection_expr, iter::empty::<Expr>())?
             .build()?;
         Self::from(plan).project(vec![Expr::Wildcard])
     }
@@ -805,7 +809,8 @@ pub fn project_with_alias(
     let input_schema = plan.schema();
     let mut projected_expr = vec![];
     for e in expr {
-        match e.into() {
+        let e = e.into();
+        match e {
             Expr::Wildcard => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan)?)
             }

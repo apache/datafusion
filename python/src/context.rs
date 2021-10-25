@@ -20,8 +20,6 @@ use std::{collections::HashSet, sync::Arc};
 
 use uuid::Uuid;
 
-use tokio::runtime::Runtime;
-
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 
@@ -31,13 +29,10 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionContext;
 use datafusion::prelude::CsvReadOptions;
 
-use crate::{dataframe, errors, functions};
-use crate::functions::{self, PyVolatility};
-use crate::types::PyDataType;
 use crate::catalog::PyCatalog;
 use crate::dataframe::PyDataFrame;
 use crate::errors::DataFusionError;
-
+use crate::functions::{PyVolatility, create_udf};
 
 /// `PyExecutionContext` is able to plan and execute DataFusion plans.
 /// It has a powerful optimizer, a physical planner for local execution, and a
@@ -151,12 +146,11 @@ impl PyExecutionContext {
         &mut self,
         name: &str,
         func: PyObject,
-        args_types: Vec<PyDataType>,
-        return_type: PyDataType,
+        args_types: Vec<DataType>,
+        return_type: DataType,
         volatility: PyVolatility,
     ) -> PyResult<()> {
-        let function =
-            functions::create_udf(func, args_types, return_type, volatility, name)?;
+        let function = create_udf(func, args_types, return_type, volatility, name)?;
         self.ctx.register_udf(function.function);
         Ok(())
     }

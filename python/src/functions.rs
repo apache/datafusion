@@ -17,15 +17,12 @@
 
 use std::sync::Arc;
 
-use pyo3::{prelude::*, wrap_pyfunction};
+use pyo3::{prelude::*, wrap_pyfunction, Python};
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::logical_plan::{self, Literal};
-use datafusion::physical_plan::functions::Volatility;
-use pyo3::{prelude::*, types::PyTuple, wrap_pyfunction, Python};
-use std::sync::Arc;
 use datafusion::logical_plan;
-use datafusion::logical_plan::Expr;
+//use datafusion::logical_plan::Expr;
+use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::{
     aggregates::AggregateFunction, functions::BuiltinScalarFunction,
 };
@@ -90,11 +87,11 @@ fn random() -> PyExpr {
 /// Standard algorithms are md5, sha224, sha256, sha384, sha512, blake2s, blake2b, and blake3.
 #[pyfunction(value, method)]
 fn digest(
-    value: expression::Expression,
-    method: expression::Expression,
-) -> expression::Expression {
-    expression::Expression {
-        expr: logical_plan::digest(value.expr, method.expr),
+    value: PyExpr,
+    method: PyExpr,
+) -> PyExpr {
+    PyExpr {
+        expr: logical_plan::digest(value.expr, method.expr)
     }
 }
 
@@ -123,7 +120,7 @@ macro_rules! scalar_function {
         #[doc = $DOC]
         #[pyfunction(args = "*")]
         fn $NAME(args: Vec<PyExpr>) -> PyExpr {
-            let expr = Expr::ScalarFunction {
+            let expr = logical_plan::Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::$FUNC,
                 args: args.into_iter().map(|e| e.into()).collect(),
             };
@@ -140,7 +137,7 @@ macro_rules! aggregate_function {
         #[doc = $DOC]
         #[pyfunction(args = "*", distinct = "false")]
         fn $NAME(args: Vec<PyExpr>, distinct: bool) -> PyExpr {
-            let expr = Expr::AggregateFunction {
+            let expr = logical_plan::Expr::AggregateFunction {
                 fun: AggregateFunction::$FUNC,
                 args: args.into_iter().map(|e| e.into()).collect(),
                 distinct,
@@ -273,8 +270,8 @@ impl PyVolatility {
 
 pub(crate) fn create_udf(
     fun: PyObject,
-    input_types: Vec<PyDataType>,
-    return_type: PyDataType,
+    input_types: Vec<DataType>,
+    return_type: DataType,
     volatility: PyVolatility,
     name: &str,
 ) -> PyResult<PyScalarUDF> {
@@ -282,7 +279,7 @@ pub(crate) fn create_udf(
         function: logical_plan::create_udf(
             name,
             input_types,
-            return_type,
+            Arc::new(return_type),
             volatility.volatility,
             udf::array_udf(fun),
         ),
@@ -293,8 +290,8 @@ pub(crate) fn create_udf(
 #[pyfunction]
 fn udf(
     fun: PyObject,
-    input_types: Vec<PyDataType>,
-    return_type: PyDataType,
+    input_types: Vec<DataType>,
+    return_type: DataType,
     volatility: PyVolatility,
     py: Python,
 ) -> PyResult<PyScalarUDF> {
@@ -306,9 +303,9 @@ fn udf(
 #[pyfunction]
 fn udaf(
     accumulator: PyObject,
-    input_type: PyDataType,
-    return_type: PyDataType,
-    state_type: Vec<PyDataType>,
+    input_type: DataType,
+    return_type: DataType,
+    state_type: Vec<DataType>,
     volatility: PyVolatility,
     py: Python,
 ) -> PyResult<PyAggregateUDF> {
@@ -320,7 +317,7 @@ fn udaf(
         function: logical_plan::create_udaf(
             &name,
             input_type,
-            return_type,
+            Arc::new(return_type),
             volatility.volatility,
             udaf::array_udaf(accumulator),
             Arc::new(state_type),
