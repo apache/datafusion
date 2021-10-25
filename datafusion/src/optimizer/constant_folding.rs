@@ -126,7 +126,7 @@ impl OptimizerRule for ConstantFolding {
 /// Simplifies [`Expr`]s by applying algebraic transformation rules
 ///
 /// For example
-/// `false && col` --> `col` where `col` is a boolean types
+/// `true && col` --> `col` where `col` is a boolean types
 struct Simplifier<'a> {
     /// input schemas
     schemas: Vec<&'a DFSchemaRef>,
@@ -845,9 +845,9 @@ mod tests {
             .build()
             .unwrap();
 
-        // TODO constant folder hould be able to run again and fold
-        // this whole thing down
-        // TODO add ticket
+        // Note that constant folder should be able to run again and fold
+        // this whole expression down to a single constant;
+        // https://github.com/apache/arrow-datafusion/issues/1160
         let expected = "Filter: TimestampNanosecond(1599566400000000000) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Int64) + Int32(50000)\
                         \n  TableScan: test projection=None";
         let actual = get_optimized_plan_formatted(&plan, &time);
