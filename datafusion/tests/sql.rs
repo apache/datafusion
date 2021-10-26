@@ -29,7 +29,7 @@ extern crate datafusion;
 
 use arrow::{
     array::*, datatypes::*, record_batch::RecordBatch,
-    util::display::array_value_to_string,
+    util::display::array_value_to_string, util::pretty::pretty_format_batches,
 };
 
 use datafusion::assert_batches_eq;
@@ -1849,8 +1849,6 @@ async fn csv_query_limit_zero() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn csv_query_create_external_table() {
     let mut ctx = ExecutionContext::new();
@@ -1867,16 +1865,23 @@ async fn csv_query_create_external_table() {
     assert_batches_eq!(expected, &actual);
 }
 
+// --- End Test Porting ---
+
 #[tokio::test]
 async fn csv_query_external_table_count() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT COUNT(c12) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
-    // let a = execute_to_batches(&mut ctx, sql).await;
-    // println!("{}", pretty_format_batches(&a).unwrap());
-    let expected = vec![vec!["100"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------------+",
+        "| COUNT(aggregate_test_100.c12) |",
+        "+-------------------------------+",
+        "| 100                           |",
+        "+-------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -1887,6 +1892,8 @@ async fn csv_query_external_table_sum() {
     let sql =
         "SELECT SUM(CAST(c7 AS BIGINT)), SUM(CAST(c8 AS BIGINT)) FROM aggregate_test_100";
     let actual = execute(&mut ctx, sql).await;
+    // let a = execute_to_batches(&mut ctx, sql).await;
+    // println!("{}", pretty_format_batches(&a).unwrap());
     let expected = vec![vec!["13060", "3017641"]];
     assert_eq!(expected, actual);
 }
