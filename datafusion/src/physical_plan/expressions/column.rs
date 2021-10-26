@@ -87,7 +87,7 @@ impl PhysicalExpr for Column {
     }
 }
 
-/// Create a column expression
+/// Create a column reference as a physical expression
 pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(Column::new_with_schema(name, schema)?))
 }

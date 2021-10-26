@@ -453,7 +453,7 @@ macro_rules! eq_array_primitive {
 }
 
 impl ScalarValue {
-    /// Getter for the `DataType` of the value
+    /// Return the `DataType` of this value
     pub fn get_datatype(&self) -> DataType {
         match self {
             ScalarValue::Boolean(_) => DataType::Boolean,

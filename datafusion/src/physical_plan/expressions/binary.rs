@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::convert::TryInto;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::TimestampMillisecondArray;
@@ -46,7 +47,8 @@ use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
 use super::coercion::{
-    eq_coercion, like_coercion, numerical_coercion, order_coercion, string_coercion,
+    eq_coercion, like_coercion, numerical_coercion, order_coercion,
+    string_coercion,
 };
 
 /// Binary expression
@@ -171,6 +173,7 @@ macro_rules! binary_string_array_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
             DataType::Utf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::LargeUtf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for scalar operation '{}' on string array",
                 other, stringify!($OP)
@@ -184,6 +187,7 @@ macro_rules! binary_string_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for binary operation '{}' on string arrays",
                 other, stringify!($OP)
@@ -302,6 +306,7 @@ macro_rules! binary_array_op {
             DataType::Float32 => compute_op!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_op!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
             DataType::Timestamp(TimeUnit::Nanosecond, None) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
@@ -467,15 +472,14 @@ fn common_binary_type(
     };
 
     // re-write the error message of failed coercions to include the operator's information
-    match result {
-        None => Err(DataFusionError::Plan(
+    result.ok_or_else(|| {
+        DataFusionError::Plan(
             format!(
                 "'{:?} {} {:?}' can't be evaluated because there isn't a common type to coerce the types to",
                 lhs_type, op, rhs_type
             ),
-        )),
-        Some(t) => Ok(t)
-    }
+        )
+    })
 }
 
 /// Returns the return type of a binary operator or an error when the binary operator cannot
@@ -542,6 +546,19 @@ impl PhysicalExpr for BinaryExpr {
         let left_data_type = left_value.data_type();
         let right_data_type = right_value.data_type();
 
+        let num_rows = batch.num_rows();
+
+        // handle null literals by casting them to the same type as
+        // the other input
+        //
+        // Note for operators other than IsDistinctFrom and
+        // IsNotDistinctFrom, we could just return a `new_null_array`
+        // if either input is NULL
+        let (left_value, left_data_type) =
+            cast_null_literal(left_value, left_data_type, &right_data_type)?;
+        let (right_value, right_data_type) =
+            cast_null_literal(right_value, right_data_type, &left_data_type)?;
+
         if left_data_type != right_data_type {
             return Err(DataFusionError::Internal(format!(
                 "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -549,13 +566,20 @@ impl PhysicalExpr for BinaryExpr {
             )));
         }
 
-        // Attempt to use special kernels if one input is scalar and the other is an array
+        // Attempt to use special kernels if one input is scalar and
+        // the other is an array.  Note scalar kernels don't accept
+        // None literals, so can't use them if the scalar value is
+        // null.
         let scalar_result = match (&left_value, &right_value) {
-            (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
+            (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar))
+                if !scalar.is_null() =>
+            {
                 // if left is array and right is literal - use scalar operations
                 self.evaluate_array_scalar(array, scalar)?
             }
-            (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
+            (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array))
+                if !scalar.is_null() =>
+            {
                 // if right is literal and left is array - reverse operator and parameters
                 self.evaluate_scalar_array(scalar, array)?
             }
@@ -568,12 +592,40 @@ impl PhysicalExpr for BinaryExpr {
 
         // if both arrays or both literals - extract arrays and continue execution
         let (left, right) = (
-            left_value.into_array(batch.num_rows()),
-            right_value.into_array(batch.num_rows()),
+            left_value.into_array(num_rows),
+            right_value.into_array(num_rows),
         );
         self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
             .map(|a| ColumnarValue::Array(a))
     }
+}
+
+/// if value represents a null literal (`ScalarValue::*(None)`) return
+/// a Null scalar value of the same type as other_data_type
+///
+/// So if the value represents `ScalarValue::Utf8(None)` and
+/// other_data_type is `Boolean`, returns ColumnarValue
+/// `ScalarValue::Boolean(none)` so the data types will match
+fn cast_null_literal(
+    value: ColumnarValue,
+    data_type: DataType,
+    other_data_type: &DataType,
+) -> Result<(ColumnarValue, DataType)> {
+    if let ColumnarValue::Scalar(scalar) = &value {
+        if scalar.is_null() {
+            let null_literal: ScalarValue = other_data_type
+                .try_into()
+                .map_err(|e| {
+                    DataFusionError::NotImplemented(format!(
+                        "Cannot evaluate binary expression. Can not create null literal for type {:?} (had {:?}: {}",
+                        other_data_type, data_type, e)
+                    )
+                })?;
+            return Ok((ColumnarValue::Scalar(null_literal), other_data_type.clone()));
+        }
+    }
+    // don't change input
+    Ok((value, data_type))
 }
 
 impl BinaryExpr {
@@ -819,10 +871,11 @@ pub fn binary(
 mod tests {
     use arrow::datatypes::{ArrowNumericType, Field, Int32Type, SchemaRef};
     use arrow::util::display::array_value_to_string;
+    use arrow::util::pretty;
 
     use super::*;
     use crate::error::Result;
-    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::expressions::{col, lit};
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -1475,6 +1528,223 @@ mod tests {
                 "Coercion should have returned an DataFusionError::Internal".to_string(),
             ))
         }
+    }
+
+    #[test]
+    fn test_compare_to_null_literal() {
+        let input_arrays: Vec<ArrayRef> = vec![
+            Arc::new(
+                vec![Some(1.0), None, Some(2.0)]
+                    .into_iter()
+                    .collect::<Float32Array>(),
+            ),
+            Arc::new(
+                vec![Some(1.0), None, Some(2.0)]
+                    .into_iter()
+                    .collect::<Float64Array>(),
+            ),
+            Arc::new(
+                vec![Some(1), None, Some(2)]
+                    .into_iter()
+                    .collect::<Int8Array>(),
+            ),
+            Arc::new(
+                vec![Some(1), None, Some(2)]
+                    .into_iter()
+                    .collect::<Int16Array>(),
+            ),
+            Arc::new(
+                vec![Some(1), None, Some(2)]
+                    .into_iter()
+                    .collect::<Int32Array>(),
+            ),
+            Arc::new(
+                vec![Some(1), None, Some(2)]
+                    .into_iter()
+                    .collect::<Int64Array>(),
+            ),
+            Arc::new(
+                vec![Some(1), None, Some(2)]
+                    .into_iter()
+                    .collect::<UInt8Array>(),
+            ),
+            Arc::new(
+                vec![Some(1), None, Some(2)]
+                    .into_iter()
+                    .collect::<UInt16Array>(),
+            ),
+            Arc::new(
+                vec![Some(1), None, Some(2)]
+                    .into_iter()
+                    .collect::<UInt32Array>(),
+            ),
+            Arc::new(
+                vec![Some(1), None, Some(2)]
+                    .into_iter()
+                    .collect::<UInt64Array>(),
+            ),
+            // TODO need boolean operator support
+            // https://github.com/apache/arrow-datafusion/issues/1159
+            // Arc::new(vec![Some(trur), None, Some(false)]
+            //     .into_iter()
+            //     .collect::<BooleanArray>()),
+            Arc::new(
+                vec![Some("foo"), None, Some("bar")]
+                    .into_iter()
+                    .collect::<StringArray>(),
+            ),
+            Arc::new(
+                vec![Some("foo"), None, Some("bar")]
+                    .into_iter()
+                    .collect::<LargeStringArray>(),
+            ),
+        ];
+
+        let null_literals = vec![
+            ScalarValue::Boolean(None),
+            ScalarValue::Float32(None),
+            ScalarValue::Float64(None),
+            ScalarValue::Int8(None),
+            ScalarValue::Int16(None),
+            ScalarValue::Int32(None),
+            ScalarValue::Int64(None),
+            ScalarValue::UInt8(None),
+            ScalarValue::UInt16(None),
+            ScalarValue::UInt32(None),
+            ScalarValue::UInt64(None),
+            ScalarValue::Utf8(None),
+            ScalarValue::LargeUtf8(None),
+            // test a date/time enum
+            // could potentially test all combinations
+            ScalarValue::Date32(None),
+        ];
+
+        for input in &input_arrays {
+            println!("Testing input type {:?}", input.data_type());
+            for null in &null_literals {
+                println!("  Testing null type {:?}", null);
+                for op in Operator::iter() {
+                    do_null_test(input, null, op)
+                }
+            }
+        }
+    }
+
+    fn do_null_test(input: &ArrayRef, null: &ScalarValue, op: Operator) {
+        let input_type = input.data_type();
+
+        let string_type = match input_type {
+            DataType::Utf8 | DataType::LargeUtf8 => true,
+            _ => false,
+        };
+
+        let bool_type = match input_type {
+            DataType::Boolean => true,
+            _ => false,
+        };
+
+        let unsigned_type = match input_type {
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
+                true
+            }
+            _ => false,
+        };
+
+        // skip operator / input combinations that don't make sense
+        let skip = match op {
+            Operator::And | Operator::Or if !bool_type => true,
+            Operator::Like | Operator::NotLike if !string_type => true,
+            // distinct operations are explicitly present to handle nulls
+            Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => true,
+            Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
+                if !string_type =>
+            {
+                true
+            }
+            // TODO file a ticket / reproducer in arrow
+            //
+            // substraction for unsigned types causes the arrow subtract kernel to panic in debug builds
+            // (should ignore underflow for null values)
+            // thread 'physical_plan::expressions::binary::tests::test_compare_to_null_literal' panicked at 'attempt to subtract with overflow'
+            // ... library/core/src/ops/arith.rs:213:1
+            Operator::Minus if unsigned_type => true,
+            Operator::Plus
+            | Operator::Minus
+            | Operator::Multiply
+            | Operator::Divide
+            | Operator::Modulo
+                if !DataType::is_numeric(input_type) =>
+            {
+                true
+            }
+
+            _ => false,
+        };
+
+        if skip {
+            println!("    Skipping input_type {:?} op {:?}", input_type, op);
+            return;
+        }
+
+        let output_type = binary_operator_data_type(input_type, &op, input_type)
+            .expect("common binary type");
+        println!(
+            "    Testing type {:?} op {:?} --> {:?}",
+            input_type, op, output_type
+        );
+        let expected = new_null_array(&output_type, input.len());
+
+        let batch = RecordBatch::try_from_iter(vec![("col", input.clone())])
+            .expect("Creating batch");
+        let schema = batch.schema();
+
+        // Test <col> <op> <null>
+        let expr = binary_simple(col("col", &schema).unwrap(), op, lit(null.clone()));
+
+        let result = expr
+            .evaluate(&batch)
+            .expect("expression evaluation")
+            .into_array(batch.num_rows());
+
+        assert_eq!(
+            &expected,
+            &result,
+            "Mismatch running {}\n\n{:#?}\n\n{:#?}:\n\n{:#?}",
+            &expr,
+            pretty_format_array("input", &input),
+            pretty_format_array("expected", &expected),
+            pretty_format_array("result", &result),
+        );
+
+        // Test <null> <op> <col>
+        let expr = binary_simple(lit(null.clone()), op, col("col", &schema).unwrap());
+
+        let result = expr
+            .evaluate(&batch)
+            .expect("expression evaluation")
+            .into_array(batch.num_rows());
+
+        assert_eq!(
+            &expected,
+            &result,
+            "Mismatch running {}\n\n{:#?}\n\n{:#?}:\n\n{:#?}",
+            &expr,
+            pretty_format_array("input", &input),
+            pretty_format_array("expected", &expected),
+            pretty_format_array("result", &result),
+        );
+    }
+
+    fn pretty_format_array(name: &str, array: &ArrayRef) -> Vec<String> {
+        let batch = RecordBatch::try_from_iter(vec![(name, Arc::clone(array))]).unwrap();
+
+        let formatted = pretty::pretty_format_batches(&[batch]).unwrap();
+        std::iter::once(format!("DataType: {}", array.data_type()))
+            .chain(formatted.split("\n").map(|s| s.to_string()))
+            .collect()
     }
 
     #[test]

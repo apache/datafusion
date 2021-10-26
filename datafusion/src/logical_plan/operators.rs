@@ -66,6 +66,36 @@ pub enum Operator {
     RegexNotIMatch,
 }
 
+impl Operator {
+    /// Return an iterator over all variants of this enum
+    pub fn iter() -> impl Iterator<Item = Operator> {
+        vec![
+            Self::Eq,
+            Self::NotEq,
+            Self::Lt,
+            Self::LtEq,
+            Self::Gt,
+            Self::GtEq,
+            Self::Plus,
+            Self::Minus,
+            Self::Multiply,
+            Self::Divide,
+            Self::Modulo,
+            Self::And,
+            Self::Or,
+            Self::Like,
+            Self::NotLike,
+            Self::IsDistinctFrom,
+            Self::IsNotDistinctFrom,
+            Self::RegexMatch,
+            Self::RegexIMatch,
+            Self::RegexNotMatch,
+            Self::RegexNotIMatch,
+        ]
+        .into_iter()
+    }
+}
+
 impl fmt::Display for Operator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let display = match &self {
