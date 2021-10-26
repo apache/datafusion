@@ -44,6 +44,7 @@ use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
     DFSchemaRef, Partitioning,
 };
+use crate::sql::utils::group_window_expr_by_sort_keys;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -401,7 +402,29 @@ impl LogicalPlanBuilder {
 
         Ok(Self::from(table_scan))
     }
-
+    /// Wrap a plan in a window
+    pub(crate) fn window_plan(
+        input: LogicalPlan,
+        window_exprs: Vec<Expr>,
+    ) -> Result<LogicalPlan> {
+        let mut plan = input;
+        let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
+        // sort by sort_key len descending, so that more deeply sorted plans gets nested further
+        // down as children; to further mimic the behavior of PostgreSQL, we want stable sort
+        // and a reverse so that tieing sort keys are reversed in order; note that by this rule
+        // if there's an empty over, it'll be at the top level
+        groups.sort_by(|(key_a, _), (key_b, _)| key_a.len().cmp(&key_b.len()));
+        groups.reverse();
+        for (_, exprs) in groups {
+            let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
+            // the partition and sort itself is done at physical level, see physical_planner's
+            // fn create_initial_plan
+            plan = LogicalPlanBuilder::from(plan)
+                .window(window_exprs)?
+                .build()?;
+        }
+        Ok(plan)
+    }
     /// Apply a projection without alias.
     pub fn project(&self, expr: impl IntoIterator<Item = Expr>) -> Result<Self> {
         self.project_with_alias(expr, None)
