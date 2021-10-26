@@ -22,7 +22,7 @@ use arrow::datatypes::{DataType, Field};
 use crate::error::{DataFusionError, Result};
 use crate::scalar::ScalarValue;
 
-/// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Dictionary`].
+/// Returns the field access indexed by `key` from a [`DataType::List`]
 /// # Error
 /// Errors if
 /// * the `data_type` is not a Struct or,
