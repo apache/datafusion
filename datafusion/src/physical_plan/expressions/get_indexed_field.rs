@@ -101,11 +101,3 @@ impl PhysicalExpr for GetIndexedFieldExpr {
         }
     }
 }
-
-/// Create a `.[field]` expression
-pub fn get_indexed_field(
-    arg: Arc<dyn PhysicalExpr>,
-    key: ScalarValue,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(GetIndexedFieldExpr::new(arg, key)))
-}
