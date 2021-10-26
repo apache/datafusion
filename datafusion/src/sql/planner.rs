@@ -59,9 +59,8 @@ use super::{
     parser::DFParser,
     utils::{
         can_columns_satisfy_exprs, expr_as_column_expr, extract_aliases,
-        find_aggregate_exprs, find_column_exprs, find_window_exprs,
-        group_window_expr_by_sort_keys, rebase_expr, resolve_aliases_to_exprs,
-        resolve_positions_to_exprs,
+        find_aggregate_exprs, find_column_exprs, find_window_exprs, rebase_expr,
+        resolve_aliases_to_exprs, resolve_positions_to_exprs,
     },
 };
 use crate::logical_plan::builder::project_with_alias;
@@ -792,7 +791,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = if window_func_exprs.is_empty() {
             plan
         } else {
-            self.window(plan, window_func_exprs)?
+            LogicalPlanBuilder::window_plan(plan, window_func_exprs)?
         };
 
         let plan = if select.distinct {
@@ -837,28 +836,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn project(&self, input: LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(input.schema(), &expr)?;
         LogicalPlanBuilder::from(input).project(expr)?.build()
-    }
-
-    /// Wrap a plan in a window
-    fn window(&self, input: LogicalPlan, window_exprs: Vec<Expr>) -> Result<LogicalPlan> {
-        let mut plan = input;
-        let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
-        // sort by sort_key len descending, so that more deeply sorted plans gets nested further
-        // down as children; to further mimic the behavior of PostgreSQL, we want stable sort
-        // and a reverse so that tieing sort keys are reversed in order; note that by this rule
-        // if there's an empty over, it'll be at the top level
-        groups.sort_by(|(key_a, _), (key_b, _)| key_a.len().cmp(&key_b.len()));
-        groups.reverse();
-        for (_, exprs) in groups {
-            let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-            // the partition and sort itself is done at physical level, see physical_planner's
-            // fn create_initial_plan
-            plan = LogicalPlanBuilder::from(plan)
-                .window(window_exprs)?
-                .build()?;
-        }
-
-        Ok(plan)
     }
 
     /// Wrap a plan in an aggregate
