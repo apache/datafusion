@@ -1865,8 +1865,6 @@ async fn csv_query_create_external_table() {
     assert_batches_eq!(expected, &actual);
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn csv_query_external_table_count() {
     let mut ctx = ExecutionContext::new();
@@ -1891,11 +1889,15 @@ async fn csv_query_external_table_sum() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql =
         "SELECT SUM(CAST(c7 AS BIGINT)), SUM(CAST(c8 AS BIGINT)) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
-    // let a = execute_to_batches(&mut ctx, sql).await;
-    // println!("{}", pretty_format_batches(&a).unwrap());
-    let expected = vec![vec!["13060", "3017641"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------------------------+-------------------------------------------+",
+        "| SUM(CAST(aggregate_test_100.c7 AS Int64)) | SUM(CAST(aggregate_test_100.c8 AS Int64)) |",
+        "+-------------------------------------------+-------------------------------------------+",
+        "| 13060                                     | 3017641                                   |",
+        "+-------------------------------------------+-------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -1903,10 +1905,18 @@ async fn csv_query_count_star() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT COUNT(*) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["100"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 100             |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn csv_query_count_one() {
