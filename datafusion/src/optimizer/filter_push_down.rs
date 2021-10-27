@@ -1172,8 +1172,6 @@ mod tests {
     fn table_scan_with_pushdown_provider(
         filter_support: TableProviderFilterPushDown,
     ) -> Result<LogicalPlan> {
-        use std::convert::TryFrom;
-
         let test_provider = PushDownProvider { filter_support };
 
         let table_scan = LogicalPlan::TableScan {
