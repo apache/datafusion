@@ -874,6 +874,41 @@ async fn select_distinct_from_utf8() {
 }
 
 #[tokio::test]
+async fn null_binary_ops() {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+
+    let sql = "select \
+                 null = null as null_null, \
+                 null = 'xx' as null_const, \
+                 'xx' = null as const_null, \
+                 null = c1 as null_col, \
+                 c1 = null as col_null \
+               from aggregate_test_100 where c4 = 18109";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------+------------+------------+----------+----------+",
+        "| null_null | null_const | const_null | null_col | col_null |",
+        "+-----------+------------+------------+----------+----------+",
+        "|           |            |            |          |          |",
+        "+-----------+------------+------------+----------+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+async fn null_values() {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+
+    let sql = "select column1 < null, column2 < null, column3 < null \
+               from (VALUES (1, 'foo', 2.3), (2, 'bar', 5.4)) as t;";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec!["FOO"];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
 async fn projection_same_fields() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 

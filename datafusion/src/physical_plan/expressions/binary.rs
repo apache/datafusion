@@ -47,8 +47,7 @@ use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
 use super::coercion::{
-    eq_coercion, like_coercion, numerical_coercion, order_coercion,
-    string_coercion,
+    eq_coercion, like_coercion, numerical_coercion, order_coercion, string_coercion,
 };
 
 /// Binary expression
@@ -1633,22 +1632,12 @@ mod tests {
     fn do_null_test(input: &ArrayRef, null: &ScalarValue, op: Operator) {
         let input_type = input.data_type();
 
-        let string_type = match input_type {
-            DataType::Utf8 | DataType::LargeUtf8 => true,
-            _ => false,
-        };
-
-        let bool_type = match input_type {
-            DataType::Boolean => true,
-            _ => false,
-        };
-
-        let unsigned_type = match input_type {
-            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-                true
-            }
-            _ => false,
-        };
+        let string_type = matches!(input_type, DataType::Utf8 | DataType::LargeUtf8);
+        let bool_type = matches!(input_type, DataType::Boolean);
+        let unsigned_type = matches!(
+            input_type,
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+        );
 
         // skip operator / input combinations that don't make sense
         let skip = match op {
@@ -1714,7 +1703,7 @@ mod tests {
             &result,
             "Mismatch running {}\n\n{:#?}\n\n{:#?}:\n\n{:#?}",
             &expr,
-            pretty_format_array("input", &input),
+            pretty_format_array("input", input),
             pretty_format_array("expected", &expected),
             pretty_format_array("result", &result),
         );
@@ -1732,7 +1721,7 @@ mod tests {
             &result,
             "Mismatch running {}\n\n{:#?}\n\n{:#?}:\n\n{:#?}",
             &expr,
-            pretty_format_array("input", &input),
+            pretty_format_array("input", input),
             pretty_format_array("expected", &expected),
             pretty_format_array("result", &result),
         );
@@ -1743,7 +1732,7 @@ mod tests {
 
         let formatted = pretty::pretty_format_batches(&[batch]).unwrap();
         std::iter::once(format!("DataType: {}", array.data_type()))
-            .chain(formatted.split("\n").map(|s| s.to_string()))
+            .chain(formatted.split('\n').map(|s| s.to_string()))
             .collect()
     }
 
