@@ -176,6 +176,7 @@ impl ExecutionContext {
                 config,
                 execution_props: ExecutionProps::new(),
                 object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+                has_optimized: false,
             })),
         }
     }
@@ -767,6 +768,7 @@ impl ExecutionContext {
             observer(&new_plan, optimizer.as_ref());
         }
         debug!("Optimized logical plan:\n {:?}", new_plan);
+        state.has_optimized = true;
         Ok(new_plan)
     }
 }
@@ -1037,6 +1039,8 @@ pub struct ExecutionContextState {
     pub execution_props: ExecutionProps,
     /// Object Store that are registered with the context
     pub object_store_registry: Arc<ObjectStoreRegistry>,
+    /// If Logical Plan has optimized, it will be true
+    pub has_optimized: bool,
 }
 
 impl ExecutionProps {
@@ -1065,6 +1069,7 @@ impl ExecutionContextState {
             config: ExecutionConfig::new(),
             execution_props: ExecutionProps::new(),
             object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+            has_optimized: false,
         }
     }
 

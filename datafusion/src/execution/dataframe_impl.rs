@@ -56,8 +56,12 @@ impl DataFrameImpl {
     /// Create a physical plan
     async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let state = self.ctx_state.lock().unwrap().clone();
+        let has_optimized = state.has_optimized;
         let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
-        let plan = ctx.optimize(&self.plan)?;
+        let mut plan: LogicalPlan = self.plan.clone();
+        if !has_optimized {
+            plan = ctx.optimize(&self.plan)?;
+        }
         ctx.create_physical_plan(&plan).await
     }
 }
