@@ -47,8 +47,10 @@ use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
 use super::coercion::{
-    eq_coercion, like_coercion, numerical_coercion, order_coercion, string_coercion,
+    eq_coercion, like_coercion, numerical_coercion, order_coercion, resolve_nulls,
+    string_coercion,
 };
+use super::Literal;
 
 /// Binary expression
 #[derive(Debug)]
@@ -439,6 +441,8 @@ fn common_binary_type(
     op: &Operator,
     rhs_type: &DataType,
 ) -> Result<DataType> {
+    let (lhs_type, rhs_type) = resolve_nulls(lhs_type, rhs_type);
+
     // This result MUST be compatible with `binary_coerce`
     let result = match op {
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
@@ -521,6 +525,21 @@ pub fn binary_operator_data_type(
     }
 }
 
+fn is_null_literal(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.as_any()
+        .downcast_ref::<Literal>()
+        .map(|literal| literal.value().is_null())
+        .unwrap_or(false)
+}
+
+fn get_input_type(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> Result<DataType> {
+    if is_null_literal(expr) {
+        Ok(DataType::Null)
+    } else {
+        expr.data_type(schema)
+    }
+}
+
 impl PhysicalExpr for BinaryExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -529,9 +548,9 @@ impl PhysicalExpr for BinaryExpr {
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         binary_operator_data_type(
-            &self.left.data_type(input_schema)?,
+            &get_input_type(&self.left, input_schema)?,
             &self.op,
-            &self.right.data_type(input_schema)?,
+            &get_input_type(&self.right, input_schema)?,
         )
     }
 
@@ -842,8 +861,8 @@ fn binary_cast(
     rhs: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Result<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> {
-    let lhs_type = &lhs.data_type(input_schema)?;
-    let rhs_type = &rhs.data_type(input_schema)?;
+    let lhs_type = &get_input_type(&lhs, input_schema)?;
+    let rhs_type = &get_input_type(&rhs, input_schema)?;
 
     let cast_type = common_binary_type(lhs_type, op, rhs_type)?;
 

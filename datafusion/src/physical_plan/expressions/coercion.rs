@@ -80,6 +80,8 @@ pub fn dictionary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 /// casted to for the purpose of a string computation
 pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+
+    let (lhs_type, rhs_type) = resolve_nulls(lhs_type, rhs_type);
     match (lhs_type, rhs_type) {
         (Utf8, Utf8) => Some(Utf8),
         (LargeUtf8, Utf8) => Some(LargeUtf8),
@@ -100,6 +102,8 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
 /// casted to for the purpose of a date computation
 pub fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+
+    let (lhs_type, rhs_type) = resolve_nulls(lhs_type, rhs_type);
     match (lhs_type, rhs_type) {
         (Utf8, Date32) => Some(Date32),
         (Date32, Utf8) => Some(Date32),
@@ -114,6 +118,8 @@ pub fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Dat
 /// maximum precision
 pub fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+
+    let (lhs_type, rhs_type) = resolve_nulls(lhs_type, rhs_type);
 
     // error on any non-numeric type
     if !is_numeric(lhs_type) || !is_numeric(rhs_type) {
@@ -164,6 +170,8 @@ pub fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
 
 // coercion rules for equality operations. This is a superset of all numerical coercion rules.
 pub fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    let (lhs_type, rhs_type) = resolve_nulls(lhs_type, rhs_type);
+
     if lhs_type == rhs_type {
         // same type => equality is possible
         return Some(lhs_type.clone());
@@ -185,6 +193,19 @@ pub fn order_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_coercion(lhs_type, rhs_type))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
+}
+
+/// If one of `lhs_type` or `rhs_type` are null, returns a paif of the other type
+pub fn resolve_nulls<'a>(
+    lhs_type: &'a DataType,
+    rhs_type: &'a DataType,
+) -> (&'a DataType, &'a DataType) {
+    match (lhs_type, rhs_type) {
+        (DataType::Null, DataType::Null) => (lhs_type, rhs_type),
+        (DataType::Null, _) => (rhs_type, rhs_type),
+        (_, DataType::Null) => (lhs_type, lhs_type),
+        _ => (lhs_type, rhs_type),
+    }
 }
 
 #[cfg(test)]

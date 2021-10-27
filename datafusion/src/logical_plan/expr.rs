@@ -422,11 +422,24 @@ impl Expr {
                 ref left,
                 ref right,
                 ref op,
-            } => binary_operator_data_type(
-                &left.get_type(schema)?,
-                op,
-                &right.get_type(schema)?,
-            ),
+            } => {
+                let left_data_type = if left.is_constant_null() {
+                    Ok(DataType::Null)
+                } else {
+                    left.get_type(schema)
+                };
+
+                let right_data_type = if right.is_constant_null() {
+                    Ok(DataType::Null)
+                } else {
+                    right.get_type(schema)
+                };
+
+                let res =
+                    binary_operator_data_type(&left_data_type?, op, &right_data_type?);
+                println!("result of Expr resolution: {:?}", res);
+                res
+            }
             Expr::Sort { ref expr, .. } => expr.get_type(schema),
             Expr::Between { .. } => Ok(DataType::Boolean),
             Expr::InList { .. } => Ok(DataType::Boolean),
@@ -496,6 +509,15 @@ impl Expr {
     /// This represents how a column with this expression is named when no alias is chosen
     pub fn name(&self, input_schema: &DFSchema) -> Result<String> {
         create_name(self, input_schema)
+    }
+
+    /// Return true if this expr represents a null constant
+    pub fn is_constant_null(&self) -> bool {
+        if let Expr::Literal(value) = self {
+            value.is_null()
+        } else {
+            false
+        }
     }
 
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
