@@ -34,6 +34,8 @@ use arrow::{
 
 use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
+use datafusion::assert_contains;
+use datafusion::assert_not_contains;
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::metrics::MetricValue;
@@ -46,50 +48,6 @@ use datafusion::{
     physical_plan::ColumnarValue,
 };
 use datafusion::{execution::context::ExecutionContext, physical_plan::displayable};
-
-/// A macro to assert that one string is contained within another with
-/// a nice error message if they are not.
-///
-/// Usage: `assert_contains!(actual, expected)`
-///
-/// Is a macro so test error
-/// messages are on the same line as the failure;
-///
-/// Both arguments must be convertable into Strings (Into<String>)
-macro_rules! assert_contains {
-    ($ACTUAL: expr, $EXPECTED: expr) => {
-        let actual_value: String = $ACTUAL.into();
-        let expected_value: String = $EXPECTED.into();
-        assert!(
-            actual_value.contains(&expected_value),
-            "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
-            expected_value,
-            actual_value
-        );
-    };
-}
-
-/// A macro to assert that one string is NOT contained within another with
-/// a nice error message if they are are.
-///
-/// Usage: `assert_not_contains!(actual, unexpected)`
-///
-/// Is a macro so test error
-/// messages are on the same line as the failure;
-///
-/// Both arguments must be convertable into Strings (Into<String>)
-macro_rules! assert_not_contains {
-    ($ACTUAL: expr, $UNEXPECTED: expr) => {
-        let actual_value: String = $ACTUAL.into();
-        let unexpected_value: String = $UNEXPECTED.into();
-        assert!(
-            !actual_value.contains(&unexpected_value),
-            "Found unexpected in actual.\n\nUnexpected:\n{}\n\nActual:\n{}",
-            unexpected_value,
-            actual_value
-        );
-    };
-}
 
 #[tokio::test]
 async fn nyc() -> Result<()> {

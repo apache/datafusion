@@ -17,12 +17,18 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
+use arrow::array::new_null_array;
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+
 use super::optimizer::OptimizerRule;
-use crate::execution::context::ExecutionProps;
+use crate::execution::context::{ExecutionContextState, ExecutionProps};
 use crate::logical_plan::{
-    build_join_schema, Column, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder,
-    Operator, Partitioning, Recursion,
+    build_join_schema, Column, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan,
+    LogicalPlanBuilder, Operator, Partitioning, Recursion, RewriteRecursion,
 };
+use crate::physical_plan::functions::Volatility;
+use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
 use crate::{
@@ -493,11 +499,196 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
     }
 }
 
+/// Partially evaluate `Expr`s so constant subtrees are evaluated at plan time.
+///
+/// Note it does not handle other algebriac rewrites such as `(a and false)` --> `a`
+///
+/// ```
+/// # use datafusion::prelude::*;
+/// # use datafusion::optimizer::utils::ConstEvaluator;
+/// let mut const_evaluator = ConstEvaluator::new();
+///
+/// // (1 + 2) + a
+/// let expr = (lit(1) + lit(2)) + col("a");
+///
+/// // is rewritten to (3 + a);
+/// let rewritten = expr.rewrite(&mut const_evaluator).unwrap();
+/// assert_eq!(rewritten, lit(3) + col("a"));
+/// ```
+pub struct ConstEvaluator {
+    /// can_evaluate is used during the depth-first-search of the
+    /// Expr tree to track if any siblings (or their descendants) were
+    /// non evaluatable (e.g. had a column reference or volatile
+    /// function)
+    ///
+    /// Specifically, can_evaluate[N] represents the state of
+    /// traversal when we are N levels deep in the tree, one entry for
+    /// this Expr and each of its parents.
+    ///
+    /// After visiting all siblings if can_evauate.top() is true, that
+    /// means there were no non evaluatable siblings (or their
+    /// descendants) so this Expr can be evaluated
+    can_evaluate: Vec<bool>,
+
+    ctx_state: ExecutionContextState,
+    planner: DefaultPhysicalPlanner,
+    input_schema: DFSchema,
+    input_batch: RecordBatch,
+}
+
+impl ExprRewriter for ConstEvaluator {
+    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+        // Default to being able to evaluate this node
+        self.can_evaluate.push(true);
+
+        // if this expr is not ok to evaluate, mark entire parent
+        // stack as not ok (as all parents have at least one child or
+        // descendant that is non evaluateable
+
+        if !Self::can_evaluate(expr) {
+            // walk back up stack, marking first parent that is not mutable
+            let parent_iter = self.can_evaluate.iter_mut().rev();
+            for p in parent_iter {
+                if !*p {
+                    // optimization: if we find an element on the
+                    // stack already marked, know all elements above are also marked
+                    break;
+                }
+                *p = false;
+            }
+        }
+
+        // NB: do not short circuit recursion even if we find a non
+        // evaluatable node (so we can fold other children, args to
+        // functions, etc)
+        Ok(RewriteRecursion::Continue)
+    }
+
+    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        if self.can_evaluate.pop().unwrap() {
+            let scalar = self.evaluate_to_scalar(expr)?;
+            Ok(Expr::Literal(scalar))
+        } else {
+            Ok(expr)
+        }
+    }
+}
+
+impl ConstEvaluator {
+    /// Create a new `ConstantEvaluator`.
+    pub fn new() -> Self {
+        let planner = DefaultPhysicalPlanner::default();
+        let ctx_state = ExecutionContextState::new();
+        let input_schema = DFSchema::empty();
+
+        // The dummy column name is unused and doesn't matter as only
+        // expressions without column references can be evaluated
+        static DUMMY_COL_NAME: &str = ".";
+        let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
+
+        // Need a single "input" row to produce a single output row
+        let col = new_null_array(&DataType::Null, 1);
+        let input_batch =
+            RecordBatch::try_new(std::sync::Arc::new(schema), vec![col]).unwrap();
+
+        Self {
+            can_evaluate: vec![],
+            ctx_state,
+            planner,
+            input_schema,
+            input_batch,
+        }
+    }
+
+    /// Can a function of the specified volatility be evaluated?
+    fn volatility_ok(volatility: Volatility) -> bool {
+        match volatility {
+            Volatility::Immutable => true,
+            // To evaluate stable functions, need ExecutionProps, see
+            // Simplifier for code that does that.
+            Volatility::Stable => false,
+            Volatility::Volatile => false,
+        }
+    }
+
+    /// Can the expression be evaluated at plan time, (assuming all of
+    /// its children can also be evaluated)?
+    fn can_evaluate(expr: &Expr) -> bool {
+        // check for reasons we can't evaluate this node
+        //
+        // NOTE all expr types are listed here so when new ones are
+        // added they can be checked for their ability to be evaluated
+        // at plan time
+        match expr {
+            // Has no runtime cost, but needed during planning
+            Expr::Alias(..) => false,
+            Expr::AggregateFunction { .. } => false,
+            Expr::AggregateUDF { .. } => false,
+            Expr::ScalarVariable(_) => false,
+            Expr::Column(_) => false,
+            Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
+            Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
+            Expr::WindowFunction { .. } => false,
+            Expr::Sort { .. } => false,
+            Expr::Wildcard => false,
+
+            Expr::Literal(_) => true,
+            Expr::BinaryExpr { .. } => true,
+            Expr::Not(_) => true,
+            Expr::IsNotNull(_) => true,
+            Expr::IsNull(_) => true,
+            Expr::Negative(_) => true,
+            Expr::Between { .. } => true,
+            Expr::Case { .. } => true,
+            Expr::Cast { .. } => true,
+            Expr::TryCast { .. } => true,
+            Expr::InList { .. } => true,
+        }
+    }
+
+    /// Internal helper to evaluates an Expr
+    fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
+        if let Expr::Literal(s) = expr {
+            return Ok(s);
+        }
+
+        let phys_expr = self.planner.create_physical_expr(
+            &expr,
+            &self.input_schema,
+            &self.input_batch.schema(),
+            &self.ctx_state,
+        )?;
+        let col_val = phys_expr.evaluate(&self.input_batch)?;
+        match col_val {
+            crate::physical_plan::ColumnarValue::Array(a) => {
+                if a.len() != 1 {
+                    Err(DataFusionError::Execution(format!(
+                        "Could not evaluate the expressison, found a result of length {}",
+                        a.len()
+                    )))
+                } else {
+                    Ok(ScalarValue::try_from_array(&a, 0)?)
+                }
+            }
+            crate::physical_plan::ColumnarValue::Scalar(s) => Ok(s),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::col;
-    use arrow::datatypes::DataType;
+    use crate::{
+        logical_plan::{col, create_udf, lit_timestamp_nano},
+        physical_plan::{
+            functions::{make_scalar_function, BuiltinScalarFunction},
+            udf::ScalarUDF,
+        },
+    };
+    use arrow::{
+        array::{ArrayRef, Int32Array},
+        datatypes::DataType,
+    };
     use std::collections::HashSet;
 
     #[test]
@@ -520,5 +711,201 @@ mod tests {
         assert_eq!(1, accum.len());
         assert!(accum.contains(&Column::from_name("a")));
         Ok(())
+    }
+
+    #[test]
+    fn test_const_evaluator() {
+        // true --> true
+        test_evaluate(lit(true), lit(true));
+        // true or true --> true
+        test_evaluate(lit(true).or(lit(true)), lit(true));
+        // true or false --> true
+        test_evaluate(lit(true).or(lit(false)), lit(true));
+
+        // "foo" == "foo" --> true
+        test_evaluate(lit("foo").eq(lit("foo")), lit(true));
+        // "foo" != "foo" --> false
+        test_evaluate(lit("foo").not_eq(lit("foo")), lit(false));
+
+        // c = 1 --> c = 1
+        test_evaluate(col("c").eq(lit(1)), col("c").eq(lit(1)));
+        // c = 1 + 2 --> c + 3
+        test_evaluate(col("c").eq(lit(1) + lit(2)), col("c").eq(lit(3)));
+        // (foo != foo) OR (c = 1) --> false OR (c = 1)
+        test_evaluate(
+            (lit("foo").not_eq(lit("foo"))).or(col("c").eq(lit(1))),
+            lit(false).or(col("c").eq(lit(1))),
+        );
+    }
+
+    #[test]
+    fn test_const_evaluator_scalar_functions() {
+        // concat("foo", "bar") --> "foobar"
+        let expr = Expr::ScalarFunction {
+            args: vec![lit("foo"), lit("bar")],
+            fun: BuiltinScalarFunction::Concat,
+        };
+        test_evaluate(expr, lit("foobar"));
+
+        // ensure arguments are also constant folded
+        // concat("foo", concat("bar", "baz")) --> "foobarbaz"
+        let concat1 = Expr::ScalarFunction {
+            args: vec![lit("bar"), lit("baz")],
+            fun: BuiltinScalarFunction::Concat,
+        };
+        let expr = Expr::ScalarFunction {
+            args: vec![lit("foo"), concat1],
+            fun: BuiltinScalarFunction::Concat,
+        };
+        test_evaluate(expr, lit("foobarbaz"));
+
+        // Check non string arguments
+        // to_timestamp("2020-09-08T12:00:00+00:00") --> timestamp(1599566400000000000i64)
+        let expr = Expr::ScalarFunction {
+            args: vec![lit("2020-09-08T12:00:00+00:00")],
+            fun: BuiltinScalarFunction::ToTimestamp,
+        };
+        test_evaluate(expr, lit_timestamp_nano(1599566400000000000i64));
+
+        // check that non foldable arguments are folded
+        // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
+        let expr = Expr::ScalarFunction {
+            args: vec![col("a")],
+            fun: BuiltinScalarFunction::ToTimestamp,
+        };
+        test_evaluate(expr.clone(), expr);
+
+        // check that non foldable arguments are folded
+        // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
+        let expr = Expr::ScalarFunction {
+            args: vec![col("a")],
+            fun: BuiltinScalarFunction::ToTimestamp,
+        };
+        test_evaluate(expr.clone(), expr);
+
+        // volatile / stable functions should not be evaluated
+        // rand() + (1 + 2) --> rand() + 3
+        let fun = BuiltinScalarFunction::Random;
+        assert_eq!(fun.volatility(), Volatility::Volatile);
+        let rand = Expr::ScalarFunction { args: vec![], fun };
+        let expr = rand.clone() + (lit(1) + lit(2));
+        let expected = rand + lit(3);
+        test_evaluate(expr, expected);
+
+        // parenthesization matters: can't rewrite
+        // (rand() + 1) + 2 --> (rand() + 1) + 2)
+        let fun = BuiltinScalarFunction::Random;
+        assert_eq!(fun.volatility(), Volatility::Volatile);
+        let rand = Expr::ScalarFunction { args: vec![], fun };
+        let expr = (rand + lit(1)) + lit(2);
+        test_evaluate(expr.clone(), expr);
+
+        // volatile / stable functions should not be evaluated
+        // now() + (1 + 2) --> now() + 3
+        let fun = BuiltinScalarFunction::Now;
+        assert_eq!(fun.volatility(), Volatility::Stable);
+        let now = Expr::ScalarFunction { args: vec![], fun };
+        let expr = now.clone() + (lit(1) + lit(2));
+        let expected = now + lit(3);
+        test_evaluate(expr, expected);
+    }
+
+    #[test]
+    fn test_const_evaluator_udfs() {
+        let args = vec![lit(1) + lit(2), lit(30) + lit(40)];
+        let folded_args = vec![lit(3), lit(70)];
+
+        // immutable UDF should get folded
+        // udf_add(1+2, 30+40) --> 70
+        let expr = Expr::ScalarUDF {
+            args: args.clone(),
+            fun: make_udf_add(Volatility::Immutable),
+        };
+        test_evaluate(expr, lit(73));
+
+        // stable UDF should have args folded
+        // udf_add(1+2, 30+40) --> udf_add(3, 70)
+        let fun = make_udf_add(Volatility::Stable);
+        let expr = Expr::ScalarUDF {
+            args: args.clone(),
+            fun: Arc::clone(&fun),
+        };
+        let expected_expr = Expr::ScalarUDF {
+            args: folded_args.clone(),
+            fun: Arc::clone(&fun),
+        };
+        test_evaluate(expr, expected_expr);
+
+        // volatile UDF should have args folded
+        // udf_add(1+2, 30+40) --> udf_add(3, 70)
+        let fun = make_udf_add(Volatility::Volatile);
+        let expr = Expr::ScalarUDF {
+            args,
+            fun: Arc::clone(&fun),
+        };
+        let expected_expr = Expr::ScalarUDF {
+            args: folded_args,
+            fun: Arc::clone(&fun),
+        };
+        test_evaluate(expr, expected_expr);
+    }
+
+    // Make a UDF that adds its two values together, with the specified volatility
+    fn make_udf_add(volatility: Volatility) -> Arc<ScalarUDF> {
+        let input_types = vec![DataType::Int32, DataType::Int32];
+        let return_type = Arc::new(DataType::Int32);
+
+        let fun = |args: &[ArrayRef]| {
+            let arg0 = &args[0]
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("cast failed");
+            let arg1 = &args[1]
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("cast failed");
+
+            // 2. perform the computation
+            let array = arg0
+                .iter()
+                .zip(arg1.iter())
+                .map(|args| {
+                    if let (Some(arg0), Some(arg1)) = args {
+                        Some(arg0 + arg1)
+                    } else {
+                        // one or both args were Null
+                        None
+                    }
+                })
+                .collect::<Int32Array>();
+
+            Ok(Arc::new(array) as ArrayRef)
+        };
+
+        let fun = make_scalar_function(fun);
+        Arc::new(create_udf(
+            "udf_add",
+            input_types,
+            return_type,
+            volatility,
+            fun,
+        ))
+    }
+
+    // udfs
+    // validate that even a volatile function's arguments will be evaluated
+
+    fn test_evaluate(input_expr: Expr, expected_expr: Expr) {
+        let mut const_evaluator = ConstEvaluator::new();
+        let evaluated_expr = input_expr
+            .clone()
+            .rewrite(&mut const_evaluator)
+            .expect("successfully evaluated");
+
+        assert_eq!(
+            evaluated_expr, expected_expr,
+            "Mismatch evaluating {}\n  Expected:{}\n  Got:{}",
+            input_expr, expected_expr, evaluated_expr
+        );
     }
 }
