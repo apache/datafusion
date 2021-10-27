@@ -147,6 +147,10 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
+      - name: Setup toolchain
+        run: |
+          rustup toolchain install stable
+          rustup default stable
       - uses: actions/setup-python@v2
         with:
           python-version: "3.9"
@@ -283,7 +287,7 @@ jobs:
     strategy:
       matrix:
         arch: [amd64]
-        rust: [nightly-2021-09-07]
+        rust: [nightly-2021-10-21]
     steps:
       - uses: actions/checkout@v2
         with:

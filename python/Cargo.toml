@@ -24,7 +24,8 @@ authors = ["Apache Arrow <dev@arrow.apache.org>"]
 description = "Build and run queries against data"
 readme = "README.md"
 license = "Apache-2.0"
-edition = "2018"
+edition = "2021"
+rust-version = "1.56"
 
 [dependencies]
 libc = "0.2"
