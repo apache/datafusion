@@ -1152,8 +1152,6 @@ mod tests {
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::physical_plan::{collect, collect_partitioned};
     use crate::test;
-    use crate::test::object_store::TestObjectStore;
-    use crate::test_util::arrow_test_data;
     use crate::variable::VarType;
     use crate::{
         assert_batches_eq, assert_batches_sorted_eq,
@@ -3288,51 +3286,6 @@ mod tests {
             "+-------------+",
         ];
         assert_batches_eq!(expected, &result);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_files_from_partitioned_path() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
-
-        let testdata = arrow_test_data();
-        let csv_file_path = format!("{}/csv/aggregate_test_100.csv", testdata);
-        let file_schema = aggr_test_schema();
-        let object_store = TestObjectStore::new_mirror(
-            csv_file_path,
-            &[
-                "mytable/date=2021-10-27/file.csv",
-                "mytable/date=2021-10-28/file.csv",
-            ],
-        );
-
-        let mut options = ListingOptions::new(Arc::new(CsvFormat::default()));
-        options.table_partition_cols = vec!["date".to_owned()];
-
-        let table =
-            ListingTable::new(object_store, "mytable".to_owned(), file_schema, options);
-
-        ctx.register_table("t", Arc::new(table))?;
-
-        let result = ctx
-            .sql("SELECT c1, date FROM t WHERE date='2021-10-27' LIMIT 5")
-            .await?
-            .collect()
-            .await?;
-
-        let expected = vec![
-            "+----+------------+",
-            "| c1 | date       |",
-            "+----+------------+",
-            "| a  | 2021-10-27 |",
-            "| b  | 2021-10-27 |",
-            "| b  | 2021-10-27 |",
-            "| c  | 2021-10-27 |",
-            "| d  | 2021-10-27 |",
-            "+----+------------+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
 
         Ok(())
     }

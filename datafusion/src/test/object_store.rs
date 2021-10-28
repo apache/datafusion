@@ -14,51 +14,35 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 //! Object store implem used for testing
 
 use std::{
-    fs, io,
+    io,
     io::{Cursor, Read},
     sync::Arc,
 };
 
-use crate::datasource::object_store::{
-    local::LocalFileSystem, FileMeta, FileMetaStream, ListEntryStream, ObjectReader,
-    ObjectStore, SizedFile,
+use crate::{
+    datasource::object_store::{
+        FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
+    },
+    error::{DataFusionError, Result},
 };
-use crate::error::{DataFusionError, Result};
-
 use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
 
 #[derive(Debug)]
 /// An object store implem that is useful for testing.
-/// Can either generate `ObjectReader`s that are filled with zero-
-/// bytes or mirror a given file to multiple path.
+/// `ObjectReader`s are filled with zero bytes.
 pub struct TestObjectStore {
     /// The `(path,size)` of the files that "exist" in the store
     files: Vec<(String, u64)>,
-    /// The file that will be read at all path. If none fille the
-    /// file with zero-bytes.
-    mirrored_file: Option<String>,
 }
 
 impl TestObjectStore {
     pub fn new_arc(files: &[(&str, u64)]) -> Arc<dyn ObjectStore> {
         Arc::new(Self {
             files: files.iter().map(|f| (f.0.to_owned(), f.1)).collect(),
-            mirrored_file: None,
-        })
-    }
-    pub fn new_mirror(mirrored_file: String, paths: &[&str]) -> Arc<dyn ObjectStore> {
-        let metadata = fs::metadata(&mirrored_file).expect("Local file metadata");
-        Arc::new(Self {
-            files: paths
-                .iter()
-                .map(|&f| (f.to_owned(), metadata.len()))
-                .collect(),
-            mirrored_file: Some(mirrored_file),
         })
     }
 }
@@ -96,15 +80,8 @@ impl ObjectStore for TestObjectStore {
 
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         match self.files.iter().find(|item| file.path == item.0) {
-            Some(&(_, size)) if size == file.size => {
-                if let Some(mirrored_file) = &self.mirrored_file {
-                    Ok(LocalFileSystem {}.file_reader(SizedFile {
-                        path: mirrored_file.clone(),
-                        size,
-                    })?)
-                } else {
-                    Ok(Arc::new(EmptyObjectReader(size)))
-                }
+            Some((_, size)) if *size == file.size => {
+                Ok(Arc::new(EmptyObjectReader(*size)))
             }
             Some(_) => Err(DataFusionError::IoError(io::Error::new(
                 io::ErrorKind::NotFound,
