@@ -38,7 +38,7 @@ use crate::datasource::{
     get_statistics_with_limit, object_store::ObjectStore, PartitionedFile, TableProvider,
 };
 
-use super::helpers::{pruned_partition_list, split_files};
+use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
 /// Options for creating a `ListingTable`
 pub struct ListingOptions {
@@ -210,9 +210,13 @@ impl TableProvider for ListingTable {
 
     fn supports_filter_pushdown(
         &self,
-        _filter: &Expr,
+        filter: &Expr,
     ) -> Result<TableProviderFilterPushDown> {
-        Ok(TableProviderFilterPushDown::Inexact)
+        if expr_applicable_for_cols(&self.options.table_partition_cols, filter) {
+            Ok(TableProviderFilterPushDown::Exact)
+        } else {
+            Ok(TableProviderFilterPushDown::Unsupported)
+        }
     }
 }
 
