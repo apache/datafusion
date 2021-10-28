@@ -37,22 +37,21 @@ use crate::scalar::ScalarValue;
 use futures::StreamExt;
 use std::pin::Pin;
 
-/// Get all files as well as the summary statistic
-/// if the optional `limit` is provided, includes only sufficient files
-/// needed to read up to `limit` number of rows
+/// Get all files as well as the file level summary statistics (no statistic for partition columns).
+/// If the optional `limit` is provided, includes only sufficient files.
+/// Needed to read up to `limit` number of rows.
 /// TODO fix case where `num_rows` and `total_byte_size` are not defined (stat should be None instead of Some(0))
-/// TODO check that stats for partition columns are correct
 pub async fn get_statistics_with_limit(
     all_files: impl Stream<Item = Result<(PartitionedFile, Statistics)>>,
-    schema: SchemaRef,
+    file_schema: SchemaRef,
     limit: Option<usize>,
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
 
     let mut total_byte_size = 0;
-    let mut null_counts = vec![0; schema.fields().len()];
+    let mut null_counts = vec![0; file_schema.fields().len()];
     let mut has_statistics = false;
-    let (mut max_values, mut min_values) = create_max_min_accs(&schema);
+    let (mut max_values, mut min_values) = create_max_min_accs(&file_schema);
 
     let mut num_rows = 0;
     let mut is_exact = true;
@@ -105,7 +104,7 @@ pub async fn get_statistics_with_limit(
 
     let column_stats = if has_statistics {
         Some(get_col_stats(
-            &*schema,
+            &*file_schema,
             null_counts,
             &mut max_values,
             &mut min_values,

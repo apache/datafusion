@@ -31,6 +31,7 @@ use datafusion::{
         },
     },
     error::{DataFusionError, Result},
+    physical_plan::ColumnStatistics,
     prelude::ExecutionContext,
     test_util::{arrow_test_data, parquet_test_data},
 };
@@ -157,6 +158,7 @@ async fn parquet_multiple_partitions() -> Result<()> {
         ],
         &["year", "month", "day"],
         "",
+        "alltypes_plain.parquet",
     )
     .await;
 
@@ -186,6 +188,65 @@ async fn parquet_multiple_partitions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn parquet_statistics() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    register_partitioned_alltypes_parquet(
+        &mut ctx,
+        &[
+            "year=2021/month=09/day=09/file.parquet",
+            "year=2021/month=10/day=09/file.parquet",
+            "year=2021/month=10/day=28/file.parquet",
+        ],
+        &["year", "month", "day"],
+        "",
+        // This is the only file we found in the test set with
+        // actual stats. It has 1 column / 1 row.
+        "single_nan.parquet",
+    )
+    .await;
+
+    //// NO PROJECTION ////
+    let logical_plan = ctx.sql("SELECT * FROM t").await?.to_logical_plan();
+
+    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+    assert_eq!(physical_plan.schema().fields().len(), 4);
+
+    let stat_cols = physical_plan
+        .statistics()
+        .column_statistics
+        .expect("col stats should be defined");
+    assert_eq!(stat_cols.len(), 4);
+    // stats for the first col are read from the parquet file
+    assert_eq!(stat_cols[0].null_count, Some(3));
+    // TODO assert partition column (1,2,3) stats once implemented (#1186)
+    assert_eq!(stat_cols[1], ColumnStatistics::default());
+    assert_eq!(stat_cols[2], ColumnStatistics::default());
+    assert_eq!(stat_cols[3], ColumnStatistics::default());
+
+    //// WITH PROJECTION ////
+    let logical_plan = ctx
+        .sql("SELECT mycol, day FROM t WHERE day='28'")
+        .await?
+        .to_logical_plan();
+
+    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+    assert_eq!(physical_plan.schema().fields().len(), 2);
+
+    let stat_cols = physical_plan
+        .statistics()
+        .column_statistics
+        .expect("col stats should be defined");
+    assert_eq!(stat_cols.len(), 2);
+    // stats for the first col are read from the parquet file
+    assert_eq!(stat_cols[0].null_count, Some(1));
+    // TODO assert partition column stats once implemented (#1186)
+    assert_eq!(stat_cols[1], ColumnStatistics::default());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn parquet_overlapping_columns() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 
@@ -199,6 +260,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
         ],
         &["id"],
         "",
+        "alltypes_plain.parquet",
     )
     .await;
 
@@ -237,14 +299,16 @@ async fn register_partitioned_alltypes_parquet(
     store_paths: &[&str],
     partition_cols: &[&str],
     table_path: &str,
+    source_file: &str,
 ) {
     let testdata = parquet_test_data();
-    let parquet_file_path = format!("{}/alltypes_plain.parquet", testdata);
+    let parquet_file_path = format!("{}/{}", testdata, source_file);
     let object_store =
         MirroringObjectStore::new_arc(parquet_file_path.clone(), store_paths);
 
     let mut options = ListingOptions::new(Arc::new(ParquetFormat::default()));
     options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
+    options.collect_stat = true;
 
     let file_schema = options
         .infer_schema(Arc::clone(&object_store), store_paths[0])

@@ -108,7 +108,7 @@ impl PhysicalPlanConfig {
                     DEFAULT_PARTITION_COLUMN_DATATYPE.clone(),
                     false,
                 ));
-                // TODO provide accurate stat for partition column
+                // TODO provide accurate stat for partition column (#1186)
                 table_cols_stats.push(ColumnStatistics::default())
             }
         }
