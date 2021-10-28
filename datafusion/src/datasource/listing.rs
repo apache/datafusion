@@ -20,22 +20,29 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::{
+    datatypes::{DataType, Field, Schema, SchemaRef},
+    record_batch::RecordBatch,
+};
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::{
+    stream::{self, TryChunksError},
+    StreamExt, TryStreamExt,
+};
 
 use crate::{
-    datasource::PartitionedFile,
+    datasource::{MemTable, PartitionedFile},
     error::{DataFusionError, Result},
-    logical_plan::Expr,
-    physical_plan::{ExecutionPlan, Statistics},
+    execution::context::ExecutionContext,
+    logical_plan::{self, Expr},
+    physical_plan::{functions::Volatility, ExecutionPlan, Statistics},
 };
 
 use super::{
     datasource::TableProviderFilterPushDown,
     file_format::{FileFormat, PhysicalPlanConfig},
     get_statistics_with_limit,
-    object_store::ObjectStore,
+    object_store::{FileMeta, ObjectStore},
     PartitionedFileStream, TableProvider,
 };
 
@@ -242,10 +249,13 @@ impl ListingTable {
 
 /// Discover the partitions on the given path and prune out files
 /// relative to irrelevant partitions using `filters` expressions
+/// TODO for tables with many files (10k+), it will usually more efficient
+/// to first list the folders relative to the first partition dimension,
+/// prune those, then list only the contain of the remaining folders.
 async fn pruned_partition_list(
     store: &dyn ObjectStore,
     path: &str,
-    _filters: &[Expr],
+    filters: &[Expr],
     file_extension: &str,
     partition_names: &[String],
 ) -> Result<PartitionedFileStream> {
@@ -262,8 +272,61 @@ async fn pruned_partition_list(
                 }),
         ))
     } else {
-        todo!("use filters to prune partitions")
+        let applicable_filters = filters
+            .iter()
+            .filter(|f| expr_applicable_for_cols(partition_names, f));
+
+        let schema = Arc::new(Schema::new(
+            partition_names
+                .iter()
+                .map(|pn| Field::new(pn, DataType::Utf8, false))
+                .collect(),
+        ));
+
+        let stream_schema = Arc::clone(&schema);
+        let stream_path = path.to_owned();
+        // TODO avoid collecting but have a streaming memory table instead
+        let batches: Vec<RecordBatch> = store
+            .list_file_with_suffix(path, file_extension)
+            .await?
+            .try_chunks(64)
+            .map_err(|TryChunksError(_, e)| e)
+            .map_ok(move |metas| {
+                paths_to_batch(Arc::clone(&stream_schema), &stream_path, metas)
+            })
+            .try_collect()
+            .await?;
+
+        let mem_table = MemTable::try_new(schema, vec![batches])?;
+
+        // Filter the partitions using a local datafusion context
+        // TODO having the external context would allow us to resolve `Volatility::Stable`
+        // scalar functions (`ScalarFunction` & `ScalarUDF`) and `ScalarVariable`s
+        let mut ctx = ExecutionContext::new();
+        let mut df = ctx.read_table(Arc::new(mem_table))?;
+        for filter in applicable_filters {
+            df = df.filter(filter.clone())?;
+        }
+        let filtered_batches = df.collect().await?;
+
+        Ok(Box::pin(stream::iter(
+            batches_to_paths(path, &filtered_batches)
+                .into_iter()
+                .map(Ok),
+        )))
     }
+}
+
+/// convert the paths of the files to a record batch with the following columns:
+/// - one column by partition
+/// - on column for the file size named `_df_part_file_size_`
+fn paths_to_batch(schema: SchemaRef, path: &str, metas: Vec<FileMeta>) -> RecordBatch {
+    RecordBatch::new_empty(schema)
+}
+
+/// convert a set of record batches created by `paths_to_batch()` back to partitioned files.
+fn batches_to_paths(path: &str, batches: &[RecordBatch]) -> Vec<PartitionedFile> {
+    vec![]
 }
 
 fn split_files(
@@ -278,6 +341,90 @@ fn split_files(
         .chunks(chunk_size)
         .map(|c| c.to_vec())
         .collect()
+}
+
+fn expr_applicable_for_cols<'a>(col_names: &[String], expr: &'a Expr) -> bool {
+    match expr {
+        // leaf
+        Expr::Literal(_) => true,
+        // TODO how to handle qualified / unqualified names?
+        Expr::Column(logical_plan::Column { ref name, .. }) => col_names.contains(name),
+        // unary
+        Expr::Alias(child, _)
+        | Expr::Not(child)
+        | Expr::IsNotNull(child)
+        | Expr::IsNull(child)
+        | Expr::Negative(child)
+        | Expr::Cast { expr: child, .. }
+        | Expr::TryCast { expr: child, .. } => expr_applicable_for_cols(col_names, child),
+        // binary
+        Expr::BinaryExpr {
+            ref left,
+            ref right,
+            ..
+        } => {
+            expr_applicable_for_cols(col_names, left)
+                && expr_applicable_for_cols(col_names, right)
+        }
+        // ternary
+        Expr::Between {
+            expr: item,
+            low,
+            high,
+            ..
+        } => {
+            expr_applicable_for_cols(col_names, item)
+                && expr_applicable_for_cols(col_names, low)
+                && expr_applicable_for_cols(col_names, high)
+        }
+        // variadic
+        Expr::ScalarFunction { fun, args } => match fun.volatility() {
+            Volatility::Immutable => args
+                .iter()
+                .all(|arg| expr_applicable_for_cols(col_names, arg)),
+            // TODO: Stable functions could be `applicable`, but that would require access to the context
+            Volatility::Stable => false,
+            Volatility::Volatile => false,
+        },
+        Expr::ScalarUDF { fun, args } => match fun.signature.volatility {
+            Volatility::Immutable => args
+                .iter()
+                .all(|arg| expr_applicable_for_cols(col_names, arg)),
+            // TODO: Stable functions could be `applicable`, but that would require access to the context
+            Volatility::Stable => false,
+            Volatility::Volatile => false,
+        },
+        Expr::InList {
+            expr: item, list, ..
+        } => {
+            expr_applicable_for_cols(col_names, item)
+                && list.iter().all(|e| expr_applicable_for_cols(col_names, e))
+        }
+        Expr::Case {
+            expr,
+            when_then_expr,
+            else_expr,
+        } => {
+            let expr_constant = expr
+                .as_ref()
+                .map(|e| expr_applicable_for_cols(col_names, e))
+                .unwrap_or(true);
+            let else_constant = else_expr
+                .as_ref()
+                .map(|e| expr_applicable_for_cols(col_names, e))
+                .unwrap_or(true);
+            let when_then_constant = when_then_expr.iter().all(|(w, th)| {
+                expr_applicable_for_cols(col_names, w)
+                    && expr_applicable_for_cols(col_names, th)
+            });
+            expr_constant && else_constant && when_then_constant
+        }
+        // TODO other expressions are not handled yet:
+        // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
+        // - Can `Wildcard` be considered as a `Literal`?
+        // - ScalarVariable could be `applicable`, but that would require access to the context
+        _ => false,
+    }
 }
 
 #[cfg(test)]
