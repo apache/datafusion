@@ -41,6 +41,7 @@ use std::pin::Pin;
 /// if the optional `limit` is provided, includes only sufficient files
 /// needed to read up to `limit` number of rows
 /// TODO fix case where `num_rows` and `total_byte_size` are not defined (stat should be None instead of Some(0))
+/// TODO check that stats for partition columns are correct
 pub async fn get_statistics_with_limit(
     all_files: impl Stream<Item = Result<(PartitionedFile, Statistics)>>,
     schema: SchemaRef,

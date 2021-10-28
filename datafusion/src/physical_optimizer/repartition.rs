@@ -109,7 +109,7 @@ mod tests {
     use arrow::datatypes::Schema;
 
     use super::*;
-    use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::datasource::file_format::PhysicalPlanConfig;
     use crate::datasource::PartitionedFile;
     use crate::physical_plan::file_format::ParquetExec;
     use crate::physical_plan::projection::ProjectionExec;
@@ -118,17 +118,20 @@ mod tests {
 
     #[test]
     fn added_repartition_to_single_partition() -> Result<()> {
-        let schema = Arc::new(Schema::empty());
+        let file_schema = Arc::new(Schema::empty());
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ParquetExec::new(
-                TestObjectStore::new_arc(&[("x", 100)]),
-                vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                Statistics::default(),
-                schema,
-                None,
-                None,
-                2048,
+                PhysicalPlanConfig {
+                    object_store: TestObjectStore::new_arc(&[("x", 100)]),
+                    file_schema,
+                    file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+                    statistics: Statistics::default(),
+                    projection: None,
+                    batch_size: 2048,
+                    limit: None,
+                    table_partition_dims: vec![],
+                },
                 None,
             )),
         )?;
@@ -152,19 +155,25 @@ mod tests {
 
     #[test]
     fn repartition_deepest_node() -> Result<()> {
-        let schema = Arc::new(Schema::empty());
+        let file_schema = Arc::new(Schema::empty());
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ProjectionExec::try_new(
                 vec![],
                 Arc::new(ParquetExec::new(
-                    Arc::new(LocalFileSystem {}),
-                    vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                    Statistics::default(),
-                    schema,
-                    None,
-                    None,
-                    2048,
+                    PhysicalPlanConfig {
+                        object_store: TestObjectStore::new_arc(&[("x", 100)]),
+                        file_schema,
+                        file_groups: vec![vec![PartitionedFile::new(
+                            "x".to_string(),
+                            100,
+                        )]],
+                        statistics: Statistics::default(),
+                        projection: None,
+                        batch_size: 2048,
+                        limit: None,
+                        table_partition_dims: vec![],
+                    },
                     None,
                 )),
             )?),

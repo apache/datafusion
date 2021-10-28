@@ -36,25 +36,25 @@ use async_trait::async_trait;
 use super::object_store::{ObjectReader, ObjectReaderStream, ObjectStore};
 use super::PartitionedFile;
 
-/// The configurations to be passed when creating a physical plan for
-/// a given file format.
+/// The base configurations to provide when creating a physical plan for
+/// any given file format.
 pub struct PhysicalPlanConfig {
     /// Store from which the `files` should be fetched
     pub object_store: Arc<dyn ObjectStore>,
     /// Schema before projection
-    pub schema: SchemaRef,
+    pub file_schema: SchemaRef,
     /// List of files to be processed, grouped into partitions
-    pub files: Vec<Vec<PartitionedFile>>,
+    pub file_groups: Vec<Vec<PartitionedFile>>,
     /// Estimated overall statistics of the plan, taking `filters` into account
     pub statistics: Statistics,
     /// Columns on which to project the data
     pub projection: Option<Vec<usize>>,
     /// The maximum number of records per arrow column
     pub batch_size: usize,
-    /// The filters that were pushed down to this execution plan
-    pub filters: Vec<Expr>,
     /// The minimum number of records required from this source plan
     pub limit: Option<usize>,
+    /// The partitioning column names
+    pub table_partition_dims: Vec<String>,
 }
 
 /// This trait abstracts all the file format specific implementations
@@ -81,5 +81,6 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     async fn create_physical_plan(
         &self,
         conf: PhysicalPlanConfig,
+        filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }

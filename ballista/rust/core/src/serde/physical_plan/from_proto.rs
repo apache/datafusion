@@ -35,6 +35,7 @@ use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
     CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
 };
+use datafusion::datasource::file_format::PhysicalPlanConfig;
 use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::datasource::object_store::{FileMeta, ObjectStoreRegistry, SizedFile};
 use datafusion::datasource::PartitionedFile;
@@ -124,18 +125,22 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let statistics = convert_required!(scan.statistics)?;
 
                 Ok(Arc::new(CsvExec::new(
-                    Arc::new(LocalFileSystem {}),
-                    scan.file_groups
-                        .iter()
-                        .map(|f| f.try_into())
-                        .collect::<Result<Vec<_>, _>>()?,
-                    statistics,
-                    schema,
+                    PhysicalPlanConfig {
+                        object_store: Arc::new(LocalFileSystem {}),
+                        file_schema: schema,
+                        file_groups: scan
+                            .file_groups
+                            .iter()
+                            .map(|f| f.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                        statistics,
+                        projection: Some(projection),
+                        batch_size: scan.batch_size as usize,
+                        limit: scan.limit.as_ref().map(|sl| sl.limit as usize),
+                        table_partition_dims: vec![],
+                    },
                     scan.has_header,
                     str_to_byte(&scan.delimiter)?,
-                    Some(projection),
-                    scan.batch_size as usize,
-                    scan.limit.as_ref().map(|sl| sl.limit as usize),
                 )))
             }
             PhysicalPlanType::ParquetScan(scan) => {
@@ -144,18 +149,22 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let statistics = convert_required!(scan.statistics)?;
 
                 Ok(Arc::new(ParquetExec::new(
-                    Arc::new(LocalFileSystem {}),
-                    scan.file_groups
-                        .iter()
-                        .map(|p| p.try_into())
-                        .collect::<Result<Vec<_>, _>>()?,
-                    statistics,
-                    schema,
-                    Some(projection),
+                    PhysicalPlanConfig {
+                        object_store: Arc::new(LocalFileSystem {}),
+                        file_schema: schema,
+                        file_groups: scan
+                            .file_groups
+                            .iter()
+                            .map(|f| f.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                        statistics,
+                        projection: Some(projection),
+                        batch_size: scan.batch_size as usize,
+                        limit: scan.limit.as_ref().map(|sl| sl.limit as usize),
+                        table_partition_dims: scan.table_partition_dims.clone(),
+                    },
                     // TODO predicate should be de-serialized
                     None,
-                    scan.batch_size as usize,
-                    scan.limit.as_ref().map(|sl| sl.limit as usize),
                 )))
             }
             PhysicalPlanType::AvroScan(scan) => {
@@ -163,18 +172,20 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let projection = scan.projection.iter().map(|i| *i as usize).collect();
                 let statistics = convert_required!(scan.statistics)?;
 
-                Ok(Arc::new(AvroExec::new(
-                    Arc::new(LocalFileSystem {}),
-                    scan.file_groups
+                Ok(Arc::new(AvroExec::new(PhysicalPlanConfig {
+                    object_store: Arc::new(LocalFileSystem {}),
+                    file_schema: schema,
+                    file_groups: scan
+                        .file_groups
                         .iter()
                         .map(|f| f.try_into())
                         .collect::<Result<Vec<_>, _>>()?,
                     statistics,
-                    schema,
-                    Some(projection),
-                    scan.batch_size as usize,
-                    scan.limit.as_ref().map(|sl| sl.limit as usize),
-                )))
+                    projection: Some(projection),
+                    batch_size: scan.batch_size as usize,
+                    limit: scan.limit.as_ref().map(|sl| sl.limit as usize),
+                    table_partition_dims: vec![],
+                })))
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> =

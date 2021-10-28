@@ -32,6 +32,7 @@ use super::FileFormat;
 use super::PhysicalPlanConfig;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
+use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
@@ -93,16 +94,9 @@ impl FileFormat for JsonFormat {
     async fn create_physical_plan(
         &self,
         conf: PhysicalPlanConfig,
+        _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = NdJsonExec::new(
-            conf.object_store,
-            conf.files,
-            conf.statistics,
-            conf.schema,
-            conf.projection,
-            conf.batch_size,
-            conf.limit,
-        );
+        let exec = NdJsonExec::new(conf);
         Ok(Arc::new(exec))
     }
 }
@@ -211,7 +205,7 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let filename = "tests/jsons/2.json";
         let format = JsonFormat::default();
-        let schema = format
+        let file_schema = format
             .infer_schema(local_object_reader_stream(vec![filename.to_owned()]))
             .await
             .expect("Schema inference");
@@ -219,18 +213,21 @@ mod tests {
             .infer_stats(local_object_reader(filename.to_owned()))
             .await
             .expect("Stats inference");
-        let files = vec![vec![local_unpartitioned_file(filename.to_owned())]];
+        let file_groups = vec![vec![local_unpartitioned_file(filename.to_owned())]];
         let exec = format
-            .create_physical_plan(PhysicalPlanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                schema,
-                files,
-                statistics,
-                projection: projection.clone(),
-                batch_size,
-                filters: vec![],
-                limit,
-            })
+            .create_physical_plan(
+                PhysicalPlanConfig {
+                    object_store: Arc::new(LocalFileSystem {}),
+                    file_schema,
+                    file_groups,
+                    statistics,
+                    projection: projection.clone(),
+                    batch_size,
+                    limit,
+                    table_partition_dims: vec![],
+                },
+                &[],
+            )
             .await?;
         Ok(exec)
     }

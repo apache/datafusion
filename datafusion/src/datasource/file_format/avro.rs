@@ -29,6 +29,7 @@ use super::{FileFormat, PhysicalPlanConfig};
 use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
+use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::AvroExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
@@ -61,16 +62,9 @@ impl FileFormat for AvroFormat {
     async fn create_physical_plan(
         &self,
         conf: PhysicalPlanConfig,
+        _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = AvroExec::new(
-            conf.object_store,
-            conf.files,
-            conf.statistics,
-            conf.schema,
-            conf.projection,
-            conf.batch_size,
-            conf.limit,
-        );
+        let exec = AvroExec::new(conf);
         Ok(Arc::new(exec))
     }
 }
@@ -346,7 +340,7 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/{}", testdata, file_name);
         let format = AvroFormat {};
-        let schema = format
+        let file_schema = format
             .infer_schema(local_object_reader_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
@@ -354,18 +348,21 @@ mod tests {
             .infer_stats(local_object_reader(filename.clone()))
             .await
             .expect("Stats inference");
-        let files = vec![vec![local_unpartitioned_file(filename.to_owned())]];
+        let file_groups = vec![vec![local_unpartitioned_file(filename.to_owned())]];
         let exec = format
-            .create_physical_plan(PhysicalPlanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                schema,
-                files,
-                statistics,
-                projection: projection.clone(),
-                batch_size,
-                filters: vec![],
-                limit,
-            })
+            .create_physical_plan(
+                PhysicalPlanConfig {
+                    object_store: Arc::new(LocalFileSystem {}),
+                    file_schema,
+                    file_groups,
+                    statistics,
+                    projection: projection.clone(),
+                    batch_size,
+                    limit,
+                    table_partition_dims: vec![],
+                },
+                &[],
+            )
             .await?;
         Ok(exec)
     }

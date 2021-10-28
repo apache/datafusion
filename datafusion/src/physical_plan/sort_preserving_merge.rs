@@ -658,6 +658,7 @@ impl RecordBatchStream for SortPreservingMergeStream {
 
 #[cfg(test)]
 mod tests {
+    use crate::datasource::file_format::PhysicalPlanConfig;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::metrics::MetricValue;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
@@ -936,15 +937,18 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
 
         let csv = Arc::new(CsvExec::new(
-            Arc::new(LocalFileSystem {}),
-            files,
-            Statistics::default(),
-            Arc::clone(&schema),
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: Arc::clone(&schema),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_dims: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         ));
 
         let sort = vec![
@@ -1016,15 +1020,18 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
 
         let csv = Arc::new(CsvExec::new(
-            Arc::new(LocalFileSystem {}),
-            files,
-            Statistics::default(),
-            schema,
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: schema,
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_dims: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         ));
 
         let sorted = basic_sort(csv, sort).await;

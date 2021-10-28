@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
 use crate::datasource::file_format::parquet::ChunkObjectReader;
+use crate::datasource::file_format::PhysicalPlanConfig;
 use crate::datasource::object_store::ObjectStore;
 use crate::datasource::PartitionedFile;
 use crate::{
@@ -81,6 +82,8 @@ pub struct ParquetExec {
     predicate_builder: Option<PruningPredicate>,
     /// Optional limit of the number of rows
     limit: Option<usize>,
+    /// Partioning column names
+    table_partition_dims: Vec<String>,
 }
 
 /// Stores metrics about the parquet execution for a particular parquet file
@@ -95,26 +98,19 @@ struct ParquetFileMetrics {
 impl ParquetExec {
     /// Create a new Parquet reader execution plan provided file list and schema.
     /// Even if `limit` is set, ParquetExec rounds up the number of records to the next `batch_size`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        object_store: Arc<dyn ObjectStore>,
-        file_groups: Vec<Vec<PartitionedFile>>,
-        statistics: Statistics,
-        schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-        predicate: Option<Expr>,
-        batch_size: usize,
-        limit: Option<usize>,
-    ) -> Self {
+    pub fn new(base_config: PhysicalPlanConfig, predicate: Option<Expr>) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
-        file_groups, projection, predicate, limit);
+        base_config.file_groups, base_config.projection, predicate, base_config.limit);
 
         let metrics = ExecutionPlanMetricsSet::new();
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
         let predicate_builder = predicate.and_then(|predicate_expr| {
-            match PruningPredicate::try_new(&predicate_expr, schema.clone()) {
+            match PruningPredicate::try_new(
+                &predicate_expr,
+                base_config.file_schema.clone(),
+            ) {
                 Ok(predicate_builder) => Some(predicate_builder),
                 Err(e) => {
                     debug!(
@@ -127,55 +123,29 @@ impl ParquetExec {
             }
         });
 
-        let projection = match projection {
-            Some(p) => p,
-            None => (0..schema.fields().len()).collect(),
+        let expanded_projection = match &base_config.projection {
+            Some(p) => p.to_vec(),
+            None => (0..base_config.file_schema.fields().len()).collect(),
         };
 
-        let (projected_schema, projected_statistics) =
-            Self::project(&projection, schema, statistics);
-
-        Self {
-            object_store,
-            file_groups,
-            schema: projected_schema,
-            projection,
-            metrics,
-            predicate_builder,
-            batch_size,
-            statistics: projected_statistics,
-            limit,
-        }
-    }
-
-    fn project(
-        projection: &[usize],
-        schema: SchemaRef,
-        statistics: Statistics,
-    ) -> (SchemaRef, Statistics) {
-        let projected_schema = Schema::new(
-            projection
-                .iter()
-                .map(|i| schema.field(*i).clone())
-                .collect(),
+        let (projected_schema, projected_statistics) = super::project(
+            &base_config.projection,
+            base_config.file_schema,
+            base_config.statistics,
         );
 
-        let new_column_statistics = statistics.column_statistics.map(|stats| {
-            let mut projected_stats = Vec::with_capacity(projection.len());
-            for proj in projection {
-                projected_stats.push(stats[*proj].clone());
-            }
-            projected_stats
-        });
-
-        let statistics = Statistics {
-            num_rows: statistics.num_rows,
-            total_byte_size: statistics.total_byte_size,
-            column_statistics: new_column_statistics,
-            is_exact: statistics.is_exact,
-        };
-
-        (Arc::new(projected_schema), statistics)
+        Self {
+            object_store: base_config.object_store,
+            file_groups: base_config.file_groups,
+            schema: projected_schema,
+            projection: expanded_projection,
+            metrics,
+            predicate_builder,
+            batch_size: base_config.batch_size,
+            statistics: projected_statistics,
+            limit: base_config.limit,
+            table_partition_dims: base_config.table_partition_dims,
+        }
     }
 
     /// List of data files
@@ -190,10 +160,13 @@ impl ParquetExec {
     pub fn batch_size(&self) -> usize {
         self.batch_size
     }
-
     /// Limit in nr. of rows
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+    /// Partitioning column names
+    pub fn table_partition_dims(&self) -> &[String] {
+        &self.table_partition_dims
     }
 }
 
@@ -483,6 +456,7 @@ fn read_partition(
             match batch_reader.next() {
                 Some(Ok(batch)) => {
                     total_rows += batch.num_rows();
+                    // TODO add partitioning columns here!
                     send_result(&response_tx, Ok(batch))?;
                     if limit.map(|l| total_rows >= l).unwrap_or(false) {
                         break 'outer;
@@ -537,15 +511,18 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let parquet_exec = ParquetExec::new(
-            Arc::new(LocalFileSystem {}),
-            vec![vec![local_unpartitioned_file(filename.clone())]],
-            Statistics::default(),
-            ParquetFormat::default()
-                .infer_schema(local_object_reader_stream(vec![filename]))
-                .await?,
-            Some(vec![0, 1, 2]),
-            None,
-            1024,
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
+                file_schema: ParquetFormat::default()
+                    .infer_schema(local_object_reader_stream(vec![filename]))
+                    .await?,
+                statistics: Statistics::default(),
+                projection: Some(vec![0, 1, 2]),
+                batch_size: 1024,
+                limit: None,
+                table_partition_dims: vec![],
+            },
             None,
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);

@@ -52,7 +52,7 @@ pub struct ListingOptions {
     /// - If there is a third level of partitioning it will be ignored.
     /// - Files that don't follow this partitioning will be ignored.
     /// Note that only `DataType::Utf8` is supported for the column type.
-    pub partitions: Vec<String>,
+    pub table_partition_dims: Vec<String>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
     /// to be opened and at least partially parsed.
@@ -73,7 +73,7 @@ impl ListingOptions {
         Self {
             file_extension: String::new(),
             format,
-            partitions: vec![],
+            table_partition_dims: vec![],
             collect_stat: false,
             target_partitions: 1,
         }
@@ -97,7 +97,7 @@ impl ListingOptions {
         let file_schema = self.format.infer_schema(Box::pin(file_stream)).await?;
         // Add the partition columns to the file schema
         let mut fields = file_schema.fields().clone();
-        for part in &self.partitions {
+        for part in &self.table_partition_dims {
             fields.push(Field::new(part, DataType::Utf8, false));
         }
         Ok(Arc::new(Schema::new(fields)))
@@ -180,16 +180,19 @@ impl TableProvider for ListingTable {
         // create the execution plan
         self.options
             .format
-            .create_physical_plan(PhysicalPlanConfig {
-                object_store: Arc::clone(&self.object_store),
-                schema: self.schema(),
-                files: partitioned_file_lists,
-                statistics,
-                projection: projection.clone(),
-                batch_size,
-                filters: filters.to_vec(),
-                limit,
-            })
+            .create_physical_plan(
+                PhysicalPlanConfig {
+                    object_store: Arc::clone(&self.object_store),
+                    file_schema: self.schema(),
+                    file_groups: partitioned_file_lists,
+                    statistics,
+                    projection: projection.clone(),
+                    batch_size,
+                    limit,
+                    table_partition_dims: self.options.table_partition_dims.clone(),
+                },
+                filters,
+            )
             .await
     }
 
@@ -215,7 +218,7 @@ impl ListingTable {
             &self.table_path,
             filters,
             &self.options.file_extension,
-            &self.options.partitions,
+            &self.options.table_partition_dims,
         )
         .await?;
 
@@ -285,7 +288,7 @@ mod tests {
         let opt = ListingOptions {
             file_extension: ".avro".to_owned(),
             format: Arc::new(AvroFormat {}),
-            partitions: vec![String::from("p1")],
+            table_partition_dims: vec![String::from("p1")],
             target_partitions: 4,
             collect_stat: true,
         };
@@ -377,7 +380,7 @@ mod tests {
         let opt = ListingOptions {
             file_extension: "parquet".to_owned(),
             format: Arc::new(ParquetFormat::default()),
-            partitions: vec![],
+            table_partition_dims: vec![],
             target_partitions: 2,
             collect_stat: true,
         };
@@ -407,7 +410,7 @@ mod tests {
         let opt = ListingOptions {
             file_extension: "".to_owned(),
             format: Arc::new(format),
-            partitions: vec![],
+            table_partition_dims: vec![],
             target_partitions,
             collect_stat: true,
         };

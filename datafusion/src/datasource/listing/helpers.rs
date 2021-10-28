@@ -29,7 +29,7 @@ use arrow::{
 };
 use chrono::{TimeZone, Utc};
 use futures::{
-    stream::{self, TryChunksError},
+    stream::{self},
     StreamExt, TryStreamExt,
 };
 use log::debug;
@@ -79,9 +79,9 @@ pub async fn pruned_partition_list(
     table_path: &str,
     filters: &[Expr],
     file_extension: &str,
-    partition_names: &[String],
+    table_partition_dims: &[String],
 ) -> Result<PartitionedFileStream> {
-    if partition_names.is_empty() {
+    if table_partition_dims.is_empty() {
         Ok(Box::pin(
             store
                 .list_file_with_suffix(table_path, file_extension)
@@ -96,17 +96,19 @@ pub async fn pruned_partition_list(
     } else {
         let applicable_filters = filters
             .iter()
-            .filter(|f| expr_applicable_for_cols(partition_names, f));
+            .filter(|f| expr_applicable_for_cols(table_partition_dims, f));
 
-        let partition_names = partition_names.to_vec();
+        let table_partition_dims = table_partition_dims.to_vec();
         let stream_path = table_path.to_owned();
         // TODO avoid collecting but have a streaming memory table instead
         let batches: Vec<RecordBatch> = store
             .list_file_with_suffix(table_path, file_extension)
             .await?
-            .try_chunks(64)
-            .map_err(|TryChunksError(_, e)| e)
-            .map(move |metas| paths_to_batch(&partition_names, &stream_path, &metas?))
+            .chunks(64)
+            .map(|v| v.into_iter().collect::<Result<Vec<_>>>())
+            .map(move |metas| {
+                paths_to_batch(&table_partition_dims, &stream_path, &metas?)
+            })
             .try_collect()
             .await?;
 
@@ -135,20 +137,20 @@ pub async fn pruned_partition_list(
 /// - ... one column by partition ...
 /// Note: For the last modified date, this looses precisions higher than millisecond.
 fn paths_to_batch(
-    partition_names: &[String],
+    table_partition_dims: &[String],
     table_path: &str,
     metas: &[FileMeta],
 ) -> Result<RecordBatch> {
     let mut key_builder = StringBuilder::new(metas.len());
     let mut length_builder = UInt64Builder::new(metas.len());
     let mut modified_builder = Date64Builder::new(metas.len());
-    let mut partition_builders = partition_names
+    let mut partition_builders = table_partition_dims
         .iter()
         .map(|_| StringBuilder::new(metas.len()))
         .collect::<Vec<_>>();
     for file_meta in metas {
         if let Some(partition_values) =
-            parse_partitions_for_path(table_path, file_meta.path(), partition_names)
+            parse_partitions_for_path(table_path, file_meta.path(), table_partition_dims)
         {
             key_builder.append_value(file_meta.path())?;
             length_builder.append_value(file_meta.size())?;
@@ -180,7 +182,7 @@ fn paths_to_batch(
         Field::new(FILE_PATH_COLUMN_NAME, DataType::UInt64, false),
         Field::new(FILE_MODIFIED_COLUMN_NAME, DataType::Date64, false),
     ];
-    for pn in partition_names {
+    for pn in table_partition_dims {
         fields.push(Field::new(pn, DataType::Utf8, false));
     }
 
@@ -231,11 +233,11 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Vec<PartitionedFile> {
 }
 
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
-/// associated to the partitions defined by `partition_names`
+/// associated to the partitions defined by `table_partition_dims`
 fn parse_partitions_for_path<'a>(
     table_path: &str,
     file_path: &'a str,
-    partition_names: &[String],
+    table_partition_dims: &[String],
 ) -> Option<Vec<&'a str>> {
     let subpath = file_path.strip_prefix(table_path)?;
 
@@ -246,7 +248,7 @@ fn parse_partitions_for_path<'a>(
     };
 
     let mut part_values = vec![];
-    for (path, pn) in subpath.split('/').zip(partition_names) {
+    for (path, pn) in subpath.split('/').zip(table_partition_dims) {
         if let Some(val) = path.strip_prefix(&format!("{}=", pn)) {
             part_values.push(val);
         } else {

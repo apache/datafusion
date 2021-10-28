@@ -295,7 +295,7 @@ message ListingTableScanNode {
   ProjectionColumns projection = 4;
   Schema schema = 5;
   repeated LogicalExprNode filters = 6;
-  repeated string partitions = 7;
+  repeated string table_partition_dims = 7;
   bool collect_stat = 8;
   uint32 target_partitions = 9;
   oneof FileFormatType {
@@ -621,6 +621,7 @@ message ParquetScanExecNode {
   repeated uint32 projection = 6;
   ScanLimit limit = 7;
   Statistics statistics = 8;
+  repeated string table_partition_dims = 9;
 }
 
 message CsvScanExecNode {
@@ -632,6 +633,7 @@ message CsvScanExecNode {
   repeated uint32 projection = 6;
   ScanLimit limit = 7;
   Statistics statistics = 8;
+  repeated string table_partition_dims = 9;
 }
 
 message AvroScanExecNode {
@@ -641,6 +643,7 @@ message AvroScanExecNode {
   repeated uint32 projection = 6;
   ScanLimit limit = 7;
   Statistics statistics = 8;
+  repeated string table_partition_dims = 9;
 }
 
 enum PartitionMode {

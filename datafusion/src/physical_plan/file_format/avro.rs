@@ -18,13 +18,14 @@
 //! Execution plan for reading line-delimited Avro files
 #[cfg(feature = "avro")]
 use crate::avro_to_arrow;
+use crate::datasource::file_format::PhysicalPlanConfig;
 use crate::datasource::object_store::ObjectStore;
 use crate::datasource::PartitionedFile;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 #[cfg(feature = "avro")]
 use arrow::error::ArrowError;
 
@@ -46,35 +47,28 @@ pub struct AvroExec {
     projected_schema: SchemaRef,
     batch_size: usize,
     limit: Option<usize>,
+    table_partition_dims: Vec<String>,
 }
 
 impl AvroExec {
     /// Create a new Avro reader execution plan provided file list and schema
-    pub fn new(
-        object_store: Arc<dyn ObjectStore>,
-        file_groups: Vec<Vec<PartitionedFile>>,
-        statistics: Statistics,
-        file_schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-        batch_size: usize,
-        limit: Option<usize>,
-    ) -> Self {
-        let projected_schema = match &projection {
-            None => Arc::clone(&file_schema),
-            Some(p) => Arc::new(Schema::new(
-                p.iter().map(|i| file_schema.field(*i).clone()).collect(),
-            )),
-        };
+    pub fn new(base_config: PhysicalPlanConfig) -> Self {
+        let (projected_schema, projected_statistics) = super::project(
+            &base_config.projection,
+            Arc::clone(&base_config.file_schema),
+            base_config.statistics,
+        );
 
         Self {
-            object_store,
-            file_groups,
-            statistics,
-            file_schema,
-            projection,
+            object_store: base_config.object_store,
+            file_groups: base_config.file_groups,
+            statistics: projected_statistics,
+            file_schema: base_config.file_schema,
+            projection: base_config.projection,
             projected_schema,
-            batch_size,
-            limit,
+            batch_size: base_config.batch_size,
+            limit: base_config.limit,
+            table_partition_dims: base_config.table_partition_dims,
         }
     }
     /// List of data files
@@ -96,6 +90,10 @@ impl AvroExec {
     /// Limit in nr. of rows
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+    /// Partitioning column names
+    pub fn table_partition_dims(&self) -> &[String] {
+        &self.table_partition_dims
     }
 }
 
@@ -172,6 +170,7 @@ impl ExecutionPlan for AvroExec {
             fun,
             Arc::clone(&self.projected_schema),
             self.limit,
+            self.table_partition_dims.clone(),
         )))
     }
 
@@ -216,17 +215,18 @@ mod tests {
 
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let avro_exec = AvroExec::new(
-            Arc::new(LocalFileSystem {}),
-            vec![vec![local_unpartitioned_file(filename.clone())]],
-            Statistics::default(),
-            AvroFormat {}
+        let avro_exec = AvroExec::new(PhysicalPlanConfig {
+            object_store: Arc::new(LocalFileSystem {}),
+            file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
+            file_schema: AvroFormat {}
                 .infer_schema(local_object_reader_stream(vec![filename]))
                 .await?,
-            Some(vec![0, 1, 2]),
-            1024,
-            None,
-        );
+            statistics: Statistics::default(),
+            projection: Some(vec![0, 1, 2]),
+            batch_size: 1024,
+            limit: None,
+            table_partition_dims: vec![],
+        });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
         let mut results = avro_exec.execute(0).await?;

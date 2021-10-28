@@ -17,6 +17,7 @@
 
 //! Execution plan for reading CSV files
 
+use crate::datasource::file_format::PhysicalPlanConfig;
 use crate::datasource::object_store::ObjectStore;
 use crate::datasource::PartitionedFile;
 use crate::error::{DataFusionError, Result};
@@ -25,7 +26,7 @@ use crate::physical_plan::{
 };
 
 use arrow::csv;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -48,40 +49,30 @@ pub struct CsvExec {
     projection: Option<Vec<usize>>,
     batch_size: usize,
     limit: Option<usize>,
+    table_partition_dims: Vec<String>,
 }
 
 impl CsvExec {
     /// Create a new CSV reader execution plan provided file list and schema
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        object_store: Arc<dyn ObjectStore>,
-        file_groups: Vec<Vec<PartitionedFile>>,
-        statistics: Statistics,
-        file_schema: SchemaRef,
-        has_header: bool,
-        delimiter: u8,
-        projection: Option<Vec<usize>>,
-        batch_size: usize,
-        limit: Option<usize>,
-    ) -> Self {
-        let projected_schema = match &projection {
-            None => Arc::clone(&file_schema),
-            Some(p) => Arc::new(Schema::new(
-                p.iter().map(|i| file_schema.field(*i).clone()).collect(),
-            )),
-        };
+    pub fn new(base_config: PhysicalPlanConfig, has_header: bool, delimiter: u8) -> Self {
+        let (projected_schema, projected_statistics) = super::project(
+            &base_config.projection,
+            Arc::clone(&base_config.file_schema),
+            base_config.statistics,
+        );
 
         Self {
-            object_store,
-            file_groups,
-            file_schema,
-            statistics,
+            object_store: base_config.object_store,
+            file_groups: base_config.file_groups,
+            file_schema: base_config.file_schema,
+            statistics: projected_statistics,
             has_header,
             delimiter,
-            projection,
+            projection: base_config.projection,
             projected_schema,
-            batch_size,
-            limit,
+            batch_size: base_config.batch_size,
+            limit: base_config.limit,
+            table_partition_dims: base_config.table_partition_dims,
         }
     }
 
@@ -112,6 +103,10 @@ impl CsvExec {
     /// Limit in nr. of rows
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+    /// Partitioning column names
+    pub fn table_partition_dims(&self) -> &[String] {
+        &self.table_partition_dims
     }
 }
 
@@ -178,6 +173,7 @@ impl ExecutionPlan for CsvExec {
             fun,
             Arc::clone(&self.projected_schema),
             self.limit,
+            self.table_partition_dims.clone(),
         )))
     }
 
@@ -216,20 +212,23 @@ mod tests {
 
     #[tokio::test]
     async fn csv_exec_with_projection() -> Result<()> {
-        let schema = aggr_test_schema();
+        let file_schema = aggr_test_schema();
         let testdata = crate::test_util::arrow_test_data();
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::new(
-            Arc::new(LocalFileSystem {}),
-            vec![vec![local_unpartitioned_file(path)]],
-            Statistics::default(),
-            schema,
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema,
+                file_groups: vec![vec![local_unpartitioned_file(path)]],
+                statistics: Statistics::default(),
+                projection: Some(vec![0, 2, 4]),
+                batch_size: 1024,
+                limit: None,
+                table_partition_dims: vec![],
+            },
             true,
             b',',
-            Some(vec![0, 2, 4]),
-            1024,
-            None,
         );
         assert_eq!(13, csv.file_schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
@@ -247,20 +246,23 @@ mod tests {
 
     #[tokio::test]
     async fn csv_exec_without_projection() -> Result<()> {
-        let schema = aggr_test_schema();
+        let file_schema = aggr_test_schema();
         let testdata = crate::test_util::arrow_test_data();
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::new(
-            Arc::new(LocalFileSystem {}),
-            vec![vec![local_unpartitioned_file(path)]],
-            Statistics::default(),
-            schema,
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema,
+                file_groups: vec![vec![local_unpartitioned_file(path)]],
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_dims: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         );
         assert_eq!(13, csv.file_schema.fields().len());
         assert_eq!(13, csv.projected_schema.fields().len());
