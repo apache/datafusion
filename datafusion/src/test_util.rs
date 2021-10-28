@@ -19,6 +19,9 @@
 
 use std::{env, error::Error, path::PathBuf};
 
+#[cfg(feature = "hdfs")]
+pub mod hdfs;
+
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
 /// batches. This is a macro so errors appear on the correct line

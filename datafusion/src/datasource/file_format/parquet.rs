@@ -34,8 +34,6 @@ use parquet::file::reader::Length;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
-use super::FileFormat;
-use super::PhysicalPlanConfig;
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
@@ -48,6 +46,9 @@ use crate::physical_plan::file_format::ParquetExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{Accumulator, Statistics};
 use crate::scalar::ScalarValue;
+
+use super::FileFormat;
+use super::PhysicalPlanConfig;
 
 /// The default file exetension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
@@ -322,6 +323,12 @@ impl ChunkReader for ChunkObjectReader {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{
+        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
+        TimestampNanosecondArray,
+    };
+    use futures::StreamExt;
+
     use crate::{
         datasource::object_store::local::{
             local_object_reader, local_object_reader_stream, local_unpartitioned_file,
@@ -331,11 +338,6 @@ mod tests {
     };
 
     use super::*;
-    use arrow::array::{
-        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
-        TimestampNanosecondArray,
-    };
-    use futures::StreamExt;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
@@ -610,5 +612,94 @@ mod tests {
             )
             .await?;
         Ok(exec)
+    }
+
+    #[cfg(feature = "hdfs")]
+    mod test_hdfs {
+        use crate::datasource::object_store::hdfs::{
+            hadoop_object_reader, hadoop_object_reader_stream, hadoop_unpartitioned_file,
+            HadoopFileSystem,
+        };
+        use crate::test_util::hdfs::run_hdfs_test;
+
+        use super::*;
+
+        #[tokio::test]
+        async fn read_small_batches_from_hdfs() -> Result<()> {
+            run_hdfs_test("alltypes_plain.parquet".to_string(), |fs, filename_hdfs| {
+                Box::pin(async move {
+                    let projection = None;
+                    let exec = get_hdfs_exec(
+                        Arc::new(fs),
+                        filename_hdfs.as_str(),
+                        &projection,
+                        2,
+                        None,
+                    )
+                    .await?;
+                    let stream = exec.execute(0).await?;
+
+                    let tt_batches = stream
+                        .map(|batch| {
+                            let batch = batch.unwrap();
+                            assert_eq!(11, batch.num_columns());
+                            assert_eq!(2, batch.num_rows());
+                        })
+                        .fold(0, |acc, _| async move { acc + 1i32 })
+                        .await;
+
+                    assert_eq!(tt_batches, 4 /* 8/2 */);
+
+                    // test metadata
+                    assert_eq!(exec.statistics().num_rows, Some(8));
+                    assert_eq!(exec.statistics().total_byte_size, Some(671));
+
+                    Ok(())
+                })
+            })
+            .await
+        }
+
+        async fn get_hdfs_exec(
+            fs: Arc<HadoopFileSystem>,
+            file_name: &str,
+            projection: &Option<Vec<usize>>,
+            batch_size: usize,
+            limit: Option<usize>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            let filename = file_name.to_string();
+            let format = ParquetFormat::default();
+            let file_schema = format
+                .infer_schema(hadoop_object_reader_stream(
+                    fs.clone(),
+                    vec![filename.clone()],
+                ))
+                .await
+                .expect("Schema inference");
+            let statistics = format
+                .infer_stats(hadoop_object_reader(fs.clone(), filename.clone()))
+                .await
+                .expect("Stats inference");
+            let file_groups = vec![vec![hadoop_unpartitioned_file(
+                fs.clone(),
+                filename.clone(),
+            )]];
+            let exec = format
+                .create_physical_plan(
+                    PhysicalPlanConfig {
+                        object_store: fs.clone(),
+                        file_schema,
+                        file_groups,
+                        statistics,
+                        projection: projection.clone(),
+                        batch_size,
+                        limit,
+                        table_partition_cols: vec![],
+                    },
+                    &[],
+                )
+                .await?;
+            Ok(exec)
+        }
     }
 }

@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
 
 use crate::datasource::object_store::{
-    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
+    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, LOCAL_SCHEME,
 };
 use crate::datasource::PartitionedFile;
 use crate::error::DataFusionError;
@@ -39,6 +39,15 @@ pub struct LocalFileSystem;
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
+    fn get_relative_path<'a>(&self, uri: &'a str) -> &'a str {
+        let mut result = uri;
+        if let Some((scheme, path)) = uri.split_once("://") {
+            assert_eq!(scheme, LOCAL_SCHEME);
+            result = path;
+        }
+        result
+    }
+
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
         list_all(prefix.to_owned()).await
     }

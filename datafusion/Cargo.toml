@@ -24,7 +24,7 @@ repository = "https://github.com/apache/arrow-datafusion"
 readme = "../README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
-keywords = [ "arrow", "query", "sql" ]
+keywords = ["arrow", "query", "sql"]
 include = [
     "benches/*.rs",
     "src/**/*.rs",
@@ -48,6 +48,8 @@ pyarrow = ["pyo3", "arrow/pyarrow"]
 force_hash_collisions = []
 # Used to enable the avro format
 avro = ["avro-rs", "num-traits"]
+# Used to enable hdfs as remote object store
+hdfs = ["fs-hdfs"]
 
 [dependencies]
 ahash = "0.7"
@@ -60,7 +62,7 @@ num_cpus = "1.13.0"
 chrono = "0.4"
 async-trait = "0.1.41"
 futures = "0.3"
-pin-project-lite= "^0.2.7"
+pin-project-lite = "^0.2.7"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs"] }
 tokio-stream = "0.1"
 log = "^0.4"
@@ -77,6 +79,8 @@ rand = "0.8"
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 num-traits = { version = "0.2", optional = true }
 pyo3 = { version = "0.14", optional = true }
+fs-hdfs = { version = "^0.1.3", optional = true }
+uuid = { version = "^0.8", features = ["v4"] }
 
 [dev-dependencies]
 criterion = "0.3"

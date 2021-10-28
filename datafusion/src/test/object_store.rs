@@ -49,6 +49,10 @@ impl TestObjectStore {
 
 #[async_trait]
 impl ObjectStore for TestObjectStore {
+    fn get_relative_path<'a>(&self, uri: &'a str) -> &'a str {
+        uri
+    }
+
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
         let prefix = prefix.to_owned();
         Ok(Box::pin(

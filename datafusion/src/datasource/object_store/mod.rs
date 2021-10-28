@@ -17,6 +17,10 @@
 
 //! Object Store abstracts access to an underlying file/object storage.
 
+#[cfg(feature = "hdfs")]
+#[allow(unused_variables)]
+#[allow(unused_parens)]
+pub mod hdfs;
 pub mod local;
 
 use std::collections::HashMap;
@@ -128,6 +132,10 @@ pub type ObjectReaderStream =
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
 #[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
+    /// Path relative to the current object store
+    /// (it does not specify the `xx://` scheme).
+    fn get_relative_path<'a>(&self, uri: &'a str) -> &'a str;
+
     /// Returns all the files in path `prefix`
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream>;
 
@@ -224,7 +232,7 @@ impl ObjectStoreRegistry {
         &self,
         uri: &'a str,
     ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
-        if let Some((scheme, path)) = uri.split_once("://") {
+        if let Some((scheme, _path)) = uri.split_once("://") {
             let stores = self.object_stores.read().unwrap();
             let store = stores
                 .get(&*scheme.to_lowercase())
@@ -235,7 +243,8 @@ impl ObjectStoreRegistry {
                         scheme
                     ))
                 })?;
-            Ok((store, path))
+            let path_relative = store.get_relative_path(uri);
+            Ok((store, path_relative))
         } else {
             Ok((Arc::new(LocalFileSystem), uri))
         }
