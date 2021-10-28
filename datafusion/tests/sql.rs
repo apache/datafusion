@@ -1916,16 +1916,20 @@ async fn csv_query_count_star() {
     assert_batches_eq!(expected, &actual);
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn csv_query_count_one() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["100"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 100             |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -1936,9 +1940,18 @@ async fn case_when() -> Result<()> {
              WHEN c1 = 'b' THEN 2 \
              END \
         FROM t1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"], vec!["2"], vec!["NULL"], vec!["NULL"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+--------------------------------------------------------------------------------------+",
+        "| CASE WHEN #t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN #t1.c1 = Utf8(\"b\") THEN Int64(2) END |",
+        "+--------------------------------------------------------------------------------------+",
+        "| 1                                                                                    |",
+        "| 2                                                                                    |",
+        "|                                                                                      |",
+        "|                                                                                      |",
+        "+--------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1950,9 +1963,18 @@ async fn case_when_else() -> Result<()> {
              WHEN c1 = 'b' THEN 2 \
              ELSE 999 END \
         FROM t1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"], vec!["2"], vec!["999"], vec!["999"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+------------------------------------------------------------------------------------------------------+",
+        "| CASE WHEN #t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN #t1.c1 = Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
+        "+------------------------------------------------------------------------------------------------------+",
+        "| 1                                                                                                    |",
+        "| 2                                                                                                    |",
+        "| 999                                                                                                  |",
+        "| 999                                                                                                  |",
+        "+------------------------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1964,9 +1986,18 @@ async fn case_when_with_base_expr() -> Result<()> {
              WHEN 'b' THEN 2 \
              END \
         FROM t1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"], vec!["2"], vec!["NULL"], vec!["NULL"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------------------------------------------------------------------------+",
+        "| CASE #t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) END |",
+        "+---------------------------------------------------------------------------+",
+        "| 1                                                                         |",
+        "| 2                                                                         |",
+        "|                                                                           |",
+        "|                                                                           |",
+        "+---------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1978,11 +2009,22 @@ async fn case_when_else_with_base_expr() -> Result<()> {
              WHEN 'b' THEN 2 \
              ELSE 999 END \
         FROM t1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"], vec!["2"], vec!["999"], vec!["999"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------------------------------------------------------------------------+",
+        "| CASE #t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
+        "+-------------------------------------------------------------------------------------------+",
+        "| 1                                                                                         |",
+        "| 2                                                                                         |",
+        "| 999                                                                                       |",
+        "| 999                                                                                       |",
+        "+-------------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+// --- End Test Porting ---
 
 fn create_case_context() -> Result<ExecutionContext> {
     let mut ctx = ExecutionContext::new();
@@ -2013,6 +2055,8 @@ async fn equijoin() -> Result<()> {
         vec!["22", "b", "y"],
         vec!["44", "d", "x"],
     ];
+    // let a = execute_to_batches(&mut ctx, sql).await;
+    // println!("{}", pretty_format_batches(&a).unwrap());
     for sql in equivalent_sql.iter() {
         let actual = execute(&mut ctx, sql).await;
         assert_eq!(expected, actual);
