@@ -83,7 +83,7 @@ pub struct ParquetExec {
     /// Optional limit of the number of rows
     limit: Option<usize>,
     /// Partioning column names
-    table_partition_dims: Vec<String>,
+    table_partition_cols: Vec<String>,
 }
 
 /// Stores metrics about the parquet execution for a particular parquet file
@@ -144,7 +144,7 @@ impl ParquetExec {
             batch_size: base_config.batch_size,
             statistics: projected_statistics,
             limit: base_config.limit,
-            table_partition_dims: base_config.table_partition_dims,
+            table_partition_cols: base_config.table_partition_cols,
         }
     }
 
@@ -165,8 +165,8 @@ impl ParquetExec {
         self.limit
     }
     /// Partitioning column names
-    pub fn table_partition_dims(&self) -> &[String] {
-        &self.table_partition_dims
+    pub fn table_partition_cols(&self) -> &[String] {
+        &self.table_partition_cols
     }
 }
 
@@ -521,7 +521,7 @@ mod tests {
                 projection: Some(vec![0, 1, 2]),
                 batch_size: 1024,
                 limit: None,
-                table_partition_dims: vec![],
+                table_partition_cols: vec![],
             },
             None,
         );

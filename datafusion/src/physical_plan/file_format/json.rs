@@ -42,7 +42,7 @@ pub struct NdJsonExec {
     projected_schema: SchemaRef,
     batch_size: usize,
     limit: Option<usize>,
-    table_partition_dims: Vec<String>,
+    table_partition_cols: Vec<String>,
 }
 
 impl NdJsonExec {
@@ -63,7 +63,7 @@ impl NdJsonExec {
             projected_schema,
             batch_size: base_config.batch_size,
             limit: base_config.limit,
-            table_partition_dims: base_config.table_partition_dims,
+            table_partition_cols: base_config.table_partition_cols,
         }
     }
 }
@@ -127,7 +127,7 @@ impl ExecutionPlan for NdJsonExec {
             fun,
             Arc::clone(&self.projected_schema),
             self.limit,
-            self.table_partition_dims.clone(),
+            self.table_partition_cols.clone(),
         )))
     }
 
@@ -187,7 +187,7 @@ mod tests {
             projection: None,
             batch_size: 1024,
             limit: Some(3),
-            table_partition_dims: vec![],
+            table_partition_cols: vec![],
         });
 
         // TODO: this is not where schema inference should be tested
@@ -241,7 +241,7 @@ mod tests {
             projection: Some(vec![0, 2]),
             batch_size: 1024,
             limit: None,
-            table_partition_dims: vec![],
+            table_partition_cols: vec![],
         });
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);

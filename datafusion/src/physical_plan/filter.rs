@@ -249,7 +249,7 @@ mod tests {
                 projection: None,
                 batch_size: 1024,
                 limit: None,
-                table_partition_dims: vec![],
+                table_partition_cols: vec![],
             },
             true,
             b',',

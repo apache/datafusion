@@ -54,7 +54,7 @@ pub struct PhysicalPlanConfig {
     /// The minimum number of records required from this source plan
     pub limit: Option<usize>,
     /// The partitioning column names
-    pub table_partition_dims: Vec<String>,
+    pub table_partition_cols: Vec<String>,
 }
 
 /// This trait abstracts all the file format specific implementations

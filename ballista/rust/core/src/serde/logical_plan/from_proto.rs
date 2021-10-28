@@ -191,7 +191,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,
-                    table_partition_dims: scan.table_partition_dims.clone(),
+                    table_partition_cols: scan.table_partition_cols.clone(),
                     collect_stat: scan.collect_stat,
                     target_partitions: scan.target_partitions as usize,
                 };

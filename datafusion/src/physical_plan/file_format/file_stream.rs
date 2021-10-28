@@ -97,10 +97,10 @@ impl<F: FormatReaderOpener> FileStream<F> {
         file_reader: F,
         schema: SchemaRef,
         limit: Option<usize>,
-        table_partition_dims: Vec<String>,
+        table_partition_cols: Vec<String>,
     ) -> Self {
         let mut projected_partition_indexes = HashMap::new();
-        for (partition_idx, partition_name) in table_partition_dims.iter().enumerate() {
+        for (partition_idx, partition_name) in table_partition_cols.iter().enumerate() {
             if let Ok(schema_idx) = schema.index_of(partition_name) {
                 projected_partition_indexes.insert(partition_idx, schema_idx);
             }

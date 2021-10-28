@@ -604,7 +604,7 @@ mod tests {
                     projection: projection.clone(),
                     batch_size,
                     limit,
-                    table_partition_dims: vec![],
+                    table_partition_cols: vec![],
                 },
                 &[],
             )

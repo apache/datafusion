@@ -272,7 +272,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                         has_header: exec.has_header(),
                         delimiter: byte_to_string(exec.delimiter())?,
                         batch_size: exec.batch_size() as u32,
-                        table_partition_dims: exec.table_partition_dims().to_vec(),
+                        table_partition_cols: exec.table_partition_cols().to_vec(),
                     },
                 )),
             })
@@ -299,7 +299,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                             .map(|n| *n as u32)
                             .collect(),
                         batch_size: exec.batch_size() as u32,
-                        table_partition_dims: exec.table_partition_dims().to_vec(),
+                        table_partition_cols: exec.table_partition_cols().to_vec(),
                     },
                 )),
             })
@@ -330,7 +330,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                             .collect(),
                         schema: Some(exec.file_schema().as_ref().into()),
                         batch_size: exec.batch_size() as u32,
-                        table_partition_dims: exec.table_partition_dims().to_vec(),
+                        table_partition_cols: exec.table_partition_cols().to_vec(),
                     },
                 )),
             })

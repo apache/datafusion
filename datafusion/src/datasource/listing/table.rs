@@ -52,7 +52,7 @@ pub struct ListingOptions {
     /// - If there is a third level of partitioning it will be ignored.
     /// - Files that don't follow this partitioning will be ignored.
     /// Note that only `DataType::Utf8` is supported for the column type.
-    pub table_partition_dims: Vec<String>,
+    pub table_partition_cols: Vec<String>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
     /// to be opened and at least partially parsed.
@@ -73,7 +73,7 @@ impl ListingOptions {
         Self {
             file_extension: String::new(),
             format,
-            table_partition_dims: vec![],
+            table_partition_cols: vec![],
             collect_stat: false,
             target_partitions: 1,
         }
@@ -97,7 +97,7 @@ impl ListingOptions {
         let file_schema = self.format.infer_schema(Box::pin(file_stream)).await?;
         // Add the partition columns to the file schema
         let mut fields = file_schema.fields().clone();
-        for part in &self.table_partition_dims {
+        for part in &self.table_partition_cols {
             fields.push(Field::new(part, DataType::Utf8, false));
         }
         Ok(Arc::new(Schema::new(fields)))
@@ -189,7 +189,7 @@ impl TableProvider for ListingTable {
                     projection: projection.clone(),
                     batch_size,
                     limit,
-                    table_partition_dims: self.options.table_partition_dims.clone(),
+                    table_partition_cols: self.options.table_partition_cols.clone(),
                 },
                 filters,
             )
@@ -218,7 +218,7 @@ impl ListingTable {
             &self.table_path,
             filters,
             &self.options.file_extension,
-            &self.options.table_partition_dims,
+            &self.options.table_partition_cols,
         )
         .await?;
 
@@ -288,7 +288,7 @@ mod tests {
         let opt = ListingOptions {
             file_extension: ".avro".to_owned(),
             format: Arc::new(AvroFormat {}),
-            table_partition_dims: vec![String::from("p1")],
+            table_partition_cols: vec![String::from("p1")],
             target_partitions: 4,
             collect_stat: true,
         };
@@ -380,7 +380,7 @@ mod tests {
         let opt = ListingOptions {
             file_extension: "parquet".to_owned(),
             format: Arc::new(ParquetFormat::default()),
-            table_partition_dims: vec![],
+            table_partition_cols: vec![],
             target_partitions: 2,
             collect_stat: true,
         };
@@ -410,7 +410,7 @@ mod tests {
         let opt = ListingOptions {
             file_extension: "".to_owned(),
             format: Arc::new(format),
-            table_partition_dims: vec![],
+            table_partition_cols: vec![],
             target_partitions,
             collect_stat: true,
         };

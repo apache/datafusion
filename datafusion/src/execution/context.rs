@@ -221,7 +221,7 @@ impl ExecutionContext {
                         .unwrap()
                         .config
                         .target_partitions,
-                    table_partition_dims: vec![],
+                    table_partition_cols: vec![],
                 };
 
                 // TODO make schema in CreateExternalTable optional instead of empty
@@ -442,7 +442,7 @@ impl ExecutionContext {
             collect_stat: true,
             file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
             target_partitions,
-            table_partition_dims: vec![],
+            table_partition_cols: vec![],
         };
 
         self.register_listing_table(name, uri, listing_options, None)

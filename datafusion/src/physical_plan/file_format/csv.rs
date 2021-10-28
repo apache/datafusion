@@ -49,7 +49,7 @@ pub struct CsvExec {
     projection: Option<Vec<usize>>,
     batch_size: usize,
     limit: Option<usize>,
-    table_partition_dims: Vec<String>,
+    table_partition_cols: Vec<String>,
 }
 
 impl CsvExec {
@@ -72,7 +72,7 @@ impl CsvExec {
             projected_schema,
             batch_size: base_config.batch_size,
             limit: base_config.limit,
-            table_partition_dims: base_config.table_partition_dims,
+            table_partition_cols: base_config.table_partition_cols,
         }
     }
 
@@ -105,8 +105,8 @@ impl CsvExec {
         self.limit
     }
     /// Partitioning column names
-    pub fn table_partition_dims(&self) -> &[String] {
-        &self.table_partition_dims
+    pub fn table_partition_cols(&self) -> &[String] {
+        &self.table_partition_cols
     }
 }
 
@@ -173,7 +173,7 @@ impl ExecutionPlan for CsvExec {
             fun,
             Arc::clone(&self.projected_schema),
             self.limit,
-            self.table_partition_dims.clone(),
+            self.table_partition_cols.clone(),
         )))
     }
 
@@ -225,7 +225,7 @@ mod tests {
                 projection: Some(vec![0, 2, 4]),
                 batch_size: 1024,
                 limit: None,
-                table_partition_dims: vec![],
+                table_partition_cols: vec![],
             },
             true,
             b',',
@@ -259,7 +259,7 @@ mod tests {
                 projection: None,
                 batch_size: 1024,
                 limit: None,
-                table_partition_dims: vec![],
+                table_partition_cols: vec![],
             },
             true,
             b',',

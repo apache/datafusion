@@ -137,7 +137,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         projection: Some(projection),
                         batch_size: scan.batch_size as usize,
                         limit: scan.limit.as_ref().map(|sl| sl.limit as usize),
-                        table_partition_dims: vec![],
+                        table_partition_cols: vec![],
                     },
                     scan.has_header,
                     str_to_byte(&scan.delimiter)?,
@@ -161,7 +161,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         projection: Some(projection),
                         batch_size: scan.batch_size as usize,
                         limit: scan.limit.as_ref().map(|sl| sl.limit as usize),
-                        table_partition_dims: scan.table_partition_dims.clone(),
+                        table_partition_cols: scan.table_partition_cols.clone(),
                     },
                     // TODO predicate should be de-serialized
                     None,
@@ -184,7 +184,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     projection: Some(projection),
                     batch_size: scan.batch_size as usize,
                     limit: scan.limit.as_ref().map(|sl| sl.limit as usize),
-                    table_partition_dims: vec![],
+                    table_partition_cols: vec![],
                 })))
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {

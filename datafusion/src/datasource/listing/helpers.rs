@@ -59,10 +59,7 @@ pub fn split_files(
     if partitioned_files.is_empty() {
         return vec![];
     }
-    let mut chunk_size = partitioned_files.len() / n;
-    if partitioned_files.len() % n > 0 {
-        chunk_size += 1;
-    }
+    let chunk_size = (partitioned_files.len() + n - 1) / n;
     partitioned_files
         .chunks(chunk_size)
         .map(|c| c.to_vec())
@@ -70,7 +67,7 @@ pub fn split_files(
 }
 
 /// Discover the partitions on the given path and prune out files
-/// relative to irrelevant partitions using `filters` expressions
+/// that belong to irrelevant partitions using `filters` expressions.
 /// TODO for tables with many files (10k+), it will usually more efficient
 /// to first list the folders relative to the first partition dimension,
 /// prune those, then list only the contain of the remaining folders.
@@ -79,9 +76,9 @@ pub async fn pruned_partition_list(
     table_path: &str,
     filters: &[Expr],
     file_extension: &str,
-    table_partition_dims: &[String],
+    table_partition_cols: &[String],
 ) -> Result<PartitionedFileStream> {
-    if table_partition_dims.is_empty() {
+    if table_partition_cols.is_empty() || filters.is_empty() {
         Ok(Box::pin(
             store
                 .list_file_with_suffix(table_path, file_extension)
@@ -96,18 +93,22 @@ pub async fn pruned_partition_list(
     } else {
         let applicable_filters = filters
             .iter()
-            .filter(|f| expr_applicable_for_cols(table_partition_dims, f));
+            .filter(|f| expr_applicable_for_cols(table_partition_cols, f));
 
-        let table_partition_dims = table_partition_dims.to_vec();
+        let table_partition_cols = table_partition_cols.to_vec();
         let stream_path = table_path.to_owned();
         // TODO avoid collecting but have a streaming memory table instead
         let batches: Vec<RecordBatch> = store
             .list_file_with_suffix(table_path, file_extension)
             .await?
-            .chunks(64)
+            // TODO we set an arbitrary high batch size here, it does not matter as we list
+            // all the files anyway. This number will need to be adjusted according to the object
+            // store if we switch to a streaming-stlye pruning of the files. For instance S3 lists
+            // 1000 items at a time so batches of 1000 would be ideal with S3 as store.
+            .chunks(1024)
             .map(|v| v.into_iter().collect::<Result<Vec<_>>>())
             .map(move |metas| {
-                paths_to_batch(&table_partition_dims, &stream_path, &metas?)
+                paths_to_batch(&table_partition_cols, &stream_path, &metas?)
             })
             .try_collect()
             .await?;
@@ -137,20 +138,20 @@ pub async fn pruned_partition_list(
 /// - ... one column by partition ...
 /// Note: For the last modified date, this looses precisions higher than millisecond.
 fn paths_to_batch(
-    table_partition_dims: &[String],
+    table_partition_cols: &[String],
     table_path: &str,
     metas: &[FileMeta],
 ) -> Result<RecordBatch> {
     let mut key_builder = StringBuilder::new(metas.len());
     let mut length_builder = UInt64Builder::new(metas.len());
     let mut modified_builder = Date64Builder::new(metas.len());
-    let mut partition_builders = table_partition_dims
+    let mut partition_builders = table_partition_cols
         .iter()
         .map(|_| StringBuilder::new(metas.len()))
         .collect::<Vec<_>>();
     for file_meta in metas {
         if let Some(partition_values) =
-            parse_partitions_for_path(table_path, file_meta.path(), table_partition_dims)
+            parse_partitions_for_path(table_path, file_meta.path(), table_partition_cols)
         {
             key_builder.append_value(file_meta.path())?;
             length_builder.append_value(file_meta.size())?;
@@ -178,11 +179,11 @@ fn paths_to_batch(
 
     // put the schema together
     let mut fields = vec![
-        Field::new(FILE_SIZE_COLUMN_NAME, DataType::Utf8, false),
-        Field::new(FILE_PATH_COLUMN_NAME, DataType::UInt64, false),
+        Field::new(FILE_PATH_COLUMN_NAME, DataType::Utf8, false),
+        Field::new(FILE_SIZE_COLUMN_NAME, DataType::UInt64, false),
         Field::new(FILE_MODIFIED_COLUMN_NAME, DataType::Date64, false),
     ];
-    for pn in table_partition_dims {
+    for pn in table_partition_cols {
         fields.push(Field::new(pn, DataType::Utf8, false));
     }
 
@@ -233,11 +234,11 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Vec<PartitionedFile> {
 }
 
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
-/// associated to the partitions defined by `table_partition_dims`
+/// associated to the partitions defined by `table_partition_cols`
 fn parse_partitions_for_path<'a>(
     table_path: &str,
     file_path: &'a str,
-    table_partition_dims: &[String],
+    table_partition_cols: &[String],
 ) -> Option<Vec<&'a str>> {
     let subpath = file_path.strip_prefix(table_path)?;
 
@@ -248,11 +249,10 @@ fn parse_partitions_for_path<'a>(
     };
 
     let mut part_values = vec![];
-    for (path, pn) in subpath.split('/').zip(table_partition_dims) {
-        if let Some(val) = path.strip_prefix(&format!("{}=", pn)) {
-            part_values.push(val);
-        } else {
-            return None;
+    for (path, pn) in subpath.split('/').zip(table_partition_cols) {
+        match path.split_once('=') {
+            Some((name, val)) if name == pn => part_values.push(val),
+            _ => return None,
         }
     }
     Some(part_values)
