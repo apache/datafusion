@@ -1,0 +1,680 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Helper functions for the table implementation
+
+use std::sync::Arc;
+
+use arrow::{
+    array::{
+        Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringArray,
+        StringBuilder, UInt64Array, UInt64Builder,
+    },
+    datatypes::{DataType, Field, Schema},
+    record_batch::RecordBatch,
+};
+use chrono::{TimeZone, Utc};
+use futures::{
+    stream::{self, TryChunksError},
+    StreamExt, TryStreamExt,
+};
+use log::debug;
+
+use crate::{
+    error::Result,
+    execution::context::ExecutionContext,
+    logical_plan::{self, Expr},
+    physical_plan::functions::Volatility,
+    scalar::ScalarValue,
+};
+
+use crate::datasource::{
+    object_store::{FileMeta, ObjectStore, SizedFile},
+    MemTable, PartitionedFile, PartitionedFileStream,
+};
+
+const FILE_SIZE_COLUMN_NAME: &str = "_df_part_file_size_";
+const FILE_PATH_COLUMN_NAME: &str = "_df_part_file_path_";
+const FILE_MODIFIED_COLUMN_NAME: &str = "_df_part_file_modified_";
+
+/// Partition the list of files into `n` groups
+pub fn split_files(
+    partitioned_files: Vec<PartitionedFile>,
+    n: usize,
+) -> Vec<Vec<PartitionedFile>> {
+    if partitioned_files.is_empty() {
+        return vec![];
+    }
+    let mut chunk_size = partitioned_files.len() / n;
+    if partitioned_files.len() % n > 0 {
+        chunk_size += 1;
+    }
+    partitioned_files
+        .chunks(chunk_size)
+        .map(|c| c.to_vec())
+        .collect()
+}
+
+/// Discover the partitions on the given path and prune out files
+/// relative to irrelevant partitions using `filters` expressions
+/// TODO for tables with many files (10k+), it will usually more efficient
+/// to first list the folders relative to the first partition dimension,
+/// prune those, then list only the contain of the remaining folders.
+pub async fn pruned_partition_list(
+    store: &dyn ObjectStore,
+    table_path: &str,
+    filters: &[Expr],
+    file_extension: &str,
+    partition_names: &[String],
+) -> Result<PartitionedFileStream> {
+    if partition_names.is_empty() {
+        Ok(Box::pin(
+            store
+                .list_file_with_suffix(table_path, file_extension)
+                .await?
+                .map(|f| {
+                    Ok(PartitionedFile {
+                        file_meta: f?,
+                        partition_values: vec![],
+                    })
+                }),
+        ))
+    } else {
+        let applicable_filters = filters
+            .iter()
+            .filter(|f| expr_applicable_for_cols(partition_names, f));
+
+        let partition_names = partition_names.to_vec();
+        let stream_path = table_path.to_owned();
+        // TODO avoid collecting but have a streaming memory table instead
+        let batches: Vec<RecordBatch> = store
+            .list_file_with_suffix(table_path, file_extension)
+            .await?
+            .try_chunks(64)
+            .map_err(|TryChunksError(_, e)| e)
+            .map(move |metas| paths_to_batch(&partition_names, &stream_path, &metas?))
+            .try_collect()
+            .await?;
+
+        let mem_table = MemTable::try_new(batches[0].schema(), vec![batches])?;
+
+        // Filter the partitions using a local datafusion context
+        // TODO having the external context would allow us to resolve `Volatility::Stable`
+        // scalar functions (`ScalarFunction` & `ScalarUDF`) and `ScalarVariable`s
+        let mut ctx = ExecutionContext::new();
+        let mut df = ctx.read_table(Arc::new(mem_table))?;
+        for filter in applicable_filters {
+            df = df.filter(filter.clone())?;
+        }
+        let filtered_batches = df.collect().await?;
+
+        Ok(Box::pin(stream::iter(
+            batches_to_paths(&filtered_batches).into_iter().map(Ok),
+        )))
+    }
+}
+
+/// convert the paths of the files to a record batch with the following columns:
+/// - one column for the file size named `_df_part_file_size_`
+/// - one column for with the original path named `_df_part_file_path_`
+/// - one column for with the last modified date named `_df_part_file_modified_`
+/// - ... one column by partition ...
+/// Note: For the last modified date, this looses precisions higher than millisecond.
+fn paths_to_batch(
+    partition_names: &[String],
+    table_path: &str,
+    metas: &[FileMeta],
+) -> Result<RecordBatch> {
+    let mut key_builder = StringBuilder::new(metas.len());
+    let mut length_builder = UInt64Builder::new(metas.len());
+    let mut modified_builder = Date64Builder::new(metas.len());
+    let mut partition_builders = partition_names
+        .iter()
+        .map(|_| StringBuilder::new(metas.len()))
+        .collect::<Vec<_>>();
+    for file_meta in metas {
+        if let Some(partition_values) =
+            parse_partitions_for_path(table_path, file_meta.path(), partition_names)
+        {
+            key_builder.append_value(file_meta.path())?;
+            length_builder.append_value(file_meta.size())?;
+            match file_meta.last_modified {
+                Some(lm) => modified_builder.append_value(lm.timestamp_millis())?,
+                None => modified_builder.append_null()?,
+            }
+            for (i, part_val) in partition_values.iter().enumerate() {
+                partition_builders[i].append_value(part_val)?;
+            }
+        } else {
+            debug!("No partitioning for path {}", file_meta.path());
+        }
+    }
+
+    // finish all builders
+    let mut col_arrays: Vec<ArrayRef> = vec![
+        ArrayBuilder::finish(&mut key_builder),
+        ArrayBuilder::finish(&mut length_builder),
+        ArrayBuilder::finish(&mut modified_builder),
+    ];
+    for mut partition_builder in partition_builders {
+        col_arrays.push(ArrayBuilder::finish(&mut partition_builder));
+    }
+
+    // put the schema together
+    let mut fields = vec![
+        Field::new(FILE_SIZE_COLUMN_NAME, DataType::Utf8, false),
+        Field::new(FILE_PATH_COLUMN_NAME, DataType::UInt64, false),
+        Field::new(FILE_MODIFIED_COLUMN_NAME, DataType::Date64, false),
+    ];
+    for pn in partition_names {
+        fields.push(Field::new(pn, DataType::Utf8, false));
+    }
+
+    let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), col_arrays)?;
+    Ok(batch)
+}
+
+/// convert a set of record batches created by `paths_to_batch()` back to partitioned files.
+fn batches_to_paths(batches: &[RecordBatch]) -> Vec<PartitionedFile> {
+    batches
+        .iter()
+        .flat_map(|batch| {
+            let key_array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let length_array = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
+            let modified_array = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<Date64Array>()
+                .unwrap();
+
+            (0..batch.num_rows()).map(move |row| PartitionedFile {
+                file_meta: FileMeta {
+                    last_modified: match modified_array.is_null(row) {
+                        false => Some(Utc.timestamp_millis(modified_array.value(row))),
+                        true => None,
+                    },
+                    sized_file: SizedFile {
+                        path: key_array.value(row).to_owned(),
+                        size: length_array.value(row),
+                    },
+                },
+                partition_values: (3..batch.columns().len())
+                    .map(|col| {
+                        ScalarValue::try_from_array(batch.column(col), row).unwrap()
+                    })
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
+/// Extract the partition values for the given `file_path` (in the given `table_path`)
+/// associated to the partitions defined by `partition_names`
+fn parse_partitions_for_path<'a>(
+    table_path: &str,
+    file_path: &'a str,
+    partition_names: &[String],
+) -> Option<Vec<&'a str>> {
+    let subpath = file_path.strip_prefix(table_path)?;
+
+    // ignore whether table_path ended with "/" or not
+    let subpath = match subpath.strip_prefix('/') {
+        Some(subpath) => subpath,
+        None => subpath,
+    };
+
+    let mut part_values = vec![];
+    for (path, pn) in subpath.split('/').zip(partition_names) {
+        if let Some(val) = path.strip_prefix(&format!("{}=", pn)) {
+            part_values.push(val);
+        } else {
+            return None;
+        }
+    }
+    Some(part_values)
+}
+
+/// Check whether the given expression can be resolved using only the columns `col_names`
+fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
+    match expr {
+        // leaf
+        Expr::Literal(_) => true,
+        // TODO how to handle qualified / unqualified names?
+        Expr::Column(logical_plan::Column { ref name, .. }) => col_names.contains(name),
+        // unary
+        Expr::Alias(child, _)
+        | Expr::Not(child)
+        | Expr::IsNotNull(child)
+        | Expr::IsNull(child)
+        | Expr::Negative(child)
+        | Expr::Cast { expr: child, .. }
+        | Expr::TryCast { expr: child, .. } => expr_applicable_for_cols(col_names, child),
+        // binary
+        Expr::BinaryExpr {
+            ref left,
+            ref right,
+            ..
+        } => {
+            expr_applicable_for_cols(col_names, left)
+                && expr_applicable_for_cols(col_names, right)
+        }
+        // ternary
+        Expr::Between {
+            expr: item,
+            low,
+            high,
+            ..
+        } => {
+            expr_applicable_for_cols(col_names, item)
+                && expr_applicable_for_cols(col_names, low)
+                && expr_applicable_for_cols(col_names, high)
+        }
+        // variadic
+        Expr::ScalarFunction { fun, args } => match fun.volatility() {
+            Volatility::Immutable => args
+                .iter()
+                .all(|arg| expr_applicable_for_cols(col_names, arg)),
+            // TODO: Stable functions could be `applicable`, but that would require access to the context
+            Volatility::Stable => false,
+            Volatility::Volatile => false,
+        },
+        Expr::ScalarUDF { fun, args } => match fun.signature.volatility {
+            Volatility::Immutable => args
+                .iter()
+                .all(|arg| expr_applicable_for_cols(col_names, arg)),
+            // TODO: Stable functions could be `applicable`, but that would require access to the context
+            Volatility::Stable => false,
+            Volatility::Volatile => false,
+        },
+        Expr::InList {
+            expr: item, list, ..
+        } => {
+            expr_applicable_for_cols(col_names, item)
+                && list.iter().all(|e| expr_applicable_for_cols(col_names, e))
+        }
+        Expr::Case {
+            expr,
+            when_then_expr,
+            else_expr,
+        } => {
+            let expr_constant = expr
+                .as_ref()
+                .map(|e| expr_applicable_for_cols(col_names, e))
+                .unwrap_or(true);
+            let else_constant = else_expr
+                .as_ref()
+                .map(|e| expr_applicable_for_cols(col_names, e))
+                .unwrap_or(true);
+            let when_then_constant = when_then_expr.iter().all(|(w, th)| {
+                expr_applicable_for_cols(col_names, w)
+                    && expr_applicable_for_cols(col_names, th)
+            });
+            expr_constant && else_constant && when_then_constant
+        }
+        // TODO other expressions are not handled yet:
+        // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
+        // - Can `Wildcard` be considered as a `Literal`?
+        // - ScalarVariable could be `applicable`, but that would require access to the context
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        logical_plan::{case, col, lit},
+        test::object_store::TestObjectStore,
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_split_files() {
+        let new_partitioned_file = |path: &str| PartitionedFile::new(path.to_owned(), 10);
+        let files = vec![
+            new_partitioned_file("a"),
+            new_partitioned_file("b"),
+            new_partitioned_file("c"),
+            new_partitioned_file("d"),
+            new_partitioned_file("e"),
+        ];
+
+        let chunks = split_files(files.clone(), 1);
+        assert_eq!(1, chunks.len());
+        assert_eq!(5, chunks[0].len());
+
+        let chunks = split_files(files.clone(), 2);
+        assert_eq!(2, chunks.len());
+        assert_eq!(3, chunks[0].len());
+        assert_eq!(2, chunks[1].len());
+
+        let chunks = split_files(files.clone(), 5);
+        assert_eq!(5, chunks.len());
+        assert_eq!(1, chunks[0].len());
+        assert_eq!(1, chunks[1].len());
+        assert_eq!(1, chunks[2].len());
+        assert_eq!(1, chunks[3].len());
+        assert_eq!(1, chunks[4].len());
+
+        let chunks = split_files(files, 123);
+        assert_eq!(5, chunks.len());
+        assert_eq!(1, chunks[0].len());
+        assert_eq!(1, chunks[1].len());
+        assert_eq!(1, chunks[2].len());
+        assert_eq!(1, chunks[3].len());
+        assert_eq!(1, chunks[4].len());
+
+        let chunks = split_files(vec![], 2);
+        assert_eq!(0, chunks.len());
+    }
+
+    #[tokio::test]
+    async fn test_pruned_partition_list_empty() {
+        let store = TestObjectStore::new_arc(&[
+            ("tablepath/mypartition=val1/notparquetfile", 100),
+            ("tablepath/file.parquet", 100),
+        ]);
+        let filter = Expr::eq(col("mypartition"), lit("val1"));
+        let pruned = pruned_partition_list(
+            store.as_ref(),
+            "tablepath/",
+            &[filter],
+            ".parquet",
+            &[String::from("mypartition")],
+        )
+        .await
+        .expect("partition pruning failed")
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(pruned.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_pruned_partition_list() {
+        let store = TestObjectStore::new_arc(&[
+            ("tablepath/mypartition=val1/file.parquet", 100),
+            ("tablepath/mypartition=val2/file.parquet", 100),
+            ("tablepath/mypartition=val1/other=val3/file.parquet", 100),
+        ]);
+        let filter = Expr::eq(col("mypartition"), lit("val1"));
+        let pruned = pruned_partition_list(
+            store.as_ref(),
+            "tablepath/",
+            &[filter],
+            ".parquet",
+            &[String::from("mypartition")],
+        )
+        .await
+        .expect("partition pruning failed")
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(pruned.len(), 2);
+        let f1 = pruned[0].as_ref().expect("first item not an error");
+        assert_eq!(
+            &f1.file_meta.sized_file.path,
+            "tablepath/mypartition=val1/file.parquet"
+        );
+        assert_eq!(
+            &f1.partition_values,
+            &[ScalarValue::Utf8(Some(String::from("val1"))),]
+        );
+        let f2 = pruned[1].as_ref().expect("second item not an error");
+        assert_eq!(
+            &f2.file_meta.sized_file.path,
+            "tablepath/mypartition=val1/other=val3/file.parquet"
+        );
+        assert_eq!(
+            &f2.partition_values,
+            &[ScalarValue::Utf8(Some(String::from("val1"))),]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pruned_partition_list_multi() {
+        let store = TestObjectStore::new_arc(&[
+            ("tablepath/part1=p1v1/file.parquet", 100),
+            ("tablepath/part1=p1v2/part2=p2v1/file1.parquet", 100),
+            ("tablepath/part1=p1v2/part2=p2v1/file2.parquet", 100),
+            ("tablepath/part1=p1v3/part2=p2v2/file2.parquet", 100),
+        ]);
+        let filter1 = Expr::eq(col("part1"), lit("p1v2"));
+        // filter2 cannot be resolved at partition pruning
+        let filter2 = Expr::eq(col("part2"), col("other"));
+        let pruned = pruned_partition_list(
+            store.as_ref(),
+            "tablepath/",
+            &[filter1, filter2],
+            ".parquet",
+            &[String::from("part1"), String::from("part2")],
+        )
+        .await
+        .expect("partition pruning failed")
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(pruned.len(), 2);
+        let f1 = pruned[0].as_ref().expect("first item not an error");
+        assert_eq!(
+            &f1.file_meta.sized_file.path,
+            "tablepath/part1=p1v2/part2=p2v1/file1.parquet"
+        );
+        assert_eq!(
+            &f1.partition_values,
+            &[
+                ScalarValue::Utf8(Some(String::from("p1v2"))),
+                ScalarValue::Utf8(Some(String::from("p2v1")))
+            ]
+        );
+        let f2 = pruned[1].as_ref().expect("second item not an error");
+        assert_eq!(
+            &f2.file_meta.sized_file.path,
+            "tablepath/part1=p1v2/part2=p2v1/file2.parquet"
+        );
+        assert_eq!(
+            &f2.partition_values,
+            &[
+                ScalarValue::Utf8(Some(String::from("p1v2"))),
+                ScalarValue::Utf8(Some(String::from("p2v1")))
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_partitions_for_path() {
+        assert_eq!(
+            Some(vec![]),
+            parse_partitions_for_path("bucket/mytable", "bucket/mytable/file.csv", &[])
+        );
+        assert_eq!(
+            None,
+            parse_partitions_for_path(
+                "bucket/othertable",
+                "bucket/mytable/file.csv",
+                &[]
+            )
+        );
+        assert_eq!(
+            None,
+            parse_partitions_for_path(
+                "bucket/mytable",
+                "bucket/mytable/file.csv",
+                &[String::from("mypartition")]
+            )
+        );
+        assert_eq!(
+            Some(vec!["v1"]),
+            parse_partitions_for_path(
+                "bucket/mytable",
+                "bucket/mytable/mypartition=v1/file.csv",
+                &[String::from("mypartition")]
+            )
+        );
+        assert_eq!(
+            Some(vec!["v1"]),
+            parse_partitions_for_path(
+                "bucket/mytable/",
+                "bucket/mytable/mypartition=v1/file.csv",
+                &[String::from("mypartition")]
+            )
+        );
+        // Only hive style partitioning supported for now:
+        assert_eq!(
+            None,
+            parse_partitions_for_path(
+                "bucket/mytable",
+                "bucket/mytable/v1/file.csv",
+                &[String::from("mypartition")]
+            )
+        );
+        assert_eq!(
+            Some(vec!["v1", "v2"]),
+            parse_partitions_for_path(
+                "bucket/mytable",
+                "bucket/mytable/mypartition=v1/otherpartition=v2/file.csv",
+                &[String::from("mypartition"), String::from("otherpartition")]
+            )
+        );
+        assert_eq!(
+            Some(vec!["v1"]),
+            parse_partitions_for_path(
+                "bucket/mytable",
+                "bucket/mytable/mypartition=v1/otherpartition=v2/file.csv",
+                &[String::from("mypartition")]
+            )
+        );
+    }
+
+    #[test]
+    fn test_path_batch_roundtrip_no_partiton() {
+        let files = vec![
+            FileMeta {
+                sized_file: SizedFile {
+                    path: String::from("mybucket/tablepath/part1=val1/file.parquet"),
+                    size: 100,
+                },
+                last_modified: Some(Utc.timestamp_millis(1634722979123)),
+            },
+            FileMeta {
+                sized_file: SizedFile {
+                    path: String::from("mybucket/tablepath/part1=val2/file.parquet"),
+                    size: 100,
+                },
+                last_modified: None,
+            },
+        ];
+
+        let batches = paths_to_batch(&[], "mybucket/tablepath", &files)
+            .expect("Serialization of file list to batch failed");
+
+        let parsed_files = batches_to_paths(&[batches]);
+        assert_eq!(parsed_files.len(), 2);
+        assert_eq!(&parsed_files[0].partition_values, &[]);
+        assert_eq!(&parsed_files[1].partition_values, &[]);
+
+        let parsed_metas = parsed_files
+            .into_iter()
+            .map(|pf| pf.file_meta)
+            .collect::<Vec<_>>();
+        assert_eq!(parsed_metas, files);
+    }
+
+    #[test]
+    fn test_path_batch_roundtrip_with_partition() {
+        let files = vec![
+            FileMeta {
+                sized_file: SizedFile {
+                    path: String::from("mybucket/tablepath/part1=val1/file.parquet"),
+                    size: 100,
+                },
+                last_modified: Some(Utc.timestamp_millis(1634722979123)),
+            },
+            FileMeta {
+                sized_file: SizedFile {
+                    path: String::from("mybucket/tablepath/part1=val2/file.parquet"),
+                    size: 100,
+                },
+                last_modified: None,
+            },
+        ];
+
+        let batches =
+            paths_to_batch(&[String::from("part1")], "mybucket/tablepath", &files)
+                .expect("Serialization of file list to batch failed");
+
+        let parsed_files = batches_to_paths(&[batches]);
+        assert_eq!(parsed_files.len(), 2);
+        assert_eq!(
+            &parsed_files[0].partition_values,
+            &[ScalarValue::Utf8(Some(String::from("val1")))]
+        );
+        assert_eq!(
+            &parsed_files[1].partition_values,
+            &[ScalarValue::Utf8(Some(String::from("val2")))]
+        );
+
+        let parsed_metas = parsed_files
+            .into_iter()
+            .map(|pf| pf.file_meta)
+            .collect::<Vec<_>>();
+        assert_eq!(parsed_metas, files);
+    }
+
+    #[test]
+    fn test_expr_applicable_for_cols() {
+        assert!(expr_applicable_for_cols(
+            &[String::from("c1")],
+            &Expr::eq(col("c1"), lit("value"))
+        ));
+        assert!(!expr_applicable_for_cols(
+            &[String::from("c1")],
+            &Expr::eq(col("c2"), lit("value"))
+        ));
+        assert!(!expr_applicable_for_cols(
+            &[String::from("c1")],
+            &Expr::eq(col("c1"), col("c2"))
+        ));
+        assert!(expr_applicable_for_cols(
+            &[String::from("c1"), String::from("c2")],
+            &Expr::eq(col("c1"), col("c2"))
+        ));
+        assert!(expr_applicable_for_cols(
+            &[String::from("c1"), String::from("c2")],
+            &(Expr::eq(col("c1"), col("c2").alias("c2_alias"))).not()
+        ));
+        assert!(expr_applicable_for_cols(
+            &[String::from("c1"), String::from("c2")],
+            &(case(col("c1"))
+                .when(lit("v1"), lit(true))
+                .otherwise(lit(false))
+                .expect("valid case expr"))
+        ));
+        // static expression not relvant in this context but we
+        // test it as an edge case anyway in case we want to generalize
+        // this helper function
+        assert!(expr_applicable_for_cols(&[], &lit(true)));
+    }
+}

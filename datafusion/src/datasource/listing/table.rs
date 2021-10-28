@@ -15,36 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A table that uses the `ObjectStore` listing capability
-//! to get the list of files to process.
+//! The table implementation.
 
 use std::{any::Any, sync::Arc};
 
-use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use futures::{
-    stream::{self, TryChunksError},
-    StreamExt, TryStreamExt,
-};
+use futures::StreamExt;
 
 use crate::{
-    datasource::{MemTable, PartitionedFile},
-    error::{DataFusionError, Result},
-    execution::context::ExecutionContext,
-    logical_plan::{self, Expr},
-    physical_plan::{functions::Volatility, ExecutionPlan, Statistics},
+    error::Result,
+    logical_plan::Expr,
+    physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
 
-use super::{
+use crate::datasource::{
     datasource::TableProviderFilterPushDown,
     file_format::{FileFormat, PhysicalPlanConfig},
     get_statistics_with_limit,
-    object_store::{FileMeta, ObjectStore},
-    PartitionedFileStream, TableProvider,
+    object_store::ObjectStore,
+    PartitionedFile, TableProvider,
 };
+
+use super::helpers::{pruned_partition_list, split_files};
 
 /// Options for creating a `ListingTable`
 pub struct ListingOptions {
@@ -116,7 +109,7 @@ impl ListingOptions {
 /// or file system listing capability to get the list of files.
 pub struct ListingTable {
     object_store: Arc<dyn ObjectStore>,
-    path: String,
+    table_path: String,
     schema: SchemaRef,
     options: ListingOptions,
 }
@@ -125,14 +118,14 @@ impl ListingTable {
     /// Create new table that lists the FS to get the files to scan.
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
-        path: String,
+        table_path: String,
         // the schema must be resolved before creating the table
         schema: SchemaRef,
         options: ListingOptions,
     ) -> Self {
         Self {
             object_store,
-            path,
+            table_path,
             schema,
             options,
         }
@@ -143,8 +136,8 @@ impl ListingTable {
         &self.object_store
     }
     /// Get path ref
-    pub fn path(&self) -> &str {
-        &self.path
+    pub fn table_path(&self) -> &str {
+        &self.table_path
     }
     /// Get options ref
     pub fn options(&self) -> &ListingOptions {
@@ -171,6 +164,19 @@ impl TableProvider for ListingTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let (partitioned_file_lists, statistics) =
             self.list_files_for_scan(filters, limit).await?;
+
+        // if no files need to be read, return an `EmptyExec`
+        if partitioned_file_lists.is_empty() {
+            let schema = self.schema();
+            let projected_schema = match &projection {
+                None => schema,
+                Some(p) => Arc::new(Schema::new(
+                    p.iter().map(|i| schema.field(*i).clone()).collect(),
+                )),
+            };
+            return Ok(Arc::new(EmptyExec::new(false, projected_schema)));
+        }
+
         // create the execution plan
         self.options
             .format
@@ -206,7 +212,7 @@ impl ListingTable {
         // list files (with partitions)
         let file_list = pruned_partition_list(
             self.object_store.as_ref(),
-            &self.path,
+            &self.table_path,
             filters,
             &self.options.file_extension,
             &self.options.partitions,
@@ -233,197 +239,10 @@ impl ListingTable {
         let (files, statistics) =
             get_statistics_with_limit(files, self.schema(), limit).await?;
 
-        if files.is_empty() {
-            return Err(DataFusionError::Plan(format!(
-                "No files found at {} with file extension {}",
-                self.path, self.options.file_extension,
-            )));
-        }
-
         Ok((
             split_files(files, self.options.target_partitions),
             statistics,
         ))
-    }
-}
-
-/// Discover the partitions on the given path and prune out files
-/// relative to irrelevant partitions using `filters` expressions
-/// TODO for tables with many files (10k+), it will usually more efficient
-/// to first list the folders relative to the first partition dimension,
-/// prune those, then list only the contain of the remaining folders.
-async fn pruned_partition_list(
-    store: &dyn ObjectStore,
-    path: &str,
-    filters: &[Expr],
-    file_extension: &str,
-    partition_names: &[String],
-) -> Result<PartitionedFileStream> {
-    if partition_names.is_empty() {
-        Ok(Box::pin(
-            store
-                .list_file_with_suffix(path, file_extension)
-                .await?
-                .map(|f| {
-                    Ok(PartitionedFile {
-                        file_meta: f?,
-                        partition_values: vec![],
-                    })
-                }),
-        ))
-    } else {
-        let applicable_filters = filters
-            .iter()
-            .filter(|f| expr_applicable_for_cols(partition_names, f));
-
-        let schema = Arc::new(Schema::new(
-            partition_names
-                .iter()
-                .map(|pn| Field::new(pn, DataType::Utf8, false))
-                .collect(),
-        ));
-
-        let stream_schema = Arc::clone(&schema);
-        let stream_path = path.to_owned();
-        // TODO avoid collecting but have a streaming memory table instead
-        let batches: Vec<RecordBatch> = store
-            .list_file_with_suffix(path, file_extension)
-            .await?
-            .try_chunks(64)
-            .map_err(|TryChunksError(_, e)| e)
-            .map_ok(move |metas| {
-                paths_to_batch(Arc::clone(&stream_schema), &stream_path, metas)
-            })
-            .try_collect()
-            .await?;
-
-        let mem_table = MemTable::try_new(schema, vec![batches])?;
-
-        // Filter the partitions using a local datafusion context
-        // TODO having the external context would allow us to resolve `Volatility::Stable`
-        // scalar functions (`ScalarFunction` & `ScalarUDF`) and `ScalarVariable`s
-        let mut ctx = ExecutionContext::new();
-        let mut df = ctx.read_table(Arc::new(mem_table))?;
-        for filter in applicable_filters {
-            df = df.filter(filter.clone())?;
-        }
-        let filtered_batches = df.collect().await?;
-
-        Ok(Box::pin(stream::iter(
-            batches_to_paths(path, &filtered_batches)
-                .into_iter()
-                .map(Ok),
-        )))
-    }
-}
-
-/// convert the paths of the files to a record batch with the following columns:
-/// - one column by partition
-/// - on column for the file size named `_df_part_file_size_`
-fn paths_to_batch(schema: SchemaRef, path: &str, metas: Vec<FileMeta>) -> RecordBatch {
-    RecordBatch::new_empty(schema)
-}
-
-/// convert a set of record batches created by `paths_to_batch()` back to partitioned files.
-fn batches_to_paths(path: &str, batches: &[RecordBatch]) -> Vec<PartitionedFile> {
-    vec![]
-}
-
-fn split_files(
-    partitioned_files: Vec<PartitionedFile>,
-    n: usize,
-) -> Vec<Vec<PartitionedFile>> {
-    let mut chunk_size = partitioned_files.len() / n;
-    if partitioned_files.len() % n > 0 {
-        chunk_size += 1;
-    }
-    partitioned_files
-        .chunks(chunk_size)
-        .map(|c| c.to_vec())
-        .collect()
-}
-
-fn expr_applicable_for_cols<'a>(col_names: &[String], expr: &'a Expr) -> bool {
-    match expr {
-        // leaf
-        Expr::Literal(_) => true,
-        // TODO how to handle qualified / unqualified names?
-        Expr::Column(logical_plan::Column { ref name, .. }) => col_names.contains(name),
-        // unary
-        Expr::Alias(child, _)
-        | Expr::Not(child)
-        | Expr::IsNotNull(child)
-        | Expr::IsNull(child)
-        | Expr::Negative(child)
-        | Expr::Cast { expr: child, .. }
-        | Expr::TryCast { expr: child, .. } => expr_applicable_for_cols(col_names, child),
-        // binary
-        Expr::BinaryExpr {
-            ref left,
-            ref right,
-            ..
-        } => {
-            expr_applicable_for_cols(col_names, left)
-                && expr_applicable_for_cols(col_names, right)
-        }
-        // ternary
-        Expr::Between {
-            expr: item,
-            low,
-            high,
-            ..
-        } => {
-            expr_applicable_for_cols(col_names, item)
-                && expr_applicable_for_cols(col_names, low)
-                && expr_applicable_for_cols(col_names, high)
-        }
-        // variadic
-        Expr::ScalarFunction { fun, args } => match fun.volatility() {
-            Volatility::Immutable => args
-                .iter()
-                .all(|arg| expr_applicable_for_cols(col_names, arg)),
-            // TODO: Stable functions could be `applicable`, but that would require access to the context
-            Volatility::Stable => false,
-            Volatility::Volatile => false,
-        },
-        Expr::ScalarUDF { fun, args } => match fun.signature.volatility {
-            Volatility::Immutable => args
-                .iter()
-                .all(|arg| expr_applicable_for_cols(col_names, arg)),
-            // TODO: Stable functions could be `applicable`, but that would require access to the context
-            Volatility::Stable => false,
-            Volatility::Volatile => false,
-        },
-        Expr::InList {
-            expr: item, list, ..
-        } => {
-            expr_applicable_for_cols(col_names, item)
-                && list.iter().all(|e| expr_applicable_for_cols(col_names, e))
-        }
-        Expr::Case {
-            expr,
-            when_then_expr,
-            else_expr,
-        } => {
-            let expr_constant = expr
-                .as_ref()
-                .map(|e| expr_applicable_for_cols(col_names, e))
-                .unwrap_or(true);
-            let else_constant = else_expr
-                .as_ref()
-                .map(|e| expr_applicable_for_cols(col_names, e))
-                .unwrap_or(true);
-            let when_then_constant = when_then_expr.iter().all(|(w, th)| {
-                expr_applicable_for_cols(col_names, w)
-                    && expr_applicable_for_cols(col_names, th)
-            });
-            expr_constant && else_constant && when_then_constant
-        }
-        // TODO other expressions are not handled yet:
-        // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
-        // - Can `Wildcard` be considered as a `Literal`?
-        // - ScalarVariable could be `applicable`, but that would require access to the context
-        _ => false,
     }
 }
 
@@ -432,49 +251,13 @@ mod tests {
     use crate::{
         datasource::{
             file_format::{avro::AvroFormat, parquet::ParquetFormat},
-            object_store::{local::LocalFileSystem, ObjectStore},
+            object_store::local::LocalFileSystem,
         },
+        logical_plan::{col, lit},
         test::object_store::TestObjectStore,
     };
 
     use super::*;
-
-    #[test]
-    fn test_split_files() {
-        let new_partitioned_file = |path: &str| PartitionedFile::new(path.to_owned(), 10);
-        let files = vec![
-            new_partitioned_file("a"),
-            new_partitioned_file("b"),
-            new_partitioned_file("c"),
-            new_partitioned_file("d"),
-            new_partitioned_file("e"),
-        ];
-
-        let chunks = split_files(files.clone(), 1);
-        assert_eq!(1, chunks.len());
-        assert_eq!(5, chunks[0].len());
-
-        let chunks = split_files(files.clone(), 2);
-        assert_eq!(2, chunks.len());
-        assert_eq!(3, chunks[0].len());
-        assert_eq!(2, chunks[1].len());
-
-        let chunks = split_files(files.clone(), 5);
-        assert_eq!(5, chunks.len());
-        assert_eq!(1, chunks[0].len());
-        assert_eq!(1, chunks[1].len());
-        assert_eq!(1, chunks[2].len());
-        assert_eq!(1, chunks[3].len());
-        assert_eq!(1, chunks[4].len());
-
-        let chunks = split_files(files, 123);
-        assert_eq!(5, chunks.len());
-        assert_eq!(1, chunks[0].len());
-        assert_eq!(1, chunks[1].len());
-        assert_eq!(1, chunks[2].len());
-        assert_eq!(1, chunks[3].len());
-        assert_eq!(1, chunks[4].len());
-    }
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
@@ -496,9 +279,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_listings() -> Result<()> {
+    async fn read_empty_table() -> Result<()> {
+        let store = TestObjectStore::new_arc(&[("table/p1=v1/file.avro", 100)]);
+
+        let opt = ListingOptions {
+            file_extension: ".avro".to_owned(),
+            format: Arc::new(AvroFormat {}),
+            partitions: vec![String::from("p1")],
+            target_partitions: 4,
+            collect_stat: true,
+        };
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+
+        let table = ListingTable::new(store, "table/".to_owned(), Arc::new(schema), opt);
+
+        // this will filter out the only file in the store
+        let filter = Expr::not_eq(col("p1"), lit("v1"));
+
+        let scan = table
+            .scan(&None, 1024, &[filter], None)
+            .await
+            .expect("Empty execution plan");
+
+        assert!(scan.as_any().is::<EmptyExec>());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_assert_list_files_for_scan_grouping() -> Result<()> {
         // more expected partitions than files
-        assert_partitioning(
+        assert_list_files_for_scan_grouping(
             &[
                 "bucket/key-prefix/file0",
                 "bucket/key-prefix/file1",
@@ -513,7 +325,7 @@ mod tests {
         .await?;
 
         // as many expected partitions as files
-        assert_partitioning(
+        assert_list_files_for_scan_grouping(
             &[
                 "bucket/key-prefix/file0",
                 "bucket/key-prefix/file1",
@@ -527,7 +339,7 @@ mod tests {
         .await?;
 
         // more files as expected partitions
-        assert_partitioning(
+        assert_list_files_for_scan_grouping(
             &[
                 "bucket/key-prefix/file0",
                 "bucket/key-prefix/file1",
@@ -541,13 +353,11 @@ mod tests {
         )
         .await?;
 
-        // no files
-        assert_partitioning(&[], "bucket/key-prefix/", 2, 0)
-            .await
-            .expect_err("no files");
+        // no files => no groups
+        assert_list_files_for_scan_grouping(&[], "bucket/key-prefix/", 2, 0).await?;
 
         // files that don't match the prefix
-        assert_partitioning(
+        assert_list_files_for_scan_grouping(
             &[
                 "bucket/key-prefix/file0",
                 "bucket/key-prefix/file1",
@@ -583,13 +393,13 @@ mod tests {
 
     /// Check that the files listed by the table match the specified `output_partitioning`
     /// when the object store contains `files`.
-    async fn assert_partitioning(
+    async fn assert_list_files_for_scan_grouping(
         files: &[&str],
         table_prefix: &str,
         target_partitions: usize,
         output_partitioning: usize,
     ) -> Result<()> {
-        let mock_store: Arc<dyn ObjectStore> =
+        let mock_store =
             TestObjectStore::new_arc(&files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
         let format = AvroFormat {};
@@ -604,12 +414,8 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
-        let table = ListingTable::new(
-            Arc::clone(&mock_store),
-            table_prefix.to_owned(),
-            Arc::new(schema),
-            opt,
-        );
+        let table =
+            ListingTable::new(mock_store, table_prefix.to_owned(), Arc::new(schema), opt);
 
         let (file_list, _) = table.list_files_for_scan(&[], None).await?;
 

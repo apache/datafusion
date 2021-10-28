@@ -41,7 +41,7 @@ pub struct TestObjectStore {
 }
 
 impl TestObjectStore {
-    pub fn new_arc(files: &[(&str, u64)]) -> Arc<Self> {
+    pub fn new_arc(files: &[(&str, u64)]) -> Arc<dyn ObjectStore> {
         Arc::new(Self {
             files: files.iter().map(|f| (f.0.to_owned(), f.1)).collect(),
         })
