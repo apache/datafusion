@@ -278,7 +278,7 @@ mod tests {
             object_store::local::LocalFileSystem,
         },
         logical_plan::{col, lit},
-        test::object_store::TestObjectStore,
+        test::{columns, object_store::TestObjectStore},
     };
 
     use super::*;
@@ -314,9 +314,14 @@ mod tests {
             collect_stat: true,
         };
 
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let file_schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
-        let table = ListingTable::new(store, "table/".to_owned(), Arc::new(schema), opt);
+        let table =
+            ListingTable::new(store, "table/".to_owned(), Arc::new(file_schema), opt);
+        assert_eq!(
+            columns(&table.schema()),
+            vec!["a".to_owned(), "p1".to_owned()]
+        );
 
         // this will filter out the only file in the store
         let filter = Expr::not_eq(col("p1"), lit("v1"));
@@ -327,6 +332,10 @@ mod tests {
             .expect("Empty execution plan");
 
         assert!(scan.as_any().is::<EmptyExec>());
+        assert_eq!(
+            columns(&scan.schema()),
+            vec!["a".to_owned(), "p1".to_owned()]
+        );
 
         Ok(())
     }
