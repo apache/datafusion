@@ -38,3 +38,7 @@ uuid = { version = "0.8", features = ["v4"] }
 [lib]
 name = "datafusion"
 crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+codegen-units = 1
