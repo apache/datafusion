@@ -23,6 +23,24 @@ The Arrow DataFusion CLI is a command-line interactive SQL utility that allows
 queries to be executed against CSV and Parquet files. It is a convenient way to
 try DataFusion out with your own data sources.
 
+Install and run using Homebrew (on MacOS)
+=========================================
+
+The easiest way to give DataFusion CLI a spin is via Homebrew (on MacOS). Install it as any other pre-built software like this:
+
+.. code-block:: bash
+
+    brew install datafusion
+    # ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/manifests/5.0.0
+    # ######################################################################## 100.0%
+    # ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/blobs/sha256:9ecc8a01be47ceb9a53b39976696afa87c0a8
+    # ==> Downloading from https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:9ecc8a01be47ceb9a53b39976
+    # ######################################################################## 100.0%
+    # ==> Pouring datafusion--5.0.0.big_sur.bottle.tar.gz
+    # 🍺  /usr/local/Cellar/datafusion/5.0.0: 9 files, 17.4MB
+
+    datafusion-cli
+
 Run using Cargo
 ===============
 
