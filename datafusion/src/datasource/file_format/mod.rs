@@ -41,7 +41,8 @@ use super::PartitionedFile;
 pub struct PhysicalPlanConfig {
     /// Store from which the `files` should be fetched
     pub object_store: Arc<dyn ObjectStore>,
-    /// Schema before projection
+    /// Schema before projection. It contains the columns that are expected
+    /// to be in the file followed by the table partition columns.
     pub file_schema: SchemaRef,
     /// List of files to be processed, grouped into partitions
     pub file_groups: Vec<Vec<PartitionedFile>>,

@@ -80,7 +80,7 @@ impl ListingOptions {
     }
 
     /// Infer the schema of the files at the given path on the provided object store.
-    /// The inferred schema should include the partitioning columns.
+    /// The inferred schema does not include the partitioning columns.
     ///
     /// This method will not be called by the table itself but before creating it.
     /// This way when creating the logical plan we can decide to resolve the schema
@@ -95,12 +95,7 @@ impl ListingOptions {
             .await?
             .map(move |file_meta| object_store.file_reader(file_meta?.sized_file));
         let file_schema = self.format.infer_schema(Box::pin(file_stream)).await?;
-        // Add the partition columns to the file schema
-        let mut fields = file_schema.fields().clone();
-        for part in &self.table_partition_cols {
-            fields.push(Field::new(part, DataType::Utf8, false));
-        }
-        Ok(Arc::new(Schema::new(fields)))
+        Ok(file_schema)
     }
 }
 
@@ -109,24 +104,32 @@ impl ListingOptions {
 pub struct ListingTable {
     object_store: Arc<dyn ObjectStore>,
     table_path: String,
-    /// the schema also contains the partition columns
+    /// File fields + partition columns
     schema: SchemaRef,
     options: ListingOptions,
 }
 
 impl ListingTable {
     /// Create new table that lists the FS to get the files to scan.
+    /// The provided `schema` must be resolved before creating the table
+    /// and should contain the fields of the file without the table
+    /// partitioning columns.
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
         table_path: String,
-        // the schema must be resolved before creating the table
         schema: SchemaRef,
         options: ListingOptions,
     ) -> Self {
+        // Add the partition columns to the file schema
+        let mut fields = schema.fields().clone();
+        for part in &options.table_partition_cols {
+            fields.push(Field::new(part, DataType::Utf8, false));
+        }
+
         Self {
             object_store,
             table_path,
-            schema,
+            schema: Arc::new(Schema::new(fields)),
             options,
         }
     }

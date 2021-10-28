@@ -39,9 +39,7 @@ use super::file_stream::{BatchIter, FileStream};
 pub struct CsvExec {
     object_store: Arc<dyn ObjectStore>,
     file_groups: Vec<Vec<PartitionedFile>>,
-    /// Schema representing the CSV file
     file_schema: SchemaRef,
-    /// Schema after the projection has been applied
     projected_schema: SchemaRef,
     statistics: Statistics,
     has_header: bool,
