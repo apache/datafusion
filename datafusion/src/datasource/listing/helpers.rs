@@ -136,6 +136,7 @@ pub async fn pruned_partition_list(
 /// - one column for with the original path named `_df_part_file_path_`
 /// - one column for with the last modified date named `_df_part_file_modified_`
 /// - ... one column by partition ...
+///
 /// Note: For the last modified date, this looses precisions higher than millisecond.
 fn paths_to_batch(
     table_partition_cols: &[String],

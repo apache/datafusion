@@ -218,11 +218,14 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::PhysicalPlanConfig;
     use crate::datasource::object_store::{local::LocalFileSystem, ObjectStore};
     use crate::test;
+
     use crate::{
-        physical_plan::{collect, file_format::CsvExec},
+        physical_plan::{
+            collect,
+            file_format::{CsvExec, PhysicalPlanConfig},
+        },
         scalar::ScalarValue,
     };
     use arrow::record_batch::RecordBatch;

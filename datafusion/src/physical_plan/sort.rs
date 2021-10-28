@@ -310,12 +310,14 @@ impl RecordBatchStream for SortStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::PhysicalPlanConfig;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::{collect, file_format::CsvExec};
+    use crate::physical_plan::{
+        collect,
+        file_format::{CsvExec, PhysicalPlanConfig},
+    };
     use crate::test::assert_is_pending;
     use crate::test::exec::assert_strong_count_converges_to_zero;
     use crate::test::{self, exec::BlockingExec};

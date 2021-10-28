@@ -18,9 +18,6 @@
 //! Execution plan for reading line-delimited JSON files
 use async_trait::async_trait;
 
-use crate::datasource::file_format::PhysicalPlanConfig;
-use crate::datasource::object_store::ObjectStore;
-use crate::datasource::PartitionedFile;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -30,40 +27,25 @@ use std::any::Any;
 use std::sync::Arc;
 
 use super::file_stream::{BatchIter, FileStream};
+use super::PhysicalPlanConfig;
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
 pub struct NdJsonExec {
-    object_store: Arc<dyn ObjectStore>,
-    file_groups: Vec<Vec<PartitionedFile>>,
-    statistics: Statistics,
-    file_schema: SchemaRef,
-    projection: Option<Vec<usize>>,
+    base_config: PhysicalPlanConfig,
+    projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    batch_size: usize,
-    limit: Option<usize>,
-    table_partition_cols: Vec<String>,
 }
 
 impl NdJsonExec {
-    /// Create a new JSON reader execution plan provided file list and schema
+    /// Create a new JSON reader execution plan provided base configurations
     pub fn new(base_config: PhysicalPlanConfig) -> Self {
-        let (projected_schema, projected_statistics) = super::project(
-            &base_config.projection,
-            Arc::clone(&base_config.file_schema),
-            base_config.statistics,
-        );
+        let (projected_schema, projected_statistics) = base_config.project();
 
         Self {
-            object_store: base_config.object_store,
-            file_groups: base_config.file_groups,
-            statistics: projected_statistics,
-            file_schema: base_config.file_schema,
-            projection: base_config.projection,
+            base_config,
             projected_schema,
-            batch_size: base_config.batch_size,
-            limit: base_config.limit,
-            table_partition_cols: base_config.table_partition_cols,
+            projected_statistics,
         }
     }
 }
@@ -79,7 +61,7 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.file_groups.len())
+        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -101,15 +83,10 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        let proj = self.projection.as_ref().map(|p| {
-            p.iter()
-                .map(|col_idx| self.file_schema.field(*col_idx).name())
-                .cloned()
-                .collect()
-        });
+        let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = self.batch_size;
-        let file_schema = Arc::clone(&self.file_schema);
+        let batch_size = self.base_config.batch_size;
+        let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.
         let fun = move |file, _remaining: &Option<usize>| {
@@ -122,12 +99,12 @@ impl ExecutionPlan for NdJsonExec {
         };
 
         Ok(Box::pin(FileStream::new(
-            Arc::clone(&self.object_store),
-            self.file_groups[partition].clone(),
+            Arc::clone(&self.base_config.object_store),
+            self.base_config.file_groups[partition].clone(),
             fun,
             Arc::clone(&self.projected_schema),
-            self.limit,
-            self.table_partition_cols.clone(),
+            self.base_config.limit,
+            self.base_config.table_partition_cols.clone(),
         )))
     }
 
@@ -141,16 +118,16 @@ impl ExecutionPlan for NdJsonExec {
                 write!(
                     f,
                     "JsonExec: batch_size={}, limit={:?}, files={}",
-                    self.batch_size,
-                    self.limit,
-                    super::FileGroupsDisplay(&self.file_groups),
+                    self.base_config.batch_size,
+                    self.base_config.limit,
+                    super::FileGroupsDisplay(&self.base_config.file_groups),
                 )
             }
         }
     }
 
     fn statistics(&self) -> Statistics {
-        self.statistics.clone()
+        self.projected_statistics.clone()
     }
 }
 

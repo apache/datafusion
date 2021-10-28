@@ -175,11 +175,10 @@ pub(crate) fn find_ranges_in_range<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::PhysicalPlanConfig;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::CsvExec;
+    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::physical_plan::{collect, Statistics};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, aggr_test_schema, assert_is_pending};

@@ -27,21 +27,20 @@ use crate::{
     scalar::ScalarValue,
 };
 use arrow::{
-    array::{ArrayData, ArrayRef, DictionaryArray, UInt8BufferBuilder},
-    buffer::Buffer,
-    datatypes::{DataType, SchemaRef, UInt8Type},
+    datatypes::SchemaRef,
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
 use futures::Stream;
 use std::{
-    collections::HashMap,
     io::Read,
     iter,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
 };
+
+use super::PartitionColumnProjector;
 
 pub type FileIter = Box<dyn Iterator<Item = PartitionedFile> + Send + Sync>;
 pub type BatchIter = Box<dyn Iterator<Item = ArrowResult<RecordBatch>> + Send + Sync>;
@@ -71,7 +70,7 @@ pub struct FileStream<F: FormatReaderOpener> {
     file_iter: FileIter,
     /// The stream schema (file schema including partition columns and after
     /// projection).
-    schema: SchemaRef,
+    projected_schema: SchemaRef,
     /// The remaining number of records to parse, None if no limit
     remain: Option<usize>,
     /// A closure that takes a reader and an optional remaining number of lines
@@ -79,13 +78,8 @@ pub struct FileStream<F: FormatReaderOpener> {
     /// is not capable of limiting the number of records in the last batch, the file
     /// stream will take care of truncating it.
     file_reader: F,
-    /// A buffer initialized to zeros that represents the key array of all partition
-    /// columns (partition columns are materialized by dictionary arrays with only one
-    /// value in the dictionary, thus all the keys are equal to zero).
-    key_buffer_cache: Option<Buffer>,
-    /// mapping between the indexes in the list of partition columns and the target
-    /// schema.
-    projected_partition_indexes: HashMap<usize, usize>,
+    /// The partition column projector
+    pc_projector: PartitionColumnProjector,
     /// the store from which to source the files.
     object_store: Arc<dyn ObjectStore>,
 }
@@ -95,26 +89,23 @@ impl<F: FormatReaderOpener> FileStream<F> {
         object_store: Arc<dyn ObjectStore>,
         files: Vec<PartitionedFile>,
         file_reader: F,
-        schema: SchemaRef,
+        projected_schema: SchemaRef,
         limit: Option<usize>,
         table_partition_cols: Vec<String>,
     ) -> Self {
-        let mut projected_partition_indexes = HashMap::new();
-        for (partition_idx, partition_name) in table_partition_cols.iter().enumerate() {
-            if let Ok(schema_idx) = schema.index_of(partition_name) {
-                projected_partition_indexes.insert(partition_idx, schema_idx);
-            }
-        }
+        let pc_projector = PartitionColumnProjector::new(
+            Arc::clone(&projected_schema),
+            &table_partition_cols,
+        );
 
         Self {
             file_iter: Box::new(files.into_iter()),
             batch_iter: Box::new(iter::empty()),
             partition_values: vec![],
             remain: limit,
-            schema,
+            projected_schema,
             file_reader,
-            key_buffer_cache: None,
-            projected_partition_indexes,
+            pc_projector,
             object_store,
         }
     }
@@ -122,28 +113,10 @@ impl<F: FormatReaderOpener> FileStream<F> {
     /// Acts as a flat_map of record batches over files. Adds the partitioning
     /// Columns to the returned record batches.
     fn next_batch(&mut self) -> Option<ArrowResult<RecordBatch>> {
-        let expected_cols =
-            self.schema.fields().len() - self.projected_partition_indexes.len();
         match self.batch_iter.next() {
-            Some(Ok(batch)) if batch.columns().len() == expected_cols => {
-                let mut cols = batch.columns().to_vec();
-                for (&pidx, &sidx) in &self.projected_partition_indexes {
-                    cols.insert(
-                        sidx,
-                        create_dict_array(
-                            &mut self.key_buffer_cache,
-                            &self.partition_values[pidx],
-                            batch.num_rows(),
-                        ),
-                    )
-                }
-                Some(RecordBatch::try_new(self.schema(), cols))
+            Some(Ok(batch)) => {
+                Some(self.pc_projector.project(batch, &self.partition_values))
             }
-            Some(Ok(batch)) => Some(Err(ArrowError::SchemaError(format!(
-                "Unexpected batch schema from file, expected {} cols but got {}",
-                expected_cols,
-                batch.columns().len()
-            )))),
             Some(Err(e)) => Some(Err(e)),
             None => match self.file_iter.next() {
                 Some(f) => {
@@ -162,36 +135,6 @@ impl<F: FormatReaderOpener> FileStream<F> {
             },
         }
     }
-}
-
-fn create_dict_array(
-    key_buffer_cache: &mut Option<Buffer>,
-    val: &ScalarValue,
-    len: usize,
-) -> ArrayRef {
-    // build value dictionary
-    let dict_vals = val.to_array();
-
-    // build keys array
-    let sliced_key_buffer = match key_buffer_cache {
-        Some(buf) if buf.len() >= len => buf.slice(buf.len() - len),
-        _ => {
-            let mut key_buffer_builder = UInt8BufferBuilder::new(len);
-            key_buffer_builder.advance(len); // keys are all 0
-            key_buffer_cache.insert(key_buffer_builder.finish()).clone()
-        }
-    };
-
-    // create data type
-    let data_type =
-        DataType::Dictionary(Box::new(DataType::UInt8), Box::new(val.get_datatype()));
-
-    // assemble pieces together
-    let mut builder = ArrayData::builder(data_type)
-        .len(len)
-        .add_buffer(sliced_key_buffer);
-    builder = builder.add_child_data(dict_vals.data().clone());
-    Arc::new(DictionaryArray::<UInt8Type>::from(builder.build().unwrap()))
 }
 
 impl<F: FormatReaderOpener> Stream for FileStream<F> {
@@ -236,7 +179,7 @@ impl<F: FormatReaderOpener> Stream for FileStream<F> {
 
 impl<F: FormatReaderOpener> RecordBatchStream for FileStream<F> {
     fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+        Arc::clone(&self.projected_schema)
     }
 }
 

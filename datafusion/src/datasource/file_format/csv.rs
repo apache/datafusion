@@ -25,11 +25,11 @@ use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
 
-use super::{FileFormat, PhysicalPlanConfig};
+use super::FileFormat;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
-use crate::physical_plan::file_format::CsvExec;
+use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 

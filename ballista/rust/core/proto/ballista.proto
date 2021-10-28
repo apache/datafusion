@@ -614,36 +614,28 @@ message ScanLimit {
   uint32 limit = 1;
 }
 
-message ParquetScanExecNode {
+message FileScanExecConf {
   repeated FileGroup file_groups = 1;
   Schema schema = 2;
-  uint32 batch_size = 4;
-  repeated uint32 projection = 6;
-  ScanLimit limit = 7;
-  Statistics statistics = 8;
-  repeated string table_partition_cols = 9;
+  uint32 batch_size = 3;
+  repeated uint32 projection = 4;
+  ScanLimit limit = 5;
+  Statistics statistics = 6;
+  repeated string table_partition_cols = 7;
+}
+
+message ParquetScanExecNode {
+  FileScanExecConf base_conf = 1;
 }
 
 message CsvScanExecNode {
-  repeated FileGroup file_groups = 1;
-  Schema schema = 2;
-  bool has_header = 3;
-  uint32 batch_size = 4;
-  string delimiter = 5;
-  repeated uint32 projection = 6;
-  ScanLimit limit = 7;
-  Statistics statistics = 8;
-  repeated string table_partition_cols = 9;
+  FileScanExecConf base_conf = 1;
+  bool has_header = 2;
+  string delimiter = 3;
 }
 
 message AvroScanExecNode {
-  repeated FileGroup file_groups = 1;
-  Schema schema = 2;
-  uint32 batch_size = 4;
-  repeated uint32 projection = 6;
-  ScanLimit limit = 7;
-  Statistics statistics = 8;
-  repeated string table_partition_cols = 9;
+  FileScanExecConf base_conf = 1;
 }
 
 enum PartitionMode {

@@ -19,22 +19,23 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
 
 use crate::{
     error::Result,
     logical_plan::Expr,
-    physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
+    physical_plan::{
+        empty::EmptyExec,
+        file_format::{PhysicalPlanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
+        ExecutionPlan, Statistics,
+    },
 };
 
 use crate::datasource::{
-    datasource::TableProviderFilterPushDown,
-    file_format::{FileFormat, PhysicalPlanConfig},
-    get_statistics_with_limit,
-    object_store::ObjectStore,
-    PartitionedFile, TableProvider,
+    datasource::TableProviderFilterPushDown, file_format::FileFormat,
+    get_statistics_with_limit, object_store::ObjectStore, PartitionedFile, TableProvider,
 };
 
 use super::helpers::{pruned_partition_list, split_files};
@@ -51,7 +52,8 @@ pub struct ListingOptions {
     /// partitioning expected should be named "a" and "b":
     /// - If there is a third level of partitioning it will be ignored.
     /// - Files that don't follow this partitioning will be ignored.
-    /// Note that only `DataType::Utf8` is supported for the column type.
+    /// Note that only `DEFAULT_PARTITION_COLUMN_DATATYPE` is currently
+    /// supported for the column type.
     pub table_partition_cols: Vec<String>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
@@ -104,8 +106,10 @@ impl ListingOptions {
 pub struct ListingTable {
     object_store: Arc<dyn ObjectStore>,
     table_path: String,
+    /// File fields only
+    file_schema: SchemaRef,
     /// File fields + partition columns
-    schema: SchemaRef,
+    table_schema: SchemaRef,
     options: ListingOptions,
 }
 
@@ -117,19 +121,24 @@ impl ListingTable {
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
         table_path: String,
-        schema: SchemaRef,
+        file_schema: SchemaRef,
         options: ListingOptions,
     ) -> Self {
         // Add the partition columns to the file schema
-        let mut fields = schema.fields().clone();
+        let mut table_fields = file_schema.fields().clone();
         for part in &options.table_partition_cols {
-            fields.push(Field::new(part, DataType::Utf8, false));
+            table_fields.push(Field::new(
+                part,
+                DEFAULT_PARTITION_COLUMN_DATATYPE.clone(),
+                false,
+            ));
         }
 
         Self {
             object_store,
             table_path,
-            schema: Arc::new(Schema::new(fields)),
+            file_schema,
+            table_schema: Arc::new(Schema::new(table_fields)),
             options,
         }
     }
@@ -155,7 +164,7 @@ impl TableProvider for ListingTable {
     }
 
     fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+        Arc::clone(&self.table_schema)
     }
 
     async fn scan(
@@ -186,7 +195,7 @@ impl TableProvider for ListingTable {
             .create_physical_plan(
                 PhysicalPlanConfig {
                     object_store: Arc::clone(&self.object_store),
-                    file_schema: self.schema(),
+                    file_schema: Arc::clone(&self.file_schema),
                     file_groups: partitioned_file_lists,
                     statistics,
                     projection: projection.clone(),
@@ -254,6 +263,8 @@ impl ListingTable {
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::DataType;
+
     use crate::{
         datasource::{
             file_format::{avro::AvroFormat, parquet::ParquetFormat},

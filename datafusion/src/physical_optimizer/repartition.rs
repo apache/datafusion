@@ -109,9 +109,8 @@ mod tests {
     use arrow::datatypes::Schema;
 
     use super::*;
-    use crate::datasource::file_format::PhysicalPlanConfig;
     use crate::datasource::PartitionedFile;
-    use crate::physical_plan::file_format::ParquetExec;
+    use crate::physical_plan::file_format::{ParquetExec, PhysicalPlanConfig};
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::Statistics;
     use crate::test::object_store::TestObjectStore;
