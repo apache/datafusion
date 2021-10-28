@@ -52,7 +52,6 @@ pub struct ListingOptions {
     /// - If there is a third level of partitioning it will be ignored.
     /// - Files that don't follow this partitioning will be ignored.
     /// Note that only `DataType::Utf8` is supported for the column type.
-    /// TODO implement case where partitions.len() > 0
     pub partitions: Vec<String>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
@@ -110,6 +109,7 @@ impl ListingOptions {
 pub struct ListingTable {
     object_store: Arc<dyn ObjectStore>,
     table_path: String,
+    /// the schema also contains the partition columns
     schema: SchemaRef,
     options: ListingOptions,
 }
