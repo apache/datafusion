@@ -116,10 +116,9 @@ mod tests {
         datasource::{
             file_format::PhysicalPlanConfig,
             object_store::local::{
-                local_file_meta, local_object_reader, local_object_reader_stream,
-                LocalFileSystem,
+                local_object_reader, local_object_reader_stream,
+                local_unpartitioned_file, LocalFileSystem,
             },
-            PartitionedFile,
         },
         physical_plan::collect,
     };
@@ -220,9 +219,7 @@ mod tests {
             .infer_stats(local_object_reader(filename.to_owned()))
             .await
             .expect("Stats inference");
-        let files = vec![vec![PartitionedFile {
-            file_meta: local_file_meta(filename.to_owned()),
-        }]];
+        let files = vec![vec![local_unpartitioned_file(filename.to_owned())]];
         let exec = format
             .create_physical_plan(PhysicalPlanConfig {
                 object_store: Arc::new(LocalFileSystem {}),

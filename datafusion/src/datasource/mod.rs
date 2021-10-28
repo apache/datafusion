@@ -33,6 +33,7 @@ use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+use crate::scalar::ScalarValue;
 use futures::StreamExt;
 use std::pin::Pin;
 
@@ -128,8 +129,8 @@ pub async fn get_statistics_with_limit(
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
     pub file_meta: FileMeta,
-    // Values of partition columns to be appended to each row
-    // pub partition_value: Option<Vec<ScalarValue>>,
+    /// Values of partition columns to be appended to each row
+    pub partition_values: Vec<ScalarValue>,
     // We may include row group range here for a more fine-grained parallel execution
 }
 
@@ -141,6 +142,7 @@ impl PartitionedFile {
                 sized_file: SizedFile { path, size },
                 last_modified: None,
             },
+            partition_values: vec![],
         }
     }
 }

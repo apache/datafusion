@@ -127,8 +127,8 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     Arc::new(LocalFileSystem {}),
                     scan.file_groups
                         .iter()
-                        .map(|p| p.into())
-                        .collect::<Vec<Vec<PartitionedFile>>>(),
+                        .map(|f| f.try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
                     statistics,
                     schema,
                     scan.has_header,
@@ -147,8 +147,8 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     Arc::new(LocalFileSystem {}),
                     scan.file_groups
                         .iter()
-                        .map(|p| p.into())
-                        .collect::<Vec<Vec<PartitionedFile>>>(),
+                        .map(|p| p.try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
                     statistics,
                     schema,
                     Some(projection),
@@ -167,8 +167,8 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     Arc::new(LocalFileSystem {}),
                     scan.file_groups
                         .iter()
-                        .map(|p| p.into())
-                        .collect::<Vec<Vec<PartitionedFile>>>(),
+                        .map(|f| f.try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
                     statistics,
                     schema,
                     Some(projection),
@@ -738,9 +738,11 @@ pub fn parse_protobuf_hash_partitioning(
     }
 }
 
-impl From<&protobuf::PartitionedFile> for PartitionedFile {
-    fn from(val: &protobuf::PartitionedFile) -> Self {
-        PartitionedFile {
+impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
+    type Error = BallistaError;
+
+    fn try_from(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
+        Ok(PartitionedFile {
             file_meta: FileMeta {
                 sized_file: SizedFile {
                     path: val.path.clone(),
@@ -752,13 +754,23 @@ impl From<&protobuf::PartitionedFile> for PartitionedFile {
                     Some(Utc.timestamp_nanos(val.last_modified_ns as i64))
                 },
             },
-        }
+            partition_values: val
+                .partition_values
+                .iter()
+                .map(|v| v.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
-impl From<&protobuf::FileGroup> for Vec<PartitionedFile> {
-    fn from(val: &protobuf::FileGroup) -> Self {
-        val.files.iter().map(|f| f.into()).collect()
+impl TryFrom<&protobuf::FileGroup> for Vec<PartitionedFile> {
+    type Error = BallistaError;
+
+    fn try_from(val: &protobuf::FileGroup) -> Result<Self, Self::Error> {
+        val.files
+            .iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<_>, _>>()
     }
 }
 

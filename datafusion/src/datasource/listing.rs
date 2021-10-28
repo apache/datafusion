@@ -162,15 +162,8 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // TODO object_store_registry should be provided as param here
-        let (partitioned_file_lists, statistics) = self
-            .list_files_for_scan(
-                Arc::clone(&self.object_store),
-                &self.path,
-                filters,
-                limit,
-            )
-            .await?;
+        let (partitioned_file_lists, statistics) =
+            self.list_files_for_scan(filters, limit).await?;
         // create the execution plan
         self.options
             .format
@@ -196,17 +189,17 @@ impl TableProvider for ListingTable {
 }
 
 impl ListingTable {
+    /// Get the list of files for a scan. The list is grouped to let the execution plan
+    /// know how the files should be distributed to different threads / executors.
     async fn list_files_for_scan<'a>(
         &'a self,
-        object_store: Arc<dyn ObjectStore>,
-        path: &'a str,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
         // list files (with partitions)
         let file_list = pruned_partition_list(
-            object_store.as_ref(),
-            path,
+            self.object_store.as_ref(),
+            &self.path,
             filters,
             &self.options.file_extension,
             &self.options.partitions,
@@ -214,6 +207,7 @@ impl ListingTable {
         .await?;
 
         // collect the statistics if required by the config
+        let object_store = Arc::clone(&self.object_store);
         let files = file_list.then(move |part_file| {
             let object_store = object_store.clone();
             async move {
@@ -260,7 +254,12 @@ async fn pruned_partition_list(
             store
                 .list_file_with_suffix(path, file_extension)
                 .await?
-                .map(|f| Ok(PartitionedFile { file_meta: f? })),
+                .map(|f| {
+                    Ok(PartitionedFile {
+                        file_meta: f?,
+                        partition_values: vec![],
+                    })
+                }),
         ))
     } else {
         todo!("use filters to prune partitions")
@@ -286,7 +285,7 @@ mod tests {
     use crate::{
         datasource::{
             file_format::{avro::AvroFormat, parquet::ParquetFormat},
-            object_store::{local::LocalFileSystem, FileMeta, ObjectStore, SizedFile},
+            object_store::{local::LocalFileSystem, ObjectStore},
         },
         test::object_store::TestObjectStore,
     };
@@ -295,15 +294,7 @@ mod tests {
 
     #[test]
     fn test_split_files() {
-        let new_partitioned_file = |path: &str| PartitionedFile {
-            file_meta: FileMeta {
-                sized_file: SizedFile {
-                    path: path.to_owned(),
-                    size: 10,
-                },
-                last_modified: None,
-            },
-        };
+        let new_partitioned_file = |path: &str| PartitionedFile::new(path.to_owned(), 10);
         let files = vec![
             new_partitioned_file("a"),
             new_partitioned_file("b"),
@@ -473,9 +464,7 @@ mod tests {
             opt,
         );
 
-        let (file_list, _) = table
-            .list_files_for_scan(mock_store, table_prefix, &[], None)
-            .await?;
+        let (file_list, _) = table.list_files_for_scan(&[], None).await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 

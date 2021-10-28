@@ -209,7 +209,7 @@ impl ExecutionPlan for CsvExec {
 mod tests {
     use super::*;
     use crate::{
-        datasource::object_store::local::{local_file_meta, LocalFileSystem},
+        datasource::object_store::local::{local_unpartitioned_file, LocalFileSystem},
         test::aggr_test_schema,
     };
     use futures::StreamExt;
@@ -222,9 +222,7 @@ mod tests {
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::new(
             Arc::new(LocalFileSystem {}),
-            vec![vec![PartitionedFile {
-                file_meta: local_file_meta(path),
-            }]],
+            vec![vec![local_unpartitioned_file(path)]],
             Statistics::default(),
             schema,
             true,
@@ -255,9 +253,7 @@ mod tests {
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::new(
             Arc::new(LocalFileSystem {}),
-            vec![vec![PartitionedFile {
-                file_meta: local_file_meta(path),
-            }]],
+            vec![vec![local_unpartitioned_file(path)]],
             Statistics::default(),
             schema,
             true,

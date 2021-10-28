@@ -330,12 +330,9 @@ impl ChunkReader for ChunkObjectReader {
 #[cfg(test)]
 mod tests {
     use crate::{
-        datasource::{
-            object_store::local::{
-                local_file_meta, local_object_reader, local_object_reader_stream,
-                LocalFileSystem,
-            },
-            PartitionedFile,
+        datasource::object_store::local::{
+            local_object_reader, local_object_reader_stream, local_unpartitioned_file,
+            LocalFileSystem,
         },
         physical_plan::collect,
     };
@@ -603,9 +600,7 @@ mod tests {
             .infer_stats(local_object_reader(filename.clone()))
             .await
             .expect("Stats inference");
-        let files = vec![vec![PartitionedFile {
-            file_meta: local_file_meta(filename.clone()),
-        }]];
+        let files = vec![vec![local_unpartitioned_file(filename.clone())]];
         let exec = format
             .create_physical_plan(PhysicalPlanConfig {
                 object_store: Arc::new(LocalFileSystem {}),

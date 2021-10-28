@@ -247,8 +247,8 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
             let file_groups = exec
                 .file_groups()
                 .iter()
-                .map(|p| p.as_slice().into())
-                .collect();
+                .map(|p| p.as_slice().try_into())
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::CsvScan(
                     protobuf::CsvScanExecNode {
@@ -279,8 +279,8 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
             let file_groups = exec
                 .file_groups()
                 .iter()
-                .map(|p| p.as_slice().into())
-                .collect();
+                .map(|p| p.as_slice().try_into())
+                .collect::<Result<Vec<_>, _>>()?;
 
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
@@ -305,8 +305,8 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
             let file_groups = exec
                 .file_groups()
                 .iter()
-                .map(|p| p.as_slice().into())
-                .collect();
+                .map(|p| p.as_slice().try_into())
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::AvroScan(
                     protobuf::AvroScanExecNode {
@@ -674,9 +674,11 @@ fn try_parse_when_then_expr(
     })
 }
 
-impl From<&PartitionedFile> for protobuf::PartitionedFile {
-    fn from(pf: &PartitionedFile) -> protobuf::PartitionedFile {
-        protobuf::PartitionedFile {
+impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
+    type Error = BallistaError;
+
+    fn try_from(pf: &PartitionedFile) -> Result<Self, Self::Error> {
+        Ok(protobuf::PartitionedFile {
             path: pf.file_meta.path().to_owned(),
             size: pf.file_meta.size(),
             last_modified_ns: pf
@@ -684,15 +686,25 @@ impl From<&PartitionedFile> for protobuf::PartitionedFile {
                 .last_modified
                 .map(|ts| ts.timestamp_nanos() as u64)
                 .unwrap_or(0),
-        }
+            partition_values: pf
+                .partition_values
+                .iter()
+                .map(|v| v.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
-impl From<&[PartitionedFile]> for protobuf::FileGroup {
-    fn from(gr: &[PartitionedFile]) -> protobuf::FileGroup {
-        protobuf::FileGroup {
-            files: gr.iter().map(|f| f.into()).collect(),
-        }
+impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
+    type Error = BallistaError;
+
+    fn try_from(gr: &[PartitionedFile]) -> Result<Self, Self::Error> {
+        Ok(protobuf::FileGroup {
+            files: gr
+                .iter()
+                .map(|f| f.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 

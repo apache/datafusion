@@ -519,7 +519,7 @@ mod tests {
     use crate::datasource::{
         file_format::{parquet::ParquetFormat, FileFormat},
         object_store::local::{
-            local_file_meta, local_object_reader_stream, LocalFileSystem,
+            local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
         },
     };
 
@@ -538,9 +538,7 @@ mod tests {
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let parquet_exec = ParquetExec::new(
             Arc::new(LocalFileSystem {}),
-            vec![vec![PartitionedFile {
-                file_meta: local_file_meta(filename.clone()),
-            }]],
+            vec![vec![local_unpartitioned_file(filename.clone())]],
             Statistics::default(),
             ParquetFormat::default()
                 .infer_schema(local_object_reader_stream(vec![filename]))

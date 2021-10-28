@@ -169,7 +169,7 @@ mod tests {
     use crate::datasource::{
         file_format::{json::JsonFormat, FileFormat},
         object_store::local::{
-            local_file_meta, local_object_reader_stream, LocalFileSystem,
+            local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
         },
     };
 
@@ -189,9 +189,7 @@ mod tests {
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::new(
             Arc::new(LocalFileSystem {}),
-            vec![vec![PartitionedFile {
-                file_meta: local_file_meta(path.clone()),
-            }]],
+            vec![vec![local_unpartitioned_file(path.clone())]],
             Default::default(),
             infer_schema(path).await?,
             None,
@@ -244,9 +242,7 @@ mod tests {
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::new(
             Arc::new(LocalFileSystem {}),
-            vec![vec![PartitionedFile {
-                file_meta: local_file_meta(path.clone()),
-            }]],
+            vec![vec![local_unpartitioned_file(path.clone())]],
             Default::default(),
             infer_schema(path).await?,
             Some(vec![0, 2]),

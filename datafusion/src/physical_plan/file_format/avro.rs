@@ -203,7 +203,7 @@ impl ExecutionPlan for AvroExec {
 mod tests {
 
     use crate::datasource::object_store::local::{
-        local_file_meta, local_object_reader_stream, LocalFileSystem,
+        local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
     };
 
     use super::*;
@@ -218,9 +218,7 @@ mod tests {
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let avro_exec = AvroExec::new(
             Arc::new(LocalFileSystem {}),
-            vec![vec![PartitionedFile {
-                file_meta: local_file_meta(filename.clone()),
-            }]],
+            vec![vec![local_unpartitioned_file(filename.clone())]],
             Statistics::default(),
             AvroFormat {}
                 .infer_schema(local_object_reader_stream(vec![filename]))
