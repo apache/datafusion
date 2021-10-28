@@ -569,10 +569,9 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            scalar::ScalarValue::List(value, datatype) => {
+            scalar::ScalarValue::List(values, datatype) => {
                 println!("Current datatype of list: {:?}", datatype);
-                match value {
-                    Some(values) => {
+
                         if values.is_empty() {
                             protobuf::ScalarValue {
                                 value: Some(protobuf::scalar_value::Value::ListValue(
@@ -637,14 +636,8 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                                 )),
                             }
                         }
-                    }
-                    None => protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::NullListValue(
-                            datatype.as_ref().try_into()?,
-                        )),
-                    },
                 }
-            }
+
             datafusion::scalar::ScalarValue::Date32(val) => {
                 create_proto_scalar(val, PrimitiveScalarType::Date32, |s| Value::Date32Value(*s))
             }
@@ -1008,14 +1001,12 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
 }
 
 fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
-    v: &Option<I>,
+    v: &I,
     null_arrow_type: protobuf::PrimitiveScalarType,
     constructor: T,
 ) -> protobuf::ScalarValue {
     protobuf::ScalarValue {
-        value: Some(v.as_ref().map(constructor).unwrap_or(
-            protobuf::scalar_value::Value::NullValue(null_arrow_type as i32),
-        )),
+        value: Some(constructor(v)),
     }
 }
 

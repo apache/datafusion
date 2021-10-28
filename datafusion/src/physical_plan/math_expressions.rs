@@ -59,12 +59,12 @@ macro_rules! unary_primitive_array_op {
                 ))),
             },
             ColumnarValue::Scalar(a) => match a {
-                ScalarValue::Float32(a) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Float32(a.map(|x| x.$FUNC())),
-                )),
-                ScalarValue::Float64(a) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Float64(a.map(|x| x.$FUNC())),
-                )),
+                ScalarValue::Float32(a) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Float32(a.$FUNC())))
+                }
+                ScalarValue::Float64(a) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Float64(a.$FUNC())))
+                }
                 _ => Err(DataFusionError::Internal(format!(
                     "Unsupported data type {:?} for function {}",
                     ($VALUE).data_type(),

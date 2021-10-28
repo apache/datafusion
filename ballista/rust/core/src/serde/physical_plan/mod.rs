@@ -146,10 +146,7 @@ mod roundtrip_tests {
         let not = Arc::new(NotExpr::new(col("a", &schema)?));
         let in_list = Arc::new(InListExpr::new(
             col("b", &schema)?,
-            vec![
-                lit(ScalarValue::Int64(Some(1))),
-                lit(ScalarValue::Int64(Some(2))),
-            ],
+            vec![lit(ScalarValue::Int64(1)), lit(ScalarValue::Int64(2))],
             false,
         ));
         let and = binary(not, Operator::And, in_list, &schema)?;

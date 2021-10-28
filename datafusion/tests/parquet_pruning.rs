@@ -121,7 +121,7 @@ async fn prune_date64() {
         .parse::<chrono::NaiveDate>()
         .unwrap()
         .and_time(chrono::NaiveTime::from_hms(0, 0, 0));
-    let date = ScalarValue::Date64(Some(date.timestamp_millis()));
+    let date = ScalarValue::Date64(date.timestamp_millis());
 
     let output = ContextWithParquet::new(Scenario::Dates)
         .await

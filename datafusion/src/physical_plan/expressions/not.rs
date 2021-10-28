@@ -87,9 +87,7 @@ impl PhysicalExpr for NotExpr {
             }
             ColumnarValue::Scalar(scalar) => {
                 let bool_value: bool = scalar.try_into()?;
-                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
-                    !bool_value,
-                ))))
+                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(!bool_value)))
             }
         }
     }

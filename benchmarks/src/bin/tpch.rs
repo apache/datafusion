@@ -995,8 +995,7 @@ mod tests {
     }
 
     async fn run_query(n: usize) -> Result<()> {
-        // Tests running query with empty tables, to see whether they run succesfully.
-
+        // Tests running query with empty tables, to see whether they run successfully.
         let config = ExecutionConfig::new()
             .with_target_partitions(1)
             .with_batch_size(10);

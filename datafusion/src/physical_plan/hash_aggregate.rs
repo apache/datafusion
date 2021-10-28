@@ -366,7 +366,7 @@ fn group_aggregate_batch(
     // it will be overwritten on every iteration of the loop below
     let mut group_by_values = Vec::with_capacity(group_values.len());
     for _ in 0..group_values.len() {
-        group_by_values.push(ScalarValue::UInt32(Some(0)));
+        group_by_values.push(ScalarValue::UInt32(0));
     }
 
     // 1.1 construct the key from the group values

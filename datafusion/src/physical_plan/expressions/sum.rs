@@ -132,8 +132,9 @@ impl SumAccumulator {
 macro_rules! typed_sum_delta_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident) => {{
         let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
-        let delta = compute::sum(array);
-        ScalarValue::$SCALAR(delta)
+        compute::sum(array)
+            .map(ScalarValue::$SCALAR)
+            .unwrap_or_else(|| ScalarValue::Null(Box::new(DataType::$SCALAR)))
     }};
 }
 
@@ -162,12 +163,7 @@ pub(super) fn sum_batch(values: &ArrayRef) -> Result<ScalarValue> {
 // returns the sum of two scalar values, including coercion into $TYPE.
 macro_rules! typed_sum {
     ($OLD_VALUE:expr, $DELTA:expr, $SCALAR:ident, $TYPE:ident) => {{
-        ScalarValue::$SCALAR(match ($OLD_VALUE, $DELTA) {
-            (None, None) => None,
-            (Some(a), None) => Some(a.clone()),
-            (None, Some(b)) => Some(b.clone() as $TYPE),
-            (Some(a), Some(b)) => Some(a + (*b as $TYPE)),
-        })
+        ScalarValue::$SCALAR($OLD_VALUE + (*$DELTA as $TYPE))
     }};
 }
 
@@ -320,7 +316,7 @@ mod tests {
             a,
             DataType::Int32,
             Sum,
-            ScalarValue::Int64(None),
+            ScalarValue::Null(Box::new(DataType::Int64)),
             DataType::Int64
         )
     }

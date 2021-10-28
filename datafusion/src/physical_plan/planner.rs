@@ -1069,9 +1069,9 @@ impl DefaultPhysicalPlanner {
                 list,
                 negated,
             } => match expr.as_ref() {
-                Expr::Literal(ScalarValue::Utf8(None)) => {
-                    Ok(expressions::lit(ScalarValue::Boolean(None)))
-                }
+                Expr::Literal(ScalarValue::Null(_)) => Ok(expressions::lit(
+                    ScalarValue::Null(Box::new(DataType::Boolean)),
+                )),
                 _ => {
                     let value_expr = self.create_physical_expr(
                         expr,
@@ -1084,7 +1084,7 @@ impl DefaultPhysicalPlanner {
                     let list_exprs = list
                         .iter()
                         .map(|expr| match expr {
-                            Expr::Literal(ScalarValue::Utf8(None)) => self
+                            Expr::Literal(ScalarValue::Null(_)) => self
                                 .create_physical_expr(
                                     expr,
                                     input_dfschema,
@@ -1648,8 +1648,8 @@ mod tests {
 
         // expression: "a in ('a', 1)"
         let list = vec![
-            Expr::Literal(ScalarValue::Utf8(Some("a".to_string()))),
-            Expr::Literal(ScalarValue::Int64(Some(1))),
+            Expr::Literal(ScalarValue::Utf8("a".to_string())),
+            Expr::Literal(ScalarValue::Int64(1)),
         ];
         let logical_plan = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),
@@ -1670,8 +1670,8 @@ mod tests {
 
         // expression: "a in (true, 'a')"
         let list = vec![
-            Expr::Literal(ScalarValue::Boolean(Some(true))),
-            Expr::Literal(ScalarValue::Utf8(Some("a".to_string()))),
+            Expr::Literal(ScalarValue::Boolean(true)),
+            Expr::Literal(ScalarValue::Utf8("a".to_string())),
         ];
         let logical_plan = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),

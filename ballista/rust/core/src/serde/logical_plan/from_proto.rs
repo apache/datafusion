@@ -456,53 +456,39 @@ fn typechecked_scalar_value_conversion(
     use protobuf::scalar_value::Value;
     use protobuf::PrimitiveScalarType;
     Ok(match (tested_type, &required_type) {
-        (Value::BoolValue(v), PrimitiveScalarType::Bool) => {
-            ScalarValue::Boolean(Some(*v))
-        }
-        (Value::Int8Value(v), PrimitiveScalarType::Int8) => {
-            ScalarValue::Int8(Some(*v as i8))
-        }
+        (Value::BoolValue(v), PrimitiveScalarType::Bool) => ScalarValue::Boolean(*v),
+        (Value::Int8Value(v), PrimitiveScalarType::Int8) => ScalarValue::Int8(*v as i8),
         (Value::Int16Value(v), PrimitiveScalarType::Int16) => {
-            ScalarValue::Int16(Some(*v as i16))
+            ScalarValue::Int16(*v as i16)
         }
-        (Value::Int32Value(v), PrimitiveScalarType::Int32) => {
-            ScalarValue::Int32(Some(*v))
-        }
-        (Value::Int64Value(v), PrimitiveScalarType::Int64) => {
-            ScalarValue::Int64(Some(*v))
-        }
+        (Value::Int32Value(v), PrimitiveScalarType::Int32) => ScalarValue::Int32(*v),
+        (Value::Int64Value(v), PrimitiveScalarType::Int64) => ScalarValue::Int64(*v),
         (Value::Uint8Value(v), PrimitiveScalarType::Uint8) => {
-            ScalarValue::UInt8(Some(*v as u8))
+            ScalarValue::UInt8(*v as u8)
         }
         (Value::Uint16Value(v), PrimitiveScalarType::Uint16) => {
-            ScalarValue::UInt16(Some(*v as u16))
+            ScalarValue::UInt16(*v as u16)
         }
-        (Value::Uint32Value(v), PrimitiveScalarType::Uint32) => {
-            ScalarValue::UInt32(Some(*v))
-        }
-        (Value::Uint64Value(v), PrimitiveScalarType::Uint64) => {
-            ScalarValue::UInt64(Some(*v))
-        }
+        (Value::Uint32Value(v), PrimitiveScalarType::Uint32) => ScalarValue::UInt32(*v),
+        (Value::Uint64Value(v), PrimitiveScalarType::Uint64) => ScalarValue::UInt64(*v),
         (Value::Float32Value(v), PrimitiveScalarType::Float32) => {
-            ScalarValue::Float32(Some(*v))
+            ScalarValue::Float32(*v)
         }
         (Value::Float64Value(v), PrimitiveScalarType::Float64) => {
-            ScalarValue::Float64(Some(*v))
+            ScalarValue::Float64(*v)
         }
-        (Value::Date32Value(v), PrimitiveScalarType::Date32) => {
-            ScalarValue::Date32(Some(*v))
-        }
+        (Value::Date32Value(v), PrimitiveScalarType::Date32) => ScalarValue::Date32(*v),
         (Value::TimeMicrosecondValue(v), PrimitiveScalarType::TimeMicrosecond) => {
-            ScalarValue::TimestampMicrosecond(Some(*v))
+            ScalarValue::TimestampMicrosecond(*v)
         }
         (Value::TimeNanosecondValue(v), PrimitiveScalarType::TimeMicrosecond) => {
-            ScalarValue::TimestampNanosecond(Some(*v))
+            ScalarValue::TimestampNanosecond(*v)
         }
         (Value::Utf8Value(v), PrimitiveScalarType::Utf8) => {
-            ScalarValue::Utf8(Some(v.to_owned()))
+            ScalarValue::Utf8(v.to_owned())
         }
         (Value::LargeUtf8Value(v), PrimitiveScalarType::LargeUtf8) => {
-            ScalarValue::LargeUtf8(Some(v.to_owned()))
+            ScalarValue::LargeUtf8(v.to_owned())
         }
 
         (Value::NullValue(i32_enum), required_scalar_type) => {
@@ -514,25 +500,53 @@ fn typechecked_scalar_value_conversion(
                     ))
                 })?;
                 let scalar_value: ScalarValue = match pb_scalar_type {
-                    PrimitiveScalarType::Bool => ScalarValue::Boolean(None),
-                    PrimitiveScalarType::Uint8 => ScalarValue::UInt8(None),
-                    PrimitiveScalarType::Int8 => ScalarValue::Int8(None),
-                    PrimitiveScalarType::Uint16 => ScalarValue::UInt16(None),
-                    PrimitiveScalarType::Int16 => ScalarValue::Int16(None),
-                    PrimitiveScalarType::Uint32 => ScalarValue::UInt32(None),
-                    PrimitiveScalarType::Int32 => ScalarValue::Int32(None),
-                    PrimitiveScalarType::Uint64 => ScalarValue::UInt64(None),
-                    PrimitiveScalarType::Int64 => ScalarValue::Int64(None),
-                    PrimitiveScalarType::Float32 => ScalarValue::Float32(None),
-                    PrimitiveScalarType::Float64 => ScalarValue::Float64(None),
-                    PrimitiveScalarType::Utf8 => ScalarValue::Utf8(None),
-                    PrimitiveScalarType::LargeUtf8 => ScalarValue::LargeUtf8(None),
-                    PrimitiveScalarType::Date32 => ScalarValue::Date32(None),
+                    PrimitiveScalarType::Bool => {
+                        ScalarValue::Null(Box::new(DataType::Boolean))
+                    }
+                    PrimitiveScalarType::Uint8 => {
+                        ScalarValue::Null(Box::new(DataType::UInt8))
+                    }
+                    PrimitiveScalarType::Int8 => {
+                        ScalarValue::Null(Box::new(DataType::Int8))
+                    }
+                    PrimitiveScalarType::Uint16 => {
+                        ScalarValue::Null(Box::new(DataType::UInt16))
+                    }
+                    PrimitiveScalarType::Int16 => {
+                        ScalarValue::Null(Box::new(DataType::Int16))
+                    }
+                    PrimitiveScalarType::Uint32 => {
+                        ScalarValue::Null(Box::new(DataType::UInt32))
+                    }
+                    PrimitiveScalarType::Int32 => {
+                        ScalarValue::Null(Box::new(DataType::Int32))
+                    }
+                    PrimitiveScalarType::Uint64 => {
+                        ScalarValue::Null(Box::new(DataType::UInt64))
+                    }
+                    PrimitiveScalarType::Int64 => {
+                        ScalarValue::Null(Box::new(DataType::Int64))
+                    }
+                    PrimitiveScalarType::Float32 => {
+                        ScalarValue::Null(Box::new(DataType::Float32))
+                    }
+                    PrimitiveScalarType::Float64 => {
+                        ScalarValue::Null(Box::new(DataType::Float64))
+                    }
+                    PrimitiveScalarType::Utf8 => {
+                        ScalarValue::Null(Box::new(DataType::Utf8))
+                    }
+                    PrimitiveScalarType::LargeUtf8 => {
+                        ScalarValue::Null(Box::new(DataType::LargeUtf8))
+                    }
+                    PrimitiveScalarType::Date32 => {
+                        ScalarValue::Null(Box::new(DataType::Date32))
+                    }
                     PrimitiveScalarType::TimeMicrosecond => {
-                        ScalarValue::TimestampMicrosecond(None)
+                        ScalarValue::TimestampMicrosecond(0).to_null()
                     }
                     PrimitiveScalarType::TimeNanosecond => {
-                        ScalarValue::TimestampNanosecond(None)
+                        ScalarValue::TimestampNanosecond(0).to_null()
                     }
                     PrimitiveScalarType::Null => {
                         return Err(proto_error(
@@ -555,51 +569,39 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::scalar_value::Value
         use datafusion::scalar::ScalarValue;
         use protobuf::PrimitiveScalarType;
         let scalar = match self {
-            protobuf::scalar_value::Value::BoolValue(v) => ScalarValue::Boolean(Some(*v)),
+            protobuf::scalar_value::Value::BoolValue(v) => ScalarValue::Boolean(*v),
             protobuf::scalar_value::Value::Utf8Value(v) => {
-                ScalarValue::Utf8(Some(v.to_owned()))
+                ScalarValue::Utf8(v.to_owned())
             }
             protobuf::scalar_value::Value::LargeUtf8Value(v) => {
-                ScalarValue::LargeUtf8(Some(v.to_owned()))
+                ScalarValue::LargeUtf8(v.to_owned())
             }
-            protobuf::scalar_value::Value::Int8Value(v) => {
-                ScalarValue::Int8(Some(*v as i8))
-            }
-            protobuf::scalar_value::Value::Int16Value(v) => {
-                ScalarValue::Int16(Some(*v as i16))
-            }
-            protobuf::scalar_value::Value::Int32Value(v) => ScalarValue::Int32(Some(*v)),
-            protobuf::scalar_value::Value::Int64Value(v) => ScalarValue::Int64(Some(*v)),
-            protobuf::scalar_value::Value::Uint8Value(v) => {
-                ScalarValue::UInt8(Some(*v as u8))
-            }
+            protobuf::scalar_value::Value::Int8Value(v) => ScalarValue::Int8(*v as i8),
+            protobuf::scalar_value::Value::Int16Value(v) => ScalarValue::Int16(*v as i16),
+            protobuf::scalar_value::Value::Int32Value(v) => ScalarValue::Int32(*v),
+            protobuf::scalar_value::Value::Int64Value(v) => ScalarValue::Int64(*v),
+            protobuf::scalar_value::Value::Uint8Value(v) => ScalarValue::UInt8(*v as u8),
             protobuf::scalar_value::Value::Uint16Value(v) => {
-                ScalarValue::UInt16(Some(*v as u16))
+                ScalarValue::UInt16(*v as u16)
             }
-            protobuf::scalar_value::Value::Uint32Value(v) => {
-                ScalarValue::UInt32(Some(*v))
-            }
-            protobuf::scalar_value::Value::Uint64Value(v) => {
-                ScalarValue::UInt64(Some(*v))
-            }
-            protobuf::scalar_value::Value::Float32Value(v) => {
-                ScalarValue::Float32(Some(*v))
-            }
-            protobuf::scalar_value::Value::Float64Value(v) => {
-                ScalarValue::Float64(Some(*v))
-            }
-            protobuf::scalar_value::Value::Date32Value(v) => {
-                ScalarValue::Date32(Some(*v))
-            }
+            protobuf::scalar_value::Value::Uint32Value(v) => ScalarValue::UInt32(*v),
+            protobuf::scalar_value::Value::Uint64Value(v) => ScalarValue::UInt64(*v),
+            protobuf::scalar_value::Value::Float32Value(v) => ScalarValue::Float32(*v),
+            protobuf::scalar_value::Value::Float64Value(v) => ScalarValue::Float64(*v),
+            protobuf::scalar_value::Value::Date32Value(v) => ScalarValue::Date32(*v),
             protobuf::scalar_value::Value::TimeMicrosecondValue(v) => {
-                ScalarValue::TimestampMicrosecond(Some(*v))
+                ScalarValue::TimestampMicrosecond(*v)
             }
             protobuf::scalar_value::Value::TimeNanosecondValue(v) => {
-                ScalarValue::TimestampNanosecond(Some(*v))
+                ScalarValue::TimestampNanosecond(*v)
             }
             protobuf::scalar_value::Value::ListValue(v) => v.try_into()?,
             protobuf::scalar_value::Value::NullListValue(v) => {
-                ScalarValue::List(None, Box::new(v.try_into()?))
+                ScalarValue::Null(Box::new(DataType::List(Box::new(Field::new(
+                    "name",
+                    v.try_into()?,
+                    true,
+                )))))
             }
             protobuf::scalar_value::Value::NullValue(null_enum) => {
                 PrimitiveScalarType::from_i32(*null_enum)
@@ -643,7 +645,7 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarListValue {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 datafusion::scalar::ScalarValue::List(
-                    Some(Box::new(typechecked_values)),
+                    Box::new(typechecked_values),
                     Box::new(leaf_scalar_type.into()),
                 )
             }
@@ -686,10 +688,7 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarListValue {
                         .collect::<Result<Vec<_>, _>>()?
                 };
                 datafusion::scalar::ScalarValue::List(
-                    match typechecked_values.len() {
-                        0 => None,
-                        _ => Some(Box::new(typechecked_values)),
-                    },
+                    Box::new(typechecked_values),
                     Box::new(list_type.try_into()?),
                 )
             }
@@ -742,25 +741,27 @@ impl TryInto<datafusion::scalar::ScalarValue> for protobuf::PrimitiveScalarType 
             protobuf::PrimitiveScalarType::Null => {
                 return Err(proto_error("Untyped null is an invalid scalar value"))
             }
-            protobuf::PrimitiveScalarType::Bool => ScalarValue::Boolean(None),
-            protobuf::PrimitiveScalarType::Uint8 => ScalarValue::UInt8(None),
-            protobuf::PrimitiveScalarType::Int8 => ScalarValue::Int8(None),
-            protobuf::PrimitiveScalarType::Uint16 => ScalarValue::UInt16(None),
-            protobuf::PrimitiveScalarType::Int16 => ScalarValue::Int16(None),
-            protobuf::PrimitiveScalarType::Uint32 => ScalarValue::UInt32(None),
-            protobuf::PrimitiveScalarType::Int32 => ScalarValue::Int32(None),
-            protobuf::PrimitiveScalarType::Uint64 => ScalarValue::UInt64(None),
-            protobuf::PrimitiveScalarType::Int64 => ScalarValue::Int64(None),
-            protobuf::PrimitiveScalarType::Float32 => ScalarValue::Float32(None),
-            protobuf::PrimitiveScalarType::Float64 => ScalarValue::Float64(None),
-            protobuf::PrimitiveScalarType::Utf8 => ScalarValue::Utf8(None),
-            protobuf::PrimitiveScalarType::LargeUtf8 => ScalarValue::LargeUtf8(None),
-            protobuf::PrimitiveScalarType::Date32 => ScalarValue::Date32(None),
+            protobuf::PrimitiveScalarType::Bool => ScalarValue::Boolean(false).to_null(),
+            protobuf::PrimitiveScalarType::Uint8 => ScalarValue::UInt8(0).to_null(),
+            protobuf::PrimitiveScalarType::Int8 => ScalarValue::Int8(0).to_null(),
+            protobuf::PrimitiveScalarType::Uint16 => ScalarValue::UInt16(0).to_null(),
+            protobuf::PrimitiveScalarType::Int16 => ScalarValue::Int16(0).to_null(),
+            protobuf::PrimitiveScalarType::Uint32 => ScalarValue::UInt32(0).to_null(),
+            protobuf::PrimitiveScalarType::Int32 => ScalarValue::Int32(0).to_null(),
+            protobuf::PrimitiveScalarType::Uint64 => ScalarValue::UInt64(0).to_null(),
+            protobuf::PrimitiveScalarType::Int64 => ScalarValue::Int64(0).to_null(),
+            protobuf::PrimitiveScalarType::Float32 => ScalarValue::Float32(0.0).to_null(),
+            protobuf::PrimitiveScalarType::Float64 => ScalarValue::Float64(0.0).to_null(),
+            protobuf::PrimitiveScalarType::Utf8 => ScalarValue::Utf8("".into()).to_null(),
+            protobuf::PrimitiveScalarType::LargeUtf8 => {
+                ScalarValue::LargeUtf8("".into()).to_null()
+            }
+            protobuf::PrimitiveScalarType::Date32 => ScalarValue::Date32(0).to_null(),
             protobuf::PrimitiveScalarType::TimeMicrosecond => {
-                ScalarValue::TimestampMicrosecond(None)
+                ScalarValue::TimestampMicrosecond(0).to_null()
             }
             protobuf::PrimitiveScalarType::TimeNanosecond => {
-                ScalarValue::TimestampNanosecond(None)
+                ScalarValue::TimestampNanosecond(0).to_null()
             }
         })
     }
@@ -773,47 +774,31 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarValue {
             proto_error("Protobuf deserialization error: missing required field 'value'")
         })?;
         Ok(match value {
-            protobuf::scalar_value::Value::BoolValue(v) => ScalarValue::Boolean(Some(*v)),
+            protobuf::scalar_value::Value::BoolValue(v) => ScalarValue::Boolean(*v),
             protobuf::scalar_value::Value::Utf8Value(v) => {
-                ScalarValue::Utf8(Some(v.to_owned()))
+                ScalarValue::Utf8(v.to_owned())
             }
             protobuf::scalar_value::Value::LargeUtf8Value(v) => {
-                ScalarValue::LargeUtf8(Some(v.to_owned()))
+                ScalarValue::LargeUtf8(v.to_owned())
             }
-            protobuf::scalar_value::Value::Int8Value(v) => {
-                ScalarValue::Int8(Some(*v as i8))
-            }
-            protobuf::scalar_value::Value::Int16Value(v) => {
-                ScalarValue::Int16(Some(*v as i16))
-            }
-            protobuf::scalar_value::Value::Int32Value(v) => ScalarValue::Int32(Some(*v)),
-            protobuf::scalar_value::Value::Int64Value(v) => ScalarValue::Int64(Some(*v)),
-            protobuf::scalar_value::Value::Uint8Value(v) => {
-                ScalarValue::UInt8(Some(*v as u8))
-            }
+            protobuf::scalar_value::Value::Int8Value(v) => ScalarValue::Int8(*v as i8),
+            protobuf::scalar_value::Value::Int16Value(v) => ScalarValue::Int16(*v as i16),
+            protobuf::scalar_value::Value::Int32Value(v) => ScalarValue::Int32(*v),
+            protobuf::scalar_value::Value::Int64Value(v) => ScalarValue::Int64(*v),
+            protobuf::scalar_value::Value::Uint8Value(v) => ScalarValue::UInt8(*v as u8),
             protobuf::scalar_value::Value::Uint16Value(v) => {
-                ScalarValue::UInt16(Some(*v as u16))
+                ScalarValue::UInt16(*v as u16)
             }
-            protobuf::scalar_value::Value::Uint32Value(v) => {
-                ScalarValue::UInt32(Some(*v))
-            }
-            protobuf::scalar_value::Value::Uint64Value(v) => {
-                ScalarValue::UInt64(Some(*v))
-            }
-            protobuf::scalar_value::Value::Float32Value(v) => {
-                ScalarValue::Float32(Some(*v))
-            }
-            protobuf::scalar_value::Value::Float64Value(v) => {
-                ScalarValue::Float64(Some(*v))
-            }
-            protobuf::scalar_value::Value::Date32Value(v) => {
-                ScalarValue::Date32(Some(*v))
-            }
+            protobuf::scalar_value::Value::Uint32Value(v) => ScalarValue::UInt32(*v),
+            protobuf::scalar_value::Value::Uint64Value(v) => ScalarValue::UInt64(*v),
+            protobuf::scalar_value::Value::Float32Value(v) => ScalarValue::Float32(*v),
+            protobuf::scalar_value::Value::Float64Value(v) => ScalarValue::Float64(*v),
+            protobuf::scalar_value::Value::Date32Value(v) => ScalarValue::Date32(*v),
             protobuf::scalar_value::Value::TimeMicrosecondValue(v) => {
-                ScalarValue::TimestampMicrosecond(Some(*v))
+                ScalarValue::TimestampMicrosecond(*v)
             }
             protobuf::scalar_value::Value::TimeNanosecondValue(v) => {
-                ScalarValue::TimestampNanosecond(Some(*v))
+                ScalarValue::TimestampNanosecond(*v)
             }
             protobuf::scalar_value::Value::ListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
@@ -829,15 +814,18 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarValue {
                     .collect::<Result<Vec<_>, _>>()?;
                 let scalar_type: DataType = pb_scalar_type.try_into()?;
                 let scalar_type = Box::new(scalar_type);
-                ScalarValue::List(Some(Box::new(typechecked_values)), scalar_type)
+                ScalarValue::List(Box::new(typechecked_values), scalar_type)
             }
             protobuf::scalar_value::Value::NullListValue(v) => {
                 let pb_datatype = v
                     .datatype
                     .as_ref()
                     .ok_or_else(|| proto_error("Protobuf deserialization error: NullListValue message missing required field 'datatyp'"))?;
-                let pb_datatype = Box::new(pb_datatype.try_into()?);
-                ScalarValue::List(None, pb_datatype)
+                ScalarValue::Null(Box::new(DataType::List(Box::new(Field::new(
+                    "name",
+                    pb_datatype.try_into()?,
+                    true,
+                )))))
             }
             protobuf::scalar_value::Value::NullValue(v) => {
                 let null_type_enum = protobuf::PrimitiveScalarType::from_i32(*v)

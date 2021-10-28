@@ -366,7 +366,7 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
             let partition_index = expressions
                 .iter()
                 .position(|expr| {
-                    matches!(expr, Expr::Literal(ScalarValue::Utf8(Some(str)))
+                    matches!(expr, Expr::Literal(ScalarValue::Utf8(str))
             if str == WINDOW_PARTITION_MARKER)
                 })
                 .ok_or_else(|| {
@@ -379,7 +379,7 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
             let sort_index = expressions
                 .iter()
                 .position(|expr| {
-                    matches!(expr, Expr::Literal(ScalarValue::Utf8(Some(str)))
+                    matches!(expr, Expr::Literal(ScalarValue::Utf8(str))
             if str == WINDOW_SORT_MARKER)
                 })
                 .ok_or_else(|| {
@@ -420,15 +420,11 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
 
             while i < expressions.len() {
                 match &expressions[i] {
-                    Expr::Literal(ScalarValue::Utf8(Some(str)))
-                        if str == CASE_EXPR_MARKER =>
-                    {
+                    Expr::Literal(ScalarValue::Utf8(str)) if str == CASE_EXPR_MARKER => {
                         base_expr = Some(Box::new(expressions[i + 1].clone()));
                         i += 2;
                     }
-                    Expr::Literal(ScalarValue::Utf8(Some(str)))
-                        if str == CASE_ELSE_MARKER =>
-                    {
+                    Expr::Literal(ScalarValue::Utf8(str)) if str == CASE_ELSE_MARKER => {
                         else_expr = Some(Box::new(expressions[i + 1].clone()));
                         i += 2;
                     }

@@ -141,9 +141,9 @@ fn take_optimizable_count(
                 .as_any()
                 .downcast_ref::<expressions::Literal>()
             {
-                if lit_expr.value() == &ScalarValue::UInt8(Some(1)) {
+                if lit_expr.value() == &ScalarValue::UInt8(1) {
                     return Some((
-                        ScalarValue::UInt64(Some(num_rows as u64)),
+                        ScalarValue::UInt64(num_rows as u64),
                         "COUNT(Uint8(1))",
                     ));
                 }
@@ -278,7 +278,7 @@ mod tests {
 
     fn count_expr() -> Arc<dyn AggregateExpr> {
         Arc::new(Count::new(
-            expressions::lit(ScalarValue::UInt8(Some(1))),
+            expressions::lit(ScalarValue::UInt8(1)),
             "my_count_alias",
             DataType::UInt64,
         ))

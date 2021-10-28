@@ -461,10 +461,10 @@ mod tests {
         let schema = batch.schema();
 
         // CASE a WHEN 'foo' THEN 123 WHEN 'bar' THEN 456 END
-        let when1 = lit(ScalarValue::Utf8(Some("foo".to_string())));
-        let then1 = lit(ScalarValue::Int32(Some(123)));
-        let when2 = lit(ScalarValue::Utf8(Some("bar".to_string())));
-        let then2 = lit(ScalarValue::Int32(Some(456)));
+        let when1 = lit(ScalarValue::Utf8("foo".to_string()));
+        let then1 = lit(ScalarValue::Int32(123));
+        let when2 = lit(ScalarValue::Utf8("bar".to_string()));
+        let then2 = lit(ScalarValue::Int32(456));
 
         let expr = case(
             Some(col("a", &schema)?),
@@ -490,11 +490,11 @@ mod tests {
         let schema = batch.schema();
 
         // CASE a WHEN 'foo' THEN 123 WHEN 'bar' THEN 456 ELSE 999 END
-        let when1 = lit(ScalarValue::Utf8(Some("foo".to_string())));
-        let then1 = lit(ScalarValue::Int32(Some(123)));
-        let when2 = lit(ScalarValue::Utf8(Some("bar".to_string())));
-        let then2 = lit(ScalarValue::Int32(Some(456)));
-        let else_value = lit(ScalarValue::Int32(Some(999)));
+        let when1 = lit(ScalarValue::Utf8("foo".to_string()));
+        let then1 = lit(ScalarValue::Int32(123));
+        let when2 = lit(ScalarValue::Utf8("bar".to_string()));
+        let then2 = lit(ScalarValue::Int32(456));
+        let else_value = lit(ScalarValue::Int32(999));
 
         let expr = case(
             Some(col("a", &schema)?),
@@ -524,17 +524,17 @@ mod tests {
         let when1 = binary(
             col("a", &schema)?,
             Operator::Eq,
-            lit(ScalarValue::Utf8(Some("foo".to_string()))),
+            lit(ScalarValue::Utf8("foo".to_string())),
             &batch.schema(),
         )?;
-        let then1 = lit(ScalarValue::Int32(Some(123)));
+        let then1 = lit(ScalarValue::Int32(123));
         let when2 = binary(
             col("a", &schema)?,
             Operator::Eq,
-            lit(ScalarValue::Utf8(Some("bar".to_string()))),
+            lit(ScalarValue::Utf8("bar".to_string())),
             &batch.schema(),
         )?;
-        let then2 = lit(ScalarValue::Int32(Some(456)));
+        let then2 = lit(ScalarValue::Int32(456));
 
         let expr = case(None, &[(when1, then1), (when2, then2)], None)?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
@@ -559,18 +559,18 @@ mod tests {
         let when1 = binary(
             col("a", &schema)?,
             Operator::Eq,
-            lit(ScalarValue::Utf8(Some("foo".to_string()))),
+            lit(ScalarValue::Utf8("foo".to_string())),
             &batch.schema(),
         )?;
-        let then1 = lit(ScalarValue::Int32(Some(123)));
+        let then1 = lit(ScalarValue::Int32(123));
         let when2 = binary(
             col("a", &schema)?,
             Operator::Eq,
-            lit(ScalarValue::Utf8(Some("bar".to_string()))),
+            lit(ScalarValue::Utf8("bar".to_string())),
             &batch.schema(),
         )?;
-        let then2 = lit(ScalarValue::Int32(Some(456)));
-        let else_value = lit(ScalarValue::Int32(Some(999)));
+        let then2 = lit(ScalarValue::Int32(456));
+        let else_value = lit(ScalarValue::Int32(999));
 
         let expr = case(None, &[(when1, then1), (when2, then2)], Some(else_value))?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());

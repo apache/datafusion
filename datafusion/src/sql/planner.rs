@@ -905,7 +905,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match *limit {
             Some(ref limit_expr) => {
                 let n = match self.sql_to_rex(limit_expr, input.schema())? {
-                    Expr::Literal(ScalarValue::Int64(Some(n))) => Ok(n as usize),
+                    Expr::Literal(ScalarValue::Int64(n)) => Ok(n as usize),
                     _ => Err(DataFusionError::Plan(
                         "Unexpected expression for LIMIT clause".to_string(),
                     )),
@@ -1136,7 +1136,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Ok(lit(s.clone()))
                         }
                         SQLExpr::Value(Value::Null) => {
-                            Ok(Expr::Literal(ScalarValue::Utf8(None)))
+                            Ok(Expr::Literal(ScalarValue::Null(Box::new(DataType::Null))))
                         }
                         SQLExpr::Value(Value::Boolean(n)) => Ok(lit(*n)),
                         SQLExpr::UnaryOp { ref op, ref expr } => {
@@ -1163,11 +1163,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(n),
             SQLExpr::Value(Value::SingleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(*n)),
-            SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Utf8(None))),
+            SQLExpr::Value(Value::Null) => {
+                Ok(Expr::Literal(ScalarValue::Null(Box::new(DataType::Null))))
+            }
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: functions::BuiltinScalarFunction::DatePart,
                 args: vec![
-                    Expr::Literal(ScalarValue::Utf8(Some(format!("{}", field)))),
+                    Expr::Literal(ScalarValue::Utf8(format!("{}", field))),
                     self.sql_expr_to_logical_expr(expr, schema)?,
                 ],
             }),
@@ -1680,13 +1682,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         if result_month != 0 {
-            return Ok(Expr::Literal(ScalarValue::IntervalYearMonth(Some(
+            return Ok(Expr::Literal(ScalarValue::IntervalYearMonth(
                 result_month as i32,
-            ))));
+            )));
         }
 
         let result: i64 = (result_days << 32) | result_millis;
-        Ok(Expr::Literal(ScalarValue::IntervalDayTime(Some(result))))
+        Ok(Expr::Literal(ScalarValue::IntervalDayTime(result)))
     }
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {

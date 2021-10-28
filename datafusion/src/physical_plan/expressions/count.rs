@@ -122,7 +122,7 @@ impl Accumulator for CountAccumulator {
 
     fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
         let count = &states[0];
-        if let ScalarValue::UInt64(Some(delta)) = count {
+        if let ScalarValue::UInt64(delta) = count {
             self.count += *delta;
         } else {
             unreachable!()
@@ -140,11 +140,11 @@ impl Accumulator for CountAccumulator {
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::UInt64(Some(self.count))])
+        Ok(vec![ScalarValue::UInt64(self.count)])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::UInt64(Some(self.count)))
+        Ok(ScalarValue::UInt64(self.count))
     }
 }
 

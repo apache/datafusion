@@ -149,7 +149,7 @@ impl LogicalPlanBuilder {
                 .iter()
                 .enumerate()
                 .map(|(j, expr)| {
-                    if let Expr::Literal(ScalarValue::Utf8(None)) = expr {
+                    if let Expr::Literal(ScalarValue::Null(_)) = expr {
                         nulls.push((i, j));
                         Ok(field_types[j].clone())
                     } else {

@@ -740,10 +740,10 @@ pub fn create_physical_fun(
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
-                    v.as_ref().map(|x| (x.len() * 8) as i32),
+                    (v.len() * 8) as i32,
                 ))),
                 ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64)),
+                    ScalarValue::Int64((v.len() * 8) as i64),
                 )),
                 _ => unreachable!(),
             },
@@ -862,12 +862,12 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {
-                ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
-                    v.as_ref().map(|x| x.len() as i32),
-                ))),
-                ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Int64(v.as_ref().map(|x| x.len() as i64)),
-                )),
+                ScalarValue::Utf8(v) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int32(v.len() as i32)))
+                }
+                ScalarValue::LargeUtf8(v) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int64(v.len() as i64)))
+                }
                 _ => unreachable!(),
             },
         }),
@@ -1735,7 +1735,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             Ascii,
-            &[lit(ScalarValue::Utf8(Some("x".to_string())))],
+            &[lit(ScalarValue::Utf8("x".to_string()))],
             Ok(Some(120)),
             i32,
             Int32,
@@ -1743,7 +1743,7 @@ mod tests {
         );
         test_function!(
             Ascii,
-            &[lit(ScalarValue::Utf8(Some("ésoj".to_string())))],
+            &[lit(ScalarValue::Utf8("ésoj".to_string()))],
             Ok(Some(233)),
             i32,
             Int32,
@@ -1751,7 +1751,7 @@ mod tests {
         );
         test_function!(
             Ascii,
-            &[lit(ScalarValue::Utf8(Some("💯".to_string())))],
+            &[lit(ScalarValue::Utf8("💯".to_string()))],
             Ok(Some(128175)),
             i32,
             Int32,
@@ -1759,7 +1759,7 @@ mod tests {
         );
         test_function!(
             Ascii,
-            &[lit(ScalarValue::Utf8(Some("💯a".to_string())))],
+            &[lit(ScalarValue::Utf8("💯a".to_string()))],
             Ok(Some(128175)),
             i32,
             Int32,
@@ -1767,7 +1767,7 @@ mod tests {
         );
         test_function!(
             Ascii,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some(0)),
             i32,
             Int32,
@@ -1775,7 +1775,7 @@ mod tests {
         );
         test_function!(
             Ascii,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             i32,
             Int32,
@@ -1783,7 +1783,7 @@ mod tests {
         );
         test_function!(
             BitLength,
-            &[lit(ScalarValue::Utf8(Some("chars".to_string())))],
+            &[lit(ScalarValue::Utf8("chars".to_string()))],
             Ok(Some(40)),
             i32,
             Int32,
@@ -1791,7 +1791,7 @@ mod tests {
         );
         test_function!(
             BitLength,
-            &[lit(ScalarValue::Utf8(Some("josé".to_string())))],
+            &[lit(ScalarValue::Utf8("josé".to_string()))],
             Ok(Some(40)),
             i32,
             Int32,
@@ -1799,7 +1799,7 @@ mod tests {
         );
         test_function!(
             BitLength,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some(0)),
             i32,
             Int32,
@@ -1807,7 +1807,7 @@ mod tests {
         );
         test_function!(
             Btrim,
-            &[lit(ScalarValue::Utf8(Some(" trim ".to_string())))],
+            &[lit(ScalarValue::Utf8(" trim ".to_string()))],
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -1815,7 +1815,7 @@ mod tests {
         );
         test_function!(
             Btrim,
-            &[lit(ScalarValue::Utf8(Some(" trim".to_string())))],
+            &[lit(ScalarValue::Utf8(" trim".to_string()))],
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -1823,7 +1823,7 @@ mod tests {
         );
         test_function!(
             Btrim,
-            &[lit(ScalarValue::Utf8(Some("trim ".to_string())))],
+            &[lit(ScalarValue::Utf8("trim ".to_string()))],
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -1831,7 +1831,7 @@ mod tests {
         );
         test_function!(
             Btrim,
-            &[lit(ScalarValue::Utf8(Some("\n trim \n".to_string())))],
+            &[lit(ScalarValue::Utf8("\n trim \n".to_string()))],
             Ok(Some("\n trim \n")),
             &str,
             Utf8,
@@ -1840,8 +1840,8 @@ mod tests {
         test_function!(
             Btrim,
             &[
-                lit(ScalarValue::Utf8(Some("xyxtrimyyx".to_string()))),
-                lit(ScalarValue::Utf8(Some("xyz".to_string()))),
+                lit(ScalarValue::Utf8("xyxtrimyyx".to_string())),
+                lit(ScalarValue::Utf8("xyz".to_string())),
             ],
             Ok(Some("trim")),
             &str,
@@ -1851,8 +1851,8 @@ mod tests {
         test_function!(
             Btrim,
             &[
-                lit(ScalarValue::Utf8(Some("\nxyxtrimyyx\n".to_string()))),
-                lit(ScalarValue::Utf8(Some("xyz\n".to_string()))),
+                lit(ScalarValue::Utf8("\nxyxtrimyyx\n".to_string())),
+                lit(ScalarValue::Utf8("xyz\n".to_string())),
             ],
             Ok(Some("trim")),
             &str,
@@ -1862,8 +1862,8 @@ mod tests {
         test_function!(
             Btrim,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("xyz".to_string()))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("xyz".to_string())),
             ],
             Ok(None),
             &str,
@@ -1873,8 +1873,8 @@ mod tests {
         test_function!(
             Btrim,
             &[
-                lit(ScalarValue::Utf8(Some("xyxtrimyyx".to_string()))),
-                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Utf8("xyxtrimyyx".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
             ],
             Ok(None),
             &str,
@@ -1884,7 +1884,7 @@ mod tests {
         #[cfg(feature = "unicode_expressions")]
         test_function!(
             CharacterLength,
-            &[lit(ScalarValue::Utf8(Some("chars".to_string())))],
+            &[lit(ScalarValue::Utf8("chars".to_string()))],
             Ok(Some(5)),
             i32,
             Int32,
@@ -1893,7 +1893,7 @@ mod tests {
         #[cfg(feature = "unicode_expressions")]
         test_function!(
             CharacterLength,
-            &[lit(ScalarValue::Utf8(Some("josé".to_string())))],
+            &[lit(ScalarValue::Utf8("josé".to_string()))],
             Ok(Some(4)),
             i32,
             Int32,
@@ -1902,7 +1902,7 @@ mod tests {
         #[cfg(feature = "unicode_expressions")]
         test_function!(
             CharacterLength,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some(0)),
             i32,
             Int32,
@@ -1911,7 +1911,7 @@ mod tests {
         #[cfg(feature = "unicode_expressions")]
         test_function!(
             CharacterLength,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             i32,
             Int32,
@@ -1920,7 +1920,7 @@ mod tests {
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             CharacterLength,
-            &[lit(ScalarValue::Utf8(Some("josé".to_string())))],
+            &[lit(ScalarValue::Utf8("josé".to_string()))],
             Err(DataFusionError::Internal(
                 "function character_length requires compilation with feature flag: unicode_expressions.".to_string()
             )),
@@ -1930,7 +1930,7 @@ mod tests {
         );
         test_function!(
             Chr,
-            &[lit(ScalarValue::Int64(Some(128175)))],
+            &[lit(ScalarValue::Int64(128175))],
             Ok(Some("💯")),
             &str,
             Utf8,
@@ -1938,7 +1938,7 @@ mod tests {
         );
         test_function!(
             Chr,
-            &[lit(ScalarValue::Int64(None))],
+            &[lit(ScalarValue::Int64(0).to_null())],
             Ok(None),
             &str,
             Utf8,
@@ -1946,7 +1946,7 @@ mod tests {
         );
         test_function!(
             Chr,
-            &[lit(ScalarValue::Int64(Some(120)))],
+            &[lit(ScalarValue::Int64(120))],
             Ok(Some("x")),
             &str,
             Utf8,
@@ -1954,7 +1954,7 @@ mod tests {
         );
         test_function!(
             Chr,
-            &[lit(ScalarValue::Int64(Some(128175)))],
+            &[lit(ScalarValue::Int64(128175))],
             Ok(Some("💯")),
             &str,
             Utf8,
@@ -1962,7 +1962,7 @@ mod tests {
         );
         test_function!(
             Chr,
-            &[lit(ScalarValue::Int64(None))],
+            &[lit(ScalarValue::Int64(0).to_null())],
             Ok(None),
             &str,
             Utf8,
@@ -1970,7 +1970,7 @@ mod tests {
         );
         test_function!(
             Chr,
-            &[lit(ScalarValue::Int64(Some(0)))],
+            &[lit(ScalarValue::Int64(0))],
             Err(DataFusionError::Execution(
                 "null character not permitted.".to_string(),
             )),
@@ -1980,7 +1980,7 @@ mod tests {
         );
         test_function!(
             Chr,
-            &[lit(ScalarValue::Int64(Some(i64::MAX)))],
+            &[lit(ScalarValue::Int64(i64::MAX))],
             Err(DataFusionError::Execution(
                 "requested character too large for encoding.".to_string(),
             )),
@@ -1991,9 +1991,9 @@ mod tests {
         test_function!(
             Concat,
             &[
-                lit(ScalarValue::Utf8(Some("aa".to_string()))),
-                lit(ScalarValue::Utf8(Some("bb".to_string()))),
-                lit(ScalarValue::Utf8(Some("cc".to_string()))),
+                lit(ScalarValue::Utf8("aa".to_string())),
+                lit(ScalarValue::Utf8("bb".to_string())),
+                lit(ScalarValue::Utf8("cc".to_string())),
             ],
             Ok(Some("aabbcc")),
             &str,
@@ -2003,9 +2003,9 @@ mod tests {
         test_function!(
             Concat,
             &[
-                lit(ScalarValue::Utf8(Some("aa".to_string()))),
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("cc".to_string()))),
+                lit(ScalarValue::Utf8("aa".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("cc".to_string())),
             ],
             Ok(Some("aacc")),
             &str,
@@ -2014,7 +2014,7 @@ mod tests {
         );
         test_function!(
             Concat,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(Some("")),
             &str,
             Utf8,
@@ -2023,10 +2023,10 @@ mod tests {
         test_function!(
             ConcatWithSeparator,
             &[
-                lit(ScalarValue::Utf8(Some("|".to_string()))),
-                lit(ScalarValue::Utf8(Some("aa".to_string()))),
-                lit(ScalarValue::Utf8(Some("bb".to_string()))),
-                lit(ScalarValue::Utf8(Some("cc".to_string()))),
+                lit(ScalarValue::Utf8("|".to_string())),
+                lit(ScalarValue::Utf8("aa".to_string())),
+                lit(ScalarValue::Utf8("bb".to_string())),
+                lit(ScalarValue::Utf8("cc".to_string())),
             ],
             Ok(Some("aa|bb|cc")),
             &str,
@@ -2036,8 +2036,8 @@ mod tests {
         test_function!(
             ConcatWithSeparator,
             &[
-                lit(ScalarValue::Utf8(Some("|".to_string()))),
-                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Utf8("|".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
             ],
             Ok(Some("")),
             &str,
@@ -2047,10 +2047,10 @@ mod tests {
         test_function!(
             ConcatWithSeparator,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("aa".to_string()))),
-                lit(ScalarValue::Utf8(Some("bb".to_string()))),
-                lit(ScalarValue::Utf8(Some("cc".to_string()))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("aa".to_string())),
+                lit(ScalarValue::Utf8("bb".to_string())),
+                lit(ScalarValue::Utf8("cc".to_string())),
             ],
             Ok(None),
             &str,
@@ -2060,10 +2060,10 @@ mod tests {
         test_function!(
             ConcatWithSeparator,
             &[
-                lit(ScalarValue::Utf8(Some("|".to_string()))),
-                lit(ScalarValue::Utf8(Some("aa".to_string()))),
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("cc".to_string()))),
+                lit(ScalarValue::Utf8("|".to_string())),
+                lit(ScalarValue::Utf8("aa".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("cc".to_string())),
             ],
             Ok(Some("aa|cc")),
             &str,
@@ -2072,7 +2072,7 @@ mod tests {
         );
         test_function!(
             Exp,
-            &[lit(ScalarValue::Int32(Some(1)))],
+            &[lit(ScalarValue::Int32(1))],
             Ok(Some((1.0_f64).exp())),
             f64,
             Float64,
@@ -2080,7 +2080,7 @@ mod tests {
         );
         test_function!(
             Exp,
-            &[lit(ScalarValue::UInt32(Some(1)))],
+            &[lit(ScalarValue::UInt32(1))],
             Ok(Some((1.0_f64).exp())),
             f64,
             Float64,
@@ -2088,7 +2088,7 @@ mod tests {
         );
         test_function!(
             Exp,
-            &[lit(ScalarValue::UInt64(Some(1)))],
+            &[lit(ScalarValue::UInt64(1))],
             Ok(Some((1.0_f64).exp())),
             f64,
             Float64,
@@ -2096,7 +2096,7 @@ mod tests {
         );
         test_function!(
             Exp,
-            &[lit(ScalarValue::Float64(Some(1.0)))],
+            &[lit(ScalarValue::Float64(1.0))],
             Ok(Some((1.0_f64).exp())),
             f64,
             Float64,
@@ -2104,7 +2104,7 @@ mod tests {
         );
         test_function!(
             Exp,
-            &[lit(ScalarValue::Float32(Some(1.0)))],
+            &[lit(ScalarValue::Float32(1.0))],
             Ok(Some((1.0_f32).exp())),
             f32,
             Float32,
@@ -2112,7 +2112,7 @@ mod tests {
         );
         test_function!(
             InitCap,
-            &[lit(ScalarValue::Utf8(Some("hi THOMAS".to_string())))],
+            &[lit(ScalarValue::Utf8("hi THOMAS".to_string()))],
             Ok(Some("Hi Thomas")),
             &str,
             Utf8,
@@ -2120,7 +2120,7 @@ mod tests {
         );
         test_function!(
             InitCap,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -2128,7 +2128,7 @@ mod tests {
         );
         test_function!(
             InitCap,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -2136,7 +2136,7 @@ mod tests {
         );
         test_function!(
             InitCap,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &str,
             Utf8,
@@ -2146,8 +2146,8 @@ mod tests {
         test_function!(
             Left,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int8(Some(2))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int8(2)),
             ],
             Ok(Some("ab")),
             &str,
@@ -2158,8 +2158,8 @@ mod tests {
         test_function!(
             Left,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int64(Some(200))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int64(200)),
             ],
             Ok(Some("abcde")),
             &str,
@@ -2170,8 +2170,8 @@ mod tests {
         test_function!(
             Left,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int64(Some(-2))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int64(-2)),
             ],
             Ok(Some("abc")),
             &str,
@@ -2182,8 +2182,8 @@ mod tests {
         test_function!(
             Left,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int64(Some(-200))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int64(-200)),
             ],
             Ok(Some("")),
             &str,
@@ -2194,8 +2194,8 @@ mod tests {
         test_function!(
             Left,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int64(Some(0))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int64(0)),
             ],
             Ok(Some("")),
             &str,
@@ -2206,8 +2206,8 @@ mod tests {
         test_function!(
             Left,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Int64(Some(2))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Int64(2)),
             ],
             Ok(None),
             &str,
@@ -2218,8 +2218,8 @@ mod tests {
         test_function!(
             Left,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int64(None)),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int64(0).to_null()),
             ],
             Ok(None),
             &str,
@@ -2230,8 +2230,8 @@ mod tests {
         test_function!(
             Left,
             &[
-                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8("joséésoj".to_string())),
+                lit(ScalarValue::Int64(5)),
             ],
             Ok(Some("joséé")),
             &str,
@@ -2242,8 +2242,8 @@ mod tests {
         test_function!(
             Left,
             &[
-                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
-                lit(ScalarValue::Int64(Some(-3))),
+                lit(ScalarValue::Utf8("joséésoj".to_string())),
+                lit(ScalarValue::Int64(-3)),
             ],
             Ok(Some("joséé")),
             &str,
@@ -2254,8 +2254,8 @@ mod tests {
         test_function!(
             Left,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int8(Some(2))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int8(2)),
             ],
             Err(DataFusionError::Internal(
                 "function left requires compilation with feature flag: unicode_expressions.".to_string()
@@ -2268,8 +2268,8 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("josé".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8("josé".to_string())),
+                lit(ScalarValue::Int64(5)),
             ],
             Ok(Some(" josé")),
             &str,
@@ -2280,8 +2280,8 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(5)),
             ],
             Ok(Some("   hi")),
             &str,
@@ -2292,8 +2292,8 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(0))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(0)),
             ],
             Ok(Some("")),
             &str,
@@ -2304,8 +2304,8 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(None)),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(0).to_null()),
             ],
             Ok(None),
             &str,
@@ -2316,8 +2316,8 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Int64(5)),
             ],
             Ok(None),
             &str,
@@ -2328,9 +2328,9 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Utf8("xy".to_string())),
             ],
             Ok(Some("xyxhi")),
             &str,
@@ -2341,9 +2341,9 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(21))),
-                lit(ScalarValue::Utf8(Some("abcdef".to_string()))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(21)),
+                lit(ScalarValue::Utf8("abcdef".to_string())),
             ],
             Ok(Some("abcdefabcdefabcdefahi")),
             &str,
@@ -2354,9 +2354,9 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Utf8(Some(" ".to_string()))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Utf8(" ".to_string())),
             ],
             Ok(Some("   hi")),
             &str,
@@ -2367,9 +2367,9 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Utf8(Some("".to_string()))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Utf8("".to_string())),
             ],
             Ok(Some("hi")),
             &str,
@@ -2380,9 +2380,9 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Utf8("xy".to_string())),
             ],
             Ok(None),
             &str,
@@ -2393,9 +2393,9 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(None)),
-                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(0).to_null()),
+                lit(ScalarValue::Utf8("xy".to_string())),
             ],
             Ok(None),
             &str,
@@ -2406,9 +2406,9 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
             ],
             Ok(None),
             &str,
@@ -2419,9 +2419,9 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("josé".to_string()))),
-                lit(ScalarValue::Int64(Some(10))),
-                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+                lit(ScalarValue::Utf8("josé".to_string())),
+                lit(ScalarValue::Int64(10)),
+                lit(ScalarValue::Utf8("xy".to_string())),
             ],
             Ok(Some("xyxyxyjosé")),
             &str,
@@ -2432,9 +2432,9 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("josé".to_string()))),
-                lit(ScalarValue::Int64(Some(10))),
-                lit(ScalarValue::Utf8(Some("éñ".to_string()))),
+                lit(ScalarValue::Utf8("josé".to_string())),
+                lit(ScalarValue::Int64(10)),
+                lit(ScalarValue::Utf8("éñ".to_string())),
             ],
             Ok(Some("éñéñéñjosé")),
             &str,
@@ -2445,8 +2445,8 @@ mod tests {
         test_function!(
             Lpad,
             &[
-                lit(ScalarValue::Utf8(Some("josé".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8("josé".to_string())),
+                lit(ScalarValue::Int64(5)),
             ],
             Err(DataFusionError::Internal(
                 "function lpad requires compilation with feature flag: unicode_expressions.".to_string()
@@ -2457,7 +2457,7 @@ mod tests {
         );
         test_function!(
             Ltrim,
-            &[lit(ScalarValue::Utf8(Some(" trim".to_string())))],
+            &[lit(ScalarValue::Utf8(" trim".to_string()))],
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -2465,7 +2465,7 @@ mod tests {
         );
         test_function!(
             Ltrim,
-            &[lit(ScalarValue::Utf8(Some(" trim ".to_string())))],
+            &[lit(ScalarValue::Utf8(" trim ".to_string()))],
             Ok(Some("trim ")),
             &str,
             Utf8,
@@ -2473,7 +2473,7 @@ mod tests {
         );
         test_function!(
             Ltrim,
-            &[lit(ScalarValue::Utf8(Some("trim ".to_string())))],
+            &[lit(ScalarValue::Utf8("trim ".to_string()))],
             Ok(Some("trim ")),
             &str,
             Utf8,
@@ -2481,7 +2481,7 @@ mod tests {
         );
         test_function!(
             Ltrim,
-            &[lit(ScalarValue::Utf8(Some("trim".to_string())))],
+            &[lit(ScalarValue::Utf8("trim".to_string()))],
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -2489,7 +2489,7 @@ mod tests {
         );
         test_function!(
             Ltrim,
-            &[lit(ScalarValue::Utf8(Some("\n trim ".to_string())))],
+            &[lit(ScalarValue::Utf8("\n trim ".to_string()))],
             Ok(Some("\n trim ")),
             &str,
             Utf8,
@@ -2497,7 +2497,7 @@ mod tests {
         );
         test_function!(
             Ltrim,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &str,
             Utf8,
@@ -2506,7 +2506,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             MD5,
-            &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
+            &[lit(ScalarValue::Utf8("tom".to_string()))],
             Ok(Some("34b7da764b21d298ef307d04d8152dc5")),
             &str,
             Utf8,
@@ -2515,7 +2515,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             MD5,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some("d41d8cd98f00b204e9800998ecf8427e")),
             &str,
             Utf8,
@@ -2524,7 +2524,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             MD5,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &str,
             Utf8,
@@ -2533,7 +2533,7 @@ mod tests {
         #[cfg(not(feature = "crypto_expressions"))]
         test_function!(
             MD5,
-            &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
+            &[lit(ScalarValue::Utf8("tom".to_string()))],
             Err(DataFusionError::Internal(
                 "function md5 requires compilation with feature flag: crypto_expressions.".to_string()
             )),
@@ -2543,7 +2543,7 @@ mod tests {
         );
         test_function!(
             OctetLength,
-            &[lit(ScalarValue::Utf8(Some("chars".to_string())))],
+            &[lit(ScalarValue::Utf8("chars".to_string()))],
             Ok(Some(5)),
             i32,
             Int32,
@@ -2551,7 +2551,7 @@ mod tests {
         );
         test_function!(
             OctetLength,
-            &[lit(ScalarValue::Utf8(Some("josé".to_string())))],
+            &[lit(ScalarValue::Utf8("josé".to_string()))],
             Ok(Some(5)),
             i32,
             Int32,
@@ -2559,7 +2559,7 @@ mod tests {
         );
         test_function!(
             OctetLength,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some(0)),
             i32,
             Int32,
@@ -2567,7 +2567,7 @@ mod tests {
         );
         test_function!(
             OctetLength,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             i32,
             Int32,
@@ -2577,9 +2577,9 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(Some("Thomas".to_string()))),
-                lit(ScalarValue::Utf8(Some(".[mN]a.".to_string()))),
-                lit(ScalarValue::Utf8(Some("M".to_string()))),
+                lit(ScalarValue::Utf8("Thomas".to_string())),
+                lit(ScalarValue::Utf8(".[mN]a.".to_string())),
+                lit(ScalarValue::Utf8("M".to_string())),
             ],
             Ok(Some("ThM")),
             &str,
@@ -2590,9 +2590,9 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(Some("foobarbaz".to_string()))),
-                lit(ScalarValue::Utf8(Some("b..".to_string()))),
-                lit(ScalarValue::Utf8(Some("X".to_string()))),
+                lit(ScalarValue::Utf8("foobarbaz".to_string())),
+                lit(ScalarValue::Utf8("b..".to_string())),
+                lit(ScalarValue::Utf8("X".to_string())),
             ],
             Ok(Some("fooXbaz")),
             &str,
@@ -2603,10 +2603,10 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(Some("foobarbaz".to_string()))),
-                lit(ScalarValue::Utf8(Some("b..".to_string()))),
-                lit(ScalarValue::Utf8(Some("X".to_string()))),
-                lit(ScalarValue::Utf8(Some("g".to_string()))),
+                lit(ScalarValue::Utf8("foobarbaz".to_string())),
+                lit(ScalarValue::Utf8("b..".to_string())),
+                lit(ScalarValue::Utf8("X".to_string())),
+                lit(ScalarValue::Utf8("g".to_string())),
             ],
             Ok(Some("fooXX")),
             &str,
@@ -2617,10 +2617,10 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(Some("foobarbaz".to_string()))),
-                lit(ScalarValue::Utf8(Some("b(..)".to_string()))),
-                lit(ScalarValue::Utf8(Some("X\\1Y".to_string()))),
-                lit(ScalarValue::Utf8(Some("g".to_string()))),
+                lit(ScalarValue::Utf8("foobarbaz".to_string())),
+                lit(ScalarValue::Utf8("b(..)".to_string())),
+                lit(ScalarValue::Utf8("X\\1Y".to_string())),
+                lit(ScalarValue::Utf8("g".to_string())),
             ],
             Ok(Some("fooXarYXazY")),
             &str,
@@ -2631,10 +2631,10 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("b(..)".to_string()))),
-                lit(ScalarValue::Utf8(Some("X\\1Y".to_string()))),
-                lit(ScalarValue::Utf8(Some("g".to_string()))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("b(..)".to_string())),
+                lit(ScalarValue::Utf8("X\\1Y".to_string())),
+                lit(ScalarValue::Utf8("g".to_string())),
             ],
             Ok(None),
             &str,
@@ -2645,10 +2645,10 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(Some("foobarbaz".to_string()))),
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("X\\1Y".to_string()))),
-                lit(ScalarValue::Utf8(Some("g".to_string()))),
+                lit(ScalarValue::Utf8("foobarbaz".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("X\\1Y".to_string())),
+                lit(ScalarValue::Utf8("g".to_string())),
             ],
             Ok(None),
             &str,
@@ -2659,10 +2659,10 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(Some("foobarbaz".to_string()))),
-                lit(ScalarValue::Utf8(Some("b(..)".to_string()))),
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("g".to_string()))),
+                lit(ScalarValue::Utf8("foobarbaz".to_string())),
+                lit(ScalarValue::Utf8("b(..)".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("g".to_string())),
             ],
             Ok(None),
             &str,
@@ -2673,10 +2673,10 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(Some("foobarbaz".to_string()))),
-                lit(ScalarValue::Utf8(Some("b(..)".to_string()))),
-                lit(ScalarValue::Utf8(Some("X\\1Y".to_string()))),
-                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Utf8("foobarbaz".to_string())),
+                lit(ScalarValue::Utf8("b(..)".to_string())),
+                lit(ScalarValue::Utf8("X\\1Y".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
             ],
             Ok(None),
             &str,
@@ -2687,10 +2687,10 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(Some("ABCabcABC".to_string()))),
-                lit(ScalarValue::Utf8(Some("(abc)".to_string()))),
-                lit(ScalarValue::Utf8(Some("X".to_string()))),
-                lit(ScalarValue::Utf8(Some("gi".to_string()))),
+                lit(ScalarValue::Utf8("ABCabcABC".to_string())),
+                lit(ScalarValue::Utf8("(abc)".to_string())),
+                lit(ScalarValue::Utf8("X".to_string())),
+                lit(ScalarValue::Utf8("gi".to_string())),
             ],
             Ok(Some("XXX")),
             &str,
@@ -2701,10 +2701,10 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(Some("ABCabcABC".to_string()))),
-                lit(ScalarValue::Utf8(Some("(abc)".to_string()))),
-                lit(ScalarValue::Utf8(Some("X".to_string()))),
-                lit(ScalarValue::Utf8(Some("i".to_string()))),
+                lit(ScalarValue::Utf8("ABCabcABC".to_string())),
+                lit(ScalarValue::Utf8("(abc)".to_string())),
+                lit(ScalarValue::Utf8("X".to_string())),
+                lit(ScalarValue::Utf8("i".to_string())),
             ],
             Ok(Some("XabcABC")),
             &str,
@@ -2715,9 +2715,9 @@ mod tests {
         test_function!(
             RegexpReplace,
             &[
-                lit(ScalarValue::Utf8(Some("foobarbaz".to_string()))),
-                lit(ScalarValue::Utf8(Some("b..".to_string()))),
-                lit(ScalarValue::Utf8(Some("X".to_string()))),
+                lit(ScalarValue::Utf8("foobarbaz".to_string())),
+                lit(ScalarValue::Utf8("b..".to_string())),
+                lit(ScalarValue::Utf8("X".to_string())),
             ],
             Err(DataFusionError::Internal(
                 "function regexp_replace requires compilation with feature flag: regex_expressions.".to_string()
@@ -2729,8 +2729,8 @@ mod tests {
         test_function!(
             Repeat,
             &[
-                lit(ScalarValue::Utf8(Some("Pg".to_string()))),
-                lit(ScalarValue::Int64(Some(4))),
+                lit(ScalarValue::Utf8("Pg".to_string())),
+                lit(ScalarValue::Int64(4)),
             ],
             Ok(Some("PgPgPgPg")),
             &str,
@@ -2740,8 +2740,8 @@ mod tests {
         test_function!(
             Repeat,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Int64(Some(4))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Int64(4)),
             ],
             Ok(None),
             &str,
@@ -2751,8 +2751,8 @@ mod tests {
         test_function!(
             Repeat,
             &[
-                lit(ScalarValue::Utf8(Some("Pg".to_string()))),
-                lit(ScalarValue::Int64(None)),
+                lit(ScalarValue::Utf8("Pg".to_string())),
+                lit(ScalarValue::Int64(0).to_null()),
             ],
             Ok(None),
             &str,
@@ -2762,7 +2762,7 @@ mod tests {
         #[cfg(feature = "unicode_expressions")]
         test_function!(
             Reverse,
-            &[lit(ScalarValue::Utf8(Some("abcde".to_string())))],
+            &[lit(ScalarValue::Utf8("abcde".to_string()))],
             Ok(Some("edcba")),
             &str,
             Utf8,
@@ -2771,7 +2771,7 @@ mod tests {
         #[cfg(feature = "unicode_expressions")]
         test_function!(
             Reverse,
-            &[lit(ScalarValue::Utf8(Some("loẅks".to_string())))],
+            &[lit(ScalarValue::Utf8("loẅks".to_string()))],
             Ok(Some("skẅol")),
             &str,
             Utf8,
@@ -2780,7 +2780,7 @@ mod tests {
         #[cfg(feature = "unicode_expressions")]
         test_function!(
             Reverse,
-            &[lit(ScalarValue::Utf8(Some("loẅks".to_string())))],
+            &[lit(ScalarValue::Utf8("loẅks".to_string()))],
             Ok(Some("skẅol")),
             &str,
             Utf8,
@@ -2789,7 +2789,7 @@ mod tests {
         #[cfg(feature = "unicode_expressions")]
         test_function!(
             Reverse,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &str,
             Utf8,
@@ -2798,7 +2798,7 @@ mod tests {
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             Reverse,
-            &[lit(ScalarValue::Utf8(Some("abcde".to_string())))],
+            &[lit(ScalarValue::Utf8("abcde".to_string()))],
             Err(DataFusionError::Internal(
                 "function reverse requires compilation with feature flag: unicode_expressions.".to_string()
             )),
@@ -2810,8 +2810,8 @@ mod tests {
         test_function!(
             Right,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int8(Some(2))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int8(2)),
             ],
             Ok(Some("de")),
             &str,
@@ -2822,8 +2822,8 @@ mod tests {
         test_function!(
             Right,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int64(Some(200))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int64(200)),
             ],
             Ok(Some("abcde")),
             &str,
@@ -2834,8 +2834,8 @@ mod tests {
         test_function!(
             Right,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int64(Some(-2))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int64(-2)),
             ],
             Ok(Some("cde")),
             &str,
@@ -2846,8 +2846,8 @@ mod tests {
         test_function!(
             Right,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int64(Some(-200))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int64(-200)),
             ],
             Ok(Some("")),
             &str,
@@ -2858,8 +2858,8 @@ mod tests {
         test_function!(
             Right,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int64(Some(0))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int64(0)),
             ],
             Ok(Some("")),
             &str,
@@ -2870,8 +2870,8 @@ mod tests {
         test_function!(
             Right,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Int64(Some(2))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Int64(2)),
             ],
             Ok(None),
             &str,
@@ -2882,8 +2882,8 @@ mod tests {
         test_function!(
             Right,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int64(None)),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int64(0).to_null()),
             ],
             Ok(None),
             &str,
@@ -2894,8 +2894,8 @@ mod tests {
         test_function!(
             Right,
             &[
-                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8("joséésoj".to_string())),
+                lit(ScalarValue::Int64(5)),
             ],
             Ok(Some("éésoj")),
             &str,
@@ -2906,8 +2906,8 @@ mod tests {
         test_function!(
             Right,
             &[
-                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
-                lit(ScalarValue::Int64(Some(-3))),
+                lit(ScalarValue::Utf8("joséésoj".to_string())),
+                lit(ScalarValue::Int64(-3)),
             ],
             Ok(Some("éésoj")),
             &str,
@@ -2918,8 +2918,8 @@ mod tests {
         test_function!(
             Right,
             &[
-                lit(ScalarValue::Utf8(Some("abcde".to_string()))),
-                lit(ScalarValue::Int8(Some(2))),
+                lit(ScalarValue::Utf8("abcde".to_string())),
+                lit(ScalarValue::Int8(2)),
             ],
             Err(DataFusionError::Internal(
                 "function right requires compilation with feature flag: unicode_expressions.".to_string()
@@ -2932,8 +2932,8 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("josé".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8("josé".to_string())),
+                lit(ScalarValue::Int64(5)),
             ],
             Ok(Some("josé ")),
             &str,
@@ -2944,8 +2944,8 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(5)),
             ],
             Ok(Some("hi   ")),
             &str,
@@ -2956,8 +2956,8 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(0))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(0)),
             ],
             Ok(Some("")),
             &str,
@@ -2968,8 +2968,8 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(None)),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(0).to_null()),
             ],
             Ok(None),
             &str,
@@ -2980,8 +2980,8 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Int64(5)),
             ],
             Ok(None),
             &str,
@@ -2992,9 +2992,9 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Utf8("xy".to_string())),
             ],
             Ok(Some("hixyx")),
             &str,
@@ -3005,9 +3005,9 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(21))),
-                lit(ScalarValue::Utf8(Some("abcdef".to_string()))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(21)),
+                lit(ScalarValue::Utf8("abcdef".to_string())),
             ],
             Ok(Some("hiabcdefabcdefabcdefa")),
             &str,
@@ -3018,9 +3018,9 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Utf8(Some(" ".to_string()))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Utf8(" ".to_string())),
             ],
             Ok(Some("hi   ")),
             &str,
@@ -3031,9 +3031,9 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Utf8(Some("".to_string()))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Utf8("".to_string())),
             ],
             Ok(Some("hi")),
             &str,
@@ -3044,9 +3044,9 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Utf8("xy".to_string())),
             ],
             Ok(None),
             &str,
@@ -3057,9 +3057,9 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(None)),
-                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(0).to_null()),
+                lit(ScalarValue::Utf8("xy".to_string())),
             ],
             Ok(None),
             &str,
@@ -3070,9 +3070,9 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("hi".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Utf8("hi".to_string())),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
             ],
             Ok(None),
             &str,
@@ -3083,9 +3083,9 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("josé".to_string()))),
-                lit(ScalarValue::Int64(Some(10))),
-                lit(ScalarValue::Utf8(Some("xy".to_string()))),
+                lit(ScalarValue::Utf8("josé".to_string())),
+                lit(ScalarValue::Int64(10)),
+                lit(ScalarValue::Utf8("xy".to_string())),
             ],
             Ok(Some("joséxyxyxy")),
             &str,
@@ -3096,9 +3096,9 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("josé".to_string()))),
-                lit(ScalarValue::Int64(Some(10))),
-                lit(ScalarValue::Utf8(Some("éñ".to_string()))),
+                lit(ScalarValue::Utf8("josé".to_string())),
+                lit(ScalarValue::Int64(10)),
+                lit(ScalarValue::Utf8("éñ".to_string())),
             ],
             Ok(Some("josééñéñéñ")),
             &str,
@@ -3109,8 +3109,8 @@ mod tests {
         test_function!(
             Rpad,
             &[
-                lit(ScalarValue::Utf8(Some("josé".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8("josé".to_string())),
+                lit(ScalarValue::Int64(5)),
             ],
             Err(DataFusionError::Internal(
                 "function rpad requires compilation with feature flag: unicode_expressions.".to_string()
@@ -3121,7 +3121,7 @@ mod tests {
         );
         test_function!(
             Rtrim,
-            &[lit(ScalarValue::Utf8(Some("trim ".to_string())))],
+            &[lit(ScalarValue::Utf8("trim ".to_string()))],
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -3129,7 +3129,7 @@ mod tests {
         );
         test_function!(
             Rtrim,
-            &[lit(ScalarValue::Utf8(Some(" trim ".to_string())))],
+            &[lit(ScalarValue::Utf8(" trim ".to_string()))],
             Ok(Some(" trim")),
             &str,
             Utf8,
@@ -3137,7 +3137,7 @@ mod tests {
         );
         test_function!(
             Rtrim,
-            &[lit(ScalarValue::Utf8(Some(" trim \n".to_string())))],
+            &[lit(ScalarValue::Utf8(" trim \n".to_string()))],
             Ok(Some(" trim \n")),
             &str,
             Utf8,
@@ -3145,7 +3145,7 @@ mod tests {
         );
         test_function!(
             Rtrim,
-            &[lit(ScalarValue::Utf8(Some(" trim".to_string())))],
+            &[lit(ScalarValue::Utf8(" trim".to_string()))],
             Ok(Some(" trim")),
             &str,
             Utf8,
@@ -3153,7 +3153,7 @@ mod tests {
         );
         test_function!(
             Rtrim,
-            &[lit(ScalarValue::Utf8(Some("trim".to_string())))],
+            &[lit(ScalarValue::Utf8("trim".to_string()))],
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -3161,7 +3161,7 @@ mod tests {
         );
         test_function!(
             Rtrim,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &str,
             Utf8,
@@ -3170,7 +3170,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA224,
-            &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
+            &[lit(ScalarValue::Utf8("tom".to_string()))],
             Ok(Some(&[
                 11u8, 246u8, 203u8, 98u8, 100u8, 156u8, 66u8, 169u8, 174u8, 56u8, 118u8,
                 171u8, 111u8, 109u8, 146u8, 173u8, 54u8, 203u8, 84u8, 20u8, 228u8, 149u8,
@@ -3183,7 +3183,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA224,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some(&[
                 209u8, 74u8, 2u8, 140u8, 42u8, 58u8, 43u8, 201u8, 71u8, 97u8, 2u8, 187u8,
                 40u8, 130u8, 52u8, 196u8, 21u8, 162u8, 176u8, 31u8, 130u8, 142u8, 166u8,
@@ -3196,7 +3196,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA224,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &[u8],
             Binary,
@@ -3205,7 +3205,7 @@ mod tests {
         #[cfg(not(feature = "crypto_expressions"))]
         test_function!(
             SHA224,
-            &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
+            &[lit(ScalarValue::Utf8("tom".to_string()))],
             Err(DataFusionError::Internal(
                 "function sha224 requires compilation with feature flag: crypto_expressions.".to_string()
             )),
@@ -3216,7 +3216,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA256,
-            &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
+            &[lit(ScalarValue::Utf8("tom".to_string()))],
             Ok(Some(&[
                 225u8, 96u8, 143u8, 117u8, 197u8, 215u8, 129u8, 63u8, 61u8, 64u8, 49u8,
                 203u8, 48u8, 191u8, 183u8, 134u8, 80u8, 125u8, 152u8, 19u8, 117u8, 56u8,
@@ -3229,7 +3229,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA256,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some(&[
                 227u8, 176u8, 196u8, 66u8, 152u8, 252u8, 28u8, 20u8, 154u8, 251u8, 244u8,
                 200u8, 153u8, 111u8, 185u8, 36u8, 39u8, 174u8, 65u8, 228u8, 100u8, 155u8,
@@ -3242,7 +3242,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA256,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &[u8],
             Binary,
@@ -3251,7 +3251,7 @@ mod tests {
         #[cfg(not(feature = "crypto_expressions"))]
         test_function!(
             SHA256,
-            &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
+            &[lit(ScalarValue::Utf8("tom".to_string()))],
             Err(DataFusionError::Internal(
                 "function sha256 requires compilation with feature flag: crypto_expressions.".to_string()
             )),
@@ -3262,7 +3262,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA384,
-            &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
+            &[lit(ScalarValue::Utf8("tom".to_string()))],
             Ok(Some(&[
                 9u8, 111u8, 91u8, 104u8, 170u8, 119u8, 132u8, 142u8, 79u8, 223u8, 92u8,
                 28u8, 11u8, 53u8, 13u8, 226u8, 219u8, 250u8, 214u8, 15u8, 253u8, 124u8,
@@ -3277,7 +3277,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA384,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some(&[
                 56u8, 176u8, 96u8, 167u8, 81u8, 172u8, 150u8, 56u8, 76u8, 217u8, 50u8,
                 126u8, 177u8, 177u8, 227u8, 106u8, 33u8, 253u8, 183u8, 17u8, 20u8, 190u8,
@@ -3292,7 +3292,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA384,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &[u8],
             Binary,
@@ -3301,7 +3301,7 @@ mod tests {
         #[cfg(not(feature = "crypto_expressions"))]
         test_function!(
             SHA384,
-            &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
+            &[lit(ScalarValue::Utf8("tom".to_string()))],
             Err(DataFusionError::Internal(
                 "function sha384 requires compilation with feature flag: crypto_expressions.".to_string()
             )),
@@ -3312,7 +3312,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA512,
-            &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
+            &[lit(ScalarValue::Utf8("tom".to_string()))],
             Ok(Some(&[
                 110u8, 27u8, 155u8, 63u8, 232u8, 64u8, 104u8, 14u8, 55u8, 5u8, 31u8,
                 122u8, 213u8, 233u8, 89u8, 214u8, 243u8, 154u8, 208u8, 248u8, 136u8,
@@ -3328,7 +3328,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA512,
-            &[lit(ScalarValue::Utf8(Some("".to_string())))],
+            &[lit(ScalarValue::Utf8("".to_string()))],
             Ok(Some(&[
                 207u8, 131u8, 225u8, 53u8, 126u8, 239u8, 184u8, 189u8, 241u8, 84u8, 40u8,
                 80u8, 214u8, 109u8, 128u8, 7u8, 214u8, 32u8, 228u8, 5u8, 11u8, 87u8,
@@ -3344,7 +3344,7 @@ mod tests {
         #[cfg(feature = "crypto_expressions")]
         test_function!(
             SHA512,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &[u8],
             Binary,
@@ -3353,7 +3353,7 @@ mod tests {
         #[cfg(not(feature = "crypto_expressions"))]
         test_function!(
             SHA512,
-            &[lit(ScalarValue::Utf8(Some("tom".to_string())))],
+            &[lit(ScalarValue::Utf8("tom".to_string()))],
             Err(DataFusionError::Internal(
                 "function sha512 requires compilation with feature flag: crypto_expressions.".to_string()
             )),
@@ -3364,9 +3364,9 @@ mod tests {
         test_function!(
             SplitPart,
             &[
-                lit(ScalarValue::Utf8(Some("abc~@~def~@~ghi".to_string()))),
-                lit(ScalarValue::Utf8(Some("~@~".to_string()))),
-                lit(ScalarValue::Int64(Some(2))),
+                lit(ScalarValue::Utf8("abc~@~def~@~ghi".to_string())),
+                lit(ScalarValue::Utf8("~@~".to_string())),
+                lit(ScalarValue::Int64(2)),
             ],
             Ok(Some("def")),
             &str,
@@ -3376,9 +3376,9 @@ mod tests {
         test_function!(
             SplitPart,
             &[
-                lit(ScalarValue::Utf8(Some("abc~@~def~@~ghi".to_string()))),
-                lit(ScalarValue::Utf8(Some("~@~".to_string()))),
-                lit(ScalarValue::Int64(Some(20))),
+                lit(ScalarValue::Utf8("abc~@~def~@~ghi".to_string())),
+                lit(ScalarValue::Utf8("~@~".to_string())),
+                lit(ScalarValue::Int64(20)),
             ],
             Ok(Some("")),
             &str,
@@ -3388,9 +3388,9 @@ mod tests {
         test_function!(
             SplitPart,
             &[
-                lit(ScalarValue::Utf8(Some("abc~@~def~@~ghi".to_string()))),
-                lit(ScalarValue::Utf8(Some("~@~".to_string()))),
-                lit(ScalarValue::Int64(Some(-1))),
+                lit(ScalarValue::Utf8("abc~@~def~@~ghi".to_string())),
+                lit(ScalarValue::Utf8("~@~".to_string())),
+                lit(ScalarValue::Int64(-1)),
             ],
             Err(DataFusionError::Execution(
                 "field position must be greater than zero".to_string(),
@@ -3402,8 +3402,8 @@ mod tests {
         test_function!(
             StartsWith,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Utf8(Some("alph".to_string()))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Utf8("alph".to_string())),
             ],
             Ok(Some(true)),
             bool,
@@ -3413,8 +3413,8 @@ mod tests {
         test_function!(
             StartsWith,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Utf8(Some("blph".to_string()))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Utf8("blph".to_string())),
             ],
             Ok(Some(false)),
             bool,
@@ -3424,8 +3424,8 @@ mod tests {
         test_function!(
             StartsWith,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("alph".to_string()))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("alph".to_string())),
             ],
             Ok(None),
             bool,
@@ -3435,8 +3435,8 @@ mod tests {
         test_function!(
             StartsWith,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
             ],
             Ok(None),
             bool,
@@ -3447,8 +3447,8 @@ mod tests {
         test_function!(
             Strpos,
             &[
-                lit(ScalarValue::Utf8(Some("abc".to_string()))),
-                lit(ScalarValue::Utf8(Some("c".to_string()))),
+                lit(ScalarValue::Utf8("abc".to_string())),
+                lit(ScalarValue::Utf8("c".to_string())),
             ],
             Ok(Some(3)),
             i32,
@@ -3459,8 +3459,8 @@ mod tests {
         test_function!(
             Strpos,
             &[
-                lit(ScalarValue::Utf8(Some("josé".to_string()))),
-                lit(ScalarValue::Utf8(Some("é".to_string()))),
+                lit(ScalarValue::Utf8("josé".to_string())),
+                lit(ScalarValue::Utf8("é".to_string())),
             ],
             Ok(Some(4)),
             i32,
@@ -3471,8 +3471,8 @@ mod tests {
         test_function!(
             Strpos,
             &[
-                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
-                lit(ScalarValue::Utf8(Some("so".to_string()))),
+                lit(ScalarValue::Utf8("joséésoj".to_string())),
+                lit(ScalarValue::Utf8("so".to_string())),
             ],
             Ok(Some(6)),
             i32,
@@ -3483,8 +3483,8 @@ mod tests {
         test_function!(
             Strpos,
             &[
-                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
-                lit(ScalarValue::Utf8(Some("abc".to_string()))),
+                lit(ScalarValue::Utf8("joséésoj".to_string())),
+                lit(ScalarValue::Utf8("abc".to_string())),
             ],
             Ok(Some(0)),
             i32,
@@ -3495,8 +3495,8 @@ mod tests {
         test_function!(
             Strpos,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("abc".to_string()))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("abc".to_string())),
             ],
             Ok(None),
             i32,
@@ -3507,8 +3507,8 @@ mod tests {
         test_function!(
             Strpos,
             &[
-                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
-                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Utf8("joséésoj".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
             ],
             Ok(None),
             i32,
@@ -3519,8 +3519,8 @@ mod tests {
         test_function!(
             Strpos,
             &[
-                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
-                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Utf8("joséésoj".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
             ],
             Err(DataFusionError::Internal(
                 "function strpos requires compilation with feature flag: unicode_expressions.".to_string()
@@ -3533,8 +3533,8 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(0))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(0)),
             ],
             Ok(Some("alphabet")),
             &str,
@@ -3545,8 +3545,8 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
+                lit(ScalarValue::Utf8("joséésoj".to_string())),
+                lit(ScalarValue::Int64(5)),
             ],
             Ok(Some("ésoj")),
             &str,
@@ -3557,8 +3557,8 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(1))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(1)),
             ],
             Ok(Some("alphabet")),
             &str,
@@ -3569,8 +3569,8 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(2))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(2)),
             ],
             Ok(Some("lphabet")),
             &str,
@@ -3581,8 +3581,8 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(3))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(3)),
             ],
             Ok(Some("phabet")),
             &str,
@@ -3593,8 +3593,8 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(-3))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(-3)),
             ],
             Ok(Some("alphabet")),
             &str,
@@ -3605,8 +3605,8 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(30))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(30)),
             ],
             Ok(Some("")),
             &str,
@@ -3617,8 +3617,8 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(None)),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(0).to_null()),
             ],
             Ok(None),
             &str,
@@ -3629,9 +3629,9 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(3))),
-                lit(ScalarValue::Int64(Some(2))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(3)),
+                lit(ScalarValue::Int64(2)),
             ],
             Ok(Some("ph")),
             &str,
@@ -3642,9 +3642,9 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(3))),
-                lit(ScalarValue::Int64(Some(20))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(3)),
+                lit(ScalarValue::Int64(20)),
             ],
             Ok(Some("phabet")),
             &str,
@@ -3655,9 +3655,9 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(None)),
-                lit(ScalarValue::Int64(Some(20))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(0).to_null()),
+                lit(ScalarValue::Int64(20)),
             ],
             Ok(None),
             &str,
@@ -3668,9 +3668,9 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(3))),
-                lit(ScalarValue::Int64(None)),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(3)),
+                lit(ScalarValue::Int64(0).to_null()),
             ],
             Ok(None),
             &str,
@@ -3681,9 +3681,9 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(1))),
-                lit(ScalarValue::Int64(Some(-1))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(1)),
+                lit(ScalarValue::Int64(-1)),
             ],
             Err(DataFusionError::Execution(
                 "negative substring length not allowed".to_string(),
@@ -3696,9 +3696,9 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
-                lit(ScalarValue::Int64(Some(5))),
-                lit(ScalarValue::Int64(Some(2))),
+                lit(ScalarValue::Utf8("joséésoj".to_string())),
+                lit(ScalarValue::Int64(5)),
+                lit(ScalarValue::Int64(2)),
             ],
             Ok(Some("és")),
             &str,
@@ -3709,8 +3709,8 @@ mod tests {
         test_function!(
             Substr,
             &[
-                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
-                lit(ScalarValue::Int64(Some(0))),
+                lit(ScalarValue::Utf8("alphabet".to_string())),
+                lit(ScalarValue::Int64(0)),
             ],
             Err(DataFusionError::Internal(
                 "function substr requires compilation with feature flag: unicode_expressions.".to_string()
@@ -3723,9 +3723,9 @@ mod tests {
         test_function!(
             Translate,
             &[
-                lit(ScalarValue::Utf8(Some("12345".to_string()))),
-                lit(ScalarValue::Utf8(Some("143".to_string()))),
-                lit(ScalarValue::Utf8(Some("ax".to_string()))),
+                lit(ScalarValue::Utf8("12345".to_string())),
+                lit(ScalarValue::Utf8("143".to_string())),
+                lit(ScalarValue::Utf8("ax".to_string())),
             ],
             Ok(Some("a2x5")),
             &str,
@@ -3736,9 +3736,9 @@ mod tests {
         test_function!(
             Translate,
             &[
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("143".to_string()))),
-                lit(ScalarValue::Utf8(Some("ax".to_string()))),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("143".to_string())),
+                lit(ScalarValue::Utf8("ax".to_string())),
             ],
             Ok(None),
             &str,
@@ -3749,9 +3749,9 @@ mod tests {
         test_function!(
             Translate,
             &[
-                lit(ScalarValue::Utf8(Some("12345".to_string()))),
-                lit(ScalarValue::Utf8(None)),
-                lit(ScalarValue::Utf8(Some("ax".to_string()))),
+                lit(ScalarValue::Utf8("12345".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
+                lit(ScalarValue::Utf8("ax".to_string())),
             ],
             Ok(None),
             &str,
@@ -3762,9 +3762,9 @@ mod tests {
         test_function!(
             Translate,
             &[
-                lit(ScalarValue::Utf8(Some("12345".to_string()))),
-                lit(ScalarValue::Utf8(Some("143".to_string()))),
-                lit(ScalarValue::Utf8(None)),
+                lit(ScalarValue::Utf8("12345".to_string())),
+                lit(ScalarValue::Utf8("143".to_string())),
+                lit(ScalarValue::Null(Box::new(DataType::Utf8))),
             ],
             Ok(None),
             &str,
@@ -3775,9 +3775,9 @@ mod tests {
         test_function!(
             Translate,
             &[
-                lit(ScalarValue::Utf8(Some("é2íñ5".to_string()))),
-                lit(ScalarValue::Utf8(Some("éñí".to_string()))),
-                lit(ScalarValue::Utf8(Some("óü".to_string()))),
+                lit(ScalarValue::Utf8("é2íñ5".to_string())),
+                lit(ScalarValue::Utf8("éñí".to_string())),
+                lit(ScalarValue::Utf8("óü".to_string())),
             ],
             Ok(Some("ó2ü5")),
             &str,
@@ -3788,9 +3788,9 @@ mod tests {
         test_function!(
             Translate,
             &[
-                lit(ScalarValue::Utf8(Some("12345".to_string()))),
-                lit(ScalarValue::Utf8(Some("143".to_string()))),
-                lit(ScalarValue::Utf8(Some("ax".to_string()))),
+                lit(ScalarValue::Utf8("12345".to_string())),
+                lit(ScalarValue::Utf8("143".to_string())),
+                lit(ScalarValue::Utf8("ax".to_string())),
             ],
             Err(DataFusionError::Internal(
                 "function translate requires compilation with feature flag: unicode_expressions.".to_string()
@@ -3801,7 +3801,7 @@ mod tests {
         );
         test_function!(
             Trim,
-            &[lit(ScalarValue::Utf8(Some(" trim ".to_string())))],
+            &[lit(ScalarValue::Utf8(" trim ".to_string()))],
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -3809,7 +3809,7 @@ mod tests {
         );
         test_function!(
             Trim,
-            &[lit(ScalarValue::Utf8(Some("trim ".to_string())))],
+            &[lit(ScalarValue::Utf8("trim ".to_string()))],
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -3817,7 +3817,7 @@ mod tests {
         );
         test_function!(
             Trim,
-            &[lit(ScalarValue::Utf8(Some(" trim".to_string())))],
+            &[lit(ScalarValue::Utf8(" trim".to_string()))],
             Ok(Some("trim")),
             &str,
             Utf8,
@@ -3825,7 +3825,7 @@ mod tests {
         );
         test_function!(
             Trim,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &str,
             Utf8,
@@ -3833,7 +3833,7 @@ mod tests {
         );
         test_function!(
             Upper,
-            &[lit(ScalarValue::Utf8(Some("upper".to_string())))],
+            &[lit(ScalarValue::Utf8("upper".to_string()))],
             Ok(Some("UPPER")),
             &str,
             Utf8,
@@ -3841,7 +3841,7 @@ mod tests {
         );
         test_function!(
             Upper,
-            &[lit(ScalarValue::Utf8(Some("UPPER".to_string())))],
+            &[lit(ScalarValue::Utf8("UPPER".to_string()))],
             Ok(Some("UPPER")),
             &str,
             Utf8,
@@ -3849,7 +3849,7 @@ mod tests {
         );
         test_function!(
             Upper,
-            &[lit(ScalarValue::Utf8(None))],
+            &[lit(ScalarValue::Utf8("".into()).to_null())],
             Ok(None),
             &str,
             Utf8,
@@ -3961,7 +3961,7 @@ mod tests {
         let ctx_state = ExecutionContextState::new();
 
         let col_value: ArrayRef = Arc::new(StringArray::from(vec!["aaa-555"]));
-        let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
+        let pattern = lit(ScalarValue::Utf8(r".*-(\d*)".to_string()));
         let columns: Vec<ArrayRef> = vec![col_value];
         let expr = create_physical_expr(
             &BuiltinScalarFunction::RegexpMatch,
@@ -3999,8 +3999,8 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let ctx_state = ExecutionContextState::new();
 
-        let col_value = lit(ScalarValue::Utf8(Some("aaa-555".to_string())));
-        let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
+        let col_value = lit(ScalarValue::Utf8("aaa-555".to_string()));
+        let pattern = lit(ScalarValue::Utf8(r".*-(\d*)".to_string()));
         let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
         let expr = create_physical_expr(
             &BuiltinScalarFunction::RegexpMatch,

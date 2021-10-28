@@ -108,12 +108,12 @@ where
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x)).transpose()?;
-                Ok(ColumnarValue::Scalar(S::scalar(result)))
+                let result = op(a)?;
+                Ok(ColumnarValue::Scalar(S::scalar(Some(result))))
             }
             ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x)).transpose()?;
-                Ok(ColumnarValue::Scalar(S::scalar(result)))
+                let result = op(a)?;
+                Ok(ColumnarValue::Scalar(S::scalar(Some(result))))
             }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
@@ -173,7 +173,7 @@ pub fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 pub fn make_now(
     now_ts: DateTime<Utc>,
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
-    let now_ts = Some(now_ts.timestamp_nanos());
+    let now_ts = now_ts.timestamp_nanos();
     move |_arg| {
         Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
             now_ts,
@@ -224,16 +224,15 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
 pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let (granularity, array) = (&args[0], &args[1]);
 
-    let granularity =
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = granularity {
-            v
-        } else {
-            return Err(DataFusionError::Execution(
-                "Granularity of `date_trunc` must be non-null scalar Utf8".to_string(),
-            ));
-        };
+    let granularity = if let ColumnarValue::Scalar(ScalarValue::Utf8(v)) = granularity {
+        v
+    } else {
+        return Err(DataFusionError::Execution(
+            "Granularity of `date_trunc` must be non-null scalar Utf8".to_string(),
+        ));
+    };
 
-    let f = |x: Option<i64>| x.map(|x| date_trunc_single(granularity, x)).transpose();
+    let f = |x: i64| date_trunc_single(granularity, x);
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v)) => {
@@ -246,9 +245,8 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 .unwrap();
             let array = array
                 .iter()
-                .map(f)
+                .map(|o| o.map(f).transpose())
                 .collect::<Result<TimestampNanosecondArray>>()?;
-
             ColumnarValue::Array(Arc::new(array))
         }
         _ => {
@@ -317,7 +315,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
     let (date_part, array) = (&args[0], &args[1]);
 
-    let date_part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = date_part {
+    let date_part = if let ColumnarValue::Scalar(ScalarValue::Utf8(v)) = date_part {
         v
     } else {
         return Err(DataFusionError::Execution(

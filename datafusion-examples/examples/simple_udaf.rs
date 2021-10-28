@@ -90,10 +90,10 @@ impl Accumulator for GeometricMean {
             // only accepts Float64 as its argument (DataFusion does try to coerce arguments to this type)
             //
             // Note that `.map` here ensures that we ignore Nulls.
-            ScalarValue::Float64(e) => e.map(|value| {
-                self.prod *= value;
+            ScalarValue::Float64(e) => {
+                self.prod *= e;
                 self.n += 1;
-            }),
+            }
             _ => unreachable!(""),
         };
         Ok(())
@@ -105,7 +105,7 @@ impl Accumulator for GeometricMean {
         let prod = &states[0];
         let n = &states[1];
         match (prod, n) {
-            (ScalarValue::Float64(Some(prod)), ScalarValue::UInt32(Some(n))) => {
+            (ScalarValue::Float64(prod), ScalarValue::UInt32(n)) => {
                 self.prod *= prod;
                 self.n += n;
             }

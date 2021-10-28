@@ -149,7 +149,7 @@ impl Accumulator for DistinctCountAccumulator {
         let col_values = states
             .iter()
             .map(|state| match state {
-                ScalarValue::List(Some(values), _) => Ok(values),
+                ScalarValue::List(values, _) => Ok(values),
                 _ => Err(DataFusionError::Internal(format!(
                     "Unexpected accumulator state {:?}",
                     state
@@ -173,14 +173,14 @@ impl Accumulator for DistinctCountAccumulator {
             .map(|state_data_type| {
                 let values = Box::new(Vec::new());
                 let data_type = Box::new(state_data_type.clone());
-                ScalarValue::List(Some(values), data_type)
+                ScalarValue::List(values, data_type)
             })
             .collect::<Vec<_>>();
 
         let mut cols_vec = cols_out
             .iter_mut()
             .map(|c| match c {
-                ScalarValue::List(Some(ref mut v), _) => v,
+                ScalarValue::List(ref mut v, _) => v,
                 _ => unreachable!(),
             })
             .collect::<Vec<_>>();
@@ -198,7 +198,7 @@ impl Accumulator for DistinctCountAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         match &self.count_data_type {
-            DataType::UInt64 => Ok(ScalarValue::UInt64(Some(self.values.len() as u64))),
+            DataType::UInt64 => Ok(ScalarValue::UInt64(self.values.len() as u64)),
             t => Err(DataFusionError::Internal(format!(
                 "Invalid data type {:?} for count distinct aggregation",
                 t
@@ -257,12 +257,11 @@ mod tests {
             }
 
             match $LIST {
-                ScalarValue::List(None, _) => None,
-                ScalarValue::List(Some(scalar_values), _) => {
+                ScalarValue::List(scalar_values, _) => {
                     let vec = scalar_values
                         .iter()
                         .map(|scalar_value| match scalar_value {
-                            ScalarValue::$DATA_TYPE(value) => *value,
+                            ScalarValue::$DATA_TYPE(value) => Some(*value),
                             _ => panic!("Unexpected ScalarValue variant"),
                         })
                         .collect::<Vec<Option<$PRIM_TY>>>();
@@ -366,7 +365,7 @@ mod tests {
 
             assert_eq!(states.len(), 1);
             assert_eq!(state_vec, vec![Some(1), Some(2), Some(3)]);
-            assert_eq!(result, ScalarValue::UInt64(Some(3)));
+            assert_eq!(result, ScalarValue::UInt64(3));
 
             Ok(())
         }};
@@ -436,7 +435,7 @@ mod tests {
                 ]
             );
             assert!(state_vec[nan_idx].unwrap_or_default().is_nan());
-            assert_eq!(result, ScalarValue::UInt64(Some(8)));
+            assert_eq!(result, ScalarValue::UInt64(8));
 
             Ok(())
         }};
@@ -500,9 +499,7 @@ mod tests {
             let mut state_vec = state_to_vec!(&states[0], Boolean, bool).unwrap();
             state_vec.sort();
             let count = match result {
-                ScalarValue::UInt64(c) => c.ok_or_else(|| {
-                    DataFusionError::Internal("Found None count".to_string())
-                }),
+                ScalarValue::UInt64(c) => Ok(c),
                 scalar => Err(DataFusionError::Internal(format!(
                     "Found non Uint64 scalar value from count: {}",
                     scalar
@@ -557,7 +554,7 @@ mod tests {
 
         assert_eq!(states.len(), 1);
         assert_eq!(state_to_vec!(&states[0], Int32, i32), Some(vec![]));
-        assert_eq!(result, ScalarValue::UInt64(Some(0)));
+        assert_eq!(result, ScalarValue::UInt64(0));
 
         Ok(())
     }
@@ -571,7 +568,7 @@ mod tests {
 
         assert_eq!(states.len(), 1);
         assert_eq!(state_to_vec!(&states[0], Int32, i32), Some(vec![]));
-        assert_eq!(result, ScalarValue::UInt64(Some(0)));
+        assert_eq!(result, ScalarValue::UInt64(0));
 
         Ok(())
     }
@@ -594,7 +591,7 @@ mod tests {
             vec![(Some(1_i8), Some(3_i16)), (Some(2_i8), Some(4_i16))]
         );
 
-        assert_eq!(result, ScalarValue::UInt64(Some(2)));
+        assert_eq!(result, ScalarValue::UInt64(2));
 
         Ok(())
     }
@@ -604,13 +601,13 @@ mod tests {
         let (states, result) = run_update(
             &[DataType::Int32, DataType::UInt64],
             &[
-                vec![ScalarValue::Int32(Some(-1)), ScalarValue::UInt64(Some(5))],
-                vec![ScalarValue::Int32(Some(5)), ScalarValue::UInt64(Some(1))],
-                vec![ScalarValue::Int32(Some(-1)), ScalarValue::UInt64(Some(5))],
-                vec![ScalarValue::Int32(Some(5)), ScalarValue::UInt64(Some(1))],
-                vec![ScalarValue::Int32(Some(-1)), ScalarValue::UInt64(Some(6))],
-                vec![ScalarValue::Int32(Some(-1)), ScalarValue::UInt64(Some(7))],
-                vec![ScalarValue::Int32(Some(2)), ScalarValue::UInt64(Some(7))],
+                vec![ScalarValue::Int32(-1), ScalarValue::UInt64(5)],
+                vec![ScalarValue::Int32(5), ScalarValue::UInt64(1)],
+                vec![ScalarValue::Int32(-1), ScalarValue::UInt64(5)],
+                vec![ScalarValue::Int32(5), ScalarValue::UInt64(1)],
+                vec![ScalarValue::Int32(-1), ScalarValue::UInt64(6)],
+                vec![ScalarValue::Int32(-1), ScalarValue::UInt64(7)],
+                vec![ScalarValue::Int32(2), ScalarValue::UInt64(7)],
             ],
         )?;
 
@@ -629,7 +626,7 @@ mod tests {
                 (Some(5_i32), Some(1_u64)),
             ]
         );
-        assert_eq!(result, ScalarValue::UInt64(Some(5)));
+        assert_eq!(result, ScalarValue::UInt64(5));
 
         Ok(())
     }
@@ -640,14 +637,17 @@ mod tests {
             &[DataType::Int32, DataType::UInt64],
             &[
                 // None of these updates contains a None, so these are accumulated.
-                vec![ScalarValue::Int32(Some(-1)), ScalarValue::UInt64(Some(5))],
-                vec![ScalarValue::Int32(Some(-1)), ScalarValue::UInt64(Some(5))],
-                vec![ScalarValue::Int32(Some(-2)), ScalarValue::UInt64(Some(5))],
+                vec![ScalarValue::Int32(-1), ScalarValue::UInt64(5)],
+                vec![ScalarValue::Int32(-1), ScalarValue::UInt64(5)],
+                vec![ScalarValue::Int32(-2), ScalarValue::UInt64(5)],
                 // Each of these updates contains at least one None, so these
                 // won't be accumulated.
-                vec![ScalarValue::Int32(Some(-1)), ScalarValue::UInt64(None)],
-                vec![ScalarValue::Int32(None), ScalarValue::UInt64(Some(5))],
-                vec![ScalarValue::Int32(None), ScalarValue::UInt64(None)],
+                vec![ScalarValue::Int32(-1), ScalarValue::UInt64(0).to_null()],
+                vec![ScalarValue::Int32(0).to_null(), ScalarValue::UInt64(5)],
+                vec![
+                    ScalarValue::Int32(0).to_null(),
+                    ScalarValue::UInt64(0).to_null(),
+                ],
             ],
         )?;
 
@@ -661,7 +661,7 @@ mod tests {
             vec![(Some(-2_i32), Some(5_u64)), (Some(-1_i32), Some(5_u64))]
         );
 
-        assert_eq!(result, ScalarValue::UInt64(Some(2)));
+        assert_eq!(result, ScalarValue::UInt64(2));
 
         Ok(())
     }
@@ -701,7 +701,7 @@ mod tests {
             ]
         );
 
-        assert_eq!(result, ScalarValue::UInt64(Some(5)));
+        assert_eq!(result, ScalarValue::UInt64(5));
 
         Ok(())
     }

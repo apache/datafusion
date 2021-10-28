@@ -146,28 +146,21 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                     (
                         Expr::Literal(ScalarValue::Boolean(l)),
                         Expr::Literal(ScalarValue::Boolean(r)),
-                    ) => match (l, r) {
-                        (Some(l), Some(r)) => {
-                            Expr::Literal(ScalarValue::Boolean(Some(l == r)))
-                        }
-                        _ => Expr::Literal(ScalarValue::Boolean(None)),
-                    },
+                    ) => Expr::Literal(ScalarValue::Boolean(l == r)),
                     (Expr::Literal(ScalarValue::Boolean(b)), _)
                         if self.is_boolean_type(&right) =>
                     {
                         match b {
-                            Some(true) => *right,
-                            Some(false) => Expr::Not(right),
-                            None => Expr::Literal(ScalarValue::Boolean(None)),
+                            true => *right,
+                            false => Expr::Not(right),
                         }
                     }
                     (_, Expr::Literal(ScalarValue::Boolean(b)))
                         if self.is_boolean_type(&left) =>
                     {
                         match b {
-                            Some(true) => *left,
-                            Some(false) => Expr::Not(left),
-                            None => Expr::Literal(ScalarValue::Boolean(None)),
+                            true => *left,
+                            false => Expr::Not(left),
                         }
                     }
                     _ => Expr::BinaryExpr {
@@ -180,28 +173,21 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                     (
                         Expr::Literal(ScalarValue::Boolean(l)),
                         Expr::Literal(ScalarValue::Boolean(r)),
-                    ) => match (l, r) {
-                        (Some(l), Some(r)) => {
-                            Expr::Literal(ScalarValue::Boolean(Some(l != r)))
-                        }
-                        _ => Expr::Literal(ScalarValue::Boolean(None)),
-                    },
+                    ) => Expr::Literal(ScalarValue::Boolean(l != r)),
                     (Expr::Literal(ScalarValue::Boolean(b)), _)
                         if self.is_boolean_type(&right) =>
                     {
                         match b {
-                            Some(true) => Expr::Not(right),
-                            Some(false) => *right,
-                            None => Expr::Literal(ScalarValue::Boolean(None)),
+                            true => Expr::Not(right),
+                            false => *right,
                         }
                     }
                     (_, Expr::Literal(ScalarValue::Boolean(b)))
                         if self.is_boolean_type(&left) =>
                     {
                         match b {
-                            Some(true) => Expr::Not(left),
-                            Some(false) => *left,
-                            None => Expr::Literal(ScalarValue::Boolean(None)),
+                            true => Expr::Not(left),
+                            false => *left,
                         }
                     }
                     _ => Expr::BinaryExpr {
@@ -287,27 +273,31 @@ mod tests {
 
         // x = null is always null
         assert_eq!(
-            (lit(true).eq(lit(ScalarValue::Boolean(None)))).rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
+            (lit(true).eq(lit(ScalarValue::Boolean(true).to_null())))
+                .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(true).to_null()),
         );
 
         // null != null is always null
         assert_eq!(
-            (lit(ScalarValue::Boolean(None)).not_eq(lit(ScalarValue::Boolean(None))))
-                .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
+            (lit(ScalarValue::Boolean(true).to_null())
+                .not_eq(lit(ScalarValue::Boolean(true).to_null())))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(true).to_null()),
         );
 
         // x != null is always null
         assert_eq!(
-            (col("c2").not_eq(lit(ScalarValue::Boolean(None)))).rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
+            (col("c2").not_eq(lit(ScalarValue::Boolean(true).to_null())))
+                .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(true).to_null()),
         );
 
         // null = x is always null
         assert_eq!(
-            (lit(ScalarValue::Boolean(None)).eq(col("c2"))).rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
+            (lit(ScalarValue::Boolean(true).to_null()).eq(col("c2")))
+                .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(true).to_null()),
         );
 
         Ok(())

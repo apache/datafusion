@@ -157,11 +157,11 @@ where
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
+                let result = op(a).as_ref().to_string();
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
             }
             ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
+                let result = op(a).as_ref().to_string();
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
             other => Err(DataFusionError::Internal(format!(
@@ -292,10 +292,8 @@ pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 for arg in args {
                     #[allow(clippy::collapsible_match)]
                     match arg {
-                        ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value)) => {
-                            if let Some(value) = maybe_value {
-                                owned_string.push_str(value);
-                            }
+                        ColumnarValue::Scalar(ScalarValue::Utf8(s)) => {
+                            owned_string.push_str(s);
                         }
                         ColumnarValue::Array(v) => {
                             if v.is_valid(index) {
@@ -317,16 +315,17 @@ pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let result = args.iter().fold(initial, |mut acc, rhs| {
             if let Some(ref mut inner) = acc {
                 match rhs {
-                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) => {
+                    ColumnarValue::Scalar(ScalarValue::Utf8(v)) => {
                         inner.push_str(v);
                     }
-                    ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {}
                     _ => unreachable!(""),
                 };
             };
             acc
         });
-        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
+        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+            result.unwrap_or("".to_string()),
+        )))
     }
 }
 

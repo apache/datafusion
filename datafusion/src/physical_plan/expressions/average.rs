@@ -162,7 +162,7 @@ impl Accumulator for AvgAccumulator {
     fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
         let count = &states[0];
         // counts are summed
-        if let ScalarValue::UInt64(Some(c)) = count {
+        if let ScalarValue::UInt64(c) = count {
             self.count += c
         } else {
             unreachable!()
@@ -185,9 +185,7 @@ impl Accumulator for AvgAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         match self.sum {
-            ScalarValue::Float64(e) => {
-                Ok(ScalarValue::Float64(e.map(|f| f / self.count as f64)))
-            }
+            ScalarValue::Float64(e) => Ok(ScalarValue::Float64(e / self.count as f64)),
             _ => Err(DataFusionError::Internal(
                 "Sum should be f64 on average".to_string(),
             )),
@@ -240,7 +238,7 @@ mod tests {
             a,
             DataType::Int32,
             Avg,
-            ScalarValue::Float64(None),
+            ScalarValue::Null(Box::new(DataType::Float64)),
             DataType::Float64
         )
     }

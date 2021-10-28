@@ -279,20 +279,20 @@ mod tests {
             column_statistics: Some(vec![
                 ColumnStatistics {
                     distinct_count: Some(5),
-                    max_value: Some(ScalarValue::Int64(Some(21))),
-                    min_value: Some(ScalarValue::Int64(Some(-4))),
+                    max_value: Some(ScalarValue::Int64(21)),
+                    min_value: Some(ScalarValue::Int64(-4)),
                     null_count: Some(0),
                 },
                 ColumnStatistics {
                     distinct_count: Some(1),
-                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
-                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
+                    max_value: Some(ScalarValue::Utf8(String::from("x"))),
+                    min_value: Some(ScalarValue::Utf8(String::from("a"))),
                     null_count: Some(3),
                 },
                 ColumnStatistics {
                     distinct_count: None,
-                    max_value: Some(ScalarValue::Float32(Some(1.1))),
-                    min_value: Some(ScalarValue::Float32(Some(0.1))),
+                    max_value: Some(ScalarValue::Float32(1.1)),
+                    min_value: Some(ScalarValue::Float32(0.1)),
                     null_count: None,
                 },
             ]),
@@ -305,14 +305,14 @@ mod tests {
             column_statistics: Some(vec![
                 ColumnStatistics {
                     distinct_count: Some(3),
-                    max_value: Some(ScalarValue::Int64(Some(34))),
-                    min_value: Some(ScalarValue::Int64(Some(1))),
+                    max_value: Some(ScalarValue::Int64(34)),
+                    min_value: Some(ScalarValue::Int64(1)),
                     null_count: Some(1),
                 },
                 ColumnStatistics {
                     distinct_count: None,
-                    max_value: Some(ScalarValue::Utf8(Some(String::from("c")))),
-                    min_value: Some(ScalarValue::Utf8(Some(String::from("b")))),
+                    max_value: Some(ScalarValue::Utf8(String::from("c"))),
+                    min_value: Some(ScalarValue::Utf8(String::from("b"))),
                     null_count: None,
                 },
                 ColumnStatistics {
@@ -332,14 +332,14 @@ mod tests {
             column_statistics: Some(vec![
                 ColumnStatistics {
                     distinct_count: None,
-                    max_value: Some(ScalarValue::Int64(Some(34))),
-                    min_value: Some(ScalarValue::Int64(Some(-4))),
+                    max_value: Some(ScalarValue::Int64(34)),
+                    min_value: Some(ScalarValue::Int64(-4)),
                     null_count: Some(1),
                 },
                 ColumnStatistics {
                     distinct_count: None,
-                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
-                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
+                    max_value: Some(ScalarValue::Utf8(String::from("x"))),
+                    min_value: Some(ScalarValue::Utf8(String::from("a"))),
                     null_count: None,
                 },
                 ColumnStatistics {

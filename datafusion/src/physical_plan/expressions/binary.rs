@@ -111,7 +111,7 @@ macro_rules! compute_utf8_op_scalar {
             .as_any()
             .downcast_ref::<$DT>()
             .expect("compute_op failed to downcast array");
-        if let ScalarValue::Utf8(Some(string_value)) = $RIGHT {
+        if let ScalarValue::Utf8(string_value) = $RIGHT {
             Ok(Arc::new(paste::expr! {[<$OP _utf8_scalar>]}(
                 &ll,
                 &string_value,
@@ -411,7 +411,7 @@ macro_rules! compute_utf8_flag_op_scalar {
             .downcast_ref::<$ARRAYTYPE>()
             .expect("compute_utf8_flag_op_scalar failed to downcast array");
 
-        if let ScalarValue::Utf8(Some(string_value)) = $RIGHT {
+        if let ScalarValue::Utf8(string_value) = $RIGHT {
             let flag = if $FLAG { Some("i") } else { None };
             let mut array =
                 paste::expr! {[<$OP _utf8_scalar>]}(&ll, &string_value, flag)?;

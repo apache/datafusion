@@ -247,7 +247,7 @@ mod tests {
                 DataType::Int32,
                 Arc::new(Column::new("c3", 0)),
                 None,
-                Some(ScalarValue::Int32(Some(100))),
+                Some(ScalarValue::Int32(100)),
             ),
             vec![
                 Some(100),

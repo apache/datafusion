@@ -130,7 +130,7 @@ impl TableProvider for CustomProvider {
         match &filters[0] {
             Expr::BinaryExpr { right, .. } => {
                 let int_value = match &**right {
-                    Expr::Literal(ScalarValue::Int64(i)) => i.unwrap(),
+                    Expr::Literal(ScalarValue::Int64(i)) => i,
                     _ => unimplemented!(),
                 };
 

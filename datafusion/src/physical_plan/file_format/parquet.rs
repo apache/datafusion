@@ -345,19 +345,16 @@ macro_rules! get_statistic {
             return None;
         }
         match $column_statistics {
-            ParquetStatistics::Boolean(s) => Some(ScalarValue::Boolean(Some(*s.$func()))),
-            ParquetStatistics::Int32(s) => Some(ScalarValue::Int32(Some(*s.$func()))),
-            ParquetStatistics::Int64(s) => Some(ScalarValue::Int64(Some(*s.$func()))),
+            ParquetStatistics::Boolean(s) => Some(ScalarValue::Boolean(*s.$func())),
+            ParquetStatistics::Int32(s) => Some(ScalarValue::Int32(*s.$func())),
+            ParquetStatistics::Int64(s) => Some(ScalarValue::Int64(*s.$func())),
             // 96 bit ints not supported
             ParquetStatistics::Int96(_) => None,
-            ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
-            ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
-            ParquetStatistics::ByteArray(s) => {
-                let s = std::str::from_utf8(s.$bytes_func())
-                    .map(|s| s.to_string())
-                    .ok();
-                Some(ScalarValue::Utf8(s))
-            }
+            ParquetStatistics::Float(s) => Some(ScalarValue::Float32(*s.$func())),
+            ParquetStatistics::Double(s) => Some(ScalarValue::Float64(*s.$func())),
+            ParquetStatistics::ByteArray(s) => std::str::from_utf8(s.$bytes_func())
+                .map(|s| ScalarValue::Utf8(s.to_string()))
+                .ok(),
             // type not supported yet
             ParquetStatistics::FixedLenByteArray(_) => None,
         }

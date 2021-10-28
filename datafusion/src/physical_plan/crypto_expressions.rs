@@ -71,7 +71,7 @@ fn digest_process(
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
-                Ok(digest_algorithm.digest_scalar(a))
+                Ok(digest_algorithm.digest_scalar(a.into()))
             }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
@@ -100,17 +100,15 @@ macro_rules! digest_to_array {
 
 macro_rules! digest_to_scalar {
     ($METHOD: ident, $INPUT:expr) => {{
-        ScalarValue::Binary($INPUT.as_ref().map(|v| {
-            let mut digest = $METHOD::default();
-            digest.update(v);
-            digest.finalize().as_slice().to_vec()
-        }))
+        let mut digest = $METHOD::default();
+        digest.update($INPUT);
+        ScalarValue::Binary(digest.finalize().as_slice().to_vec())
     }};
 }
 
 impl DigestAlgorithm {
-    /// digest an optional string to its hash value, null values are returned as is
-    fn digest_scalar(self, value: &Option<String>) -> ColumnarValue {
+    /// digest a string to its hash value
+    fn digest_scalar(self, value: String) -> ColumnarValue {
         ColumnarValue::Scalar(match self {
             Self::Md5 => digest_to_scalar!(Md5, value),
             Self::Sha224 => digest_to_scalar!(Sha224, value),
@@ -119,11 +117,11 @@ impl DigestAlgorithm {
             Self::Sha512 => digest_to_scalar!(Sha512, value),
             Self::Blake2b => digest_to_scalar!(Blake2b, value),
             Self::Blake2s => digest_to_scalar!(Blake2s, value),
-            Self::Blake3 => ScalarValue::Binary(value.as_ref().map(|v| {
+            Self::Blake3 => {
                 let mut digest = Blake3::default();
-                digest.update(v.as_bytes());
-                digest.finalize().as_bytes().to_vec()
-            })),
+                digest.update(value.as_bytes());
+                ScalarValue::Binary(digest.finalize().as_bytes().to_vec())
+            }
         })
     }
 
@@ -267,7 +265,7 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ColumnarValue::Array(Arc::new(string_array))
         }
         ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
-            ColumnarValue::Scalar(ScalarValue::Utf8(opt.map(hex_encode::<_>)))
+            ColumnarValue::Scalar(ScalarValue::Utf8(hex_encode::<_>(&opt)))
         }
         _ => {
             return Err(DataFusionError::Internal(
@@ -325,7 +323,7 @@ pub fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
     let digest_algorithm = match &args[1] {
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
+            ScalarValue::Utf8(method) | ScalarValue::LargeUtf8(method) => {
                 method.parse::<DigestAlgorithm>()
             }
             other => Err(DataFusionError::Internal(format!(

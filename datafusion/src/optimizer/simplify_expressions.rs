@@ -63,23 +63,23 @@ fn operator_is_boolean(op: Operator) -> bool {
 
 fn is_one(s: &Expr) -> bool {
     match s {
-        Expr::Literal(ScalarValue::Int8(Some(1)))
-        | Expr::Literal(ScalarValue::Int16(Some(1)))
-        | Expr::Literal(ScalarValue::Int32(Some(1)))
-        | Expr::Literal(ScalarValue::Int64(Some(1)))
-        | Expr::Literal(ScalarValue::UInt8(Some(1)))
-        | Expr::Literal(ScalarValue::UInt16(Some(1)))
-        | Expr::Literal(ScalarValue::UInt32(Some(1)))
-        | Expr::Literal(ScalarValue::UInt64(Some(1))) => true,
-        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 1. => true,
-        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 1. => true,
+        Expr::Literal(ScalarValue::Int8(1))
+        | Expr::Literal(ScalarValue::Int16(1))
+        | Expr::Literal(ScalarValue::Int32(1))
+        | Expr::Literal(ScalarValue::Int64(1))
+        | Expr::Literal(ScalarValue::UInt8(1))
+        | Expr::Literal(ScalarValue::UInt16(1))
+        | Expr::Literal(ScalarValue::UInt32(1))
+        | Expr::Literal(ScalarValue::UInt64(1)) => true,
+        Expr::Literal(ScalarValue::Float32(v)) if *v == 1. => true,
+        Expr::Literal(ScalarValue::Float64(v)) if *v == 1. => true,
         _ => false,
     }
 }
 
 fn is_true(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(Some(v))) => *v,
+        Expr::Literal(ScalarValue::Boolean(v)) => *v,
         _ => false,
     }
 }
@@ -93,7 +93,7 @@ fn is_null(expr: &Expr) -> bool {
 
 fn is_false(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(Some(v))) => !(*v),
+        Expr::Literal(ScalarValue::Boolean(v)) => !(*v),
         _ => false,
     }
 }
@@ -451,8 +451,11 @@ mod tests {
 
     #[test]
     fn test_simplify_and_and_false() -> Result<()> {
-        let expr =
-            binary_expr(lit(ScalarValue::Boolean(None)), Operator::And, lit(false));
+        let expr = binary_expr(
+            lit(ScalarValue::Boolean(true).to_null()),
+            Operator::And,
+            lit(false),
+        );
         let expr_eq = lit(false);
 
         assert_eq!(simplify(&expr), expr_eq);
@@ -461,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_simplify_divide_null_by_null() -> Result<()> {
-        let null = Expr::Literal(ScalarValue::Int32(None));
+        let null = Expr::Literal(ScalarValue::Int32(0).to_null());
         let expr_plus = binary_expr(null.clone(), Operator::Divide, null.clone());
         let expr_eq = null;
 

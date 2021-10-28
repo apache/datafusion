@@ -185,7 +185,7 @@ where
 impl<T: Hash> From<&HyperLogLog<T>> for ScalarValue {
     fn from(v: &HyperLogLog<T>) -> ScalarValue {
         let values = v.as_ref().to_vec();
-        ScalarValue::Binary(Some(values))
+        ScalarValue::Binary(values)
     }
 }
 
@@ -204,7 +204,7 @@ impl<T: Hash> TryFrom<&[u8]> for HyperLogLog<T> {
 impl<T: Hash> TryFrom<&ScalarValue> for HyperLogLog<T> {
     type Error = DataFusionError;
     fn try_from(v: &ScalarValue) -> Result<HyperLogLog<T>> {
-        if let ScalarValue::Binary(Some(slice)) = v {
+        if let ScalarValue::Binary(slice) = v {
             slice.as_slice().try_into()
         } else {
             Err(DataFusionError::Internal(
@@ -255,7 +255,7 @@ macro_rules! default_accumulator_impl {
         }
 
         fn evaluate(&self) -> Result<ScalarValue> {
-            Ok(ScalarValue::UInt64(Some(self.hll.count() as u64)))
+            Ok(ScalarValue::UInt64(self.hll.count() as u64))
         }
     };
 }

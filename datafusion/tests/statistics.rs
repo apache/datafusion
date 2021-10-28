@@ -187,14 +187,14 @@ fn fully_defined() -> (Statistics, Schema) {
             column_statistics: Some(vec![
                 ColumnStatistics {
                     distinct_count: Some(2),
-                    max_value: Some(ScalarValue::Int32(Some(1023))),
-                    min_value: Some(ScalarValue::Int32(Some(-24))),
+                    max_value: Some(ScalarValue::Int32(1023)),
+                    min_value: Some(ScalarValue::Int32(-24)),
                     null_count: Some(0),
                 },
                 ColumnStatistics {
                     distinct_count: Some(13),
-                    max_value: Some(ScalarValue::Int64(Some(5486))),
-                    min_value: Some(ScalarValue::Int64(Some(-6783))),
+                    max_value: Some(ScalarValue::Int64(5486)),
+                    min_value: Some(ScalarValue::Int64(-6783)),
                     null_count: Some(5),
                 },
             ]),

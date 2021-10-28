@@ -160,20 +160,22 @@ impl ExecutionPlan for CustomExecutionPlan {
                     .iter()
                     .map(|i| ColumnStatistics {
                         null_count: Some(batch.column(*i).null_count()),
-                        min_value: Some(ScalarValue::Int32(aggregate::min(
+                        min_value: aggregate::min(
                             batch
                                 .column(*i)
                                 .as_any()
                                 .downcast_ref::<PrimitiveArray<Int32Type>>()
                                 .unwrap(),
-                        ))),
-                        max_value: Some(ScalarValue::Int32(aggregate::max(
+                        )
+                        .map(ScalarValue::Int32),
+                        max_value: aggregate::max(
                             batch
                                 .column(*i)
                                 .as_any()
                                 .downcast_ref::<PrimitiveArray<Int32Type>>()
                                 .unwrap(),
-                        ))),
+                        )
+                        .map(ScalarValue::Int32),
                         ..Default::default()
                     })
                     .collect(),

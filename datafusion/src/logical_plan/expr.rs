@@ -1397,25 +1397,25 @@ pub trait TimestampLiteral {
 
 impl Literal for &str {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Utf8(Some((*self).to_owned())))
+        Expr::Literal(ScalarValue::Utf8(self.to_string()).to_owned())
     }
 }
 
 impl Literal for String {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Utf8(Some((*self).to_owned())))
+        Expr::Literal(ScalarValue::Utf8(self.to_owned()).to_owned())
     }
 }
 
 impl Literal for Vec<u8> {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
+        Expr::Literal(ScalarValue::Binary(self.to_owned()).to_owned())
     }
 }
 
 impl Literal for &[u8] {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
+        Expr::Literal(ScalarValue::Binary(self.to_vec()).to_owned())
     }
 }
 
@@ -1430,7 +1430,7 @@ macro_rules! make_literal {
         #[doc = $DOC]
         impl Literal for $TYPE {
             fn lit(&self) -> Expr {
-                Expr::Literal(ScalarValue::$SCALAR(Some(self.clone())))
+                Expr::Literal(ScalarValue::$SCALAR(self.clone()))
             }
         }
     };
@@ -1441,9 +1441,7 @@ macro_rules! make_timestamp_literal {
         #[doc = $DOC]
         impl TimestampLiteral for $TYPE {
             fn lit_timestamp_nano(&self) -> Expr {
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some(
-                    (self.clone()).into(),
-                )))
+                Expr::Literal(ScalarValue::TimestampNanosecond((self.clone()).into()))
             }
         }
     };
@@ -1974,7 +1972,7 @@ mod tests {
     #[test]
     fn test_lit_timestamp_nano() {
         let expr = col("time").eq(lit_timestamp_nano(10)); // 10 is an implicit i32
-        let expected = col("time").eq(lit(ScalarValue::TimestampNanosecond(Some(10))));
+        let expected = col("time").eq(lit(ScalarValue::TimestampNanosecond(10)));
         assert_eq!(expr, expected);
 
         let i: i64 = 10;
@@ -2049,7 +2047,7 @@ mod tests {
     impl ExprRewriter for FooBarRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             match expr {
-                Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
+                Expr::Literal(ScalarValue::Utf8(utf8_val)) => {
                     let utf8_val = if utf8_val == "foo" {
                         "bar".to_string()
                     } else {

@@ -103,8 +103,9 @@ macro_rules! typed_min_max_batch_string {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
         let value = compute::$OP(array);
-        let value = value.and_then(|e| Some(e.to_string()));
-        ScalarValue::$SCALAR(value)
+        value
+            .map(|e| ScalarValue::$SCALAR(e.to_string()))
+            .unwrap_or_else(|| ScalarValue::Null(Box::new(DataType::$SCALAR)))
     }};
 }
 
@@ -112,8 +113,20 @@ macro_rules! typed_min_max_batch_string {
 macro_rules! typed_min_max_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
-        let value = compute::$OP(array);
-        ScalarValue::$SCALAR(value)
+        compute::$OP(array)
+            .map(|v| ScalarValue::$SCALAR(v))
+            .unwrap_or_else(|| ScalarValue::Null(Box::new(DataType::$SCALAR)))
+    }};
+    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $TIMEUNIT:ident, $OP:ident) => {{
+        let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
+        compute::$OP(array)
+            .map(|v| ScalarValue::$SCALAR(v))
+            .unwrap_or_else(|| {
+                ScalarValue::Null(Box::new(DataType::Timestamp(
+                    TimeUnit::$TIMEUNIT,
+                    None,
+                )))
+            })
     }};
 }
 
@@ -129,33 +142,58 @@ macro_rules! min_max_batch {
             DataType::Float32 => {
                 typed_min_max_batch!($VALUES, Float32Array, Float32, $OP)
             }
-            DataType::Int64 => typed_min_max_batch!($VALUES, Int64Array, Int64, $OP),
-            DataType::Int32 => typed_min_max_batch!($VALUES, Int32Array, Int32, $OP),
-            DataType::Int16 => typed_min_max_batch!($VALUES, Int16Array, Int16, $OP),
-            DataType::Int8 => typed_min_max_batch!($VALUES, Int8Array, Int8, $OP),
-            DataType::UInt64 => typed_min_max_batch!($VALUES, UInt64Array, UInt64, $OP),
-            DataType::UInt32 => typed_min_max_batch!($VALUES, UInt32Array, UInt32, $OP),
-            DataType::UInt16 => typed_min_max_batch!($VALUES, UInt16Array, UInt16, $OP),
-            DataType::UInt8 => typed_min_max_batch!($VALUES, UInt8Array, UInt8, $OP),
+            DataType::Int64 => {
+                typed_min_max_batch!($VALUES, Int64Array, Int64, $OP)
+            }
+            DataType::Int32 => {
+                typed_min_max_batch!($VALUES, Int32Array, Int32, $OP)
+            }
+            DataType::Int16 => {
+                typed_min_max_batch!($VALUES, Int16Array, Int16, $OP)
+            }
+            DataType::Int8 => {
+                typed_min_max_batch!($VALUES, Int8Array, Int8, $OP)
+            }
+            DataType::UInt64 => {
+                typed_min_max_batch!($VALUES, UInt64Array, UInt64, $OP)
+            }
+            DataType::UInt32 => {
+                typed_min_max_batch!($VALUES, UInt32Array, UInt32, $OP)
+            }
+            DataType::UInt16 => {
+                typed_min_max_batch!($VALUES, UInt16Array, UInt16, $OP)
+            }
+            DataType::UInt8 => {
+                typed_min_max_batch!($VALUES, UInt8Array, UInt8, $OP)
+            }
             DataType::Timestamp(TimeUnit::Second, _) => {
-                typed_min_max_batch!($VALUES, TimestampSecondArray, TimestampSecond, $OP)
+                typed_min_max_batch!(
+                    $VALUES,
+                    TimestampSecondArray,
+                    TimestampSecond,
+                    Second,
+                    $OP
+                )
             }
             DataType::Timestamp(TimeUnit::Millisecond, _) => typed_min_max_batch!(
                 $VALUES,
                 TimestampMillisecondArray,
                 TimestampMillisecond,
+                Millisecond,
                 $OP
             ),
             DataType::Timestamp(TimeUnit::Microsecond, _) => typed_min_max_batch!(
                 $VALUES,
                 TimestampMicrosecondArray,
                 TimestampMicrosecond,
+                Microsecond,
                 $OP
             ),
             DataType::Timestamp(TimeUnit::Nanosecond, _) => typed_min_max_batch!(
                 $VALUES,
                 TimestampNanosecondArray,
                 TimestampNanosecond,
+                Nanosecond,
                 $OP
             ),
             DataType::Date32 => typed_min_max_batch!($VALUES, Date32Array, Date32, $OP),
@@ -200,24 +238,14 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
 // min/max of two non-string scalar values.
 macro_rules! typed_min_max {
     ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
-        ScalarValue::$SCALAR(match ($VALUE, $DELTA) {
-            (None, None) => None,
-            (Some(a), None) => Some(a.clone()),
-            (None, Some(b)) => Some(b.clone()),
-            (Some(a), Some(b)) => Some((*a).$OP(*b)),
-        })
+        ScalarValue::$SCALAR((*$VALUE).$OP(*$DELTA))
     }};
 }
 
 // min/max of two scalar string values.
 macro_rules! typed_min_max_string {
     ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
-        ScalarValue::$SCALAR(match ($VALUE, $DELTA) {
-            (None, None) => None,
-            (Some(a), None) => Some(a.clone()),
-            (None, Some(b)) => Some(b.clone()),
-            (Some(a), Some(b)) => Some((a).$OP(b).clone()),
-        })
+        ScalarValue::$SCALAR(($VALUE).$OP($DELTA).clone())
     }};
 }
 
@@ -506,7 +534,7 @@ mod tests {
             a,
             DataType::Utf8,
             Max,
-            ScalarValue::Utf8(Some("d".to_string())),
+            ScalarValue::Utf8("d".to_string()),
             DataType::Utf8
         )
     }
@@ -518,7 +546,7 @@ mod tests {
             a,
             DataType::LargeUtf8,
             Max,
-            ScalarValue::LargeUtf8(Some("d".to_string())),
+            ScalarValue::LargeUtf8("d".to_string()),
             DataType::LargeUtf8
         )
     }
@@ -530,7 +558,7 @@ mod tests {
             a,
             DataType::Utf8,
             Min,
-            ScalarValue::Utf8(Some("a".to_string())),
+            ScalarValue::Utf8("a".to_string()),
             DataType::Utf8
         )
     }
@@ -542,7 +570,7 @@ mod tests {
             a,
             DataType::LargeUtf8,
             Min,
-            ScalarValue::LargeUtf8(Some("a".to_string())),
+            ScalarValue::LargeUtf8("a".to_string()),
             DataType::LargeUtf8
         )
     }
@@ -590,7 +618,7 @@ mod tests {
             a,
             DataType::Int32,
             Max,
-            ScalarValue::Int32(None),
+            ScalarValue::Null(Box::new(DataType::Int32)),
             DataType::Int32
         )
     }
@@ -602,7 +630,7 @@ mod tests {
             a,
             DataType::Int32,
             Min,
-            ScalarValue::Int32(None),
+            ScalarValue::Null(Box::new(DataType::Int32)),
             DataType::Int32
         )
     }
@@ -692,7 +720,7 @@ mod tests {
             a,
             DataType::Date32,
             Min,
-            ScalarValue::Date32(Some(1)),
+            ScalarValue::Date32(1),
             DataType::Date32
         )
     }
@@ -704,7 +732,7 @@ mod tests {
             a,
             DataType::Date64,
             Min,
-            ScalarValue::Date64(Some(1)),
+            ScalarValue::Date64(1),
             DataType::Date64
         )
     }
@@ -716,7 +744,7 @@ mod tests {
             a,
             DataType::Date32,
             Max,
-            ScalarValue::Date32(Some(5)),
+            ScalarValue::Date32(5),
             DataType::Date32
         )
     }
@@ -728,7 +756,7 @@ mod tests {
             a,
             DataType::Date64,
             Max,
-            ScalarValue::Date64(Some(5)),
+            ScalarValue::Date64(5),
             DataType::Date64
         )
     }

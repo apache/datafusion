@@ -136,7 +136,7 @@ mod tests {
         ]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
+        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(2i32));
 
         let result = nullif_func(&[a, lit_array])?;
         let result = result.into_array(0);
@@ -162,7 +162,7 @@ mod tests {
         let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
+        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(1i32));
 
         let result = nullif_func(&[a, lit_array])?;
         let result = result.into_array(0);
