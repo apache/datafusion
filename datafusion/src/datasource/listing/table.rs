@@ -213,9 +213,12 @@ impl TableProvider for ListingTable {
         filter: &Expr,
     ) -> Result<TableProviderFilterPushDown> {
         if expr_applicable_for_cols(&self.options.table_partition_cols, filter) {
+            // if filter can be handled by partiton pruning, it is exact
             Ok(TableProviderFilterPushDown::Exact)
         } else {
-            Ok(TableProviderFilterPushDown::Unsupported)
+            // otherwise, we still might be able to handle the filter with file
+            // level mechanisms such as Parquet row group pruning.
+            Ok(TableProviderFilterPushDown::Inexact)
         }
     }
 }
