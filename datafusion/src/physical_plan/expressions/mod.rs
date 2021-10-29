@@ -116,7 +116,7 @@ impl PhysicalSortExpr {
         let array_to_sort = match value_to_sort {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => {
-                return Err(DataFusionError::Internal(format!(
+                return Err(DataFusionError::Plan(format!(
                     "Sort operation is not applicable to scalar value {}",
                     scalar
                 )));
