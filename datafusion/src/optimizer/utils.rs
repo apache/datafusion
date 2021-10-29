@@ -656,6 +656,7 @@ impl ConstEvaluator {
             Expr::Cast { .. } => true,
             Expr::TryCast { .. } => true,
             Expr::InList { .. } => true,
+            Expr::GetIndexedField { .. } => true,
         }
     }
 
