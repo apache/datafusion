@@ -166,7 +166,12 @@ impl<'a> Display for FileGroupsDisplay<'a> {
     }
 }
 
-/// A helper that projects partition columns into the file record batches
+/// A helper that projects partition columns into the file record batches.
+///
+/// One interesting trick is the usage of a cache for the key buffers of the partition column
+/// dictionaries. Indeed, the partition columns are constant, so the dictionaries that represent them
+/// have all their keys equal to 0. This enables us to re-use the same "all-zero" buffer across batches,
+/// which makes the space consumption of the partition columns O(batch_size) instead of O(record_count).
 struct PartitionColumnProjector {
     /// An Arrow buffer initialized to zeros that represents the key array of all partition
     /// columns (partition columns are materialized by dictionary arrays with only one
@@ -202,7 +207,7 @@ impl PartitionColumnProjector {
         }
     }
 
-    // Transform the batch read from the fileby inserting the partitioning columns
+    // Transform the batch read from the file by inserting the partitioning columns
     // to the right positions as deduced from `projected_schema`
     // - file_batch: batch read from the file, with internal projection applied
     // - partition_values: the list of partition values, one for each partition column
@@ -379,6 +384,8 @@ mod tests {
         let (proj_schema, _) = conf.project();
         // created a projector for that projected schema
         let mut proj = PartitionColumnProjector::new(proj_schema, &partition_cols);
+
+        // project first batch
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
@@ -390,7 +397,6 @@ mod tests {
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
-
         let expected = vec![
             "+---+----+----+------+-----+",
             "| a | b  | c  | year | day |",
@@ -399,6 +405,64 @@ mod tests {
             "| 1 | -1 | 11 | 2021 | 26  |",
             "| 2 | 0  | 12 | 2021 | 26  |",
             "+---+----+----+------+-----+",
+        ];
+        crate::assert_batches_eq!(expected, &[projected_batch]);
+
+        // project another batch that is larger than the previous one
+        let file_batch = build_table_i32(
+            ("a", &vec![5, 6, 7, 8, 9]),
+            ("b", &vec![-10, -9, -8, -7, -6]),
+            ("c", &vec![12, 13, 14, 15, 16]),
+        );
+        let projected_batch = proj
+            .project(
+                // file_batch is ok here because we kept all the file cols in the projection
+                file_batch,
+                &[
+                    ScalarValue::Utf8(Some("2021".to_owned())),
+                    ScalarValue::Utf8(Some("10".to_owned())),
+                    ScalarValue::Utf8(Some("27".to_owned())),
+                ],
+            )
+            .expect("Projection of partition columns into record batch failed");
+        let expected = vec![
+            "+---+-----+----+------+-----+",
+            "| a | b   | c  | year | day |",
+            "+---+-----+----+------+-----+",
+            "| 5 | -10 | 12 | 2021 | 27  |",
+            "| 6 | -9  | 13 | 2021 | 27  |",
+            "| 7 | -8  | 14 | 2021 | 27  |",
+            "| 8 | -7  | 15 | 2021 | 27  |",
+            "| 9 | -6  | 16 | 2021 | 27  |",
+            "+---+-----+----+------+-----+",
+        ];
+        crate::assert_batches_eq!(expected, &[projected_batch]);
+
+        // project another batch that is smaller than the previous one
+        let file_batch = build_table_i32(
+            ("a", &vec![0, 1, 3]),
+            ("b", &vec![2, 3, 4]),
+            ("c", &vec![4, 5, 6]),
+        );
+        let projected_batch = proj
+            .project(
+                // file_batch is ok here because we kept all the file cols in the projection
+                file_batch,
+                &[
+                    ScalarValue::Utf8(Some("2021".to_owned())),
+                    ScalarValue::Utf8(Some("10".to_owned())),
+                    ScalarValue::Utf8(Some("28".to_owned())),
+                ],
+            )
+            .expect("Projection of partition columns into record batch failed");
+        let expected = vec![
+            "+---+---+---+------+-----+",
+            "| a | b | c | year | day |",
+            "+---+---+---+------+-----+",
+            "| 0 | 2 | 4 | 2021 | 28  |",
+            "| 1 | 3 | 5 | 2021 | 28  |",
+            "| 3 | 4 | 6 | 2021 | 28  |",
+            "+---+---+---+------+-----+",
         ];
         crate::assert_batches_eq!(expected, &[projected_batch]);
     }
