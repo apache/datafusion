@@ -35,11 +35,11 @@ datafusion = { path = "../datafusion", version = "5.1.0", features = ["pyarrow"]
 uuid = { version = "0.8", features = ["v4"] }
 
 [lib]
-name = "internals"
+name = "_internal"
 crate-type = ["cdylib"]
 
 [package.metadata.maturin]
-name = "datafusion.internals"
+name = "datafusion._internal"
 
 [profile.release]
 lto = true

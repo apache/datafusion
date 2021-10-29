@@ -17,7 +17,7 @@
 
 import pyarrow as pa
 
-from .internals import DataFrame, ExecutionContext, Expression
+from ._internal import DataFrame, ExecutionContext, Expression
 
 __all__ = ["DataFrame", "ExecutionContext", "Expression", "column", "literal"]
 

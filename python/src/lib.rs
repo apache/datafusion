@@ -32,7 +32,7 @@ mod utils;
 /// The higher-level public API is defined in pure python files under the
 /// datafusion directory.
 #[pymodule]
-fn internals(py: Python, m: &PyModule) -> PyResult<()> {
+fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     // Register the python classes
     m.add_class::<catalog::PyCatalog>()?;
     m.add_class::<catalog::PyDatabase>()?;
