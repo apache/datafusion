@@ -23,10 +23,8 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::{udaf::AggregateUDF, udf::ScalarUDF};
 
-
-use datafusion::logical_plan::{lit, col};
+use datafusion::logical_plan::{col, lit};
 use datafusion::scalar::ScalarValue;
-
 
 /// An PyExpr that can be used on a DataFrame
 #[pyclass(name = "Expression")]
@@ -99,7 +97,6 @@ impl PyObjectProtocol for PyExpr {
 
 #[pymethods]
 impl PyExpr {
-
     #[staticmethod]
     pub fn literal(value: ScalarValue) -> PyExpr {
         lit(value).into()

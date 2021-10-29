@@ -27,35 +27,24 @@ mod udaf;
 mod udf;
 mod utils;
 
-// TODO(kszucs): remvoe
-// taken from https://github.com/PyO3/pyo3/issues/471
-// fn register_module_package(py: Python, package_name: &str, module: &PyModule) {
-//     py.import("sys")
-//         .expect("failed to import python sys module")
-//         .dict()
-//         .get_item("modules")
-//         .expect("failed to get python modules dictionary")
-//         .downcast::<pyo3::types::PyDict>()
-//         .expect("failed to turn sys.modules into a PyDict")
-//         .set_item(package_name, module)
-//         .expect("failed to inject module");
-// }
-
-/// DataFusion.
+/// Low-level DataFusion internal package.
+///
+/// The higher-level public API is defined in pure python files under the
+/// datafusion directory.
 #[pymodule]
 fn internals(py: Python, m: &PyModule) -> PyResult<()> {
-    //register_module_package(py, "datafusion.functions", functions);
-
-    let functions = PyModule::new(py, "functions")?;
-    functions::init(functions)?;
-    m.add_submodule(functions)?;
-
+    // Register the python classes
     m.add_class::<catalog::PyCatalog>()?;
     m.add_class::<catalog::PyDatabase>()?;
     m.add_class::<catalog::PyTable>()?;
     m.add_class::<context::PyExecutionContext>()?;
     m.add_class::<dataframe::PyDataFrame>()?;
     m.add_class::<expression::PyExpr>()?;
+
+    // Register the functions as a submodule
+    let funcs = PyModule::new(py, "functions")?;
+    functions::init_module(funcs)?;
+    m.add_submodule(funcs)?;
 
     Ok(())
 }

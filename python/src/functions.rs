@@ -306,7 +306,7 @@ fn udaf(
     })
 }
 
-pub fn init(m: &PyModule) -> PyResult<()> {
+pub(crate) fn init_module(m: &PyModule) -> PyResult<()> {
     // TODO(kszucs): implement FromPyObject to PyVolatility
     m.add_class::<PyVolatility>()?;
     m.add_wrapped(wrap_pyfunction!(abs))?;

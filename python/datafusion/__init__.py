@@ -19,6 +19,8 @@ import pyarrow as pa
 
 from .internals import DataFrame, ExecutionContext, Expression
 
+__all__ = ["DataFrame", "ExecutionContext", "Expression", "column", "literal"]
+
 
 def column(value):
     return Expression.column(value)
