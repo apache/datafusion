@@ -877,9 +877,9 @@ mod tests {
         assert_eq!(batches_without_drop, batches_with_drop);
     }
 
-    fn str_batches_to_vec(batches: &Vec<RecordBatch>) -> Vec<&str> {
+    fn str_batches_to_vec(batches: &[RecordBatch]) -> Vec<&str> {
         batches
-            .into_iter()
+            .iter()
             .flat_map(|batch| {
                 assert_eq!(batch.columns().len(), 1);
                 let string_array = batch
