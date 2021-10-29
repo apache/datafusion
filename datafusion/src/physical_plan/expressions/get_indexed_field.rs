@@ -91,9 +91,10 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                     let iter = concat(vec.as_slice()).unwrap();
                     Ok(ColumnarValue::Array(iter))
                 }
-                _ => Err(DataFusionError::NotImplemented(
-                    "get indexed field is only possible on lists".to_string(),
-                )),
+                (dt, _) => Err(DataFusionError::NotImplemented(format!(
+                    "get indexed field is not implemented for {}",
+                    dt
+                ))),
             },
             ColumnarValue::Scalar(_) => Err(DataFusionError::NotImplemented(
                 "field is not yet implemented for scalar values".to_string(),
