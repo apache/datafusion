@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use pyo3::exceptions::PyKeyError;
 use pyo3::prelude::*;
-// use pyo3::{PyIterProtocol, PyMappingProtocol};
 
 use datafusion::{
     arrow::pyarrow::PyArrowConvert,

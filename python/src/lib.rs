@@ -25,6 +25,7 @@ mod expression;
 mod functions;
 mod udaf;
 mod udf;
+mod utils;
 
 // TODO(kszucs): remvoe
 // taken from https://github.com/PyO3/pyo3/issues/471

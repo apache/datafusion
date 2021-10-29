@@ -15,11 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::future::Future;
 use std::path::PathBuf;
 use std::{collections::HashSet, sync::Arc};
 
-use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use pyo3::exceptions::{PyKeyError, PyValueError};
@@ -35,15 +33,7 @@ use crate::catalog::PyCatalog;
 use crate::dataframe::PyDataFrame;
 use crate::errors::DataFusionError;
 use crate::functions::{create_udf, PyVolatility};
-
-fn wait_for_future<F: Future>(py: Python, f: F) -> F::Output
-where
-    F: Send,
-    F::Output: Send,
-{
-    let rt = Runtime::new().unwrap();
-    py.allow_threads(|| rt.block_on(f))
-}
+use crate::utils::wait_for_future;
 
 /// `PyExecutionContext` is able to plan and execute DataFusion plans.
 /// It has a powerful optimizer, a physical planner for local execution, and a

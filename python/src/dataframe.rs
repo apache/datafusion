@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use pyo3::prelude::*;
-use tokio::runtime::Runtime;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::pyarrow::PyArrowConvert;
@@ -26,6 +25,7 @@ use datafusion::arrow::util::pretty;
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_plan::JoinType;
 
+use crate::utils::wait_for_future;
 use crate::{errors::DataFusionError, expression::PyExpr};
 
 /// A PyDataFrame is a representation of a logical plan and an API to compose statements.
@@ -86,8 +86,7 @@ impl PyDataFrame {
     /// Unless some order is specified in the plan, there is no
     /// guarantee of the order of the result.
     fn collect(&self, py: Python) -> PyResult<Vec<PyObject>> {
-        let rt = Runtime::new().unwrap();
-        let batches = py.allow_threads(|| rt.block_on(self.df.collect()))?;
+        let batches = wait_for_future(py, self.df.collect())?;
         // cannot use PyResult<Vec<RecordBatch>> return type due to
         // https://github.com/PyO3/pyo3/issues/1813
         batches.into_iter().map(|rb| rb.to_pyarrow(py)).collect()
@@ -96,9 +95,8 @@ impl PyDataFrame {
     /// Print the result, 20 lines by default
     #[args(num = "20")]
     fn show(&self, py: Python, num: usize) -> PyResult<()> {
-        let rt = Runtime::new().unwrap();
         let df = self.df.limit(num)?;
-        let batches = py.allow_threads(|| rt.block_on(df.collect()))?;
+        let batches = wait_for_future(py, df.collect())?;
         Ok(pretty::print_batches(&batches)?)
     }
 
@@ -124,7 +122,9 @@ impl PyDataFrame {
             }
         };
 
-        let df = self.df.join(right.df, join_type, &join_keys.0, &join_keys.1)?;
+        let df = self
+            .df
+            .join(right.df, join_type, &join_keys.0, &join_keys.1)?;
         Ok(Self::new(df))
     }
 }
