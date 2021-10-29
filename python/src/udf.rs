@@ -15,12 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use pyo3::{prelude::*, types::PyTuple};
+
 use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::pyarrow::PyArrowConvert;
 use datafusion::error::DataFusionError;
+use datafusion::logical_plan;
 use datafusion::physical_plan::functions::ScalarFunctionImplementation;
+use datafusion::physical_plan::{
+    functions::Volatility, udaf::AggregateUDF, udf::ScalarUDF,
+};
 use datafusion::{arrow::array, physical_plan::functions::make_scalar_function};
-use pyo3::{prelude::*, types::PyTuple};
+
+use crate::errors;
+use crate::expression::PyExpr;
 
 /// creates a DataFusion's UDF implementation from a python function that expects pyarrow arrays
 /// This is more efficient as it performs a zero-copy of the contents.
@@ -51,4 +62,51 @@ pub fn array_udf(func: PyObject) -> ScalarFunctionImplementation {
             })
         },
     )
+}
+
+/// Represents a PyScalarUDF
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct PyScalarUDF {
+    pub(crate) function: ScalarUDF,
+}
+
+#[pymethods]
+impl PyScalarUDF {
+    //#args(args)
+    fn new(
+        fun: PyObject,
+        input_types: Vec<DataType>,
+        return_type: DataType,
+        volatility: &str,
+        name: &str,
+    ) -> PyResult<Self> {
+        let volatility = match volatility {
+            "immutable" => Volatility::Immutable,
+            "stable" => Volatility::Stable,
+            "volatile" => Volatility::Volatile,
+            value => {
+                return Err(errors::DataFusionError::Common(format!(
+                    "Unsupportad volatility type: `{}`, supported values are: immutable, stable and volatile.",
+                    value
+                )).into())
+            }
+        };
+        let function = logical_plan::create_udf(
+            name,
+            input_types,
+            Arc::new(return_type),
+            volatility,
+            array_udf(fun),
+        );
+        Ok(PyScalarUDF { function })
+    }
+
+    /// creates a new PyExpr with the call of the udf
+    #[call]
+    #[args(args = "*")]
+    fn __call__(&self, args: Vec<PyExpr>) -> PyResult<PyExpr> {
+        let args = args.iter().map(|e| e.expr.clone()).collect();
+        Ok(self.function.call(args).into())
+    }
 }

@@ -20,10 +20,8 @@ use std::convert::{From, Into};
 use std::vec::Vec;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::logical_plan::Expr;
-use datafusion::physical_plan::{udaf::AggregateUDF, udf::ScalarUDF};
-
-use datafusion::logical_plan::{col, lit};
+use datafusion::logical_plan::{col, lit, Expr};
+use datafusion::physical_plan::udaf::AggregateUDF;
 use datafusion::scalar::ScalarValue;
 
 /// An PyExpr that can be used on a DataFrame
@@ -130,26 +128,6 @@ impl PyExpr {
             data_type: to,
         };
         expr.into()
-    }
-}
-
-/// Represents a PyScalarUDF
-#[pyclass]
-#[derive(Debug, Clone)]
-pub struct PyScalarUDF {
-    pub(crate) function: ScalarUDF,
-}
-
-#[pymethods]
-impl PyScalarUDF {
-    // ADD NEW()
-
-    /// creates a new PyExpr with the call of the udf
-    #[call]
-    #[args(args = "*")]
-    fn __call__(&self, args: Vec<PyExpr>) -> PyResult<PyExpr> {
-        let args = args.iter().map(|e| e.expr.clone()).collect();
-        Ok(self.function.call(args).into())
     }
 }
 

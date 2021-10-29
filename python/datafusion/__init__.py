@@ -30,3 +30,9 @@ def literal(value):
     if not isinstance(value, pa.Scalar):
         value = pa.scalar(value)
     return Expression.literal(value)
+
+
+# def udf():
+# """Create a new User Defined Function"""
+#     let name = fun.getattr(py, "__qualname__")?.extract::<String>(py)?;
+#     create_udf(fun, input_types, return_type, volatility, &name)

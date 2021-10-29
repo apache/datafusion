@@ -23,7 +23,7 @@ use uuid::Uuid;
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionContext;
@@ -32,7 +32,7 @@ use datafusion::prelude::CsvReadOptions;
 use crate::catalog::PyCatalog;
 use crate::dataframe::PyDataFrame;
 use crate::errors::DataFusionError;
-use crate::functions::create_udf;
+use crate::udf::PyScalarUDF;
 use crate::utils::wait_for_future;
 
 /// `PyExecutionContext` is able to plan and execute DataFusion plans.
@@ -143,16 +143,8 @@ impl PyExecutionContext {
         Ok(())
     }
 
-    fn register_udf(
-        &mut self,
-        name: &str,
-        func: PyObject,
-        args_types: Vec<DataType>,
-        return_type: DataType,
-        volatility: &str,
-    ) -> PyResult<()> {
-        let function = create_udf(func, args_types, return_type, volatility, name)?;
-        self.ctx.register_udf(function.function);
+    fn register_udf(&mut self, udf: PyScalarUDF) -> PyResult<()> {
+        self.ctx.register_udf(udf.function);
         Ok(())
     }
 

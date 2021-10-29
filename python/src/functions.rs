@@ -21,7 +21,7 @@ use pyo3::{prelude::*, wrap_pyfunction, Python};
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_plan;
-//use datafusion::logical_plan::Expr;
+
 use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::{
     aggregates::AggregateFunction, functions::BuiltinScalarFunction,
@@ -29,8 +29,8 @@ use datafusion::physical_plan::{
 
 use crate::{
     errors::DataFusionError,
-    expression::{PyAggregateUDF, PyExpr, PyScalarUDF},
-    udaf, udf,
+    expression::{PyAggregateUDF, PyExpr},
+    udaf,
 };
 
 #[pyfunction]
@@ -222,49 +222,7 @@ aggregate_function!(min, Min);
 aggregate_function!(sum, Sum);
 aggregate_function!(approx_distinct, ApproxDistinct);
 
-pub(crate) fn create_udf(
-    fun: PyObject,
-    input_types: Vec<DataType>,
-    return_type: DataType,
-    volatility: &str,
-    name: &str,
-) -> PyResult<PyScalarUDF> {
-    let volatility = match volatility {
-        "immutable" => Volatility::Immutable,
-        "stable" => Volatility::Stable,
-        "volatile" => Volatility::Volatile,
-        value => {
-            return Err(DataFusionError::Common(format!(
-                "Unsupportad volatility type: `{}`, supported values are: immutable, stable and volatile.",
-                value
-            )).into())
-        }
-    };
-    Ok(PyScalarUDF {
-        function: logical_plan::create_udf(
-            name,
-            input_types,
-            Arc::new(return_type),
-            volatility,
-            udf::array_udf(fun),
-        ),
-    })
-}
-
-/// Creates a new UDF (User Defined Function).
-#[pyfunction]
-fn udf(
-    fun: PyObject,
-    input_types: Vec<DataType>,
-    return_type: DataType,
-    volatility: &str,
-    py: Python,
-) -> PyResult<PyScalarUDF> {
-    let name = fun.getattr(py, "__qualname__")?.extract::<String>(py)?;
-    create_udf(fun, input_types, return_type, volatility, &name)
-}
-
-/// Creates a new UDAF (User Defined Aggregate Function).
+/// Creates a new udf.
 #[pyfunction]
 fn udaf(
     accumulator: PyObject,
@@ -365,7 +323,6 @@ pub(crate) fn init_module(m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(trim))?;
     m.add_wrapped(wrap_pyfunction!(trunc))?;
     m.add_wrapped(wrap_pyfunction!(udaf))?;
-    m.add_wrapped(wrap_pyfunction!(udf))?;
     m.add_wrapped(wrap_pyfunction!(upper))?;
     Ok(())
 }
