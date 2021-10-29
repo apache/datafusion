@@ -5305,3 +5305,83 @@ async fn case_with_bool_type_result() -> Result<()> {
     assert_eq!(expected, actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn query_get_indexed_field() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "some_list",
+        DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
+        false,
+    )]));
+    let builder = PrimitiveBuilder::<Int64Type>::new(3);
+    let mut lb = ListBuilder::new(builder);
+    for int_vec in vec![vec![0, 1, 2], vec![4, 5, 6], vec![7, 8, 9]] {
+        let builder = lb.values();
+        for int in int_vec {
+            builder.append_value(int).unwrap();
+        }
+        lb.append(true).unwrap();
+    }
+
+    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(lb.finish())])?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let table_a = Arc::new(table);
+
+    ctx.register_table("ints", table_a)?;
+
+    // Original column is micros, convert to millis and check timestamp
+    let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["0"], vec!["4"], vec!["7"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_nested_get_indexed_field() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+    // Nested schema of { "some_list": [[i64]] }
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "some_list",
+        DataType::List(Box::new(Field::new("item", nested_dt.clone(), true))),
+        false,
+    )]));
+
+    let builder = PrimitiveBuilder::<Int64Type>::new(3);
+    let nested_lb = ListBuilder::new(builder);
+    let mut lb = ListBuilder::new(nested_lb);
+    for int_vec_vec in vec![
+        vec![vec![0, 1], vec![2, 3], vec![3, 4]],
+        vec![vec![5, 6], vec![7, 8], vec![9, 10]],
+        vec![vec![11, 12], vec![13, 14], vec![15, 16]],
+    ] {
+        let nested_builder = lb.values();
+        for int_vec in int_vec_vec {
+            let builder = nested_builder.values();
+            for int in int_vec {
+                builder.append_value(int).unwrap();
+            }
+            nested_builder.append(true).unwrap();
+        }
+        lb.append(true).unwrap();
+    }
+
+    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(lb.finish())])?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let table_a = Arc::new(table);
+
+    ctx.register_table("ints", table_a)?;
+
+    // Original column is micros, convert to millis and check timestamp
+    let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["[0, 1]"], vec!["[5, 6]"], vec!["[11, 12]"]];
+    assert_eq!(expected, actual);
+    let sql = "SELECT some_list[0][0] as i0 FROM ints LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["0"], vec!["5"], vec!["11"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}

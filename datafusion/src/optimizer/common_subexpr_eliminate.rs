@@ -442,6 +442,10 @@ impl ExprIdentifierVisitor<'_> {
             Expr::Wildcard => {
                 desc.push_str("Wildcard-");
             }
+            Expr::GetIndexedField { key, .. } => {
+                desc.push_str("GetIndexedField-");
+                desc.push_str(&key.to_string());
+            }
         }
 
         desc

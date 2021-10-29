@@ -81,6 +81,32 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     schema_provider: &'a S,
 }
 
+fn plan_key(key: Value) -> ScalarValue {
+    match key {
+        Value::Number(s, _) => ScalarValue::Int64(Some(s.parse().unwrap())),
+        Value::SingleQuotedString(s) => ScalarValue::Utf8(Some(s)),
+        _ => unreachable!(),
+    }
+}
+
+#[allow(clippy::branches_sharing_code)]
+fn plan_indexed(expr: Expr, mut keys: Vec<Value>) -> Expr {
+    if keys.len() == 1 {
+        let key = keys.pop().unwrap();
+        Expr::GetIndexedField {
+            expr: Box::new(expr),
+            key: plan_key(key),
+        }
+    } else {
+        let key = keys.pop().unwrap();
+        let expr = Box::new(plan_indexed(expr, keys));
+        Expr::GetIndexedField {
+            expr,
+            key: plan_key(key),
+        }
+    }
+}
+
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
     pub fn new(schema_provider: &'a S) -> Self {
@@ -1194,6 +1220,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // create a column expression based on raw user input, this column will be
                     // normalized with qualifer later by the SQL planner.
                     Ok(col(&id.value))
+                }
+            }
+
+            SQLExpr::MapAccess { ref column, keys } => {
+                if let SQLExpr::Identifier(ref id) = column.as_ref() {
+                    Ok(plan_indexed(col(&id.value), keys.clone()))
+                } else {
+                    Err(DataFusionError::NotImplemented(format!(
+                        "map access requires an identifier, found column {} instead",
+                        column
+                    )))
                 }
             }
 
