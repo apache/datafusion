@@ -15,24 +15,103 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import numpy as np
 import pyarrow as pa
 import pytest
 
-from datafusion import ExecutionContext, column, literal
+from datafusion import ExecutionContext, literal, column
 from datafusion import functions as f
 
 
 @pytest.fixture
 def df():
     ctx = ExecutionContext()
-
     # create a RecordBatch and a new DataFrame from it
     batch = pa.RecordBatch.from_arrays(
         [pa.array(["Hello", "World", "!"]), pa.array([4, 5, 6])],
         names=["a", "b"],
     )
-
     return ctx.create_dataframe([[batch]])
+
+
+def test_literal(df):
+    df = df.select(
+        literal(1),
+        literal("1"),
+        literal("OK"),
+        literal(3.14),
+        literal(True),
+        literal(b"hello world"),
+    )
+    result = df.collect()
+    assert len(result) == 1
+    result = result[0]
+    assert result.column(0) == pa.array([1] * 3)
+    assert result.column(1) == pa.array(["1"] * 3)
+    assert result.column(2) == pa.array(["OK"] * 3)
+    assert result.column(3) == pa.array([3.14] * 3)
+    assert result.column(4) == pa.array([True] * 3)
+    assert result.column(5) == pa.array([b"hello world"] * 3)
+
+
+def test_lit_arith(df):
+    """
+    Test literals with arithmetic operations
+    """
+    df = df.select(literal(1) + column("b"), f.concat(column("a"), literal("!")))
+    result = df.collect()
+    assert len(result) == 1
+    result = result[0]
+    assert result.column(0) == pa.array([5, 6, 7])
+    assert result.column(1) == pa.array(["Hello!", "World!", "!!"])
+
+
+def test_math_functions():
+    ctx = ExecutionContext()
+    # create a RecordBatch and a new DataFrame from it
+    batch = pa.RecordBatch.from_arrays(
+        [pa.array([0.1, -0.7, 0.55])], names=["value"]
+    )
+    df = ctx.create_dataframe([[batch]])
+
+    values = np.array([0.1, -0.7, 0.55])
+    col_v = column("value")
+    df = df.select(
+        f.abs(col_v),
+        f.sin(col_v),
+        f.cos(col_v),
+        f.tan(col_v),
+        f.asin(col_v),
+        f.acos(col_v),
+        f.exp(col_v),
+        f.ln(col_v + literal(pa.scalar(1))),
+        f.log2(col_v + literal(pa.scalar(1))),
+        f.log10(col_v + literal(pa.scalar(1))),
+        f.random(),
+    )
+    batches = df.collect()
+    assert len(batches) == 1
+    result = batches[0]
+
+    np.testing.assert_array_almost_equal(result.column(0), np.abs(values))
+    np.testing.assert_array_almost_equal(result.column(1), np.sin(values))
+    np.testing.assert_array_almost_equal(result.column(2), np.cos(values))
+    np.testing.assert_array_almost_equal(result.column(3), np.tan(values))
+    np.testing.assert_array_almost_equal(result.column(4), np.arcsin(values))
+    np.testing.assert_array_almost_equal(result.column(5), np.arccos(values))
+    np.testing.assert_array_almost_equal(result.column(6), np.exp(values))
+    np.testing.assert_array_almost_equal(
+        result.column(7), np.log(values + 1.0)
+    )
+    np.testing.assert_array_almost_equal(
+        result.column(8), np.log2(values + 1.0)
+    )
+    np.testing.assert_array_almost_equal(
+        result.column(9), np.log10(values + 1.0)
+    )
+    np.testing.assert_array_less(result.column(10), np.ones_like(values))
+
+
 
 
 def test_string_functions(df):
