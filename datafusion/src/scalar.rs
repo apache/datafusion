@@ -1094,7 +1094,9 @@ impl ScalarValue {
             DataType::Int16 => typed_cast!(array, index, Int16Array, Int16),
             DataType::Int8 => typed_cast!(array, index, Int8Array, Int8),
             DataType::Binary => typed_cast!(array, index, BinaryArray, Binary),
-            DataType::LargeBinary => typed_cast!(array, index, LargeBinaryArray, LargeBinary),
+            DataType::LargeBinary => {
+                typed_cast!(array, index, LargeBinaryArray, LargeBinary)
+            }
             DataType::Utf8 => typed_cast!(array, index, StringArray, Utf8),
             DataType::LargeUtf8 => typed_cast!(array, index, LargeStringArray, LargeUtf8),
             DataType::List(nested_type) => {
