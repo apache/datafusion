@@ -1935,10 +1935,32 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
-        other => Err(DataFusionError::NotImplemented(format!(
+        Expr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => {
+            let expr = create_name(expr, input_schema)?;
+            let low = create_name(low, input_schema)?;
+            let high = create_name(high, input_schema)?;
+            if *negated {
+                Ok(format!("{} NOT BETWEEN {} AND {}", expr, low, high))
+            } else {
+                Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
+            }
+        }
+        Expr::Sort {
+            expr,
+            asc: _,
+            nulls_first: _,
+        } => Err(DataFusionError::Internal(format!(
             "Create name does not support logical expression {:?}",
-            other
+            expr
         ))),
+        Expr::Wildcard => Err(DataFusionError::Internal(
+            "Create name does not support wildcard".to_string(),
+        )),
     }
 }
 
