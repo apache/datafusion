@@ -25,7 +25,7 @@ use datafusion::arrow::pyarrow::PyArrowConvert;
 use datafusion::error::DataFusionError;
 use datafusion::logical_plan;
 use datafusion::physical_plan::functions::{
-    make_scalar_function, ScalarFunctionImplementation, Volatility,
+    make_scalar_function, ScalarFunctionImplementation,
 };
 use datafusion::physical_plan::udf::ScalarUDF;
 
@@ -62,7 +62,7 @@ fn to_rust_function(func: PyObject) -> ScalarFunctionImplementation {
 }
 
 /// Represents a PyScalarUDF
-#[pyclass]
+#[pyclass(name = "ScalarUDF", module = "datafusion", subclass)]
 #[derive(Debug, Clone)]
 pub struct PyScalarUDF {
     pub(crate) function: ScalarUDF,
@@ -70,10 +70,10 @@ pub struct PyScalarUDF {
 
 #[pymethods]
 impl PyScalarUDF {
-    #[new]
+    #[new(name, func, input_types, return_type, volatility)]
     fn new(
         name: &str,
-        fun: PyObject,
+        func: PyObject,
         input_types: Vec<DataType>,
         return_type: DataType,
         volatility: &str,
@@ -83,9 +83,9 @@ impl PyScalarUDF {
             input_types,
             Arc::new(return_type),
             parse_volatility(volatility)?,
-            to_rust_function(fun),
+            to_rust_function(func),
         );
-        Ok(PyScalarUDF { function })
+        Ok(Self { function })
     }
 
     /// creates a new PyExpr with the call of the udf

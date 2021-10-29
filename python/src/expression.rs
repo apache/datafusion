@@ -17,11 +17,10 @@
 
 use pyo3::{basic::CompareOp, prelude::*, PyNumberProtocol, PyObjectProtocol};
 use std::convert::{From, Into};
-use std::vec::Vec;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_plan::{col, lit, Expr};
-use datafusion::physical_plan::udaf::AggregateUDF;
+
 use datafusion::scalar::ScalarValue;
 
 /// An PyExpr that can be used on a DataFrame

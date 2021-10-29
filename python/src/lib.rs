@@ -40,6 +40,8 @@ fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<context::PyExecutionContext>()?;
     m.add_class::<dataframe::PyDataFrame>()?;
     m.add_class::<expression::PyExpr>()?;
+    m.add_class::<udf::PyScalarUDF>()?;
+    m.add_class::<udaf::PyAggregateUDF>()?;
 
     // Register the functions as a submodule
     let funcs = PyModule::new(py, "functions")?;

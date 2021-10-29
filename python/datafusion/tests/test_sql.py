@@ -19,7 +19,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from datafusion import ExecutionContext
+from datafusion import ExecutionContext, udf
 
 from . import generic as helpers
 
@@ -197,11 +197,13 @@ def test_udf(
         tmp_path / "a.parquet", pa.array(input_values)
     )
     ctx.register_parquet("t", path)
-    ctx.register_udf(
-        "udf", fn, input_types, output_type, volatility="immutable"
-    )
 
-    batches = ctx.sql("SELECT udf(a) AS tt FROM t").collect()
+    func = udf(
+        fn, input_types, output_type, name="func", volatility="immutable"
+    )
+    ctx.register_udf(func)
+
+    batches = ctx.sql("SELECT func(a) AS tt FROM t").collect()
     result = batches[0].column(0)
 
     assert result == pa.array(expected_values)

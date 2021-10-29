@@ -18,7 +18,14 @@
 import pytest
 
 import datafusion
-from datafusion import DataFrame, ExecutionContext, Expression, functions
+from datafusion import (
+    AggregateUDF,
+    DataFrame,
+    ExecutionContext,
+    Expression,
+    ScalarUDF,
+    functions,
+)
 
 
 def test_import_datafusion():
@@ -26,7 +33,13 @@ def test_import_datafusion():
 
 
 def test_class_module_is_datafusion():
-    for klass in [ExecutionContext, Expression, DataFrame]:
+    for klass in [
+        ExecutionContext,
+        Expression,
+        DataFrame,
+        ScalarUDF,
+        AggregateUDF,
+    ]:
         assert klass.__module__ == "datafusion"
 
 

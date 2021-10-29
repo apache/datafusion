@@ -26,25 +26,26 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan;
 use datafusion::physical_plan::udaf::AggregateUDF;
 use datafusion::physical_plan::Accumulator;
+use datafusion::physical_plan::aggregates::AccumulatorFunctionImplementation;
 use datafusion::scalar::ScalarValue;
 
 use crate::expression::PyExpr;
 use crate::utils::parse_volatility;
 
 #[derive(Debug)]
-struct PyAccumulator {
+struct RustAccumulator {
     accum: PyObject,
 }
 
-impl PyAccumulator {
+impl RustAccumulator {
     fn new(accum: PyObject) -> Self {
         Self { accum }
     }
 }
 
-impl Accumulator for PyAccumulator {
+impl Accumulator for RustAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Python::with_gil(|py| self.accum.as_ref(py).call_method0("to_scalars")?.extract())
+        Python::with_gil(|py| self.accum.as_ref(py).call_method0("state")?.extract())
             .map_err(|e| DataFusionError::Execution(format!("{}", e)))
     }
 
@@ -66,16 +67,13 @@ impl Accumulator for PyAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         Python::with_gil(|py| {
             // 1. cast args to Pyarrow array
-            // 2. call function
-
-            // 1.
             let py_args = values
                 .iter()
                 .map(|arg| arg.data().to_owned().to_pyarrow(py).unwrap())
                 .collect::<Vec<_>>();
             let py_args = PyTuple::new(py, py_args);
 
-            // update accumulator
+            // 2. call function
             self.accum
                 .as_ref(py)
                 .call_method1("update", py_args)
@@ -94,7 +92,7 @@ impl Accumulator for PyAccumulator {
                 .to_pyarrow(py)
                 .map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
 
-            // 2. merge
+            // 2. call merge
             self.accum
                 .as_ref(py)
                 .call_method1("merge", (state,))
@@ -106,20 +104,20 @@ impl Accumulator for PyAccumulator {
 }
 
 pub fn to_rust_accumulator(
-    accumulator: PyObject,
-) -> Arc<dyn Fn() -> Result<Box<dyn Accumulator>> + Send + Sync> {
+    accum: PyObject,
+) -> AccumulatorFunctionImplementation {
     Arc::new(move || -> Result<Box<dyn Accumulator>> {
-        let accumulator = Python::with_gil(|py| {
-            accumulator
+        let accum = Python::with_gil(|py| {
+            accum
                 .call0(py)
                 .map_err(|e| DataFusionError::Execution(format!("{}", e)))
         })?;
-        Ok(Box::new(PyAccumulator::new(accumulator)))
+        Ok(Box::new(RustAccumulator::new(accum)))
     })
 }
 
 /// Represents a AggregateUDF
-#[pyclass]
+#[pyclass(name = "AggregateUDF", module = "datafusion", subclass)]
 #[derive(Debug, Clone)]
 pub struct PyAggregateUDF {
     pub(crate) function: AggregateUDF,
@@ -127,7 +125,7 @@ pub struct PyAggregateUDF {
 
 #[pymethods]
 impl PyAggregateUDF {
-    #[new]
+    #[new(name, accumulator, input_type, return_type, state_type, volatility)]
     fn new(
         name: &str,
         accumulator: PyObject,
@@ -136,16 +134,15 @@ impl PyAggregateUDF {
         state_type: Vec<DataType>,
         volatility: &str,
     ) -> PyResult<Self> {
-        Ok(Self {
-            function: logical_plan::create_udaf(
-                &name,
-                input_type,
-                Arc::new(return_type),
-                parse_volatility(volatility)?,
-                to_rust_accumulator(accumulator),
-                Arc::new(state_type),
-            ),
-        })
+        let function = logical_plan::create_udaf(
+            &name,
+            input_type,
+            Arc::new(return_type),
+            parse_volatility(volatility)?,
+            to_rust_accumulator(accumulator),
+            Arc::new(state_type),
+        );
+        Ok(Self { function })
     }
 
     /// creates a new PyExpr with the call of the udf

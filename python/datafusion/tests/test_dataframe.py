@@ -18,9 +18,7 @@
 import pyarrow as pa
 import pytest
 
-from datafusion import DataFrame, ExecutionContext, column
-from datafusion import functions as f
-from datafusion import literal
+from datafusion import DataFrame, ExecutionContext, column, literal, udf
 
 
 @pytest.fixture
@@ -83,14 +81,14 @@ def test_limit(df):
 
 def test_udf(df):
     # is_null is a pa function over arrays
-    udf = f.udf(
+    is_null = udf(
         lambda x: x.is_null(),
         [pa.int64()],
         pa.bool_(),
         volatility="immutable",
     )
 
-    df = df.select(udf(column("a")))
+    df = df.select(is_null(column("a")))
     result = df.collect()[0].column(0)
 
     assert result == pa.array([False, False, False])

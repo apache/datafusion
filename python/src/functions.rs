@@ -15,19 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use pyo3::{prelude::*, wrap_pyfunction};
 
-use pyo3::{prelude::*, wrap_pyfunction, Python};
-
-use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_plan;
 
-use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::{
     aggregates::AggregateFunction, functions::BuiltinScalarFunction,
 };
 
-use crate::errors::DataFusionError;
 use crate::expression::PyExpr;
 
 #[pyfunction]
