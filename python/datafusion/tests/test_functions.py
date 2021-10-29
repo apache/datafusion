@@ -19,8 +19,9 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from datafusion import ExecutionContext, literal, column
+from datafusion import ExecutionContext, column
 from datafusion import functions as f
+from datafusion import literal
 
 
 @pytest.fixture

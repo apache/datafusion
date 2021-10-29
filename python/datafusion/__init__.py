@@ -17,11 +17,7 @@
 
 import pyarrow as pa
 
-from .internals import (
-    DataFrame,
-    ExecutionContext,
-    Expression,
-)
+from .internals import DataFrame, ExecutionContext, Expression
 
 
 def column(value):

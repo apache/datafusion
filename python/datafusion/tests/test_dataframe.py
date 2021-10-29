@@ -18,8 +18,9 @@
 import pyarrow as pa
 import pytest
 
-from datafusion import DataFrame, ExecutionContext, literal, column
+from datafusion import DataFrame, ExecutionContext, column
 from datafusion import functions as f
+from datafusion import literal
 
 
 @pytest.fixture
