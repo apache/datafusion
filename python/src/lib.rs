@@ -17,13 +17,6 @@
 
 use pyo3::prelude::*;
 
-use datafusion::logical_plan;
-use datafusion::scalar::ScalarValue;
-
-use context::PyExecutionContext;
-use dataframe::PyDataFrame;
-use expression::PyExpr;
-
 mod catalog;
 mod context;
 mod dataframe;
@@ -33,21 +26,6 @@ mod functions;
 mod udaf;
 mod udf;
 mod utils;
-
-// wrap_pyfunction!() doesn't work from other modules, so
-// define the simple API functions here. See organizing
-// modules section of pyo3:
-// https://pyo3.rs/v0.14.5/module.html#organizing-your-module-registration-code
-
-#[pyfunction]
-fn literal(value: ScalarValue) -> PyExpr {
-    logical_plan::lit(value).into()
-}
-
-#[pyfunction]
-fn column(value: &str) -> PyExpr {
-    logical_plan::col(value).into()
-}
 
 // TODO(kszucs): remvoe
 // taken from https://github.com/PyO3/pyo3/issues/471
@@ -75,12 +53,9 @@ fn internals(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<catalog::PyCatalog>()?;
     m.add_class::<catalog::PyDatabase>()?;
     m.add_class::<catalog::PyTable>()?;
-    m.add_class::<PyExecutionContext>()?;
-    m.add_class::<PyExpr>()?;
-    m.add_class::<PyDataFrame>()?;
-
-    m.add_wrapped(wrap_pyfunction!(literal))?;
-    m.add_wrapped(wrap_pyfunction!(column))?;
+    m.add_class::<context::PyExecutionContext>()?;
+    m.add_class::<dataframe::PyDataFrame>()?;
+    m.add_class::<expression::PyExpr>()?;
 
     Ok(())
 }

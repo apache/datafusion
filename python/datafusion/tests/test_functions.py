@@ -58,7 +58,9 @@ def test_lit_arith(df):
     """
     Test literals with arithmetic operations
     """
-    df = df.select(literal(1) + column("b"), f.concat(column("a"), literal("!")))
+    df = df.select(
+        literal(1) + column("b"), f.concat(column("a"), literal("!"))
+    )
     result = df.collect()
     assert len(result) == 1
     result = result[0]
@@ -110,8 +112,6 @@ def test_math_functions():
         result.column(9), np.log10(values + 1.0)
     )
     np.testing.assert_array_less(result.column(10), np.ones_like(values))
-
-
 
 
 def test_string_functions(df):

@@ -17,11 +17,18 @@
 
 import pyarrow as pa
 
-from .internals import *  # noqa
-from .internals import literal as _literal
+from .internals import (
+    DataFrame,
+    ExecutionContext,
+    Expression,
+)
+
+
+def column(value):
+    return Expression.column(value)
 
 
 def literal(value):
     if not isinstance(value, pa.Scalar):
         value = pa.scalar(value)
-    return _literal(value)
+    return Expression.literal(value)

@@ -23,8 +23,13 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::{udaf::AggregateUDF, udf::ScalarUDF};
 
+
+use datafusion::logical_plan::{lit, col};
+use datafusion::scalar::ScalarValue;
+
+
 /// An PyExpr that can be used on a DataFrame
-#[pyclass(name = "Expr")]
+#[pyclass(name = "Expression")]
 #[derive(Debug, Clone)]
 pub(crate) struct PyExpr {
     pub(crate) expr: Expr,
@@ -94,6 +99,17 @@ impl PyObjectProtocol for PyExpr {
 
 #[pymethods]
 impl PyExpr {
+
+    #[staticmethod]
+    pub fn literal(value: ScalarValue) -> PyExpr {
+        lit(value).into()
+    }
+
+    #[staticmethod]
+    pub fn column(value: &str) -> PyExpr {
+        col(value).into()
+    }
+
     /// assign a name to the PyExpr
     pub fn alias(&self, name: &str) -> PyExpr {
         self.expr.clone().alias(name).into()
