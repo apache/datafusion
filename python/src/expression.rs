@@ -20,9 +20,8 @@ use std::convert::{From, Into};
 use std::vec::Vec;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::logical_plan::{col, lit, Expr};
+use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::{udaf::AggregateUDF, udf::ScalarUDF};
-use datafusion::scalar::ScalarValue;
 
 /// An PyExpr that can be used on a DataFrame
 #[pyclass(name = "Expr")]
@@ -155,21 +154,4 @@ impl PyAggregateUDF {
         let args = args.iter().map(|e| e.expr.clone()).collect();
         Ok(self.function.call(args).into())
     }
-}
-
-#[pyfunction]
-fn literal(value: ScalarValue) -> PyExpr {
-    lit(value).into()
-}
-
-#[pyfunction]
-fn column(value: &str) -> PyExpr {
-    col(value).into()
-}
-
-pub fn init(m: &PyModule) -> PyResult<()> {
-    m.add_class::<PyExpr>()?;
-    m.add_wrapped(wrap_pyfunction!(literal))?;
-    m.add_wrapped(wrap_pyfunction!(column))?;
-    Ok(())
 }
