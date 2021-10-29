@@ -27,7 +27,7 @@ use datafusion::logical_plan::{col, lit};
 use datafusion::scalar::ScalarValue;
 
 /// An PyExpr that can be used on a DataFrame
-#[pyclass(name = "Expression")]
+#[pyclass(name = "Expression", module = "datafusion", subclass)]
 #[derive(Debug, Clone)]
 pub(crate) struct PyExpr {
     pub(crate) expr: Expr,

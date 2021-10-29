@@ -38,7 +38,7 @@ use crate::utils::wait_for_future;
 /// `PyExecutionContext` is able to plan and execute DataFusion plans.
 /// It has a powerful optimizer, a physical planner for local execution, and a
 /// multi-threaded execution engine to perform the execution.
-#[pyclass(name = "ExecutionContext", unsendable)]
+#[pyclass(name = "ExecutionContext", module = "datafusion", subclass, unsendable)]
 pub(crate) struct PyExecutionContext {
     ctx: ExecutionContext,
 }

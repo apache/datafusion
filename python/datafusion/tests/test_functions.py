@@ -35,10 +35,6 @@ def df():
     return ctx.create_dataframe([[batch]])
 
 
-def test_import_from_submodule():
-    from datafusion.functions import abs, sin  # noqa
-
-
 def test_literal(df):
     df = df.select(
         literal(1),
