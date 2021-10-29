@@ -893,15 +893,6 @@ impl ExecutionConfig {
         Default::default()
     }
 
-    /// Deprecated. Use with_target_partitions instead.
-    #[deprecated(
-        since = "5.1.0",
-        note = "This method is deprecated in favor of `with_target_partitions`."
-    )]
-    pub fn with_concurrency(self, n: usize) -> Self {
-        self.with_target_partitions(n)
-    }
-
     /// Customize target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
         // partition count must be greater than zero
