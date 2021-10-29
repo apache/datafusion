@@ -31,21 +31,19 @@ pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Fiel
     match (data_type, key) {
         (DataType::List(lt), ScalarValue::Int64(Some(i))) => {
             if *i < 0 {
-                Err(DataFusionError::Plan(
-                    format!("List based indexed access requires a positive int, was {0}", i),
-                ))
+                Err(DataFusionError::Plan(format!(
+                    "List based indexed access requires a positive int, was {0}",
+                    i
+                )))
             } else {
                 Ok(Field::new(&i.to_string(), lt.data_type().clone(), false))
             }
         }
-        (DataType::List(_), _) => {
-            Err(DataFusionError::Plan(
-                "Only ints are valid as an indexed field in a list"
-                    .to_string(),
-            ))
-        }
+        (DataType::List(_), _) => Err(DataFusionError::Plan(
+            "Only ints are valid as an indexed field in a list".to_string(),
+        )),
         _ => Err(DataFusionError::Plan(
-            "The expression to get an indexed field is only valid for `List` or 'Dictionary'"
+            "The expression to get an indexed field is only valid for `List` types"
                 .to_string(),
         )),
     }

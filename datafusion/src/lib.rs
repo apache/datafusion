@@ -231,7 +231,7 @@ pub mod variable;
 pub use arrow;
 pub use parquet;
 
-pub mod field_util;
+pub(crate) mod field_util;
 #[cfg(test)]
 pub mod test;
 pub mod test_util;
