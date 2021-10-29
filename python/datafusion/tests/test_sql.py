@@ -20,7 +20,6 @@ import pyarrow as pa
 import pytest
 
 from datafusion import ExecutionContext
-from datafusion import functions as f
 
 from . import generic as helpers
 
@@ -199,7 +198,7 @@ def test_udf(
     )
     ctx.register_parquet("t", path)
     ctx.register_udf(
-        "udf", fn, input_types, output_type, f.Volatility.immutable()
+        "udf", fn, input_types, output_type, volatility="immutable"
     )
 
     batches = ctx.sql("SELECT udf(a) AS tt FROM t").collect()

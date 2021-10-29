@@ -87,7 +87,7 @@ def test_udf(df):
         lambda x: x.is_null(),
         [pa.int64()],
         pa.bool_(),
-        f.Volatility.immutable(),
+        volatility="immutable",
     )
 
     df = df.select(udf(column("a")))

@@ -142,6 +142,8 @@ pub struct PyScalarUDF {
 
 #[pymethods]
 impl PyScalarUDF {
+    // ADD NEW()
+
     /// creates a new PyExpr with the call of the udf
     #[call]
     #[args(args = "*")]

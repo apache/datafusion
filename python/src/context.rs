@@ -32,7 +32,7 @@ use datafusion::prelude::CsvReadOptions;
 use crate::catalog::PyCatalog;
 use crate::dataframe::PyDataFrame;
 use crate::errors::DataFusionError;
-use crate::functions::{create_udf, PyVolatility};
+use crate::functions::create_udf;
 use crate::utils::wait_for_future;
 
 /// `PyExecutionContext` is able to plan and execute DataFusion plans.
@@ -149,7 +149,7 @@ impl PyExecutionContext {
         func: PyObject,
         args_types: Vec<DataType>,
         return_type: DataType,
-        volatility: PyVolatility,
+        volatility: &str,
     ) -> PyResult<()> {
         let function = create_udf(func, args_types, return_type, volatility, name)?;
         self.ctx.register_udf(function.function);

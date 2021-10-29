@@ -28,6 +28,7 @@ use datafusion::physical_plan::{
 };
 
 use crate::{
+    errors::DataFusionError,
     expression::{PyAggregateUDF, PyExpr, PyScalarUDF},
     udaf, udf,
 };
@@ -221,47 +222,30 @@ aggregate_function!(min, Min);
 aggregate_function!(sum, Sum);
 aggregate_function!(approx_distinct, ApproxDistinct);
 
-#[pyclass(name = "Volatility", module = "datafusion.functions")]
-#[derive(Clone)]
-pub struct PyVolatility {
-    pub(crate) volatility: Volatility,
-}
-
-#[pymethods]
-impl PyVolatility {
-    #[staticmethod]
-    fn immutable() -> Self {
-        Self {
-            volatility: Volatility::Immutable,
-        }
-    }
-    #[staticmethod]
-    fn stable() -> Self {
-        Self {
-            volatility: Volatility::Stable,
-        }
-    }
-    #[staticmethod]
-    fn volatile() -> Self {
-        Self {
-            volatility: Volatility::Volatile,
-        }
-    }
-}
-
 pub(crate) fn create_udf(
     fun: PyObject,
     input_types: Vec<DataType>,
     return_type: DataType,
-    volatility: PyVolatility,
+    volatility: &str,
     name: &str,
 ) -> PyResult<PyScalarUDF> {
+    let volatility = match volatility {
+        "immutable" => Volatility::Immutable,
+        "stable" => Volatility::Stable,
+        "volatile" => Volatility::Volatile,
+        value => {
+            return Err(DataFusionError::Common(format!(
+                "Unsupportad volatility type: `{}`, supported values are: immutable, stable and volatile.",
+                value
+            )).into())
+        }
+    };
     Ok(PyScalarUDF {
         function: logical_plan::create_udf(
             name,
             input_types,
             Arc::new(return_type),
-            volatility.volatility,
+            volatility,
             udf::array_udf(fun),
         ),
     })
@@ -273,7 +257,7 @@ fn udf(
     fun: PyObject,
     input_types: Vec<DataType>,
     return_type: DataType,
-    volatility: PyVolatility,
+    volatility: &str,
     py: Python,
 ) -> PyResult<PyScalarUDF> {
     let name = fun.getattr(py, "__qualname__")?.extract::<String>(py)?;
@@ -287,19 +271,30 @@ fn udaf(
     input_type: DataType,
     return_type: DataType,
     state_type: Vec<DataType>,
-    volatility: PyVolatility,
+    volatility: &str,
     py: Python,
 ) -> PyResult<PyAggregateUDF> {
     let name = accumulator
         .getattr(py, "__qualname__")?
         .extract::<String>(py)?;
 
+    let volatility = match volatility {
+        "immutable" => Volatility::Immutable,
+        "stable" => Volatility::Stable,
+        "volatile" => Volatility::Volatile,
+        value => {
+            return Err(DataFusionError::Common(
+                format!("Unsupportad volatility type: `{}`, supported values are: immutable, stable and volatile.", value)
+            ).into())
+        }
+    };
+
     Ok(PyAggregateUDF {
         function: logical_plan::create_udaf(
             &name,
             input_type,
             Arc::new(return_type),
-            volatility.volatility,
+            volatility,
             udaf::array_udaf(accumulator),
             Arc::new(state_type),
         ),
@@ -307,8 +302,6 @@ fn udaf(
 }
 
 pub(crate) fn init_module(m: &PyModule) -> PyResult<()> {
-    // TODO(kszucs): implement FromPyObject to PyVolatility
-    m.add_class::<PyVolatility>()?;
     m.add_wrapped(wrap_pyfunction!(abs))?;
     m.add_wrapped(wrap_pyfunction!(acos))?;
     m.add_wrapped(wrap_pyfunction!(approx_distinct))?;

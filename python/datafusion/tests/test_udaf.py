@@ -68,7 +68,7 @@ def test_aggregate(df):
         pa.float64(),
         pa.float64(),
         [pa.float64()],
-        f.Volatility.immutable(),
+        volatility="immutable",
     )
 
     df = df.aggregate([], [udaf(column("a"))])
@@ -85,7 +85,7 @@ def test_group_by(df):
         pa.float64(),
         pa.float64(),
         [pa.float64()],
-        f.Volatility.immutable(),
+        volatility="immutable",
     )
 
     df = df.aggregate([column("b")], [udaf(column("a"))])
