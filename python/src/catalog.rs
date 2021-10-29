@@ -27,17 +27,17 @@ use datafusion::{
     datasource::{TableProvider, TableType},
 };
 
-#[pyclass(name = "Catalog", subclass)]
+#[pyclass(name = "Catalog", module = "datafusion", subclass)]
 pub(crate) struct PyCatalog {
     catalog: Arc<dyn CatalogProvider>,
 }
 
-#[pyclass(name = "Database", subclass)]
+#[pyclass(name = "Database", module = "datafusion", subclass)]
 pub(crate) struct PyDatabase {
     database: Arc<dyn SchemaProvider>,
 }
 
-#[pyclass(name = "Table", subclass)]
+#[pyclass(name = "Table", module = "datafusion", subclass)]
 pub(crate) struct PyTable {
     table: Arc<dyn TableProvider>,
 }
@@ -66,6 +66,7 @@ impl PyCatalog {
         self.catalog.schema_names()
     }
 
+    #[args(name = "\"public\"")]
     fn database(&self, name: &str) -> PyResult<PyDatabase> {
         match self.catalog.schema(name) {
             Some(database) => Ok(PyDatabase::new(database)),

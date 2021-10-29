@@ -24,9 +24,9 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::pyarrow::PyArrowConvert;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan;
+use datafusion::physical_plan::aggregates::AccumulatorFunctionImplementation;
 use datafusion::physical_plan::udaf::AggregateUDF;
 use datafusion::physical_plan::Accumulator;
-use datafusion::physical_plan::aggregates::AccumulatorFunctionImplementation;
 use datafusion::scalar::ScalarValue;
 
 use crate::expression::PyExpr;
@@ -103,9 +103,7 @@ impl Accumulator for RustAccumulator {
     }
 }
 
-pub fn to_rust_accumulator(
-    accum: PyObject,
-) -> AccumulatorFunctionImplementation {
+pub fn to_rust_accumulator(accum: PyObject) -> AccumulatorFunctionImplementation {
     Arc::new(move || -> Result<Box<dyn Accumulator>> {
         let accum = Python::with_gil(|py| {
             accum

@@ -58,8 +58,8 @@ def test_basic(ctx, database):
     default = ctx.catalog()
     assert default.names() == ["public"]
 
-    database = default.database("public")
-    assert database.names() == {"csv1", "csv", "csv2"}
+    for database in [default.database("public"), default.database()]:
+        assert database.names() == {"csv1", "csv", "csv2"}
 
     table = database.table("csv")
     assert table.kind == "physical"
