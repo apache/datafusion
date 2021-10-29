@@ -32,7 +32,9 @@ use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions;
-use crate::physical_plan::expressions::{CaseExpr, Column, Literal, PhysicalSortExpr};
+use crate::physical_plan::expressions::{
+    CaseExpr, Column, GetIndexedFieldExpr, Literal, PhysicalSortExpr,
+};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use crate::physical_plan::hash_join::HashJoinExec;
@@ -140,6 +142,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::IsNotNull(expr) => {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NOT NULL", expr))
+        }
+        Expr::GetIndexedField { expr, key } => {
+            let expr = create_physical_name(expr, false)?;
+            Ok(format!("{}[{}]", expr, key))
         }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_physical_name(&fun.to_string(), false, args)
@@ -989,6 +995,18 @@ impl DefaultPhysicalPlanner {
             Expr::IsNotNull(expr) => expressions::is_not_null(
                 self.create_physical_expr(expr, input_dfschema, input_schema, ctx_state)?,
             ),
+            Expr::GetIndexedField { expr, key } => {
+                Ok(Arc::new(GetIndexedFieldExpr::new(
+                    self.create_physical_expr(
+                        expr,
+                        input_dfschema,
+                        input_schema,
+                        ctx_state,
+                    )?,
+                    key.clone(),
+                )))
+            }
+
             Expr::ScalarFunction { fun, args } => {
                 let physical_args = args
                     .iter()

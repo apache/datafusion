@@ -35,6 +35,7 @@ mod coercion;
 mod column;
 mod count;
 mod cume_dist;
+mod get_indexed_field;
 mod in_list;
 mod is_not_null;
 mod is_null;
@@ -66,6 +67,7 @@ pub use cast::{
 pub use column::{col, Column};
 pub use count::Count;
 pub use cume_dist::cume_dist;
+pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
