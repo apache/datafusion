@@ -36,3 +36,9 @@ def literal(value):
 # """Create a new User Defined Function"""
 #     let name = fun.getattr(py, "__qualname__")?.extract::<String>(py)?;
 #     create_udf(fun, input_types, return_type, volatility, &name)
+
+
+# udaf():
+#  // let name = accumulator
+#         //     .getattr(py, "__qualname__")?
+#         //     .extract::<String>(py)?;

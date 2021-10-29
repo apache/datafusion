@@ -24,39 +24,36 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::pyarrow::PyArrowConvert;
 use datafusion::error::DataFusionError;
 use datafusion::logical_plan;
-use datafusion::physical_plan::functions::ScalarFunctionImplementation;
-use datafusion::physical_plan::{
-    functions::Volatility, udaf::AggregateUDF, udf::ScalarUDF,
+use datafusion::physical_plan::functions::{
+    make_scalar_function, ScalarFunctionImplementation, Volatility,
 };
-use datafusion::{arrow::array, physical_plan::functions::make_scalar_function};
+use datafusion::physical_plan::udf::ScalarUDF;
 
-use crate::errors;
 use crate::expression::PyExpr;
+use crate::utils::parse_volatility;
 
-/// creates a DataFusion's UDF implementation from a python function that expects pyarrow arrays
-/// This is more efficient as it performs a zero-copy of the contents.
-pub fn array_udf(func: PyObject) -> ScalarFunctionImplementation {
+/// Create a DataFusion's UDF implementation from a python function
+/// that expects pyarrow arrays. This is more efficient as it performs
+/// a zero-copy of the contents.
+fn to_rust_function(func: PyObject) -> ScalarFunctionImplementation {
     make_scalar_function(
-        move |args: &[array::ArrayRef]| -> Result<array::ArrayRef, DataFusionError> {
+        move |args: &[ArrayRef]| -> Result<ArrayRef, DataFusionError> {
             Python::with_gil(|py| {
                 // 1. cast args to Pyarrow arrays
-                // 2. call function
-                // 3. cast to arrow::array::Array
-
-                // 1.
                 let py_args = args
                     .iter()
                     .map(|arg| arg.data().to_owned().to_pyarrow(py).unwrap())
                     .collect::<Vec<_>>();
                 let py_args = PyTuple::new(py, py_args);
 
-                // 2.
+                // 2. call function
                 let value = func.as_ref(py).call(py_args, None);
                 let value = match value {
                     Ok(n) => Ok(n),
                     Err(error) => Err(DataFusionError::Execution(format!("{:?}", error))),
                 }?;
 
+                // 3. cast to arrow::array::Array
                 let array = ArrayRef::from_pyarrow(value).unwrap();
                 Ok(array)
             })
@@ -73,31 +70,20 @@ pub struct PyScalarUDF {
 
 #[pymethods]
 impl PyScalarUDF {
-    //#args(args)
+    #[new]
     fn new(
+        name: &str,
         fun: PyObject,
         input_types: Vec<DataType>,
         return_type: DataType,
         volatility: &str,
-        name: &str,
     ) -> PyResult<Self> {
-        let volatility = match volatility {
-            "immutable" => Volatility::Immutable,
-            "stable" => Volatility::Stable,
-            "volatile" => Volatility::Volatile,
-            value => {
-                return Err(errors::DataFusionError::Common(format!(
-                    "Unsupportad volatility type: `{}`, supported values are: immutable, stable and volatile.",
-                    value
-                )).into())
-            }
-        };
         let function = logical_plan::create_udf(
             name,
             input_types,
             Arc::new(return_type),
-            volatility,
-            array_udf(fun),
+            parse_volatility(volatility)?,
+            to_rust_function(fun),
         );
         Ok(PyScalarUDF { function })
     }

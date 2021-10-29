@@ -27,11 +27,8 @@ use datafusion::physical_plan::{
     aggregates::AggregateFunction, functions::BuiltinScalarFunction,
 };
 
-use crate::{
-    errors::DataFusionError,
-    expression::{PyAggregateUDF, PyExpr},
-    udaf,
-};
+use crate::errors::DataFusionError;
+use crate::expression::PyExpr;
 
 #[pyfunction]
 fn array(value: Vec<PyExpr>) -> PyExpr {
@@ -222,43 +219,6 @@ aggregate_function!(min, Min);
 aggregate_function!(sum, Sum);
 aggregate_function!(approx_distinct, ApproxDistinct);
 
-/// Creates a new udf.
-#[pyfunction]
-fn udaf(
-    accumulator: PyObject,
-    input_type: DataType,
-    return_type: DataType,
-    state_type: Vec<DataType>,
-    volatility: &str,
-    py: Python,
-) -> PyResult<PyAggregateUDF> {
-    let name = accumulator
-        .getattr(py, "__qualname__")?
-        .extract::<String>(py)?;
-
-    let volatility = match volatility {
-        "immutable" => Volatility::Immutable,
-        "stable" => Volatility::Stable,
-        "volatile" => Volatility::Volatile,
-        value => {
-            return Err(DataFusionError::Common(
-                format!("Unsupportad volatility type: `{}`, supported values are: immutable, stable and volatile.", value)
-            ).into())
-        }
-    };
-
-    Ok(PyAggregateUDF {
-        function: logical_plan::create_udaf(
-            &name,
-            input_type,
-            Arc::new(return_type),
-            volatility,
-            udaf::array_udaf(accumulator),
-            Arc::new(state_type),
-        ),
-    })
-}
-
 pub(crate) fn init_module(m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(abs))?;
     m.add_wrapped(wrap_pyfunction!(acos))?;
@@ -322,7 +282,6 @@ pub(crate) fn init_module(m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(translate))?;
     m.add_wrapped(wrap_pyfunction!(trim))?;
     m.add_wrapped(wrap_pyfunction!(trunc))?;
-    m.add_wrapped(wrap_pyfunction!(udaf))?;
     m.add_wrapped(wrap_pyfunction!(upper))?;
     Ok(())
 }

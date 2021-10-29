@@ -20,13 +20,16 @@ use std::sync::Arc;
 use pyo3::{prelude::*, types::PyTuple};
 
 use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::pyarrow::PyArrowConvert;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::logical_plan;
+use datafusion::physical_plan::udaf::AggregateUDF;
+use datafusion::physical_plan::Accumulator;
+use datafusion::scalar::ScalarValue;
 
-use datafusion::error::Result;
-use datafusion::{
-    error::DataFusionError as InnerDataFusionError, physical_plan::Accumulator,
-    scalar::ScalarValue,
-};
+use crate::expression::PyExpr;
+use crate::utils::parse_volatility;
 
 #[derive(Debug)]
 struct PyAccumulator {
@@ -42,7 +45,7 @@ impl PyAccumulator {
 impl Accumulator for PyAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Python::with_gil(|py| self.accum.as_ref(py).call_method0("to_scalars")?.extract())
-            .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
+            .map_err(|e| DataFusionError::Execution(format!("{}", e)))
     }
 
     fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
@@ -57,7 +60,7 @@ impl Accumulator for PyAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Python::with_gil(|py| self.accum.as_ref(py).call_method0("evaluate")?.extract())
-            .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
+            .map_err(|e| DataFusionError::Execution(format!("{}", e)))
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -76,7 +79,7 @@ impl Accumulator for PyAccumulator {
             self.accum
                 .as_ref(py)
                 .call_method1("update", py_args)
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
+                .map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
 
             Ok(())
         })
@@ -84,34 +87,72 @@ impl Accumulator for PyAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         Python::with_gil(|py| {
-            // 1. cast states to Pyarrow array
-            // 2. merge
             let state = &states[0];
 
+            // 1. cast states to Pyarrow array
             let state = state
                 .to_pyarrow(py)
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
+                .map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
 
-            // 2.
+            // 2. merge
             self.accum
                 .as_ref(py)
                 .call_method1("merge", (state,))
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))?;
+                .map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
 
             Ok(())
         })
     }
 }
 
-pub fn array_udaf(
+pub fn to_rust_accumulator(
     accumulator: PyObject,
 ) -> Arc<dyn Fn() -> Result<Box<dyn Accumulator>> + Send + Sync> {
     Arc::new(move || -> Result<Box<dyn Accumulator>> {
         let accumulator = Python::with_gil(|py| {
             accumulator
                 .call0(py)
-                .map_err(|e| InnerDataFusionError::Execution(format!("{}", e)))
+                .map_err(|e| DataFusionError::Execution(format!("{}", e)))
         })?;
         Ok(Box::new(PyAccumulator::new(accumulator)))
     })
+}
+
+/// Represents a AggregateUDF
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct PyAggregateUDF {
+    pub(crate) function: AggregateUDF,
+}
+
+#[pymethods]
+impl PyAggregateUDF {
+    #[new]
+    fn new(
+        name: &str,
+        accumulator: PyObject,
+        input_type: DataType,
+        return_type: DataType,
+        state_type: Vec<DataType>,
+        volatility: &str,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            function: logical_plan::create_udaf(
+                &name,
+                input_type,
+                Arc::new(return_type),
+                parse_volatility(volatility)?,
+                to_rust_accumulator(accumulator),
+                Arc::new(state_type),
+            ),
+        })
+    }
+
+    /// creates a new PyExpr with the call of the udf
+    #[call]
+    #[args(args = "*")]
+    fn __call__(&self, args: Vec<PyExpr>) -> PyResult<PyExpr> {
+        let args = args.iter().map(|e| e.expr.clone()).collect();
+        Ok(self.function.call(args).into())
+    }
 }

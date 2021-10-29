@@ -130,21 +130,3 @@ impl PyExpr {
         expr.into()
     }
 }
-
-/// Represents a AggregateUDF
-#[pyclass]
-#[derive(Debug, Clone)]
-pub struct PyAggregateUDF {
-    pub(crate) function: AggregateUDF,
-}
-
-#[pymethods]
-impl PyAggregateUDF {
-    /// creates a new PyExpr with the call of the udf
-    #[call]
-    #[args(args = "*")]
-    fn __call__(&self, args: Vec<PyExpr>) -> PyResult<PyExpr> {
-        let args = args.iter().map(|e| e.expr.clone()).collect();
-        Ok(self.function.call(args).into())
-    }
-}
