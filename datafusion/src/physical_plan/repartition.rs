@@ -852,12 +852,12 @@ mod tests {
 
         // run some checks on the result
         let items_vec = str_batches_to_vec(&batches_without_drop);
-        let items_set: HashSet<&str> = items_vec.iter().map(|s| *s).collect();
+        let items_set: HashSet<&str> = items_vec.iter().copied().collect();
         assert_eq!(items_vec.len(), items_set.len());
         let source_str_set: HashSet<&str> =
             (&["foo", "bar", "frob", "baz", "goo", "gar", "grob", "gaz"])
                 .iter()
-                .map(|s| *s)
+                .copied()
                 .collect();
         assert_eq!(items_set.difference(&source_str_set).count(), 0);
 
