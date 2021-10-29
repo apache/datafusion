@@ -573,7 +573,6 @@ impl ExecutionContext {
     /// register_table function.
     ///
     /// Returns an error if no table has been registered with the provided reference.
-    /// NOTE(kszucs): perhaps it should be called dataframe() instead?
     pub fn table<'a>(
         &self,
         table_ref: impl Into<TableReference<'a>>,

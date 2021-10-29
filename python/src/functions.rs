@@ -219,6 +219,7 @@ aggregate_function!(count, Count);
 aggregate_function!(max, Max);
 aggregate_function!(min, Min);
 aggregate_function!(sum, Sum);
+aggregate_function!(approx_distinct, ApproxDistinct);
 
 #[pyclass(name = "Volatility", module = "datafusion.functions")]
 #[derive(Clone)]
@@ -310,6 +311,7 @@ pub fn init(m: &PyModule) -> PyResult<()> {
     m.add_class::<PyVolatility>()?;
     m.add_wrapped(wrap_pyfunction!(abs))?;
     m.add_wrapped(wrap_pyfunction!(acos))?;
+    m.add_wrapped(wrap_pyfunction!(approx_distinct))?;
     m.add_wrapped(wrap_pyfunction!(array))?;
     m.add_wrapped(wrap_pyfunction!(ascii))?;
     m.add_wrapped(wrap_pyfunction!(asin))?;

@@ -16,7 +16,6 @@
 // under the License.
 
 use core::fmt;
-//use std::result::Result;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion::error::DataFusionError as InnerDataFusionError;

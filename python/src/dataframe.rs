@@ -102,7 +102,12 @@ impl PyDataFrame {
         Ok(pretty::print_batches(&batches)?)
     }
 
-    fn join(&self, right: PyDataFrame, on: Vec<&str>, how: &str) -> PyResult<Self> {
+    fn join(
+        &self,
+        right: PyDataFrame,
+        join_keys: (Vec<&str>, Vec<&str>),
+        how: &str,
+    ) -> PyResult<Self> {
         let join_type = match how {
             "inner" => JoinType::Inner,
             "left" => JoinType::Left,
@@ -119,7 +124,7 @@ impl PyDataFrame {
             }
         };
 
-        let df = self.df.join(right.df, join_type, &on, &on)?;
+        let df = self.df.join(right.df, join_type, &join_keys.0, &join_keys.1)?;
         Ok(Self::new(df))
     }
 }
