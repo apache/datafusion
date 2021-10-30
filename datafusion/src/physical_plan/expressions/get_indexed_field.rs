@@ -317,7 +317,7 @@ mod tests {
         let result = result
             .as_any()
             .downcast_ref::<ListArray>()
-            .expect(&format!("failed to downcast to ListArray : {:?}", result));
+            .unwrap_or_else(|| panic!("failed to downcast to ListArray : {:?}", result));
         let expected =
             &build_utf8_lists(list_of_tuples.into_iter().map(|t| t.1).collect());
         assert_eq!(expected, result);
@@ -333,7 +333,9 @@ mod tests {
             let result = result
                 .as_any()
                 .downcast_ref::<StringArray>()
-                .expect(&format!("failed to downcast to StringArray : {:?}", result));
+                .unwrap_or_else(|| {
+                    panic!("failed to downcast to StringArray : {:?}", result)
+                });
             let expected = &StringArray::from(expected);
             assert_eq!(expected, result);
         }
@@ -359,7 +361,7 @@ mod tests {
         get_indexed_field_mixed_test(
             list_of_structs.clone(),
             expected_list,
-            expected_ints.clone(),
+            expected_ints,
         )?;
         Ok(())
     }
