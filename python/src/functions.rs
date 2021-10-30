@@ -292,7 +292,7 @@ pub(crate) fn create_udf(
     }
 }
 
-/// Creates a new UDAF (User Defined Function).
+/// Creates a new UDF (User Defined Function).
 #[pyfunction]
 fn udf(
     fun: PyObject,
