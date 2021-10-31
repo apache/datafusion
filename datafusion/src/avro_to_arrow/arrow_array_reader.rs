@@ -91,31 +91,32 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     /// Read the next batch of records
     #[allow(clippy::should_implement_trait)]
     pub fn next_batch(&mut self, batch_size: usize) -> ArrowResult<Option<RecordBatch>> {
-        let mut rows = Vec::with_capacity(batch_size);
-        for value in self.reader.by_ref().take(batch_size) {
-            let v = value.map_err(|e| {
-                ArrowError::ParseError(format!("Failed to parse avro value: {:?}", e))
-            })?;
-            match v {
-                Value::Record(v) => {
-                    rows.push(v);
-                }
+        let rows = self
+            .reader
+            .by_ref()
+            .take(batch_size)
+            .map(|value| match value {
+                Ok(Value::Record(v)) => Ok(v),
+                Err(e) => Err(ArrowError::ParseError(format!(
+                    "Failed to parse avro value: {:?}",
+                    e
+                ))),
                 other => {
                     return Err(ArrowError::ParseError(format!(
                         "Row needs to be of type object, got: {:?}",
                         other
                     )))
                 }
-            }
-        }
+            })
+            .collect::<ArrowResult<Vec<Vec<(String, Value)>>>>()?;
         if rows.is_empty() {
             // reached end of file
             return Ok(None);
         }
         let rows = rows.iter().collect::<Vec<&Vec<(String, Value)>>>();
-        let rows = &rows[..];
         let projection = self.projection.clone().unwrap_or_else(Vec::new);
-        let arrays = self.build_struct_array(rows, self.schema.fields(), &projection);
+        let arrays =
+            self.build_struct_array(rows.as_slice(), self.schema.fields(), &projection);
         let projected_fields: Vec<Field> = if projection.is_empty() {
             self.schema.fields().to_vec()
         } else {
@@ -288,7 +289,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 let vals: Vec<Option<String>> = if let Value::String(v) = value {
                     vec![Some(v.to_string())]
                 } else if let Value::Array(n) = value {
-                    n.into_iter()
+                    n.iter()
                         .map(|v| resolve_string(&v))
                         .collect::<ArrowResult<Vec<String>>>()?
                         .into_iter()
@@ -843,9 +844,7 @@ fn flatten_values<'a>(values: &[&'a Value]) -> Vec<&'a Value> {
         .flat_map(|row| {
             let v = maybe_resolve_union(row);
             if let Value::Array(values) = v {
-                values.into_iter().map(|v| v).collect()
-            } else if let Value::Null = v {
-                vec![v]
+                values.iter().collect()
             } else {
                 // we interpret a scalar as a single-value list to minimise data loss
                 vec![v]
@@ -913,7 +912,7 @@ fn resolve_bytes(v: &Value) -> Option<Vec<u8>> {
         Value::String(s) => Ok(Value::Bytes(s.clone().into_bytes())),
         Value::Array(items) => Ok(Value::Bytes(
             items
-                .into_iter()
+                .iter()
                 .map(resolve_u8)
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .ok()?,
