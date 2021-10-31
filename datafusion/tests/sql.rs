@@ -2051,15 +2051,17 @@ async fn equijoin() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
-    // let a = execute_to_batches(&mut ctx, sql).await;
-    // println!("{}", pretty_format_batches(&a).unwrap());
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
 
     let mut ctx = create_join_context_qualified()?;
@@ -2067,10 +2069,18 @@ async fn equijoin() -> Result<()> {
         "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t1.a = t2.a ORDER BY t1.a",
         "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t2.a = t1.a ORDER BY t1.a",
     ];
-    let expected = vec![vec!["1", "100"], vec!["2", "200"], vec!["4", "400"]];
+    let expected = vec![
+        "+---+-----+",
+        "| a | b   |",
+        "+---+-----+",
+        "| 1 | 100 |",
+        "| 2 | 200 |",
+        "| 4 | 400 |",
+        "+---+-----+",
+    ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -2085,13 +2095,17 @@ async fn equijoin_multiple_condition_ordering() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t2_name <> t1_name ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -2102,6 +2116,8 @@ async fn equijoin_and_other_condition() -> Result<()> {
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
     let actual = execute(&mut ctx, sql).await;
+    // let a = execute_to_batches(&mut ctx, sql).await;
+    // println!("{}", pretty_format_batches(&a).unwrap());
     let expected = vec![vec!["11", "a", "z"], vec!["22", "b", "y"]];
     assert_eq!(expected, actual);
     Ok(())
