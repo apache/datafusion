@@ -292,7 +292,7 @@ pub(crate) fn create_udf(
     }
 }
 
-/// Creates a new udf.
+/// Creates a new UDF (User Defined Function).
 #[pyfunction]
 fn udf(
     fun: PyObject,
@@ -306,7 +306,7 @@ fn udf(
     Ok(create_udf(fun, input_types, return_type, volatility, &name))
 }
 
-/// Creates a new udf.
+/// Creates a new UDAF (User Defined Aggregate Function).
 #[pyfunction]
 fn udaf(
     accumulator: PyObject,
