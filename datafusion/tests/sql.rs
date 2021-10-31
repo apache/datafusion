@@ -2024,8 +2024,6 @@ async fn case_when_else_with_base_expr() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 fn create_case_context() -> Result<ExecutionContext> {
     let mut ctx = ExecutionContext::new();
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
@@ -2109,6 +2107,8 @@ async fn equijoin_multiple_condition_ordering() -> Result<()> {
     }
     Ok(())
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn equijoin_and_other_condition() -> Result<()> {
