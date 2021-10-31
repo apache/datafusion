@@ -210,6 +210,38 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                         right,
                     },
                 },
+                Operator::Or => match (left.as_ref(), right.as_ref()) {
+                    (
+                        Expr::Literal(ScalarValue::Boolean(l)),
+                        Expr::Literal(ScalarValue::Boolean(r)),
+                    ) => match (l, r) {
+                        (Some(l), Some(r)) => {
+                            Expr::Literal(ScalarValue::Boolean(Some(*l || *r)))
+                        }
+                        _ => Expr::Literal(ScalarValue::Boolean(None)),
+                    },
+                    (Expr::Literal(ScalarValue::Boolean(b)), _)
+                        if self.is_boolean_type(&right) =>
+                    {
+                        match b {
+                            Some(true) => Expr::Literal(ScalarValue::Boolean(Some(true))),
+                            _ => *right,
+                        }
+                    }
+                    (_, Expr::Literal(ScalarValue::Boolean(b)))
+                        if self.is_boolean_type(&left) =>
+                    {
+                        match b {
+                            Some(true) => Expr::Literal(ScalarValue::Boolean(Some(true))),
+                            _ => *left,
+                        }
+                    }
+                    _ => Expr::BinaryExpr {
+                        left,
+                        op: Operator::Or,
+                        right,
+                    },
+                },
                 _ => Expr::BinaryExpr { left, op, right },
             },
             // Not(Not(expr)) --> expr
