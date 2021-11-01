@@ -139,6 +139,7 @@ pub fn split_files(
     if partitioned_files.is_empty() {
         return vec![];
     }
+    // effectively this is div with rounding up instead of truncating
     let chunk_size = (partitioned_files.len() + n - 1) / n;
     partitioned_files
         .chunks(chunk_size)
