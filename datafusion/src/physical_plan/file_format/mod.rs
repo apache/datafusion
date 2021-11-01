@@ -39,6 +39,7 @@ use crate::{
     datasource::{object_store::ObjectStore, PartitionedFile},
     scalar::ScalarValue,
 };
+use lazy_static::lazy_static;
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter, Result as FmtResult},
