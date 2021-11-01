@@ -496,7 +496,7 @@ fn get_table(
         file_extension: extension.to_owned(),
         target_partitions,
         collect_stat: true,
-        partitions: vec![],
+        table_partition_cols: vec![],
     };
 
     Ok(Arc::new(ListingTable::new(

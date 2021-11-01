@@ -220,8 +220,12 @@ mod tests {
     use super::*;
     use crate::datasource::object_store::{local::LocalFileSystem, ObjectStore};
     use crate::test;
+
     use crate::{
-        physical_plan::{collect, file_format::CsvExec},
+        physical_plan::{
+            collect,
+            file_format::{CsvExec, PhysicalPlanConfig},
+        },
         scalar::ScalarValue,
     };
     use arrow::record_batch::RecordBatch;
@@ -236,27 +240,33 @@ mod tests {
         let (_, files2) = test::create_partitioned_csv("aggregate_test_100.csv", 5)?;
 
         let csv = CsvExec::new(
-            Arc::clone(&fs),
-            files,
-            Statistics::default(),
-            Arc::clone(&schema),
+            PhysicalPlanConfig {
+                object_store: Arc::clone(&fs),
+                file_schema: Arc::clone(&schema),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         );
 
         let csv2 = CsvExec::new(
-            Arc::clone(&fs),
-            files2,
-            Statistics::default(),
-            schema,
+            PhysicalPlanConfig {
+                object_store: Arc::clone(&fs),
+                file_schema: Arc::clone(&schema),
+                file_groups: files2,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         );
 
         let union_exec = Arc::new(UnionExec::new(vec![Arc::new(csv), Arc::new(csv2)]));

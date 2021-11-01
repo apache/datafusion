@@ -755,8 +755,11 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                                     .options()
                                     .file_extension
                                     .clone(),
-                                partitions: listing_table.options().partitions.clone(),
-                                path: listing_table.path().to_owned(),
+                                table_partition_cols: listing_table
+                                    .options()
+                                    .table_partition_cols
+                                    .clone(),
+                                path: listing_table.table_path().to_owned(),
                                 schema: Some(schema),
                                 projection,
                                 filters,

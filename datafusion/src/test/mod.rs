@@ -17,7 +17,7 @@
 
 //! Common unit test utility methods
 
-use crate::datasource::object_store::local::local_file_meta;
+use crate::datasource::object_store::local::local_unpartitioned_file;
 use crate::datasource::{MemTable, PartitionedFile, TableProvider};
 use crate::error::Result;
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
@@ -98,11 +98,7 @@ pub fn create_partitioned_csv(
 
     let groups = files
         .into_iter()
-        .map(|f| {
-            vec![PartitionedFile {
-                file_meta: local_file_meta(f.to_str().unwrap().to_owned()),
-            }]
-        })
+        .map(|f| vec![local_unpartitioned_file(f.to_str().unwrap().to_owned())])
         .collect::<Vec<_>>();
 
     Ok((tmp_dir.into_path().to_str().unwrap().to_string(), groups))

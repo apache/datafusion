@@ -49,6 +49,8 @@ use datafusion::{
 };
 use datafusion::{execution::context::ExecutionContext, physical_plan::displayable};
 
+mod common;
+
 #[tokio::test]
 async fn nyc() -> Result<()> {
     // schema for nyxtaxi csv files
@@ -3195,24 +3197,6 @@ async fn explain_analyze_runs_optimizers() {
     assert_contains!(actual, expected);
 }
 
-fn aggr_test_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Utf8, false),
-        Field::new("c2", DataType::UInt32, false),
-        Field::new("c3", DataType::Int8, false),
-        Field::new("c4", DataType::Int16, false),
-        Field::new("c5", DataType::Int32, false),
-        Field::new("c6", DataType::Int64, false),
-        Field::new("c7", DataType::UInt8, false),
-        Field::new("c8", DataType::UInt16, false),
-        Field::new("c9", DataType::UInt32, false),
-        Field::new("c10", DataType::UInt64, false),
-        Field::new("c11", DataType::Float32, false),
-        Field::new("c12", DataType::Float64, false),
-        Field::new("c13", DataType::Utf8, false),
-    ]))
-}
-
 async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
 
@@ -3256,7 +3240,7 @@ async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
 
 async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
     let testdata = datafusion::test_util::arrow_test_data();
-    let schema = aggr_test_schema();
+    let schema = common::aggr_test_schema();
     ctx.register_csv(
         "aggregate_test_100",
         &format!("{}/csv/aggregate_test_100.csv", testdata),

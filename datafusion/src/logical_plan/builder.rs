@@ -277,7 +277,7 @@ impl LogicalPlanBuilder {
             collect_stat: true,
             file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
             target_partitions,
-            partitions: vec![],
+            table_partition_cols: vec![],
         };
 
         let path: String = path.into();
