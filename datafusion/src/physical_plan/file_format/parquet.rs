@@ -148,6 +148,52 @@ impl ParquetExec {
         }
     }
 
+    /// Create a new Parquet reader execution plan for deserialization.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_for_deserialization(
+        object_store: Arc<dyn ObjectStore>,
+        file_groups: Vec<Vec<PartitionedFile>>,
+        statistics: Statistics,
+        schema: SchemaRef,
+        projection: Vec<usize>,
+        predicate: Option<Expr>,
+        batch_size: usize,
+        limit: Option<usize>,
+    ) -> Self {
+        debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
+        file_groups, projection, predicate, limit);
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let predicate_creation_errors =
+            MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
+
+        let predicate_builder = predicate.and_then(|predicate_expr| {
+            match PruningPredicate::try_new(&predicate_expr, schema.clone()) {
+                Ok(predicate_builder) => Some(predicate_builder),
+                Err(e) => {
+                    debug!(
+                        "Could not create pruning predicate for {:?}: {}",
+                        predicate_expr, e
+                    );
+                    predicate_creation_errors.add(1);
+                    None
+                }
+            }
+        });
+
+        Self {
+            object_store,
+            file_groups,
+            schema,
+            projection,
+            metrics,
+            predicate_builder,
+            batch_size,
+            statistics,
+            limit,
+        }
+    }
+
     fn project(
         projection: &[usize],
         schema: SchemaRef,

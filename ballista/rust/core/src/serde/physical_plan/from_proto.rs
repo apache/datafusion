@@ -143,7 +143,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                 let projection = scan.projection.iter().map(|i| *i as usize).collect();
                 let statistics = convert_required!(scan.statistics)?;
 
-                Ok(Arc::new(ParquetExec::new(
+                Ok(Arc::new(ParquetExec::new_for_deserialization(
                     Arc::new(LocalFileSystem {}),
                     scan.file_groups
                         .iter()
@@ -151,7 +151,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                         .collect::<Vec<Vec<PartitionedFile>>>(),
                     statistics,
                     schema,
-                    Some(projection),
+                    projection,
                     // TODO predicate should be de-serialized
                     None,
                     scan.batch_size as usize,
