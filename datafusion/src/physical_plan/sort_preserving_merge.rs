@@ -667,7 +667,7 @@ mod tests {
     use crate::assert_batches_eq;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::CsvExec;
+    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::sort::SortExec;
     use crate::physical_plan::{collect, common};
@@ -936,15 +936,18 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
 
         let csv = Arc::new(CsvExec::new(
-            Arc::new(LocalFileSystem {}),
-            files,
-            Statistics::default(),
-            Arc::clone(&schema),
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: Arc::clone(&schema),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         ));
 
         let sort = vec![
@@ -1016,15 +1019,18 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
 
         let csv = Arc::new(CsvExec::new(
-            Arc::new(LocalFileSystem {}),
-            files,
-            Statistics::default(),
-            schema,
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: schema,
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         ));
 
         let sorted = basic_sort(csv, sort).await;

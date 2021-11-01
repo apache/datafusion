@@ -274,6 +274,7 @@ message PartitionedFile {
   string path = 1;
   uint64 size = 2;
   uint64 last_modified_ns = 3;
+  repeated ScalarValue partition_values = 4;
 }
 
 message CsvFormat {
@@ -294,7 +295,7 @@ message ListingTableScanNode {
   ProjectionColumns projection = 4;
   Schema schema = 5;
   repeated LogicalExprNode filters = 6;
-  repeated string partitions = 7;
+  repeated string table_partition_cols = 7;
   bool collect_stat = 8;
   uint32 target_partitions = 9;
   oneof FileFormatType {
@@ -613,33 +614,28 @@ message ScanLimit {
   uint32 limit = 1;
 }
 
-message ParquetScanExecNode {
+message FileScanExecConf {
   repeated FileGroup file_groups = 1;
   Schema schema = 2;
-  uint32 batch_size = 4;
-  repeated uint32 projection = 6;
-  ScanLimit limit = 7;
-  Statistics statistics = 8;
+  uint32 batch_size = 3;
+  repeated uint32 projection = 4;
+  ScanLimit limit = 5;
+  Statistics statistics = 6;
+  repeated string table_partition_cols = 7;
+}
+
+message ParquetScanExecNode {
+  FileScanExecConf base_conf = 1;
 }
 
 message CsvScanExecNode {
-  repeated FileGroup file_groups = 1;
-  Schema schema = 2;
-  bool has_header = 3;
-  uint32 batch_size = 4;
-  string delimiter = 5;
-  repeated uint32 projection = 6;
-  ScanLimit limit = 7;
-  Statistics statistics = 8;
+  FileScanExecConf base_conf = 1;
+  bool has_header = 2;
+  string delimiter = 3;
 }
 
 message AvroScanExecNode {
-  repeated FileGroup file_groups = 1;
-  Schema schema = 2;
-  uint32 batch_size = 4;
-  repeated uint32 projection = 6;
-  ScanLimit limit = 7;
-  Statistics statistics = 8;
+  FileScanExecConf base_conf = 1;
 }
 
 enum PartitionMode {

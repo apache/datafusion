@@ -23,8 +23,8 @@
 
 use crate::{
     datasource::{object_store::ObjectStore, PartitionedFile},
-    error::Result as DataFusionResult,
     physical_plan::RecordBatchStream,
+    scalar::ScalarValue,
 };
 use arrow::{
     datatypes::SchemaRef,
@@ -40,8 +40,9 @@ use std::{
     task::{Context, Poll},
 };
 
-pub type FileIter =
-    Box<dyn Iterator<Item = DataFusionResult<Box<dyn Read + Send + Sync>>> + Send + Sync>;
+use super::PartitionColumnProjector;
+
+pub type FileIter = Box<dyn Iterator<Item = PartitionedFile> + Send + Sync>;
 pub type BatchIter = Box<dyn Iterator<Item = ArrowResult<RecordBatch>> + Send + Sync>;
 
 /// A closure that creates a file format reader (iterator over `RecordBatch`) from a `Read` object
@@ -63,10 +64,13 @@ impl<T> FormatReaderOpener for T where
 pub struct FileStream<F: FormatReaderOpener> {
     /// An iterator over record batches of the last file returned by file_iter
     batch_iter: BatchIter,
-    /// An iterator over input files
+    /// Partitioning column values for the current batch_iter
+    partition_values: Vec<ScalarValue>,
+    /// An iterator over input files.
     file_iter: FileIter,
-    /// The stream schema (file schema after projection)
-    schema: SchemaRef,
+    /// The stream schema (file schema including partition columns and after
+    /// projection).
+    projected_schema: SchemaRef,
     /// The remaining number of records to parse, None if no limit
     remain: Option<usize>,
     /// A closure that takes a reader and an optional remaining number of lines
@@ -74,6 +78,10 @@ pub struct FileStream<F: FormatReaderOpener> {
     /// is not capable of limiting the number of records in the last batch, the file
     /// stream will take care of truncating it.
     file_reader: F,
+    /// The partition column projector
+    pc_projector: PartitionColumnProjector,
+    /// the store from which to source the files.
+    object_store: Arc<dyn ObjectStore>,
 }
 
 impl<F: FormatReaderOpener> FileStream<F> {
@@ -81,34 +89,48 @@ impl<F: FormatReaderOpener> FileStream<F> {
         object_store: Arc<dyn ObjectStore>,
         files: Vec<PartitionedFile>,
         file_reader: F,
-        schema: SchemaRef,
+        projected_schema: SchemaRef,
         limit: Option<usize>,
+        table_partition_cols: Vec<String>,
     ) -> Self {
-        let read_iter = files.into_iter().map(move |f| -> DataFusionResult<_> {
-            object_store
-                .file_reader(f.file_meta.sized_file)?
-                .sync_reader()
-        });
+        let pc_projector = PartitionColumnProjector::new(
+            Arc::clone(&projected_schema),
+            &table_partition_cols,
+        );
 
         Self {
-            file_iter: Box::new(read_iter),
+            file_iter: Box::new(files.into_iter()),
             batch_iter: Box::new(iter::empty()),
+            partition_values: vec![],
             remain: limit,
-            schema,
+            projected_schema,
             file_reader,
+            pc_projector,
+            object_store,
         }
     }
 
-    /// Acts as a flat_map of record batches over files.
+    /// Acts as a flat_map of record batches over files. Adds the partitioning
+    /// Columns to the returned record batches.
     fn next_batch(&mut self) -> Option<ArrowResult<RecordBatch>> {
         match self.batch_iter.next() {
-            Some(batch) => Some(batch),
+            Some(Ok(batch)) => {
+                Some(self.pc_projector.project(batch, &self.partition_values))
+            }
+            Some(Err(e)) => Some(Err(e)),
             None => match self.file_iter.next() {
-                Some(Ok(f)) => {
-                    self.batch_iter = (self.file_reader)(f, &self.remain);
-                    self.next_batch()
+                Some(f) => {
+                    self.partition_values = f.partition_values;
+                    self.object_store
+                        .file_reader(f.file_meta.sized_file)
+                        .and_then(|r| r.sync_reader())
+                        .map_err(|e| ArrowError::ExternalError(Box::new(e)))
+                        .and_then(|f| {
+                            self.batch_iter = (self.file_reader)(f, &self.remain);
+                            self.next_batch().transpose()
+                        })
+                        .transpose()
                 }
-                Some(Err(e)) => Some(Err(ArrowError::ExternalError(Box::new(e)))),
                 None => None,
             },
         }
@@ -157,7 +179,7 @@ impl<F: FormatReaderOpener> Stream for FileStream<F> {
 
 impl<F: FormatReaderOpener> RecordBatchStream for FileStream<F> {
     fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+        Arc::clone(&self.projected_schema)
     }
 }
 
@@ -191,6 +213,7 @@ mod tests {
             reader,
             source_schema,
             limit,
+            vec![],
         );
 
         file_stream

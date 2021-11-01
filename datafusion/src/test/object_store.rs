@@ -14,7 +14,6 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 //! Object store implem used for testing
 
 use std::{
@@ -34,14 +33,14 @@ use futures::{stream, AsyncRead, StreamExt};
 
 #[derive(Debug)]
 /// An object store implem that is useful for testing.
-/// The `ObjectReader`s are filled with zero bytes.
+/// `ObjectReader`s are filled with zero bytes.
 pub struct TestObjectStore {
     /// The `(path,size)` of the files that "exist" in the store
-    pub files: Vec<(String, u64)>,
+    files: Vec<(String, u64)>,
 }
 
 impl TestObjectStore {
-    pub fn new_arc(files: &[(&str, u64)]) -> Arc<Self> {
+    pub fn new_arc(files: &[(&str, u64)]) -> Arc<dyn ObjectStore> {
         Arc::new(Self {
             files: files.iter().map(|f| (f.0.to_owned(), f.1)).collect(),
         })

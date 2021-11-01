@@ -18,61 +18,34 @@
 //! Execution plan for reading line-delimited JSON files
 use async_trait::async_trait;
 
-use crate::datasource::object_store::ObjectStore;
-use crate::datasource::PartitionedFile;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use arrow::{
-    datatypes::{Schema, SchemaRef},
-    json,
-};
+use arrow::{datatypes::SchemaRef, json};
 use std::any::Any;
 use std::sync::Arc;
 
 use super::file_stream::{BatchIter, FileStream};
+use super::PhysicalPlanConfig;
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
 pub struct NdJsonExec {
-    object_store: Arc<dyn ObjectStore>,
-    file_groups: Vec<Vec<PartitionedFile>>,
-    statistics: Statistics,
-    file_schema: SchemaRef,
-    projection: Option<Vec<usize>>,
+    base_config: PhysicalPlanConfig,
+    projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    batch_size: usize,
-    limit: Option<usize>,
 }
 
 impl NdJsonExec {
-    /// Create a new JSON reader execution plan provided file list and schema
-    pub fn new(
-        object_store: Arc<dyn ObjectStore>,
-        file_groups: Vec<Vec<PartitionedFile>>,
-        statistics: Statistics,
-        file_schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-        batch_size: usize,
-        limit: Option<usize>,
-    ) -> Self {
-        let projected_schema = match &projection {
-            None => Arc::clone(&file_schema),
-            Some(p) => Arc::new(Schema::new(
-                p.iter().map(|i| file_schema.field(*i).clone()).collect(),
-            )),
-        };
+    /// Create a new JSON reader execution plan provided base configurations
+    pub fn new(base_config: PhysicalPlanConfig) -> Self {
+        let (projected_schema, projected_statistics) = base_config.project();
 
         Self {
-            object_store,
-            file_groups,
-            statistics,
-            file_schema,
-            projection,
+            base_config,
             projected_schema,
-            batch_size,
-            limit,
+            projected_statistics,
         }
     }
 }
@@ -88,7 +61,7 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.file_groups.len())
+        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -110,15 +83,10 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        let proj = self.projection.as_ref().map(|p| {
-            p.iter()
-                .map(|col_idx| self.file_schema.field(*col_idx).name())
-                .cloned()
-                .collect()
-        });
+        let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = self.batch_size;
-        let file_schema = Arc::clone(&self.file_schema);
+        let batch_size = self.base_config.batch_size;
+        let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.
         let fun = move |file, _remaining: &Option<usize>| {
@@ -131,11 +99,12 @@ impl ExecutionPlan for NdJsonExec {
         };
 
         Ok(Box::pin(FileStream::new(
-            Arc::clone(&self.object_store),
-            self.file_groups[partition].clone(),
+            Arc::clone(&self.base_config.object_store),
+            self.base_config.file_groups[partition].clone(),
             fun,
             Arc::clone(&self.projected_schema),
-            self.limit,
+            self.base_config.limit,
+            self.base_config.table_partition_cols.clone(),
         )))
     }
 
@@ -149,16 +118,16 @@ impl ExecutionPlan for NdJsonExec {
                 write!(
                     f,
                     "JsonExec: batch_size={}, limit={:?}, files={}",
-                    self.batch_size,
-                    self.limit,
-                    super::FileGroupsDisplay(&self.file_groups),
+                    self.base_config.batch_size,
+                    self.base_config.limit,
+                    super::FileGroupsDisplay(&self.base_config.file_groups),
                 )
             }
         }
     }
 
     fn statistics(&self) -> Statistics {
-        self.statistics.clone()
+        self.projected_statistics.clone()
     }
 }
 
@@ -169,7 +138,7 @@ mod tests {
     use crate::datasource::{
         file_format::{json::JsonFormat, FileFormat},
         object_store::local::{
-            local_file_meta, local_object_reader_stream, LocalFileSystem,
+            local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
         },
     };
 
@@ -187,17 +156,16 @@ mod tests {
     async fn nd_json_exec_file_without_projection() -> Result<()> {
         use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = NdJsonExec::new(
-            Arc::new(LocalFileSystem {}),
-            vec![vec![PartitionedFile {
-                file_meta: local_file_meta(path.clone()),
-            }]],
-            Default::default(),
-            infer_schema(path).await?,
-            None,
-            1024,
-            Some(3),
-        );
+        let exec = NdJsonExec::new(PhysicalPlanConfig {
+            object_store: Arc::new(LocalFileSystem {}),
+            file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
+            file_schema: infer_schema(path).await?,
+            statistics: Statistics::default(),
+            projection: None,
+            batch_size: 1024,
+            limit: Some(3),
+            table_partition_cols: vec![],
+        });
 
         // TODO: this is not where schema inference should be tested
 
@@ -242,17 +210,16 @@ mod tests {
     #[tokio::test]
     async fn nd_json_exec_file_projection() -> Result<()> {
         let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = NdJsonExec::new(
-            Arc::new(LocalFileSystem {}),
-            vec![vec![PartitionedFile {
-                file_meta: local_file_meta(path.clone()),
-            }]],
-            Default::default(),
-            infer_schema(path).await?,
-            Some(vec![0, 2]),
-            1024,
-            None,
-        );
+        let exec = NdJsonExec::new(PhysicalPlanConfig {
+            object_store: Arc::new(LocalFileSystem {}),
+            file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
+            file_schema: infer_schema(path).await?,
+            statistics: Statistics::default(),
+            projection: Some(vec![0, 2]),
+            batch_size: 1024,
+            limit: None,
+            table_partition_cols: vec![],
+        });
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 

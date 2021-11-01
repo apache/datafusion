@@ -26,7 +26,6 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::physical_plan::hash_aggregate::AggregateMode;
 use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -43,6 +42,9 @@ use datafusion::physical_plan::{
     file_format::ParquetExec,
 };
 use datafusion::physical_plan::{file_format::AvroExec, filter::FilterExec};
+use datafusion::physical_plan::{
+    file_format::PhysicalPlanConfig, hash_aggregate::AggregateMode,
+};
 use datafusion::{
     datasource::PartitionedFile, physical_plan::coalesce_batches::CoalesceBatchesExec,
 };
@@ -244,90 +246,29 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 ))),
             })
         } else if let Some(exec) = plan.downcast_ref::<CsvExec>() {
-            let file_groups = exec
-                .file_groups()
-                .iter()
-                .map(|p| p.as_slice().into())
-                .collect();
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::CsvScan(
                     protobuf::CsvScanExecNode {
-                        file_groups,
-                        statistics: Some((&exec.statistics()).into()),
-                        limit: exec
-                            .limit()
-                            .map(|l| protobuf::ScanLimit { limit: l as u32 }),
-                        projection: exec
-                            .projection()
-                            .as_ref()
-                            .ok_or_else(|| {
-                                BallistaError::General(
-                                    "projection in CsvExec does not exist.".to_owned(),
-                                )
-                            })?
-                            .iter()
-                            .map(|n| *n as u32)
-                            .collect(),
-                        schema: Some(exec.file_schema().as_ref().into()),
+                        base_conf: Some(exec.base_config().try_into()?),
                         has_header: exec.has_header(),
                         delimiter: byte_to_string(exec.delimiter())?,
-                        batch_size: exec.batch_size() as u32,
                     },
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
-            let file_groups = exec
-                .file_groups()
-                .iter()
-                .map(|p| p.as_slice().into())
-                .collect();
-
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
-                        file_groups,
-                        statistics: Some((&exec.statistics()).into()),
-                        limit: exec
-                            .limit()
-                            .map(|l| protobuf::ScanLimit { limit: l as u32 }),
-                        schema: Some(exec.schema().as_ref().into()),
-                        projection: exec
-                            .projection()
-                            .as_ref()
-                            .iter()
-                            .map(|n| *n as u32)
-                            .collect(),
-                        batch_size: exec.batch_size() as u32,
+                        base_conf: Some(exec.base_config().try_into()?),
+                        // TODO serialize predicates
                     },
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<AvroExec>() {
-            let file_groups = exec
-                .file_groups()
-                .iter()
-                .map(|p| p.as_slice().into())
-                .collect();
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::AvroScan(
                     protobuf::AvroScanExecNode {
-                        file_groups,
-                        statistics: Some((&exec.statistics()).into()),
-                        limit: exec
-                            .limit()
-                            .map(|l| protobuf::ScanLimit { limit: l as u32 }),
-                        projection: exec
-                            .projection()
-                            .as_ref()
-                            .ok_or_else(|| {
-                                BallistaError::General(
-                                    "projection in AvroExec does not exist.".to_owned(),
-                                )
-                            })?
-                            .iter()
-                            .map(|n| *n as u32)
-                            .collect(),
-                        schema: Some(exec.file_schema().as_ref().into()),
-                        batch_size: exec.batch_size() as u32,
+                        base_conf: Some(exec.base_config().try_into()?),
                     },
                 )),
             })
@@ -674,9 +615,11 @@ fn try_parse_when_then_expr(
     })
 }
 
-impl From<&PartitionedFile> for protobuf::PartitionedFile {
-    fn from(pf: &PartitionedFile) -> protobuf::PartitionedFile {
-        protobuf::PartitionedFile {
+impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
+    type Error = BallistaError;
+
+    fn try_from(pf: &PartitionedFile) -> Result<Self, Self::Error> {
+        Ok(protobuf::PartitionedFile {
             path: pf.file_meta.path().to_owned(),
             size: pf.file_meta.size(),
             last_modified_ns: pf
@@ -684,15 +627,25 @@ impl From<&PartitionedFile> for protobuf::PartitionedFile {
                 .last_modified
                 .map(|ts| ts.timestamp_nanos() as u64)
                 .unwrap_or(0),
-        }
+            partition_values: pf
+                .partition_values
+                .iter()
+                .map(|v| v.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
-impl From<&[PartitionedFile]> for protobuf::FileGroup {
-    fn from(gr: &[PartitionedFile]) -> protobuf::FileGroup {
-        protobuf::FileGroup {
-            files: gr.iter().map(|f| f.into()).collect(),
-        }
+impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
+    type Error = BallistaError;
+
+    fn try_from(gr: &[PartitionedFile]) -> Result<Self, Self::Error> {
+        Ok(protobuf::FileGroup {
+            files: gr
+                .iter()
+                .map(|f| f.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
@@ -720,5 +673,34 @@ impl From<&Statistics> for protobuf::Statistics {
             column_stats,
             is_exact: s.is_exact,
         }
+    }
+}
+
+impl TryFrom<&PhysicalPlanConfig> for protobuf::FileScanExecConf {
+    type Error = BallistaError;
+    fn try_from(
+        conf: &PhysicalPlanConfig,
+    ) -> Result<protobuf::FileScanExecConf, Self::Error> {
+        let file_groups = conf
+            .file_groups
+            .iter()
+            .map(|p| p.as_slice().try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(protobuf::FileScanExecConf {
+            file_groups,
+            statistics: Some((&conf.statistics).into()),
+            limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
+            projection: conf
+                .projection
+                .as_ref()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|n| *n as u32)
+                .collect(),
+            schema: Some(conf.file_schema.as_ref().into()),
+            batch_size: conf.batch_size as u32,
+            table_partition_cols: conf.table_partition_cols.to_vec(),
+        })
     }
 }
