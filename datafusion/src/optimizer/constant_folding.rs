@@ -226,6 +226,24 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                         right,
                     },
                 },
+                Operator::And => match (left.as_ref(), right.as_ref()) {
+                    (Expr::Literal(ScalarValue::Boolean(lit)), col)
+                    | (col, Expr::Literal(ScalarValue::Boolean(lit)))
+                        if self.is_boolean_type(col) =>
+                    {
+                        match lit {
+                            Some(false) => {
+                                Expr::Literal(ScalarValue::Boolean(Some(false)))
+                            }
+                            _ => *col,
+                        }
+                    }
+                    _ => Expr::BinaryExpr {
+                        left,
+                        op: Operator::And,
+                        right,
+                    },
+                },
                 _ => Expr::BinaryExpr { left, op, right },
             },
             // Not(Not(expr)) --> expr
