@@ -91,6 +91,7 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::BinaryExpr { .. }
             | Expr::Between { .. }
             | Expr::InList { .. }
+            | Expr::GetIndexedField { .. }
             | Expr::Case { .. } => Recursion::Continue(self),
 
             Expr::ScalarFunction { fun, .. } => self.visit_volatility(fun.volatility()),
