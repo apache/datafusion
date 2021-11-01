@@ -1087,7 +1087,7 @@ impl DefaultPhysicalPlanner {
                 list,
                 negated,
             } => match expr.as_ref() {
-                Expr::Literal(ScalarValue::Utf8(None)) => {
+                Expr::Literal(ScalarValue::Null) => {
                     Ok(expressions::lit(ScalarValue::Boolean(None)))
                 }
                 _ => {
@@ -1102,7 +1102,7 @@ impl DefaultPhysicalPlanner {
                     let list_exprs = list
                         .iter()
                         .map(|expr| match expr {
-                            Expr::Literal(ScalarValue::Utf8(None)) => self
+                            Expr::Literal(ScalarValue::Null) => self
                                 .create_physical_expr(
                                     expr,
                                     input_dfschema,

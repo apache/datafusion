@@ -37,6 +37,8 @@ use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 /// This is the single-valued counter-part of arrow’s `Array`.
 #[derive(Clone)]
 pub enum ScalarValue {
+    /// untyped null
+    Null,
     /// true or false value
     Boolean(Option<bool>),
     /// 32bit float
@@ -100,6 +102,7 @@ impl PartialEq for ScalarValue {
         // any newly added enum variant will require editing this list
         // or else face a compile error
         match (self, other) {
+            (Null, _) | (_, Null) => false,
             (Boolean(v1), Boolean(v2)) => v1.eq(v2),
             (Boolean(_), _) => false,
             (Float32(v1), Float32(v2)) => {
@@ -171,6 +174,7 @@ impl PartialOrd for ScalarValue {
         // any newly added enum variant will require editing this list
         // or else face a compile error
         match (self, other) {
+            (Null, _) | (_, Null) => None,
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
             (Boolean(_), _) => None,
             (Float32(v1), Float32(v2)) => {
@@ -253,6 +257,7 @@ impl std::hash::Hash for ScalarValue {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         use ScalarValue::*;
         match self {
+            Null => {}
             Boolean(v) => v.hash(state),
             Float32(v) => {
                 let v = v.map(OrderedFloat);
@@ -456,6 +461,7 @@ impl ScalarValue {
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {
         match self {
+            ScalarValue::Null => DataType::Null,
             ScalarValue::Boolean(_) => DataType::Boolean,
             ScalarValue::UInt8(_) => DataType::UInt8,
             ScalarValue::UInt16(_) => DataType::UInt16,
@@ -521,7 +527,8 @@ impl ScalarValue {
     pub fn is_null(&self) -> bool {
         matches!(
             *self,
-            ScalarValue::Boolean(None)
+            ScalarValue::Null
+                | ScalarValue::Boolean(None)
                 | ScalarValue::UInt8(None)
                 | ScalarValue::UInt16(None)
                 | ScalarValue::UInt32(None)
@@ -908,6 +915,7 @@ impl ScalarValue {
     /// Converts a scalar value into an array of `size` rows.
     pub fn to_array_of_size(&self, size: usize) -> ArrayRef {
         match self {
+            ScalarValue::Null => new_null_array(&DataType::Null, size),
             ScalarValue::Boolean(e) => {
                 Arc::new(BooleanArray::from(vec![*e; size])) as ArrayRef
             }
@@ -1082,6 +1090,7 @@ impl ScalarValue {
         }
 
         Ok(match array.data_type() {
+            DataType::Null => ScalarValue::Null,
             DataType::Boolean => typed_cast!(array, index, BooleanArray, Boolean),
             DataType::Float64 => typed_cast!(array, index, Float64Array, Float64),
             DataType::Float32 => typed_cast!(array, index, Float32Array, Float32),
@@ -1218,6 +1227,7 @@ impl ScalarValue {
         }
 
         match self {
+            ScalarValue::Null => false,
             ScalarValue::Boolean(val) => {
                 eq_array_primitive!(array, index, BooleanArray, val)
             }
@@ -1443,6 +1453,7 @@ impl TryFrom<&DataType> for ScalarValue {
     /// Create a Null instance of ScalarValue for this datatype
     fn try_from(datatype: &DataType) -> Result<Self> {
         Ok(match datatype {
+            DataType::Null => ScalarValue::Null,
             DataType::Boolean => ScalarValue::Boolean(None),
             DataType::Float64 => ScalarValue::Float64(None),
             DataType::Float32 => ScalarValue::Float32(None),
@@ -1501,6 +1512,7 @@ macro_rules! format_option {
 impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            ScalarValue::Null => write!(f, "NULL")?,
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float32(e) => format_option!(f, e)?,
             ScalarValue::Float64(e) => format_option!(f, e)?,
@@ -1575,6 +1587,7 @@ impl fmt::Display for ScalarValue {
 impl fmt::Debug for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ScalarValue::Null => write!(f, "UntypedNull"),
             ScalarValue::Boolean(_) => write!(f, "Boolean({})", self),
             ScalarValue::Float32(_) => write!(f, "Float32({})", self),
             ScalarValue::Float64(_) => write!(f, "Float64({})", self),
