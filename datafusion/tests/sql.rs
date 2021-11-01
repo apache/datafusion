@@ -2108,18 +2108,21 @@ async fn equijoin_multiple_condition_ordering() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn equijoin_and_other_condition() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
-    // let a = execute_to_batches(&mut ctx, sql).await;
-    // println!("{}", pretty_format_batches(&a).unwrap());
-    let expected = vec![vec!["11", "a", "z"], vec!["22", "b", "y"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "+-------+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -2130,15 +2133,18 @@ async fn equijoin_left_and_condition_from_right() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
     let res = ctx.create_logical_plan(sql);
     assert!(res.is_ok());
-    let actual = execute(&mut ctx, sql).await;
-
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["33", "c", "NULL"],
-        vec!["44", "d", "NULL"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 33    | c       |         |",
+        "| 44    | d       |         |",
+        "+-------+---------+---------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 
     Ok(())
 }
@@ -2150,16 +2156,18 @@ async fn equijoin_right_and_condition_from_left() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t1_id >= 22 ORDER BY t2_name";
     let res = ctx.create_logical_plan(sql);
     assert!(res.is_ok());
-    let actual = execute(&mut ctx, sql).await;
-
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["NULL", "NULL", "w"],
-        vec!["44", "d", "x"],
-        vec!["22", "b", "y"],
-        vec!["NULL", "NULL", "z"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "|       |         | w       |",
+        "| 44    | d       | x       |",
+        "| 22    | b       | y       |",
+        "|       |         | z       |",
+        "+-------+---------+---------+",
     ];
-    assert_eq!(expected, actual);
-
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -2184,14 +2192,18 @@ async fn left_join() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["33", "c", "NULL"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 33    | c       |         |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -2205,18 +2217,24 @@ async fn left_join_unbalanced() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["33", "c", "NULL"],
-        vec!["44", "d", "x"],
-        vec!["77", "e", "NULL"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 33    | c       |         |",
+        "| 44    | d       | x       |",
+        "| 77    | e       |         |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn right_join() -> Result<()> {
@@ -2233,6 +2251,8 @@ async fn right_join() -> Result<()> {
     ];
     for sql in equivalent_sql.iter() {
         let actual = execute(&mut ctx, sql).await;
+        // let a = execute_to_batches(&mut ctx, sql).await;
+        // println!("{}", pretty_format_batches(&a).unwrap());
         assert_eq!(expected, actual);
     }
     Ok(())
