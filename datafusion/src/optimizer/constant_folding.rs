@@ -210,6 +210,104 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                         right,
                     },
                 },
+                Operator::Or => match (left.as_ref(), right.as_ref()) {
+                    (Expr::Literal(ScalarValue::Boolean(b)), _)
+                        if self.is_boolean_type(&right) =>
+                    {
+                        match b {
+                            Some(true) => Expr::Literal(ScalarValue::Boolean(Some(true))),
+                            Some(false) => match *right {
+                                Expr::Literal(ScalarValue::Boolean(None)) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                _ => *right,
+                            },
+                            None => match *right {
+                                Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+                                    Expr::Literal(ScalarValue::Boolean(Some(true)))
+                                }
+                                Expr::Literal(ScalarValue::Boolean(Some(false))) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                _ => *right,
+                            },
+                        }
+                    }
+                    (_, Expr::Literal(ScalarValue::Boolean(b)))
+                        if self.is_boolean_type(&left) =>
+                    {
+                        match b {
+                            Some(true) => Expr::Literal(ScalarValue::Boolean(Some(true))),
+                            Some(false) => match *left {
+                                Expr::Literal(ScalarValue::Boolean(None)) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                _ => *left,
+                            },
+                            None => match *left {
+                                Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+                                    Expr::Literal(ScalarValue::Boolean(Some(true)))
+                                }
+                                Expr::Literal(ScalarValue::Boolean(Some(false))) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                _ => *left,
+                            },
+                        }
+                    }
+                    _ => Expr::BinaryExpr {
+                        left,
+                        op: Operator::Or,
+                        right,
+                    },
+                },
+                Operator::And => match (left.as_ref(), right.as_ref()) {
+                    (Expr::Literal(ScalarValue::Boolean(b)), _)
+                        if self.is_boolean_type(&right) =>
+                    {
+                        // match b {
+                        //     Some(false) => {
+                        //         Expr::Literal(ScalarValue::Boolean(Some(false)))
+                        //     }
+                        //     _ => *right,
+                        // }
+                        match b {
+                            Some(true) => match *right {
+                                Expr::Literal(ScalarValue::Boolean(None)) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                _ => *right,
+                            },
+                            Some(false) => {
+                                Expr::Literal(ScalarValue::Boolean(Some(false)))
+                            }
+                            None => match *right {
+                                Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                Expr::Literal(ScalarValue::Boolean(Some(false))) => {
+                                    Expr::Literal(ScalarValue::Boolean(Some(false)))
+                                }
+                                _ => *right,
+                            },
+                        }
+                    }
+                    (_, Expr::Literal(ScalarValue::Boolean(b)))
+                        if self.is_boolean_type(&left) =>
+                    {
+                        match b {
+                            Some(false) => {
+                                Expr::Literal(ScalarValue::Boolean(Some(false)))
+                            }
+                            _ => *left,
+                        }
+                    }
+                    _ => Expr::BinaryExpr {
+                        left,
+                        op: Operator::And,
+                        right,
+                    },
+                },
                 _ => Expr::BinaryExpr { left, op, right },
             },
             // Not(Not(expr)) --> expr
@@ -810,5 +908,114 @@ mod tests {
         let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);
+    }
+    #[test]
+    fn optimize_expr_bool_or() -> Result<()> {
+        let schema = expr_test_schema();
+        let mut rewriter = Simplifier {
+            schemas: vec![&schema],
+        };
+
+        // col || true is always true
+        assert_eq!(
+            (col("c2").or(Expr::Literal(ScalarValue::Boolean(Some(true)))))
+                .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(true))),
+        );
+
+        // col || false is always col
+        assert_eq!(
+            (col("c2").or(Expr::Literal(ScalarValue::Boolean(Some(false)))))
+                .rewrite(&mut rewriter)?,
+            col("c2"),
+        );
+
+        // true || null is always true
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(Some(true)))
+                .or(Expr::Literal(ScalarValue::Boolean(None))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(true))),
+        );
+
+        // null || true is always true
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(None))
+                .or(Expr::Literal(ScalarValue::Boolean(Some(true)))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(true))),
+        );
+
+        // false || null is always null
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(Some(false)))
+                .or(Expr::Literal(ScalarValue::Boolean(None))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        // null || false is always null
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(None))
+                .or(Expr::Literal(ScalarValue::Boolean(Some(false)))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        Ok(())
+    }
+    #[test]
+    fn optimize_expr_bool_and() -> Result<()> {
+        let schema = expr_test_schema();
+        let mut rewriter = Simplifier {
+            schemas: vec![&schema],
+        };
+
+        // col & true is always col
+        assert_eq!(
+            (col("c2").and(Expr::Literal(ScalarValue::Boolean(Some(true)))))
+                .rewrite(&mut rewriter)?,
+            col("c2"),
+        );
+        // col & false is always false
+        assert_eq!(
+            (col("c2").and(Expr::Literal(ScalarValue::Boolean(Some(false)))))
+                .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(false))),
+        );
+
+        // true && null is always null
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(Some(true)))
+                .and(Expr::Literal(ScalarValue::Boolean(None))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        // null && true is always null
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(None))
+                .and(Expr::Literal(ScalarValue::Boolean(Some(true)))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        // false && null is always false
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(Some(false)))
+                .and(Expr::Literal(ScalarValue::Boolean(None))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(false))),
+        );
+
+        // null && false is always false
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(None))
+                .and(Expr::Literal(ScalarValue::Boolean(Some(false)))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(false))),
+        );
+
+        Ok(())
     }
 }
