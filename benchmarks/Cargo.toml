@@ -40,6 +40,10 @@ futures = "0.3"
 env_logger = "0.9"
 mimalloc = { version = "0.1", optional = true, default-features = false }
 snmalloc-rs = {version = "0.2", optional = true, features= ["cache-friendly"] }
+tokomak={path="../tokomak"}
 
 [dev-dependencies]
 ballista-core = { path = "../ballista/rust/core" }
+
+[profile.release]
+opt-level=1

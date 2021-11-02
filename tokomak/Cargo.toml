@@ -15,26 +15,19 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-members = [
-    "datafusion",
-    "datafusion-cli",
-    "datafusion-examples",
-    "benchmarks",
-    "ballista/rust/client",
-    "ballista/rust/core",
-    "ballista/rust/executor",
-    "ballista/rust/scheduler",
-    "ballista-examples",
-    "tokomak"
-]
-
-exclude = ["python"]
+[package]
+name = "tokomak"
+version = "0.0.1"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/arrow-datafusion"
 
 
-#[profile.release]
-#opt-level=1
-
-[profile.release]
-lto = true
-codegen-units = 1
+[dependencies]
+datafusion = { path = "../datafusion", version = "5.1.0" }
+ordered-float="2.0"
+log="^0.4"
+egg = "0.6.0"
+tokio="^1"

@@ -17,18 +17,12 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
-use std::{
-    fs,
-    iter::Iterator,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Instant,
-};
+use std::{fs, iter::Iterator, path::{Path, PathBuf}, sync::Arc, time::{Duration, Instant}};
 
 use ballista::context::BallistaContext;
 use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
 
-use datafusion::datasource::{MemTable, TableProvider};
+use datafusion::{datasource::{MemTable, TableProvider}, optimizer::optimizer::OptimizerRule};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::parquet::basic::Compression;
@@ -52,6 +46,7 @@ use datafusion::{
 };
 
 use structopt::StructOpt;
+use tokomak::{RunnerSettings, SIMPLIFICATION_RULES} ;
 
 #[cfg(feature = "snmalloc")]
 #[global_allocator]
@@ -358,10 +353,17 @@ async fn execute_query(
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
     }
+    let tokomak_optimizer = tokomak::TokomakOptimizer::with_builtin_rules((), RunnerSettings{iter_limit:Some(40), node_limit:Some(50_000), time_limit: Some(Duration::from_secs_f64(0.5))}, SIMPLIFICATION_RULES);
     let plan = ctx.optimize(plan)?;
+    let props = ctx.state.lock().unwrap().execution_props.clone();
+    let now = std::time::Instant::now();
+    let plan = tokomak_optimizer.optimize(&plan, &props)?;
+    let duration = std::time::Instant::now() - now;
+    println!("It took {:?} to optimize the plan using the TokomakOptimizer", duration);
     if debug {
         println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
+    std::process::exit(0);
     let physical_plan = ctx.create_physical_plan(&plan).await?;
     if debug {
         println!(

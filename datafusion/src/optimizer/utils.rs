@@ -623,7 +623,10 @@ impl ConstEvaluator {
             Volatility::Volatile => false,
         }
     }
-
+    ///Updates the execution properties of this constant evaluator
+    pub fn update_execution_props(&mut self, execution_props: &ExecutionProps){
+        self.ctx_state.execution_props = execution_props.clone();
+    }
     /// Can the expression be evaluated at plan time, (assuming all of
     /// its children can also be evaluated)?
     fn can_evaluate(expr: &Expr) -> bool {
@@ -661,7 +664,7 @@ impl ConstEvaluator {
     }
 
     /// Internal helper to evaluates an Expr
-    fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
+    pub fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
         if let Expr::Literal(s) = expr {
             return Ok(s);
         }
