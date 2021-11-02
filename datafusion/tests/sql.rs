@@ -2234,8 +2234,6 @@ async fn left_join_unbalanced() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn right_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
@@ -2313,6 +2311,8 @@ async fn left_join_using() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn equijoin_implicit_syntax() -> Result<()> {
