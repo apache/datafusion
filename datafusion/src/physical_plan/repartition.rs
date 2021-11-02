@@ -482,6 +482,8 @@ impl RecordBatchStream for RepartitionStream {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::{
         assert_batches_sorted_eq,
@@ -788,76 +790,110 @@ mod tests {
     }
 
     #[tokio::test]
-    // skip this test when hash function is different because the hard
-    // coded expected output is a function of the hash values
-    #[cfg(not(feature = "force_hash_collisions"))]
-    async fn repartition_with_dropping_output_stream() {
-        #[derive(Debug)]
-        struct Case<'a> {
-            partitioning: Partitioning,
-            expected: Vec<&'a str>,
-        }
+    async fn robin_repartition_with_dropping_output_stream() {
+        let partitioning = Partitioning::RoundRobinBatch(2);
+        // The barrier exec waits to be pinged
+        // requires the input to wait at least once)
+        let input = Arc::new(make_barrier_exec());
 
-        let cases = vec![
-            Case {
-                partitioning: Partitioning::RoundRobinBatch(2),
-                expected: vec![
-                    "+------------------+",
-                    "| my_awesome_field |",
-                    "+------------------+",
-                    "| baz              |",
-                    "| frob             |",
-                    "| gaz              |",
-                    "| grob             |",
-                    "+------------------+",
-                ],
-            },
-            Case {
-                partitioning: Partitioning::Hash(
-                    vec![Arc::new(crate::physical_plan::expressions::Column::new(
-                        "my_awesome_field",
-                        0,
-                    ))],
-                    2,
-                ),
-                expected: vec![
-                    "+------------------+",
-                    "| my_awesome_field |",
-                    "+------------------+",
-                    "| frob             |",
-                    "+------------------+",
-                ],
-            },
+        // partition into two output streams
+        let exec = RepartitionExec::try_new(input.clone(), partitioning).unwrap();
+
+        let output_stream0 = exec.execute(0).await.unwrap();
+        let output_stream1 = exec.execute(1).await.unwrap();
+
+        // now, purposely drop output stream 0
+        // *before* any outputs are produced
+        std::mem::drop(output_stream0);
+
+        // Now, start sending input
+        input.wait().await;
+
+        // output stream 1 should *not* error and have one of the input batches
+        let batches = crate::physical_plan::common::collect(output_stream1)
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+------------------+",
+            "| my_awesome_field |",
+            "+------------------+",
+            "| baz              |",
+            "| frob             |",
+            "| gaz              |",
+            "| grob             |",
+            "+------------------+",
         ];
 
-        for case in cases {
-            println!("Running case {:?}", case.partitioning);
+        assert_batches_sorted_eq!(&expected, &batches);
+    }
 
-            // The barrier exec waits to be pinged
-            // requires the input to wait at least once)
-            let input = Arc::new(make_barrier_exec());
+    #[tokio::test]
+    // As the hash results might be different on different platforms or
+    // wiht different compilers, we will compare the same execution with
+    // and without droping the output stream.
+    async fn hash_repartition_with_dropping_output_stream() {
+        let partitioning = Partitioning::Hash(
+            vec![Arc::new(crate::physical_plan::expressions::Column::new(
+                "my_awesome_field",
+                0,
+            ))],
+            2,
+        );
 
-            // partition into two output streams
-            let exec =
-                RepartitionExec::try_new(input.clone(), case.partitioning).unwrap();
+        // We first collect the results without droping the output stream.
+        let input = Arc::new(make_barrier_exec());
+        let exec = RepartitionExec::try_new(input.clone(), partitioning.clone()).unwrap();
+        let output_stream1 = exec.execute(1).await.unwrap();
+        input.wait().await;
+        let batches_without_drop = crate::physical_plan::common::collect(output_stream1)
+            .await
+            .unwrap();
 
-            let output_stream0 = exec.execute(0).await.unwrap();
-            let output_stream1 = exec.execute(1).await.unwrap();
+        // run some checks on the result
+        let items_vec = str_batches_to_vec(&batches_without_drop);
+        let items_set: HashSet<&str> = items_vec.iter().copied().collect();
+        assert_eq!(items_vec.len(), items_set.len());
+        let source_str_set: HashSet<&str> =
+            (&["foo", "bar", "frob", "baz", "goo", "gar", "grob", "gaz"])
+                .iter()
+                .copied()
+                .collect();
+        assert_eq!(items_set.difference(&source_str_set).count(), 0);
 
-            // now, purposely drop output stream 0
-            // *before* any outputs are produced
-            std::mem::drop(output_stream0);
+        // Now do the same but dropping the stream before waiting for the barrier
+        let input = Arc::new(make_barrier_exec());
+        let exec = RepartitionExec::try_new(input.clone(), partitioning).unwrap();
+        let output_stream0 = exec.execute(0).await.unwrap();
+        let output_stream1 = exec.execute(1).await.unwrap();
+        // now, purposely drop output stream 0
+        // *before* any outputs are produced
+        std::mem::drop(output_stream0);
+        input.wait().await;
+        let batches_with_drop = crate::physical_plan::common::collect(output_stream1)
+            .await
+            .unwrap();
 
-            // Now, start sending input
-            input.wait().await;
+        assert_eq!(batches_without_drop, batches_with_drop);
+    }
 
-            // output stream 1 should *not* error and have one of the input batches
-            let batches = crate::physical_plan::common::collect(output_stream1)
-                .await
-                .unwrap();
+    fn str_batches_to_vec(batches: &[RecordBatch]) -> Vec<&str> {
+        batches
+            .iter()
+            .flat_map(|batch| {
+                assert_eq!(batch.columns().len(), 1);
+                let string_array = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .expect("Unexpected type for repartitoned batch");
 
-            assert_batches_sorted_eq!(&case.expected, &batches);
-        }
+                string_array
+                    .iter()
+                    .map(|v| v.expect("Unexpected null"))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
     }
 
     /// Create a BarrierExec that returns two partitions of two batches each
