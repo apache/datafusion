@@ -19,8 +19,8 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from datafusion import ExecutionContext
-from datafusion import functions as f
+from datafusion import ExecutionContext, udf
+
 from . import generic as helpers
 
 
@@ -68,9 +68,9 @@ def test_register_csv(ctx, tmp_path):
     assert ctx.tables() == {"csv", "csv1", "csv2", "csv3"}
 
     for table in ["csv", "csv1", "csv2"]:
-        result = ctx.sql(f"SELECT COUNT(int) FROM {table}").collect()
+        result = ctx.sql(f"SELECT COUNT(int) AS cnt FROM {table}").collect()
         result = pa.Table.from_batches(result)
-        assert result.to_pydict() == {f"COUNT({table}.int)": [4]}
+        assert result.to_pydict() == {"cnt": [4]}
 
     result = ctx.sql("SELECT * FROM csv3").collect()
     result = pa.Table.from_batches(result)
@@ -87,9 +87,9 @@ def test_register_parquet(ctx, tmp_path):
     ctx.register_parquet("t", path)
     assert ctx.tables() == {"t"}
 
-    result = ctx.sql("SELECT COUNT(a) FROM t").collect()
+    result = ctx.sql("SELECT COUNT(a) AS cnt FROM t").collect()
     result = pa.Table.from_batches(result)
-    assert result.to_pydict() == {"COUNT(t.a)": [100]}
+    assert result.to_pydict() == {"cnt": [100]}
 
 
 def test_execute(ctx, tmp_path):
@@ -102,21 +102,21 @@ def test_execute(ctx, tmp_path):
     assert ctx.tables() == {"t"}
 
     # count
-    result = ctx.sql("SELECT COUNT(a) FROM t").collect()
+    result = ctx.sql("SELECT COUNT(a) AS cnt FROM t").collect()
 
     expected = pa.array([7], pa.uint64())
-    expected = [pa.RecordBatch.from_arrays([expected], ["COUNT(a)"])]
+    expected = [pa.RecordBatch.from_arrays([expected], ["cnt"])]
     assert result == expected
 
     # where
     expected = pa.array([2], pa.uint64())
-    expected = [pa.RecordBatch.from_arrays([expected], ["COUNT(a)"])]
-    result = ctx.sql("SELECT COUNT(a) FROM t WHERE a > 10").collect()
+    expected = [pa.RecordBatch.from_arrays([expected], ["cnt"])]
+    result = ctx.sql("SELECT COUNT(a) AS cnt FROM t WHERE a > 10").collect()
     assert result == expected
 
     # group by
     results = ctx.sql(
-        "SELECT CAST(a as int), COUNT(a) FROM t GROUP BY CAST(a as int)"
+        "SELECT CAST(a as int) AS a, COUNT(a) AS cnt FROM t GROUP BY a"
     ).collect()
 
     # group by returns batches
@@ -124,8 +124,8 @@ def test_execute(ctx, tmp_path):
     result_values = []
     for result in results:
         pydict = result.to_pydict()
-        result_keys.extend(pydict["CAST(t.a AS Int32)"])
-        result_values.extend(pydict["COUNT(t.a)"])
+        result_keys.extend(pydict["a"])
+        result_values.extend(pydict["cnt"])
 
     result_keys, result_values = (
         list(t) for t in zip(*sorted(zip(result_keys, result_values)))
@@ -136,14 +136,12 @@ def test_execute(ctx, tmp_path):
 
     # order by
     result = ctx.sql(
-        "SELECT a, CAST(a AS int) FROM t ORDER BY a DESC LIMIT 2"
+        "SELECT a, CAST(a AS int) AS a_int FROM t ORDER BY a DESC LIMIT 2"
     ).collect()
     expected_a = pa.array([50.0219, 50.0152], pa.float64())
     expected_cast = pa.array([50, 50], pa.int32())
     expected = [
-        pa.RecordBatch.from_arrays(
-            [expected_a, expected_cast], ["a", "CAST(t.a AS Int32)"]
-        )
+        pa.RecordBatch.from_arrays([expected_a, expected_cast], ["a", "a_int"])
     ]
     np.testing.assert_equal(expected[0].column(1), expected[0].column(1))
 
@@ -199,11 +197,13 @@ def test_udf(
         tmp_path / "a.parquet", pa.array(input_values)
     )
     ctx.register_parquet("t", path)
-    ctx.register_udf(
-        "udf", fn, input_types, output_type, f.Volatility.immutable()
-    )
 
-    batches = ctx.sql("SELECT udf(a) AS tt FROM t").collect()
+    func = udf(
+        fn, input_types, output_type, name="func", volatility="immutable"
+    )
+    ctx.register_udf(func)
+
+    batches = ctx.sql("SELECT func(a) AS tt FROM t").collect()
     result = batches[0].column(0)
 
     assert result == pa.array(expected_values)

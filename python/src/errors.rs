@@ -19,7 +19,7 @@ use core::fmt;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion::error::DataFusionError as InnerDataFusionError;
-use pyo3::{exceptions, PyErr};
+use pyo3::{exceptions::PyException, PyErr};
 
 #[derive(Debug)]
 pub enum DataFusionError {
@@ -38,9 +38,9 @@ impl fmt::Display for DataFusionError {
     }
 }
 
-impl From<DataFusionError> for PyErr {
-    fn from(err: DataFusionError) -> PyErr {
-        exceptions::PyException::new_err(err.to_string())
+impl From<ArrowError> for DataFusionError {
+    fn from(err: ArrowError) -> DataFusionError {
+        DataFusionError::ArrowError(err)
     }
 }
 
@@ -50,12 +50,8 @@ impl From<InnerDataFusionError> for DataFusionError {
     }
 }
 
-impl From<ArrowError> for DataFusionError {
-    fn from(err: ArrowError) -> DataFusionError {
-        DataFusionError::ArrowError(err)
+impl From<DataFusionError> for PyErr {
+    fn from(err: DataFusionError) -> PyErr {
+        PyException::new_err(err.to_string())
     }
-}
-
-pub(crate) fn wrap<T>(a: Result<T, InnerDataFusionError>) -> Result<T, DataFusionError> {
-    Ok(a?)
 }
