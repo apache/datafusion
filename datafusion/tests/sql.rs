@@ -29,7 +29,7 @@ extern crate datafusion;
 
 use arrow::{
     array::*, datatypes::*, record_batch::RecordBatch,
-    util::display::array_value_to_string, util::pretty::pretty_format_batches,
+    util::display::array_value_to_string,
 };
 
 use datafusion::assert_batches_eq;
@@ -2244,16 +2244,18 @@ async fn right_join() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t2_id = t1_id ORDER BY t1_id"
     ];
     let expected = vec![
-        vec!["NULL", "NULL", "w"],
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "|       |         | w       |",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        // let a = execute_to_batches(&mut ctx, sql).await;
-        // println!("{}", pretty_format_batches(&a).unwrap());
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -2266,15 +2268,19 @@ async fn full_join() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["NULL", "NULL", "w"],
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["33", "c", "NULL"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "|       |         | w       |",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 33    | c       |         |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
 
     let equivalent_sql = [
@@ -2282,8 +2288,8 @@ async fn full_join() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
 
     Ok(())
@@ -2293,14 +2299,18 @@ async fn full_join() -> Result<()> {
 async fn left_join_using() -> Result<()> {
     let mut ctx = create_join_context("id", "id")?;
     let sql = "SELECT id, t1_name, t2_name FROM t1 LEFT JOIN t2 USING (id) ORDER BY id";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["33", "c", "NULL"],
-        vec!["44", "d", "x"],
+        "+----+---------+---------+",
+        "| id | t1_name | t2_name |",
+        "+----+---------+---------+",
+        "| 11 | a       | z       |",
+        "| 22 | b       | y       |",
+        "| 33 | c       |         |",
+        "| 44 | d       | x       |",
+        "+----+---------+---------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
