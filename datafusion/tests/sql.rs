@@ -5476,3 +5476,47 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     assert_eq!(expected, actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+    // Nested schema of { "some_struct": { "bar": [i64] } }
+    let struct_fields = vec![Field::new("bar", nested_dt.clone(), true)];
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "some_struct",
+        DataType::Struct(struct_fields.clone()),
+        false,
+    )]));
+
+    let builder = PrimitiveBuilder::<Int64Type>::new(3);
+    let nested_lb = ListBuilder::new(builder);
+    let mut sb = StructBuilder::new(struct_fields, vec![Box::new(nested_lb)]);
+    for int_vec in vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]] {
+        let lb = sb.field_builder::<ListBuilder<Int64Builder>>(0).unwrap();
+        for int in int_vec {
+            lb.values().append_value(int).unwrap();
+        }
+        lb.append(true).unwrap();
+    }
+    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(sb.finish())])?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let table_a = Arc::new(table);
+
+    ctx.register_table("structs", table_a)?;
+
+    // Original column is micros, convert to millis and check timestamp
+    let sql = "SELECT some_struct[\"bar\"] as l0 FROM structs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["[0, 1, 2, 3]"],
+        vec!["[4, 5, 6, 7]"],
+        vec!["[8, 9, 10, 11]"],
+    ];
+    assert_eq!(expected, actual);
+    let sql = "SELECT some_struct[\"bar\"][0] as i0 FROM structs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["0"], vec!["4"], vec!["8"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}

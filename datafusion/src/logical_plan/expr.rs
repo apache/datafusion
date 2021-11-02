@@ -246,7 +246,7 @@ pub enum Expr {
     IsNull(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
-    /// Returns the field of a [`ListArray`] by key
+    /// Returns the field of a [`ListArray`] or [`StructArray`] by key
     GetIndexedField {
         /// the expression to take the field from
         expr: Box<Expr>,
