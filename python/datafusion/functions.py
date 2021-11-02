@@ -15,21 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "datafusion-cli"
-version = "5.1.0-SNAPSHOT"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-edition = "2021"
-keywords = [ "arrow", "datafusion", "ballista", "query", "sql", "cli", "repl" ]
-license = "Apache-2.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-rust-version = "1.56"
 
-[dependencies]
-clap = "2.33"
-rustyline = "9.0"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
-datafusion = { path = "../datafusion", version = "5.1.0" }
-arrow = { version = "6.0.0" }
-ballista = { path = "../ballista/rust/client", version = "0.6.0" }
+from ._internal import functions
+
+
+def __getattr__(name):
+    return getattr(functions, name)

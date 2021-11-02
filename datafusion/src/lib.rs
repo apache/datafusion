@@ -232,6 +232,10 @@ pub use arrow;
 pub use parquet;
 
 pub(crate) mod field_util;
+
+#[cfg(feature = "pyarrow")]
+mod pyarrow;
+
 #[cfg(test)]
 pub mod test;
 pub mod test_util;

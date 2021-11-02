@@ -17,42 +17,36 @@
 
 use pyo3::prelude::*;
 
+mod catalog;
 mod context;
 mod dataframe;
 mod errors;
 mod expression;
 mod functions;
-mod scalar;
-mod to_py;
-mod to_rust;
-mod types;
 mod udaf;
 mod udf;
+mod utils;
 
-// taken from https://github.com/PyO3/pyo3/issues/471
-fn register_module_package(py: Python, package_name: &str, module: &PyModule) {
-    py.import("sys")
-        .expect("failed to import python sys module")
-        .dict()
-        .get_item("modules")
-        .expect("failed to get python modules dictionary")
-        .downcast::<pyo3::types::PyDict>()
-        .expect("failed to turn sys.modules into a PyDict")
-        .set_item(package_name, module)
-        .expect("failed to inject module");
-}
-
-/// DataFusion.
+/// Low-level DataFusion internal package.
+///
+/// The higher-level public API is defined in pure python files under the
+/// datafusion directory.
 #[pymodule]
-fn datafusion(py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<context::ExecutionContext>()?;
-    m.add_class::<dataframe::DataFrame>()?;
-    m.add_class::<expression::Expression>()?;
+fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
+    // Register the python classes
+    m.add_class::<catalog::PyCatalog>()?;
+    m.add_class::<catalog::PyDatabase>()?;
+    m.add_class::<catalog::PyTable>()?;
+    m.add_class::<context::PyExecutionContext>()?;
+    m.add_class::<dataframe::PyDataFrame>()?;
+    m.add_class::<expression::PyExpr>()?;
+    m.add_class::<udf::PyScalarUDF>()?;
+    m.add_class::<udaf::PyAggregateUDF>()?;
 
-    let functions = PyModule::new(py, "functions")?;
-    functions::init(functions)?;
-    register_module_package(py, "datafusion.functions", functions);
-    m.add_submodule(functions)?;
+    // Register the functions as a submodule
+    let funcs = PyModule::new(py, "functions")?;
+    functions::init_module(funcs)?;
+    m.add_submodule(funcs)?;
 
     Ok(())
 }

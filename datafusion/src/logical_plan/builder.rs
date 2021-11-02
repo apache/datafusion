@@ -33,6 +33,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use std::convert::TryFrom;
+use std::iter;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -426,14 +427,17 @@ impl LogicalPlanBuilder {
         Ok(plan)
     }
     /// Apply a projection without alias.
-    pub fn project(&self, expr: impl IntoIterator<Item = Expr>) -> Result<Self> {
+    pub fn project(
+        &self,
+        expr: impl IntoIterator<Item = impl Into<Expr>>,
+    ) -> Result<Self> {
         self.project_with_alias(expr, None)
     }
 
     /// Apply a projection with alias
     pub fn project_with_alias(
         &self,
-        expr: impl IntoIterator<Item = Expr>,
+        expr: impl IntoIterator<Item = impl Into<Expr>>,
         alias: Option<String>,
     ) -> Result<Self> {
         Ok(Self::from(project_with_alias(
@@ -444,8 +448,8 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a filter
-    pub fn filter(&self, expr: Expr) -> Result<Self> {
-        let expr = normalize_col(expr, &self.plan)?;
+    pub fn filter(&self, expr: impl Into<Expr>) -> Result<Self> {
+        let expr = normalize_col(expr.into(), &self.plan)?;
         Ok(Self::from(LogicalPlan::Filter {
             predicate: expr,
             input: Arc::new(self.plan.clone()),
@@ -461,7 +465,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a sort
-    pub fn sort(&self, exprs: impl IntoIterator<Item = Expr>) -> Result<Self> {
+    pub fn sort(&self, exprs: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Sort {
             expr: normalize_cols(exprs, &self.plan)?,
             input: Arc::new(self.plan.clone()),
@@ -477,7 +481,7 @@ impl LogicalPlanBuilder {
     pub fn distinct(&self) -> Result<Self> {
         let projection_expr = expand_wildcard(self.plan.schema(), &self.plan)?;
         let plan = LogicalPlanBuilder::from(self.plan.clone())
-            .aggregate(projection_expr, vec![])?
+            .aggregate(projection_expr, iter::empty::<Expr>())?
             .build()?;
         Self::from(plan).project(vec![Expr::Wildcard])
     }
@@ -629,8 +633,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a window functions to extend the schema
-    pub fn window(&self, window_expr: impl IntoIterator<Item = Expr>) -> Result<Self> {
-        let window_expr = window_expr.into_iter().collect::<Vec<Expr>>();
+    pub fn window(
+        &self,
+        window_expr: impl IntoIterator<Item = impl Into<Expr>>,
+    ) -> Result<Self> {
+        let window_expr = normalize_cols(window_expr, &self.plan)?;
         let all_expr = window_expr.iter();
         validate_unique_names("Windows", all_expr.clone(), self.plan.schema())?;
         let mut window_fields: Vec<DFField> =
@@ -648,8 +655,8 @@ impl LogicalPlanBuilder {
     /// value of the `group_expr`;
     pub fn aggregate(
         &self,
-        group_expr: impl IntoIterator<Item = Expr>,
-        aggr_expr: impl IntoIterator<Item = Expr>,
+        group_expr: impl IntoIterator<Item = impl Into<Expr>>,
+        aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
@@ -796,12 +803,13 @@ pub fn union_with_alias(
 /// * An invalid expression is used (e.g. a `sort` expression)
 pub fn project_with_alias(
     plan: LogicalPlan,
-    expr: impl IntoIterator<Item = Expr>,
+    expr: impl IntoIterator<Item = impl Into<Expr>>,
     alias: Option<String>,
 ) -> Result<LogicalPlan> {
     let input_schema = plan.schema();
     let mut projected_expr = vec![];
     for e in expr {
+        let e = e.into();
         match e {
             Expr::Wildcard => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan)?)

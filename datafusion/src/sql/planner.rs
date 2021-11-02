@@ -18,6 +18,7 @@
 //! SQL Query Planner (produces logical plan from SQL AST)
 
 use std::collections::HashSet;
+use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
@@ -822,7 +823,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = if select.distinct {
             return LogicalPlanBuilder::from(plan)
-                .aggregate(select_exprs_post_aggr, vec![])?
+                .aggregate(select_exprs_post_aggr, iter::empty::<Expr>())?
                 .build();
         } else {
             plan

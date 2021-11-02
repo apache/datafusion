@@ -329,6 +329,14 @@ impl ExecutionContext {
         )))
     }
 
+    /// Creates an empty DataFrame.
+    pub fn read_empty(&self) -> Result<Arc<dyn DataFrame>> {
+        Ok(Arc::new(DataFrameImpl::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::empty(true).build()?,
+        )))
+    }
+
     /// Creates a DataFrame for reading a CSV data source.
     pub async fn read_csv(
         &mut self,
