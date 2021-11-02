@@ -236,9 +236,5 @@ pub(crate) mod field_util;
 pub mod test;
 pub mod test_util;
 
-#[macro_use]
-#[cfg(feature = "regex_expressions")]
-extern crate lazy_static;
-
 #[cfg(doctest)]
 doc_comment::doctest!("../../README.md", readme_example_test);
