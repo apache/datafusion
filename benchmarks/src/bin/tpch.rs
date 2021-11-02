@@ -353,7 +353,7 @@ async fn execute_query(
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
     }
-    let tokomak_optimizer = tokomak::TokomakOptimizer::with_builtin_rules((), RunnerSettings{iter_limit:Some(40), node_limit:Some(50_000), time_limit: Some(Duration::from_secs_f64(0.5))}, SIMPLIFICATION_RULES);
+    let tokomak_optimizer = tokomak::TokomakOptimizer::with_builtin_rules((), RunnerSettings{iter_limit:Some(25), node_limit:Some(50_000), time_limit: Some(Duration::from_secs_f64(0.5))}, SIMPLIFICATION_RULES);
     let plan = ctx.optimize(plan)?;
     let props = ctx.state.lock().unwrap().execution_props.clone();
     let now = std::time::Instant::now();

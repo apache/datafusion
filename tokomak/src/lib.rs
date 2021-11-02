@@ -421,6 +421,7 @@ impl<T: CustomTokomakAnalysis> OptimizerRule for TokomakOptimizer<T>{
         let optimzed_expressions = self.runner_settings.optimize_exprs(&expressions, &mut  udf_registry, &self.rules, AstSize)?;
         let inputs: Vec<LogicalPlan> = inputs.iter().map(|p| (*p).to_owned()).collect();
         utils::from_plan(&plan, &optimzed_expressions, inputs.as_slice())
+        
     }
 
     fn name(&self) -> &str {
