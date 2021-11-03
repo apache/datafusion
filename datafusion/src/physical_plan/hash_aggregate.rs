@@ -777,9 +777,7 @@ async fn compute_hash_aggregate(
     // 2. convert values to a record batch
     let timer = elapsed_compute.timer();
     let batch = finalize_aggregation(&accumulators, &mode)
-        .map(|columns| {
-            RecordBatch::try_new(schema.clone(), columns)
-        })
+        .map(|columns| RecordBatch::try_new(schema.clone(), columns))
         .map_err(DataFusionError::into_arrow_external_error)?;
     timer.done();
     batch
