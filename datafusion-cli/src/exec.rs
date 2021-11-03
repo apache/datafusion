@@ -88,7 +88,7 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: PrintOptions) {
                     match cmd {
                         Command::Quit => break,
                         others => {
-                            if let Err(e) = others.execute() {
+                            if let Err(e) = others.execute(ctx).await {
                                 eprintln!("{}", e)
                             }
                         }
