@@ -17,6 +17,7 @@
 
 //! Command within CLI
 
+use crate::context::Context;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -30,13 +31,20 @@ use std::sync::Arc;
 pub enum Command {
     Quit,
     Help,
+    ListTables,
 }
 
 impl Command {
-    pub fn execute(&self) -> Result<()> {
+    pub async fn execute(&self, ctx: &mut Context) -> Result<()> {
         match self {
             Self::Help => pretty::print_batches(&[all_commands_info()])
                 .map_err(|e| DataFusionError::Execution(e.to_string())),
+            Self::ListTables => {
+                let df = ctx.sql("SHOW TABLES").await?;
+                let batches = df.collect().await?;
+                pretty::print_batches(&batches)
+                    .map_err(|e| DataFusionError::Execution(e.to_string()))
+            }
             Self::Quit => Err(DataFusionError::Execution(
                 "Unexpected quit, this should be handled outside".into(),
             )),
@@ -46,12 +54,13 @@ impl Command {
     fn get_name_and_description(&self) -> (&str, &str) {
         match self {
             Self::Quit => ("\\q", "quit datafusion-cli"),
+            Self::ListTables => ("\\d", "list tables"),
             Self::Help => ("\\?", "help"),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 2] = [Command::Quit, Command::Help];
+const ALL_COMMANDS: [Command; 3] = [Command::ListTables, Command::Quit, Command::Help];
 
 fn all_commands_info() -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
@@ -76,10 +85,11 @@ impl FromStr for Command {
     type Err = ();
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "q" => Ok(Self::Quit),
-            "?" => Ok(Self::Help),
-            _ => Err(()),
-        }
+        Ok(match s {
+            "q" => Self::Quit,
+            "d" => Self::ListTables,
+            "?" => Self::Help,
+            _ => return Err(()),
+        })
     }
 }
