@@ -145,10 +145,10 @@ pub async fn main() -> Result<()> {
             .collect::<Vec<_>>();
         for file in files {
             let mut reader = BufReader::new(file);
-            exec::exec_from_lines(&mut ctx, &mut reader, print_options.clone()).await;
+            exec::exec_from_lines(&mut ctx, &mut reader, &print_options).await;
         }
     } else {
-        exec::exec_from_repl(&mut ctx, print_options).await;
+        exec::exec_from_repl(&mut ctx, &print_options).await;
     }
 
     Ok(())
