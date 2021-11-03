@@ -503,6 +503,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
+                    println!(" ++++++++++++++++++++++++++ schema to HashAggregateExec in create_initial_plan for AggregateMode::Partial: \n {:#?}", physical_input_schema.clone());
                     let initial_aggr = Arc::new(HashAggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
@@ -547,6 +548,7 @@ impl DefaultPhysicalPlanner {
                         (initial_aggr, AggregateMode::Final)
                     };
 
+                    println!(" ++++++++++++++++++++++++++ schema to HashAggregateExec in create_initial_plan: \n {:#?}", physical_input_schema.clone());
                     Ok(Arc::new(HashAggregateExec::try_new(
                         next_partition_mode,
                         final_group
@@ -1416,6 +1418,7 @@ impl DefaultPhysicalPlanner {
     {
         let optimizers = &ctx_state.config.physical_optimizers;
         debug!("Physical plan:\n{:?}", plan);
+        println!("NGA NGA NGA ============== Physical plan:\n{:?}", plan);
 
         let mut new_plan = plan;
         for optimizer in optimizers {
@@ -1423,6 +1426,7 @@ impl DefaultPhysicalPlanner {
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!("Optimized physical plan:\n{:?}", new_plan);
+        println!("NGA NGA NGA ============== Optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
     }
 }

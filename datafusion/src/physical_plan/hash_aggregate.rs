@@ -137,6 +137,8 @@ impl HashAggregateExec {
         input_schema: SchemaRef,
     ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &group_expr, &aggr_expr, mode)?;
+        println!(" +++++ Schema created for the aggregate: \n {:#?}", schema.clone() );
+        println!(" +++++ Input Schema of the aggregate: \n {:#?}", input_schema.clone());
 
         let schema = Arc::new(schema);
 
@@ -208,6 +210,7 @@ impl ExecutionPlan for HashAggregateExec {
     }
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+        println!(" ============== RUNNING HashAggregateExec");
         let input = self.input.execute(partition).await?;
         let group_expr = self.group_expr.iter().map(|x| x.0.clone()).collect();
 
@@ -777,7 +780,12 @@ async fn compute_hash_aggregate(
     // 2. convert values to a record batch
     let timer = elapsed_compute.timer();
     let batch = finalize_aggregation(&accumulators, &mode)
-        .map(|columns| RecordBatch::try_new(schema.clone(), columns))
+        .map(|columns| {
+            println!(" =================== RecordBatch::try_new in HashAggregare's compute_hash_aggregate");
+            println!("    ================ schema: {:#?}", schema.clone());
+            println!("    ================ columns: {:#?}", columns);
+            RecordBatch::try_new(schema.clone(), columns)
+        })
         .map_err(DataFusionError::into_arrow_external_error)?;
     timer.done();
     batch
@@ -966,6 +974,10 @@ fn create_batch_from_map(
         .zip(output_schema.fields().iter())
         .map(|(col, desired_field)| cast(col, desired_field.data_type()))
         .collect::<ArrowResult<Vec<_>>>()?;
+
+        println!(" =================== RecordBatch::try_new in HashAggregare's create_batch_from_map");
+        println!("    ================ schema: {:#?}", output_schema.clone());
+        println!("    ================ columns: {:#?}", columns);
 
     RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns)
 }
