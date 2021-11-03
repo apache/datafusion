@@ -5398,7 +5398,7 @@ async fn case_with_bool_type_result() -> Result<()> {
 }
 
 #[tokio::test]
-async fn use_between_experssion_in_select_query() -> Result<()> {
+async fn use_between_expression_in_select_query() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 
     let sql = "SELECT 1 NOT BETWEEN 3 AND 5";
@@ -5434,19 +5434,14 @@ async fn use_between_experssion_in_select_query() -> Result<()> {
 
     let sql = "EXPLAIN SELECT c1 BETWEEN 2 AND 3 FROM test";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let expected = vec![
-        "+---------------+-----------------------------------------------------------------------------------------+",
-        "| plan_type     | plan                                                                                    |",
-        "+---------------+-----------------------------------------------------------------------------------------+",
-        "| logical_plan  | Projection: #test.c1 BETWEEN Int64(2) AND Int64(3)                                      |",
-        "|               |   TableScan: test projection=Some([0])                                                  |",
-        "| physical_plan | ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as test.c1 BETWEEN Int64(2) AND Int64(3)] |",
-        "|               |   RepartitionExec: partitioning=RoundRobinBatch(8)                                      |",
-        "|               |     MemoryExec: partitions=1, partition_sizes=[1]                                       |",
-        "|               |                                                                                         |",
-        "+---------------+-----------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+
+    // Only test that the projection exprs arecorrect, rather than entire output
+    let needle = "ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as test.c1 BETWEEN Int64(2) AND Int64(3)]";
+    assert_contains!(&formatted, needle);
+    let needle = "Projection: #test.c1 BETWEEN Int64(2) AND Int64(3)";
+    assert_contains!(&formatted, needle);
+
     Ok(())
 }
 
