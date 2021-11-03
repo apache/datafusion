@@ -442,6 +442,10 @@ impl ExprIdentifierVisitor<'_> {
             Expr::Wildcard => {
                 desc.push_str("Wildcard-");
             }
+            Expr::GetIndexedField { key, .. } => {
+                desc.push_str("GetIndexedField-");
+                desc.push_str(&key.to_string());
+            }
         }
 
         desc
@@ -627,6 +631,7 @@ mod test {
         avg, binary_expr, col, lit, sum, LogicalPlanBuilder, Operator,
     };
     use crate::test::*;
+    use std::iter;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let optimizer = CommonSubexprEliminate {};
@@ -684,7 +689,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
-                vec![],
+                iter::empty::<Expr>(),
                 vec![
                     sum(binary_expr(
                         col("a"),
@@ -719,7 +724,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
-                vec![],
+                iter::empty::<Expr>(),
                 vec![
                     binary_expr(lit(1), Operator::Plus, avg(col("a"))),
                     binary_expr(lit(1), Operator::Minus, avg(col("a"))),

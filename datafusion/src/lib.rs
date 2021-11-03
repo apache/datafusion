@@ -231,13 +231,14 @@ pub mod variable;
 pub use arrow;
 pub use parquet;
 
+pub(crate) mod field_util;
+
+#[cfg(feature = "pyarrow")]
+mod pyarrow;
+
 #[cfg(test)]
 pub mod test;
 pub mod test_util;
-
-#[macro_use]
-#[cfg(feature = "regex_expressions")]
-extern crate lazy_static;
 
 #[cfg(doctest)]
 doc_comment::doctest!("../../README.md", readme_example_test);

@@ -108,7 +108,7 @@ impl<'a> CsvReadOptions<'a> {
             collect_stat: false,
             file_extension: self.file_extension.to_owned(),
             target_partitions,
-            partitions: vec![],
+            table_partition_cols: vec![],
         }
     }
 }
@@ -143,7 +143,7 @@ impl<'a> AvroReadOptions<'a> {
             collect_stat: false,
             file_extension: self.file_extension.to_owned(),
             target_partitions,
-            partitions: vec![],
+            table_partition_cols: vec![],
         }
     }
 }

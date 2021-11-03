@@ -20,6 +20,7 @@
 
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
+use crate::field_util::get_indexed_field;
 use crate::logical_plan::{window_frames, DFField, DFSchema, LogicalPlan};
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::{
@@ -245,6 +246,13 @@ pub enum Expr {
     IsNull(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
+    /// Returns the field of a [`ListArray`] or [`StructArray`] by key
+    GetIndexedField {
+        /// the expression to take the field from
+        expr: Box<Expr>,
+        /// The name of the field to take
+        key: ScalarValue,
+    },
     /// Whether an expression is between a given range.
     Between {
         /// The value to compare
@@ -433,6 +441,11 @@ impl Expr {
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
+            Expr::GetIndexedField { ref expr, key } => {
+                let data_type = expr.get_type(schema)?;
+
+                get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
+            }
         }
     }
 
@@ -488,6 +501,10 @@ impl Expr {
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
+            Expr::GetIndexedField { ref expr, key } => {
+                let data_type = expr.get_type(input_schema)?;
+                get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+            }
         }
     }
 
@@ -523,6 +540,9 @@ impl Expr {
     /// This function errors when it is impossible to cast the
     /// expression to the target [arrow::datatypes::DataType].
     pub fn cast_to(self, cast_to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
+        // TODO(kszucs): most of the operations do not validate the type correctness
+        // like all of the binary expressions below. Perhaps Expr should track the
+        // type of the expression?
         let this_type = self.get_type(schema)?;
         if this_type == *cast_to_type {
             Ok(self)
@@ -763,6 +783,7 @@ impl Expr {
                     .try_fold(visitor, |visitor, arg| arg.accept(visitor))
             }
             Expr::Wildcard => Ok(visitor),
+            Expr::GetIndexedField { ref expr, .. } => expr.accept(visitor),
         }?;
 
         visitor.post_visit(self)
@@ -923,6 +944,10 @@ impl Expr {
                 negated,
             },
             Expr::Wildcard => Expr::Wildcard,
+            Expr::GetIndexedField { expr, key } => Expr::GetIndexedField {
+                expr: rewrite_boxed(expr, rewriter)?,
+                key,
+            },
         };
 
         // now rewrite this expression itself
@@ -1283,10 +1308,13 @@ fn normalize_col_with_schemas(
 /// Recursively normalize all Column expressions in a list of expression trees
 #[inline]
 pub fn normalize_cols(
-    exprs: impl IntoIterator<Item = Expr>,
+    exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
 ) -> Result<Vec<Expr>> {
-    exprs.into_iter().map(|e| normalize_col(e, plan)).collect()
+    exprs
+        .into_iter()
+        .map(|e| normalize_col(e.into(), plan))
+        .collect()
 }
 
 /// Recursively 'unnormalize' (remove all qualifiers) from an
@@ -1522,6 +1550,8 @@ pub fn approx_distinct(expr: Expr) -> Expr {
     }
 }
 
+// TODO(kszucs): this seems buggy, unary_scalar_expr! is used for many
+// varying arity functions
 /// Create an convenience function representing a unary scalar function
 macro_rules! unary_scalar_expr {
     ($ENUM:ident, $FUNC:ident) => {
@@ -1799,6 +1829,9 @@ impl fmt::Debug for Expr {
                 }
             }
             Expr::Wildcard => write!(f, "*"),
+            Expr::GetIndexedField { ref expr, key } => {
+                write!(f, "({:?})[{}]", expr, key)
+            }
         }
     }
 }
@@ -1878,6 +1911,10 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::IsNotNull(expr) => {
             let expr = create_name(expr, input_schema)?;
             Ok(format!("{} IS NOT NULL", expr))
+        }
+        Expr::GetIndexedField { expr, key } => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{}[{}]", expr, key))
         }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_name(&fun.to_string(), false, args, input_schema)

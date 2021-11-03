@@ -178,7 +178,7 @@ mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::CsvExec;
+    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::physical_plan::{collect, Statistics};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, aggr_test_schema, assert_is_pending};
@@ -192,15 +192,18 @@ mod tests {
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
         let csv = CsvExec::new(
-            Arc::new(LocalFileSystem {}),
-            files,
-            Statistics::default(),
-            aggr_test_schema(),
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: aggr_test_schema(),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         );
 
         let input = Arc::new(csv);

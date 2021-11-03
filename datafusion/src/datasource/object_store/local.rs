@@ -27,6 +27,7 @@ use futures::{stream, AsyncRead, StreamExt};
 use crate::datasource::object_store::{
     FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
+use crate::datasource::PartitionedFile;
 use crate::error::DataFusionError;
 use crate::error::Result;
 
@@ -161,19 +162,22 @@ pub fn local_object_reader_stream(files: Vec<String>) -> ObjectReaderStream {
 /// Helper method to convert a file location to a `LocalFileReader`
 pub fn local_object_reader(file: String) -> Arc<dyn ObjectReader> {
     LocalFileSystem
-        .file_reader(local_file_meta(file).sized_file)
+        .file_reader(local_unpartitioned_file(file).file_meta.sized_file)
         .expect("File not found")
 }
 
 /// Helper method to fetch the file size and date at given path and create a `FileMeta`
-pub fn local_file_meta(file: String) -> FileMeta {
+pub fn local_unpartitioned_file(file: String) -> PartitionedFile {
     let metadata = fs::metadata(&file).expect("Local file metadata");
-    FileMeta {
-        sized_file: SizedFile {
-            size: metadata.len(),
-            path: file,
+    PartitionedFile {
+        file_meta: FileMeta {
+            sized_file: SizedFile {
+                size: metadata.len(),
+                path: file,
+            },
+            last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
         },
-        last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
+        partition_values: vec![],
     }
 }
 

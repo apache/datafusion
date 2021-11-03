@@ -29,6 +29,7 @@ use crate::{
     logical_plan::{Column, Expr},
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
+        file_format::PhysicalPlanConfig,
         metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         stream::RecordBatchReceiverStream,
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
@@ -60,27 +61,18 @@ use tokio::{
 
 use async_trait::async_trait;
 
+use super::PartitionColumnProjector;
+
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
-    object_store: Arc<dyn ObjectStore>,
-    /// Grouped list of files. Each group will be processed together by one
-    /// partition of the `ExecutionPlan`.
-    file_groups: Vec<Vec<PartitionedFile>>,
-    /// Schema after projection is applied
-    schema: SchemaRef,
-    /// Projection for which columns to load
-    projection: Vec<usize>,
-    /// Batch size
-    batch_size: usize,
-    /// Statistics for the data set (sum of statistics for all partitions)
-    statistics: Statistics,
+    base_config: PhysicalPlanConfig,
+    projected_statistics: Statistics,
+    projected_schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate builder
     predicate_builder: Option<PruningPredicate>,
-    /// Optional limit of the number of rows
-    limit: Option<usize>,
 }
 
 /// Stores metrics about the parquet execution for a particular parquet file
@@ -95,26 +87,19 @@ struct ParquetFileMetrics {
 impl ParquetExec {
     /// Create a new Parquet reader execution plan provided file list and schema.
     /// Even if `limit` is set, ParquetExec rounds up the number of records to the next `batch_size`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        object_store: Arc<dyn ObjectStore>,
-        file_groups: Vec<Vec<PartitionedFile>>,
-        statistics: Statistics,
-        schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-        predicate: Option<Expr>,
-        batch_size: usize,
-        limit: Option<usize>,
-    ) -> Self {
+    pub fn new(base_config: PhysicalPlanConfig, predicate: Option<Expr>) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
-        file_groups, projection, predicate, limit);
+        base_config.file_groups, base_config.projection, predicate, base_config.limit);
 
         let metrics = ExecutionPlanMetricsSet::new();
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
         let predicate_builder = predicate.and_then(|predicate_expr| {
-            match PruningPredicate::try_new(&predicate_expr, schema.clone()) {
+            match PruningPredicate::try_new(
+                &predicate_expr,
+                base_config.file_schema.clone(),
+            ) {
                 Ok(predicate_builder) => Some(predicate_builder),
                 Err(e) => {
                     debug!(
@@ -127,73 +112,20 @@ impl ParquetExec {
             }
         });
 
-        let projection = match projection {
-            Some(p) => p,
-            None => (0..schema.fields().len()).collect(),
-        };
-
-        let (projected_schema, projected_statistics) =
-            Self::project(&projection, schema, statistics);
+        let (projected_schema, projected_statistics) = base_config.project();
 
         Self {
-            object_store,
-            file_groups,
-            schema: projected_schema,
-            projection,
+            base_config,
+            projected_schema,
+            projected_statistics,
             metrics,
             predicate_builder,
-            batch_size,
-            statistics: projected_statistics,
-            limit,
         }
     }
 
-    fn project(
-        projection: &[usize],
-        schema: SchemaRef,
-        statistics: Statistics,
-    ) -> (SchemaRef, Statistics) {
-        let projected_schema = Schema::new(
-            projection
-                .iter()
-                .map(|i| schema.field(*i).clone())
-                .collect(),
-        );
-
-        let new_column_statistics = statistics.column_statistics.map(|stats| {
-            let mut projected_stats = Vec::with_capacity(projection.len());
-            for proj in projection {
-                projected_stats.push(stats[*proj].clone());
-            }
-            projected_stats
-        });
-
-        let statistics = Statistics {
-            num_rows: statistics.num_rows,
-            total_byte_size: statistics.total_byte_size,
-            column_statistics: new_column_statistics,
-            is_exact: statistics.is_exact,
-        };
-
-        (Arc::new(projected_schema), statistics)
-    }
-
-    /// List of data files
-    pub fn file_groups(&self) -> &[Vec<PartitionedFile>] {
-        &self.file_groups
-    }
-    /// Optional projection for which columns to load
-    pub fn projection(&self) -> &[usize] {
-        &self.projection
-    }
-    /// Batch size
-    pub fn batch_size(&self) -> usize {
-        self.batch_size
-    }
-
-    /// Limit in nr. of rows
-    pub fn limit(&self) -> Option<usize> {
-        self.limit
+    /// Ref to the base configs
+    pub fn base_config(&self) -> &PhysicalPlanConfig {
+        &self.base_config
     }
 }
 
@@ -227,7 +159,7 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.projected_schema)
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -237,7 +169,7 @@ impl ExecutionPlan for ParquetExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.file_groups.len())
+        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
     fn with_new_children(
@@ -262,13 +194,20 @@ impl ExecutionPlan for ParquetExec {
             Receiver<ArrowResult<RecordBatch>>,
         ) = channel(2);
 
-        let partition = self.file_groups[partition_index].clone();
+        let partition = self.base_config.file_groups[partition_index].clone();
         let metrics = self.metrics.clone();
-        let projection = self.projection.clone();
+        let projection = match self.base_config.file_column_projection_indices() {
+            Some(proj) => proj,
+            None => (0..self.base_config.file_schema.fields().len()).collect(),
+        };
         let predicate_builder = self.predicate_builder.clone();
-        let batch_size = self.batch_size;
-        let limit = self.limit;
-        let object_store = Arc::clone(&self.object_store);
+        let batch_size = self.base_config.batch_size;
+        let limit = self.base_config.limit;
+        let object_store = Arc::clone(&self.base_config.object_store);
+        let partition_col_proj = PartitionColumnProjector::new(
+            Arc::clone(&self.projected_schema),
+            &self.base_config.table_partition_cols,
+        );
 
         let join_handle = task::spawn_blocking(move || {
             if let Err(e) = read_partition(
@@ -281,13 +220,14 @@ impl ExecutionPlan for ParquetExec {
                 batch_size,
                 response_tx,
                 limit,
+                partition_col_proj,
             ) {
                 println!("Parquet reader thread terminated due to error: {:?}", e);
             }
         });
 
         Ok(RecordBatchReceiverStream::create(
-            &self.schema,
+            &self.projected_schema,
             response_rx,
             join_handle,
         ))
@@ -303,9 +243,9 @@ impl ExecutionPlan for ParquetExec {
                 write!(
                     f,
                     "ParquetExec: batch_size={}, limit={:?}, partitions={}",
-                    self.batch_size,
-                    self.limit,
-                    super::FileGroupsDisplay(&self.file_groups)
+                    self.base_config.batch_size,
+                    self.base_config.limit,
+                    super::FileGroupsDisplay(&self.base_config.file_groups)
                 )
             }
         }
@@ -316,7 +256,7 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn statistics(&self) -> Statistics {
-        self.statistics.clone()
+        self.projected_statistics.clone()
     }
 }
 
@@ -456,6 +396,7 @@ fn read_partition(
     batch_size: usize,
     response_tx: Sender<ArrowResult<RecordBatch>>,
     limit: Option<usize>,
+    mut partition_column_projector: PartitionColumnProjector,
 ) -> Result<()> {
     let mut total_rows = 0;
     'outer: for partitioned_file in partition {
@@ -483,7 +424,10 @@ fn read_partition(
             match batch_reader.next() {
                 Some(Ok(batch)) => {
                     total_rows += batch.num_rows();
-                    send_result(&response_tx, Ok(batch))?;
+                    let proj_batch = partition_column_projector
+                        .project(batch, &partitioned_file.partition_values);
+
+                    send_result(&response_tx, proj_batch)?;
                     if limit.map(|l| total_rows >= l).unwrap_or(false) {
                         break 'outer;
                     }
@@ -519,7 +463,7 @@ mod tests {
     use crate::datasource::{
         file_format::{parquet::ParquetFormat, FileFormat},
         object_store::local::{
-            local_file_meta, local_object_reader_stream, LocalFileSystem,
+            local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
         },
     };
 
@@ -533,21 +477,22 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn test() -> Result<()> {
+    async fn parquet_exec_with_projection() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let parquet_exec = ParquetExec::new(
-            Arc::new(LocalFileSystem {}),
-            vec![vec![PartitionedFile {
-                file_meta: local_file_meta(filename.clone()),
-            }]],
-            Statistics::default(),
-            ParquetFormat::default()
-                .infer_schema(local_object_reader_stream(vec![filename]))
-                .await?,
-            Some(vec![0, 1, 2]),
-            None,
-            1024,
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
+                file_schema: ParquetFormat::default()
+                    .infer_schema(local_object_reader_stream(vec![filename]))
+                    .await?,
+                statistics: Statistics::default(),
+                projection: Some(vec![0, 1, 2]),
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
             None,
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
@@ -568,6 +513,62 @@ mod tests {
 
         let batch = results.next().await;
         assert!(batch.is_none());
+
+        let batch = results.next().await;
+        assert!(batch.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_with_partition() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/alltypes_plain.parquet", testdata);
+        let mut partitioned_file = local_unpartitioned_file(filename.clone());
+        partitioned_file.partition_values = vec![
+            ScalarValue::Utf8(Some("2021".to_owned())),
+            ScalarValue::Utf8(Some("10".to_owned())),
+            ScalarValue::Utf8(Some("26".to_owned())),
+        ];
+        let parquet_exec = ParquetExec::new(
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_groups: vec![vec![partitioned_file]],
+                file_schema: ParquetFormat::default()
+                    .infer_schema(local_object_reader_stream(vec![filename]))
+                    .await?,
+                statistics: Statistics::default(),
+                // file has 10 cols so index 12 should be month
+                projection: Some(vec![0, 1, 2, 12]),
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![
+                    "year".to_owned(),
+                    "month".to_owned(),
+                    "day".to_owned(),
+                ],
+            },
+            None,
+        );
+        assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+
+        let mut results = parquet_exec.execute(0).await?;
+        let batch = results.next().await.unwrap()?;
+        let expected = vec![
+            "+----+----------+-------------+-------+",
+            "| id | bool_col | tinyint_col | month |",
+            "+----+----------+-------------+-------+",
+            "| 4  | true     | 0           | 10    |",
+            "| 5  | false    | 1           | 10    |",
+            "| 6  | true     | 0           | 10    |",
+            "| 7  | false    | 1           | 10    |",
+            "| 2  | true     | 0           | 10    |",
+            "| 3  | false    | 1           | 10    |",
+            "| 0  | true     | 0           | 10    |",
+            "| 1  | false    | 1           | 10    |",
+            "+----+----------+-------------+-------+",
+        ];
+        crate::assert_batches_eq!(expected, &[batch]);
 
         let batch = results.next().await;
         assert!(batch.is_none());

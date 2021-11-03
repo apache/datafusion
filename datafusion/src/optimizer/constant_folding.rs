@@ -17,8 +17,6 @@
 
 //! Constant folding and algebraic simplification
 
-use std::sync::Arc;
-
 use arrow::datatypes::DataType;
 
 use crate::error::Result;
@@ -26,7 +24,6 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{DFSchemaRef, Expr, ExprRewriter, LogicalPlan, Operator};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use crate::physical_plan::functions::BuiltinScalarFunction;
 use crate::scalar::ScalarValue;
 
 /// Simplifies plans by rewriting [`Expr`]`s evaluating constants
@@ -61,18 +58,14 @@ impl OptimizerRule for ConstantFolding {
         // children plans.
         let mut simplifier = Simplifier {
             schemas: plan.all_schemas(),
-            execution_props,
         };
 
-        let mut const_evaluator = utils::ConstEvaluator::new();
+        let mut const_evaluator = utils::ConstEvaluator::new(execution_props);
 
         match plan {
-            LogicalPlan::Filter { predicate, input } => Ok(LogicalPlan::Filter {
-                predicate: predicate.clone().rewrite(&mut simplifier)?,
-                input: Arc::new(self.optimize(input, execution_props)?),
-            }),
-            // Rest: recurse into plan, apply optimization where possible
-            LogicalPlan::Projection { .. }
+            // Recurse into plan, apply optimization where possible
+            LogicalPlan::Filter { .. }
+            | LogicalPlan::Projection { .. }
             | LogicalPlan::Window { .. }
             | LogicalPlan::Aggregate { .. }
             | LogicalPlan::Repartition { .. }
@@ -130,7 +123,6 @@ impl OptimizerRule for ConstantFolding {
 struct Simplifier<'a> {
     /// input schemas
     schemas: Vec<&'a DFSchemaRef>,
-    execution_props: &'a ExecutionProps,
 }
 
 impl<'a> Simplifier<'a> {
@@ -218,6 +210,104 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                         right,
                     },
                 },
+                Operator::Or => match (left.as_ref(), right.as_ref()) {
+                    (Expr::Literal(ScalarValue::Boolean(b)), _)
+                        if self.is_boolean_type(&right) =>
+                    {
+                        match b {
+                            Some(true) => Expr::Literal(ScalarValue::Boolean(Some(true))),
+                            Some(false) => match *right {
+                                Expr::Literal(ScalarValue::Boolean(None)) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                _ => *right,
+                            },
+                            None => match *right {
+                                Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+                                    Expr::Literal(ScalarValue::Boolean(Some(true)))
+                                }
+                                Expr::Literal(ScalarValue::Boolean(Some(false))) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                _ => *right,
+                            },
+                        }
+                    }
+                    (_, Expr::Literal(ScalarValue::Boolean(b)))
+                        if self.is_boolean_type(&left) =>
+                    {
+                        match b {
+                            Some(true) => Expr::Literal(ScalarValue::Boolean(Some(true))),
+                            Some(false) => match *left {
+                                Expr::Literal(ScalarValue::Boolean(None)) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                _ => *left,
+                            },
+                            None => match *left {
+                                Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+                                    Expr::Literal(ScalarValue::Boolean(Some(true)))
+                                }
+                                Expr::Literal(ScalarValue::Boolean(Some(false))) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                _ => *left,
+                            },
+                        }
+                    }
+                    _ => Expr::BinaryExpr {
+                        left,
+                        op: Operator::Or,
+                        right,
+                    },
+                },
+                Operator::And => match (left.as_ref(), right.as_ref()) {
+                    (Expr::Literal(ScalarValue::Boolean(b)), _)
+                        if self.is_boolean_type(&right) =>
+                    {
+                        // match b {
+                        //     Some(false) => {
+                        //         Expr::Literal(ScalarValue::Boolean(Some(false)))
+                        //     }
+                        //     _ => *right,
+                        // }
+                        match b {
+                            Some(true) => match *right {
+                                Expr::Literal(ScalarValue::Boolean(None)) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                _ => *right,
+                            },
+                            Some(false) => {
+                                Expr::Literal(ScalarValue::Boolean(Some(false)))
+                            }
+                            None => match *right {
+                                Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+                                    Expr::Literal(ScalarValue::Boolean(None))
+                                }
+                                Expr::Literal(ScalarValue::Boolean(Some(false))) => {
+                                    Expr::Literal(ScalarValue::Boolean(Some(false)))
+                                }
+                                _ => *right,
+                            },
+                        }
+                    }
+                    (_, Expr::Literal(ScalarValue::Boolean(b)))
+                        if self.is_boolean_type(&left) =>
+                    {
+                        match b {
+                            Some(false) => {
+                                Expr::Literal(ScalarValue::Boolean(Some(false)))
+                            }
+                            _ => *left,
+                        }
+                    }
+                    _ => Expr::BinaryExpr {
+                        left,
+                        op: Operator::And,
+                        right,
+                    },
+                },
                 _ => Expr::BinaryExpr { left, op, right },
             },
             // Not(Not(expr)) --> expr
@@ -228,15 +318,6 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                     Expr::Not(inner)
                 }
             }
-            // convert now() --> the time in `ExecutionProps`
-            Expr::ScalarFunction {
-                fun: BuiltinScalarFunction::Now,
-                ..
-            } => Expr::Literal(ScalarValue::TimestampNanosecond(Some(
-                self.execution_props
-                    .query_execution_start_time
-                    .timestamp_nanos(),
-            ))),
             expr => {
                 // no additional rewrites possible
                 expr
@@ -248,10 +329,13 @@ impl<'a> ExprRewriter for Simplifier<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{
         assert_contains,
         logical_plan::{col, lit, max, min, DFField, DFSchema, LogicalPlanBuilder},
+        physical_plan::functions::BuiltinScalarFunction,
     };
 
     use arrow::datatypes::*;
@@ -282,7 +366,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(
@@ -298,7 +381,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         // x = null is always null
@@ -334,7 +416,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(col("c2").get_type(&schema)?, DataType::Boolean);
@@ -365,7 +446,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         // When one of the operand is not of boolean type, folding the other boolean constant will
@@ -405,7 +485,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(col("c2").get_type(&schema)?, DataType::Boolean);
@@ -441,7 +520,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         // when one of the operand is not of boolean type, folding the other boolean constant will
@@ -477,7 +555,6 @@ mod tests {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
-            execution_props: &ExecutionProps::new(),
         };
 
         assert_eq!(
@@ -754,27 +831,6 @@ mod tests {
     }
 
     #[test]
-    fn single_now_expr() {
-        let table_scan = test_table_scan().unwrap();
-        let proj = vec![now_expr()];
-        let time = Utc::now();
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let expected = format!(
-            "Projection: TimestampNanosecond({})\
-            \n  TableScan: test projection=None",
-            time.timestamp_nanos()
-        );
-        let actual = get_optimized_plan_formatted(&plan, &time);
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
     fn multiple_now_expr() {
         let table_scan = test_table_scan().unwrap();
         let time = Utc::now();
@@ -838,20 +894,128 @@ mod tests {
         //  now() < cast(to_timestamp(...) as int) + 5000000000
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(
-                now_expr()
+                cast_to_int64_expr(now_expr())
                     .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000)),
             )
             .unwrap()
             .build()
             .unwrap();
 
-        // Note that constant folder should be able to run again and fold
-        // this whole expression down to a single constant;
-        // https://github.com/apache/arrow-datafusion/issues/1160
-        let expected = "Filter: TimestampNanosecond(1599566400000000000) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Int64) + Int32(50000)\
+        // Note that constant folder runs and folds the entire
+        // expression down to a single constant (true)
+        let expected = "Filter: Boolean(true)\
                         \n  TableScan: test projection=None";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);
+    }
+    #[test]
+    fn optimize_expr_bool_or() -> Result<()> {
+        let schema = expr_test_schema();
+        let mut rewriter = Simplifier {
+            schemas: vec![&schema],
+        };
+
+        // col || true is always true
+        assert_eq!(
+            (col("c2").or(Expr::Literal(ScalarValue::Boolean(Some(true)))))
+                .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(true))),
+        );
+
+        // col || false is always col
+        assert_eq!(
+            (col("c2").or(Expr::Literal(ScalarValue::Boolean(Some(false)))))
+                .rewrite(&mut rewriter)?,
+            col("c2"),
+        );
+
+        // true || null is always true
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(Some(true)))
+                .or(Expr::Literal(ScalarValue::Boolean(None))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(true))),
+        );
+
+        // null || true is always true
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(None))
+                .or(Expr::Literal(ScalarValue::Boolean(Some(true)))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(true))),
+        );
+
+        // false || null is always null
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(Some(false)))
+                .or(Expr::Literal(ScalarValue::Boolean(None))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        // null || false is always null
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(None))
+                .or(Expr::Literal(ScalarValue::Boolean(Some(false)))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        Ok(())
+    }
+    #[test]
+    fn optimize_expr_bool_and() -> Result<()> {
+        let schema = expr_test_schema();
+        let mut rewriter = Simplifier {
+            schemas: vec![&schema],
+        };
+
+        // col & true is always col
+        assert_eq!(
+            (col("c2").and(Expr::Literal(ScalarValue::Boolean(Some(true)))))
+                .rewrite(&mut rewriter)?,
+            col("c2"),
+        );
+        // col & false is always false
+        assert_eq!(
+            (col("c2").and(Expr::Literal(ScalarValue::Boolean(Some(false)))))
+                .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(false))),
+        );
+
+        // true && null is always null
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(Some(true)))
+                .and(Expr::Literal(ScalarValue::Boolean(None))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        // null && true is always null
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(None))
+                .and(Expr::Literal(ScalarValue::Boolean(Some(true)))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        // false && null is always false
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(Some(false)))
+                .and(Expr::Literal(ScalarValue::Boolean(None))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(false))),
+        );
+
+        // null && false is always false
+        assert_eq!(
+            (Expr::Literal(ScalarValue::Boolean(None))
+                .and(Expr::Literal(ScalarValue::Boolean(Some(false)))))
+            .rewrite(&mut rewriter)?,
+            lit(ScalarValue::Boolean(Some(false))),
+        );
+
+        Ok(())
     }
 }

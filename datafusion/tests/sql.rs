@@ -49,6 +49,8 @@ use datafusion::{
 };
 use datafusion::{execution::context::ExecutionContext, physical_plan::displayable};
 
+mod common;
+
 #[tokio::test]
 async fn nyc() -> Result<()> {
     // schema for nyxtaxi csv files
@@ -1807,8 +1809,6 @@ async fn csv_query_limit_zero() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn csv_query_create_external_table() {
     let mut ctx = ExecutionContext::new();
@@ -1830,11 +1830,16 @@ async fn csv_query_external_table_count() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT COUNT(c12) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
-    // let a = execute_to_batches(&mut ctx, sql).await;
-    // println!("{}", pretty_format_batches(&a).unwrap());
-    let expected = vec![vec!["100"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------------+",
+        "| COUNT(aggregate_test_100.c12) |",
+        "+-------------------------------+",
+        "| 100                           |",
+        "+-------------------------------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -1844,9 +1849,15 @@ async fn csv_query_external_table_sum() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql =
         "SELECT SUM(CAST(c7 AS BIGINT)), SUM(CAST(c8 AS BIGINT)) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["13060", "3017641"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------------------------+-------------------------------------------+",
+        "| SUM(CAST(aggregate_test_100.c7 AS Int64)) | SUM(CAST(aggregate_test_100.c8 AS Int64)) |",
+        "+-------------------------------------------+-------------------------------------------+",
+        "| 13060                                     | 3017641                                   |",
+        "+-------------------------------------------+-------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -1854,9 +1865,15 @@ async fn csv_query_count_star() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT COUNT(*) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["100"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 100             |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -1864,9 +1881,15 @@ async fn csv_query_count_one() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["100"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 100             |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -1877,9 +1900,18 @@ async fn case_when() -> Result<()> {
              WHEN c1 = 'b' THEN 2 \
              END \
         FROM t1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"], vec!["2"], vec!["NULL"], vec!["NULL"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+--------------------------------------------------------------------------------------+",
+        "| CASE WHEN #t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN #t1.c1 = Utf8(\"b\") THEN Int64(2) END |",
+        "+--------------------------------------------------------------------------------------+",
+        "| 1                                                                                    |",
+        "| 2                                                                                    |",
+        "|                                                                                      |",
+        "|                                                                                      |",
+        "+--------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1891,9 +1923,18 @@ async fn case_when_else() -> Result<()> {
              WHEN c1 = 'b' THEN 2 \
              ELSE 999 END \
         FROM t1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"], vec!["2"], vec!["999"], vec!["999"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+------------------------------------------------------------------------------------------------------+",
+        "| CASE WHEN #t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN #t1.c1 = Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
+        "+------------------------------------------------------------------------------------------------------+",
+        "| 1                                                                                                    |",
+        "| 2                                                                                                    |",
+        "| 999                                                                                                  |",
+        "| 999                                                                                                  |",
+        "+------------------------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1905,9 +1946,18 @@ async fn case_when_with_base_expr() -> Result<()> {
              WHEN 'b' THEN 2 \
              END \
         FROM t1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"], vec!["2"], vec!["NULL"], vec!["NULL"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------------------------------------------------------------------------+",
+        "| CASE #t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) END |",
+        "+---------------------------------------------------------------------------+",
+        "| 1                                                                         |",
+        "| 2                                                                         |",
+        "|                                                                           |",
+        "|                                                                           |",
+        "+---------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1919,9 +1969,18 @@ async fn case_when_else_with_base_expr() -> Result<()> {
              WHEN 'b' THEN 2 \
              ELSE 999 END \
         FROM t1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"], vec!["2"], vec!["999"], vec!["999"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------------------------------------------------------------------------+",
+        "| CASE #t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
+        "+-------------------------------------------------------------------------------------------+",
+        "| 1                                                                                         |",
+        "| 2                                                                                         |",
+        "| 999                                                                                       |",
+        "| 999                                                                                       |",
+        "+-------------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1950,13 +2009,17 @@ async fn equijoin() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
 
     let mut ctx = create_join_context_qualified()?;
@@ -1964,10 +2027,18 @@ async fn equijoin() -> Result<()> {
         "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t1.a = t2.a ORDER BY t1.a",
         "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t2.a = t1.a ORDER BY t1.a",
     ];
-    let expected = vec![vec!["1", "100"], vec!["2", "200"], vec!["4", "400"]];
+    let expected = vec![
+        "+---+-----+",
+        "| a | b   |",
+        "+---+-----+",
+        "| 1 | 100 |",
+        "| 2 | 200 |",
+        "| 4 | 400 |",
+        "+---+-----+",
+    ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -1982,13 +2053,17 @@ async fn equijoin_multiple_condition_ordering() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t2_name <> t1_name ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -1998,9 +2073,16 @@ async fn equijoin_and_other_condition() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["11", "a", "z"], vec!["22", "b", "y"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "+-------+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -2011,15 +2093,18 @@ async fn equijoin_left_and_condition_from_right() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
     let res = ctx.create_logical_plan(sql);
     assert!(res.is_ok());
-    let actual = execute(&mut ctx, sql).await;
-
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["33", "c", "NULL"],
-        vec!["44", "d", "NULL"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 33    | c       |         |",
+        "| 44    | d       |         |",
+        "+-------+---------+---------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 
     Ok(())
 }
@@ -2031,16 +2116,18 @@ async fn equijoin_right_and_condition_from_left() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t1_id >= 22 ORDER BY t2_name";
     let res = ctx.create_logical_plan(sql);
     assert!(res.is_ok());
-    let actual = execute(&mut ctx, sql).await;
-
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["NULL", "NULL", "w"],
-        vec!["44", "d", "x"],
-        vec!["22", "b", "y"],
-        vec!["NULL", "NULL", "z"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "|       |         | w       |",
+        "| 44    | d       | x       |",
+        "| 22    | b       | y       |",
+        "|       |         | z       |",
+        "+-------+---------+---------+",
     ];
-    assert_eq!(expected, actual);
-
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -2065,14 +2152,18 @@ async fn left_join() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["33", "c", "NULL"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 33    | c       |         |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -2086,15 +2177,19 @@ async fn left_join_unbalanced() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["33", "c", "NULL"],
-        vec!["44", "d", "x"],
-        vec!["77", "e", "NULL"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 33    | c       |         |",
+        "| 44    | d       | x       |",
+        "| 77    | e       |         |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -2107,14 +2202,18 @@ async fn right_join() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t2_id = t1_id ORDER BY t1_id"
     ];
     let expected = vec![
-        vec!["NULL", "NULL", "w"],
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "|       |         | w       |",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -2127,15 +2226,19 @@ async fn full_join() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["NULL", "NULL", "w"],
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["33", "c", "NULL"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "|       |         | w       |",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 33    | c       |         |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
 
     let equivalent_sql = [
@@ -2143,8 +2246,8 @@ async fn full_join() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
 
     Ok(())
@@ -2154,16 +2257,22 @@ async fn full_join() -> Result<()> {
 async fn left_join_using() -> Result<()> {
     let mut ctx = create_join_context("id", "id")?;
     let sql = "SELECT id, t1_name, t2_name FROM t1 LEFT JOIN t2 USING (id) ORDER BY id";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["33", "c", "NULL"],
-        vec!["44", "d", "x"],
+        "+----+---------+---------+",
+        "| id | t1_name | t2_name |",
+        "+----+---------+---------+",
+        "| 11 | a       | z       |",
+        "| 22 | b       | y       |",
+        "| 33 | c       |         |",
+        "| 44 | d       | x       |",
+        "+----+---------+---------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn equijoin_implicit_syntax() -> Result<()> {
@@ -3195,24 +3304,6 @@ async fn explain_analyze_runs_optimizers() {
     assert_contains!(actual, expected);
 }
 
-fn aggr_test_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Utf8, false),
-        Field::new("c2", DataType::UInt32, false),
-        Field::new("c3", DataType::Int8, false),
-        Field::new("c4", DataType::Int16, false),
-        Field::new("c5", DataType::Int32, false),
-        Field::new("c6", DataType::Int64, false),
-        Field::new("c7", DataType::UInt8, false),
-        Field::new("c8", DataType::UInt16, false),
-        Field::new("c9", DataType::UInt32, false),
-        Field::new("c10", DataType::UInt64, false),
-        Field::new("c11", DataType::Float32, false),
-        Field::new("c12", DataType::Float64, false),
-        Field::new("c13", DataType::Utf8, false),
-    ]))
-}
-
 async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
 
@@ -3256,7 +3347,7 @@ async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
 
 async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
     let testdata = datafusion::test_util::arrow_test_data();
-    let schema = aggr_test_schema();
+    let schema = common::aggr_test_schema();
     ctx.register_csv(
         "aggregate_test_100",
         &format!("{}/csv/aggregate_test_100.csv", testdata),
@@ -5356,6 +5447,129 @@ async fn use_between_experssion_in_select_query() -> Result<()> {
         "+---------------+-----------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
+    Ok(())
+}
 
+#[tokio::test]
+async fn query_get_indexed_field() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "some_list",
+        DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
+        false,
+    )]));
+    let builder = PrimitiveBuilder::<Int64Type>::new(3);
+    let mut lb = ListBuilder::new(builder);
+    for int_vec in vec![vec![0, 1, 2], vec![4, 5, 6], vec![7, 8, 9]] {
+        let builder = lb.values();
+        for int in int_vec {
+            builder.append_value(int).unwrap();
+        }
+        lb.append(true).unwrap();
+    }
+
+    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(lb.finish())])?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let table_a = Arc::new(table);
+
+    ctx.register_table("ints", table_a)?;
+
+    // Original column is micros, convert to millis and check timestamp
+    let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["0"], vec!["4"], vec!["7"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_nested_get_indexed_field() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+    // Nested schema of { "some_list": [[i64]] }
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "some_list",
+        DataType::List(Box::new(Field::new("item", nested_dt.clone(), true))),
+        false,
+    )]));
+
+    let builder = PrimitiveBuilder::<Int64Type>::new(3);
+    let nested_lb = ListBuilder::new(builder);
+    let mut lb = ListBuilder::new(nested_lb);
+    for int_vec_vec in vec![
+        vec![vec![0, 1], vec![2, 3], vec![3, 4]],
+        vec![vec![5, 6], vec![7, 8], vec![9, 10]],
+        vec![vec![11, 12], vec![13, 14], vec![15, 16]],
+    ] {
+        let nested_builder = lb.values();
+        for int_vec in int_vec_vec {
+            let builder = nested_builder.values();
+            for int in int_vec {
+                builder.append_value(int).unwrap();
+            }
+            nested_builder.append(true).unwrap();
+        }
+        lb.append(true).unwrap();
+    }
+
+    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(lb.finish())])?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let table_a = Arc::new(table);
+
+    ctx.register_table("ints", table_a)?;
+
+    // Original column is micros, convert to millis and check timestamp
+    let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["[0, 1]"], vec!["[5, 6]"], vec!["[11, 12]"]];
+    assert_eq!(expected, actual);
+    let sql = "SELECT some_list[0][0] as i0 FROM ints LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["0"], vec!["5"], vec!["11"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+    // Nested schema of { "some_struct": { "bar": [i64] } }
+    let struct_fields = vec![Field::new("bar", nested_dt.clone(), true)];
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "some_struct",
+        DataType::Struct(struct_fields.clone()),
+        false,
+    )]));
+
+    let builder = PrimitiveBuilder::<Int64Type>::new(3);
+    let nested_lb = ListBuilder::new(builder);
+    let mut sb = StructBuilder::new(struct_fields, vec![Box::new(nested_lb)]);
+    for int_vec in vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]] {
+        let lb = sb.field_builder::<ListBuilder<Int64Builder>>(0).unwrap();
+        for int in int_vec {
+            lb.values().append_value(int).unwrap();
+        }
+        lb.append(true).unwrap();
+    }
+    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(sb.finish())])?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let table_a = Arc::new(table);
+
+    ctx.register_table("structs", table_a)?;
+
+    // Original column is micros, convert to millis and check timestamp
+    let sql = "SELECT some_struct[\"bar\"] as l0 FROM structs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        vec!["[0, 1, 2, 3]"],
+        vec!["[4, 5, 6, 7]"],
+        vec!["[8, 9, 10, 11]"],
+    ];
+    assert_eq!(expected, actual);
+    let sql = "SELECT some_struct[\"bar\"][0] as i0 FROM structs LIMIT 3";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["0"], vec!["4"], vec!["8"]];
+    assert_eq!(expected, actual);
     Ok(())
 }

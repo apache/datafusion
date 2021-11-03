@@ -221,7 +221,7 @@ impl ExecutionContext {
                         .unwrap()
                         .config
                         .target_partitions,
-                    partitions: vec![],
+                    table_partition_cols: vec![],
                 };
 
                 // TODO make schema in CreateExternalTable optional instead of empty
@@ -326,6 +326,14 @@ impl ExecutionContext {
             )
             .await?
             .build()?,
+        )))
+    }
+
+    /// Creates an empty DataFrame.
+    pub fn read_empty(&self) -> Result<Arc<dyn DataFrame>> {
+        Ok(Arc::new(DataFrameImpl::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::empty(true).build()?,
         )))
     }
 
@@ -442,7 +450,7 @@ impl ExecutionContext {
             collect_stat: true,
             file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
             target_partitions,
-            partitions: vec![],
+            table_partition_cols: vec![],
         };
 
         self.register_listing_table(name, uri, listing_options, None)
@@ -891,15 +899,6 @@ impl ExecutionConfig {
     /// Create an execution config with default setting
     pub fn new() -> Self {
         Default::default()
-    }
-
-    /// Deprecated. Use with_target_partitions instead.
-    #[deprecated(
-        since = "5.1.0",
-        note = "This method is deprecated in favor of `with_target_partitions`."
-    )]
-    pub fn with_concurrency(self, n: usize) -> Self {
-        self.with_target_partitions(n)
     }
 
     /// Customize target_partitions
