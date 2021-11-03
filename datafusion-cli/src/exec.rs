@@ -18,15 +18,20 @@
 //! Execution functions
 
 use crate::{
+    command::Command,
     context::Context,
     print_format::{all_print_formats, PrintFormat},
     print_options::PrintOptions,
 };
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};
 use rustyline::Editor;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
+use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// run and execute SQL statements and commands from a file, against a context with the given print options
@@ -78,23 +83,34 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: PrintOptions) {
     let mut query = "".to_owned();
     loop {
         match rl.readline("> ") {
-            Ok(ref line) if is_exit_command(line) && query.is_empty() => {
-                break;
+            Ok(line) if line.starts_with('\\') => {
+                if let Ok(cmd) = &line[1..].parse::<Command>() {
+                    match cmd {
+                        Command::Quit => break,
+                        others => {
+                            if let Err(e) = others.execute() {
+                                eprintln!("{}", e)
+                            }
+                        }
+                    }
+                } else {
+                    eprintln!("'\\{}' is not a valid command", &line[1..]);
+                }
             }
-            Ok(ref line) if line.starts_with("--") => {
+            Ok(line) if line.starts_with("--") => {
                 continue;
             }
-            Ok(ref line) if line.trim_end().ends_with(';') => {
+            Ok(line) if line.trim_end().ends_with(';') => {
                 query.push_str(line.trim_end());
                 rl.add_history_entry(query.clone());
                 match exec_and_print(ctx, print_options.clone(), query).await {
                     Ok(_) => {}
-                    Err(err) => println!("{:?}", err),
+                    Err(err) => eprintln!("{:?}", err),
                 }
                 query = "".to_owned();
             }
-            Ok(ref line) => {
-                query.push_str(line);
+            Ok(line) => {
+                query.push_str(&line);
                 query.push('\n');
             }
             Err(_) => {
@@ -117,9 +133,4 @@ async fn exec_and_print(
     print_options.print_batches(&results, now)?;
 
     Ok(())
-}
-
-fn is_exit_command(line: &str) -> bool {
-    let line = line.trim_end().to_lowercase();
-    line == "quit" || line == "exit"
 }
