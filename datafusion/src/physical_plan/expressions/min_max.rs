@@ -38,6 +38,15 @@ use arrow::{
 
 use super::format_state_name;
 
+// min/max aggregation only returns a value for each group
+// and should not be a Dictionary data type anymore
+fn min_max_aggregate_data_type(input_type: DataType) -> DataType {
+    match input_type {
+        DataType::Dictionary(_, value_type) => (*value_type).clone(),
+        _ => input_type.clone(),
+    }
+}
+
 /// MAX aggregate expression
 #[derive(Debug)]
 pub struct Max {
@@ -72,7 +81,7 @@ impl AggregateExpr for Max {
     fn field(&self) -> Result<Field> {
         Ok(Field::new(
             &self.name,
-            self.data_type.clone(),
+            min_max_aggregate_data_type(self.data_type.clone()),
             self.nullable,
         ))
     }
@@ -80,7 +89,7 @@ impl AggregateExpr for Max {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             &format_state_name(&self.name, "max"),
-            self.data_type.clone(),
+            min_max_aggregate_data_type(self.data_type.clone()),
             true,
         )])
     }
@@ -394,7 +403,7 @@ impl AggregateExpr for Min {
     fn field(&self) -> Result<Field> {
         Ok(Field::new(
             &self.name,
-            self.data_type.clone(),
+            min_max_aggregate_data_type(self.data_type.clone()),
             self.nullable,
         ))
     }
@@ -402,7 +411,7 @@ impl AggregateExpr for Min {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             &format_state_name(&self.name, "min"),
-            self.data_type.clone(),
+            min_max_aggregate_data_type(self.data_type.clone()),
             true,
         )])
     }

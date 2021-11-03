@@ -3946,13 +3946,6 @@ async fn query_on_string_dictionary() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
-    // aggregation min
-    let sql = "SELECT MIN(d1) FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["one"]];
-    assert_eq!(expected, actual);
-
-
     // Basic SELECT
     let sql = "SELECT * FROM test";
     let actual = execute(&mut ctx, sql).await;
@@ -3981,6 +3974,12 @@ async fn query_on_string_dictionary() -> Result<()> {
     let sql = "SELECT COUNT(d1) FROM test";
     let actual = execute(&mut ctx, sql).await;
     let expected = vec![vec!["2"]];
+    assert_eq!(expected, actual);
+
+    // aggregation min
+    let sql = "SELECT MIN(d1) FROM test";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["one"]];
     assert_eq!(expected, actual);
 
     // grouping

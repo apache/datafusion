@@ -1418,15 +1418,14 @@ impl DefaultPhysicalPlanner {
     {
         let optimizers = &ctx_state.config.physical_optimizers;
         debug!("Physical plan:\n{:?}", plan);
-        println!("NGA NGA NGA ============== Physical plan:\n{:?}", plan);
 
         let mut new_plan = plan;
         for optimizer in optimizers {
             new_plan = optimizer.optimize(new_plan, &ctx_state.config)?;
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
+        debug!("Optimized physical plan short version:\n{}\n", displayable(new_plan.as_ref()).indent().to_string());
         debug!("Optimized physical plan:\n{:?}", new_plan);
-        println!("NGA NGA NGA ============== Optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
     }
 }
