@@ -1422,6 +1422,10 @@ impl DefaultPhysicalPlanner {
             new_plan = optimizer.optimize(new_plan, &ctx_state.config)?;
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
+        debug!(
+            "Optimized physical plan short version:\n{}\n",
+            displayable(new_plan.as_ref()).indent()
+        );
         debug!("Optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
     }

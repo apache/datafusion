@@ -38,6 +38,18 @@ use arrow::{
 
 use super::format_state_name;
 
+// Min/max aggregation can take Dictionary encode input but always produces unpacked
+// (aka non Dictionary) output. We need to adjust the output data type to reflect this.
+// The reason min/max aggregate produces unpacked output because there is only one
+// min/max value per group; there is no needs to keep them Dictionary encode
+fn min_max_aggregate_data_type(input_type: DataType) -> DataType {
+    if let DataType::Dictionary(_, value_type) = input_type {
+        *value_type
+    } else {
+        input_type
+    }
+}
+
 /// MAX aggregate expression
 #[derive(Debug)]
 pub struct Max {
@@ -57,7 +69,7 @@ impl Max {
         Self {
             name: name.into(),
             expr,
-            data_type,
+            data_type: min_max_aggregate_data_type(data_type),
             nullable: true,
         }
     }
@@ -379,7 +391,7 @@ impl Min {
         Self {
             name: name.into(),
             expr,
-            data_type,
+            data_type: min_max_aggregate_data_type(data_type),
             nullable: true,
         }
     }
