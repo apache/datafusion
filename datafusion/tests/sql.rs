@@ -29,7 +29,7 @@ extern crate datafusion;
 
 use arrow::{
     array::*, datatypes::*, record_batch::RecordBatch,
-    util::display::array_value_to_string,
+    util::display::array_value_to_string, util::pretty::pretty_format_batches,
 };
 
 use datafusion::assert_batches_eq;
@@ -2272,8 +2272,6 @@ async fn left_join_using() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn equijoin_implicit_syntax() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
@@ -2282,13 +2280,17 @@ async fn equijoin_implicit_syntax() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -2302,13 +2304,17 @@ async fn equijoin_implicit_syntax_with_filter() -> Result<()> {
         AND t1_id = t2_id \
         AND t2_id < 99 \
         ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -2317,13 +2323,17 @@ async fn equijoin_implicit_syntax_reversed() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -2342,31 +2352,35 @@ async fn cross_join() {
     assert_eq!(4 * 4, actual.len());
 
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2";
-    let actual = execute(&mut ctx, sql).await;
 
+    let actual = execute(&mut ctx, sql).await;
     assert_eq!(4 * 4, actual.len());
 
-    assert_eq!(
-        actual,
-        [
-            ["11", "a", "z"],
-            ["11", "a", "y"],
-            ["11", "a", "x"],
-            ["11", "a", "w"],
-            ["22", "b", "z"],
-            ["22", "b", "y"],
-            ["22", "b", "x"],
-            ["22", "b", "w"],
-            ["33", "c", "z"],
-            ["33", "c", "y"],
-            ["33", "c", "x"],
-            ["33", "c", "w"],
-            ["44", "d", "z"],
-            ["44", "d", "y"],
-            ["44", "d", "x"],
-            ["44", "d", "w"]
-        ]
-    );
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 11    | a       | y       |",
+        "| 11    | a       | x       |",
+        "| 11    | a       | w       |",
+        "| 22    | b       | z       |",
+        "| 22    | b       | y       |",
+        "| 22    | b       | x       |",
+        "| 22    | b       | w       |",
+        "| 33    | c       | z       |",
+        "| 33    | c       | y       |",
+        "| 33    | c       | x       |",
+        "| 33    | c       | w       |",
+        "| 44    | d       | z       |",
+        "| 44    | d       | y       |",
+        "| 44    | d       | x       |",
+        "| 44    | d       | w       |",
+        "+-------+---------+---------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
 
     // Two partitions (from UNION) on the left
     let sql = "SELECT * FROM (SELECT t1_id, t1_name FROM t1 UNION ALL SELECT t1_id, t1_name FROM t1) AS t1 CROSS JOIN t2";
@@ -2389,33 +2403,34 @@ async fn cross_join_unbalanced() {
     // the order of the values is not determinisitic, so we need to sort to check the values
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id, t1_name";
-    let actual = execute(&mut ctx, sql).await;
-
-    assert_eq!(
-        actual,
-        [
-            ["11", "a", "z"],
-            ["11", "a", "y"],
-            ["11", "a", "x"],
-            ["11", "a", "w"],
-            ["22", "b", "z"],
-            ["22", "b", "y"],
-            ["22", "b", "x"],
-            ["22", "b", "w"],
-            ["33", "c", "z"],
-            ["33", "c", "y"],
-            ["33", "c", "x"],
-            ["33", "c", "w"],
-            ["44", "d", "z"],
-            ["44", "d", "y"],
-            ["44", "d", "x"],
-            ["44", "d", "w"],
-            ["77", "e", "z"],
-            ["77", "e", "y"],
-            ["77", "e", "x"],
-            ["77", "e", "w"]
-        ]
-    );
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 11    | a       | y       |",
+        "| 11    | a       | x       |",
+        "| 11    | a       | w       |",
+        "| 22    | b       | z       |",
+        "| 22    | b       | y       |",
+        "| 22    | b       | x       |",
+        "| 22    | b       | w       |",
+        "| 33    | c       | z       |",
+        "| 33    | c       | y       |",
+        "| 33    | c       | x       |",
+        "| 33    | c       | w       |",
+        "| 44    | d       | z       |",
+        "| 44    | d       | y       |",
+        "| 44    | d       | x       |",
+        "| 44    | d       | w       |",
+        "| 77    | e       | z       |",
+        "| 77    | e       | y       |",
+        "| 77    | e       | x       |",
+        "| 77    | e       | w       |",
+        "+-------+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -2677,6 +2692,8 @@ fn create_join_context_unbalanced(
     Ok(ctx)
 }
 
+// --- End Test Porting ---
+
 #[tokio::test]
 async fn csv_explain() {
     // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
@@ -2684,30 +2701,28 @@ async fn csv_explain() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute(&mut ctx, sql).await;
-    let actual = normalize_vec_for_explain(actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec![
-            "logical_plan",
-            "Projection: #aggregate_test_100.c1\
-             \n  Filter: #aggregate_test_100.c2 > Int64(10)\
-             \n    TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]"
-        ],
-        vec!["physical_plan",
-             "ProjectionExec: expr=[c1@0 as c1]\
-              \n  CoalesceBatchesExec: target_batch_size=4096\
-              \n    FilterExec: CAST(c2@1 AS Int64) > 10\
-              \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-              \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None\
-              \n"
-    ]];
-    assert_eq!(expected, actual);
+        "+---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        "| plan_type     | plan                                                                                                                                                                  |",
+        "+---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        "| logical_plan  | Projection: #aggregate_test_100.c1                                                                                                                                    |",
+        "|               |   Filter: #aggregate_test_100.c2 > Int64(10)                                                                                                                          |",
+        "|               |     TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]                                                               |",
+        "| physical_plan | ProjectionExec: expr=[c1@0 as c1]                                                                                                                                     |",
+        "|               |   CoalesceBatchesExec: target_batch_size=4096                                                                                                                         |",
+        "|               |     FilterExec: CAST(c2@1 AS Int64) > 10                                                                                                                              |",
+        "|               |       RepartitionExec: partitioning=RoundRobinBatch(8)                                                                                                                |",
+        "|               |         CsvExec: files=[/Users/matth/OpenSource/arrow-datafusion/datafusion/../testing/data/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None |",
+        "|               |                                                                                                                                                                       |",
+        "+---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     // Also, expect same result with lowercase explain
     let sql = "explain SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute(&mut ctx, sql).await;
-    let actual = normalize_vec_for_explain(actual);
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
