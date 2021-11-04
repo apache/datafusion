@@ -1424,7 +1424,7 @@ impl DefaultPhysicalPlanner {
         }
         debug!(
             "Optimized physical plan short version:\n{}\n",
-            displayable(new_plan.as_ref()).indent().to_string()
+            displayable(new_plan.as_ref()).indent()
         );
         debug!("Optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)

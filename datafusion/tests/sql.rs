@@ -3982,6 +3982,12 @@ async fn query_on_string_dictionary() -> Result<()> {
     let expected = vec![vec!["one"]];
     assert_eq!(expected, actual);
 
+    // aggregation max
+    let sql = "SELECT MAX(d1) FROM test";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["three"]];
+    assert_eq!(expected, actual);
+
     // grouping
     let sql = "SELECT d1, COUNT(*) FROM test group by d1";
     let mut actual = execute(&mut ctx, sql).await;

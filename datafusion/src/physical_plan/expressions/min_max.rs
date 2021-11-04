@@ -38,12 +38,15 @@ use arrow::{
 
 use super::format_state_name;
 
-// min/max aggregation only returns a value for each group
-// and should not be a Dictionary data type anymore
+// Min/max aggregation can take Dictionary encode input but always produces unpacked
+// (aka non Dictionary) output. We need to adjust the output data type to reflect this.
+// The reason min/max aggregate produces unpacked output because there is only one
+// min/max value per group; there is no needs to keep them Dictionary encode
 fn min_max_aggregate_data_type(input_type: DataType) -> DataType {
-    match input_type {
-        DataType::Dictionary(_, value_type) => (*value_type).clone(),
-        _ => input_type.clone(),
+    if let DataType::Dictionary(_, value_type) = input_type {
+        *value_type
+    } else {
+        input_type
     }
 }
 
@@ -66,7 +69,7 @@ impl Max {
         Self {
             name: name.into(),
             expr,
-            data_type,
+            data_type: min_max_aggregate_data_type(data_type),
             nullable: true,
         }
     }
@@ -81,7 +84,7 @@ impl AggregateExpr for Max {
     fn field(&self) -> Result<Field> {
         Ok(Field::new(
             &self.name,
-            min_max_aggregate_data_type(self.data_type.clone()),
+            self.data_type.clone(),
             self.nullable,
         ))
     }
@@ -89,7 +92,7 @@ impl AggregateExpr for Max {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             &format_state_name(&self.name, "max"),
-            min_max_aggregate_data_type(self.data_type.clone()),
+            self.data_type.clone(),
             true,
         )])
     }
@@ -388,7 +391,7 @@ impl Min {
         Self {
             name: name.into(),
             expr,
-            data_type,
+            data_type: min_max_aggregate_data_type(data_type),
             nullable: true,
         }
     }
@@ -403,7 +406,7 @@ impl AggregateExpr for Min {
     fn field(&self) -> Result<Field> {
         Ok(Field::new(
             &self.name,
-            min_max_aggregate_data_type(self.data_type.clone()),
+            self.data_type.clone(),
             self.nullable,
         ))
     }
@@ -411,7 +414,7 @@ impl AggregateExpr for Min {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             &format_state_name(&self.name, "min"),
-            min_max_aggregate_data_type(self.data_type.clone()),
+            self.data_type.clone(),
             true,
         )])
     }
