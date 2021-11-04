@@ -143,6 +143,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )),
         }
     }
+    /// subquery to plan
+    pub fn subquery_to_plan(&self, query: & Query) -> Result<LogicalPlan> {
+        let plan = self.query_to_plan(query)?;
+        LogicalPlanBuilder::from(plan).project(plan.schema().fields().iter().map(|field| col(field.name())))?.build()
+
+    }
 
     /// Generate a logic plan from an SQL query
     pub fn query_to_plan(&self, query: &Query) -> Result<LogicalPlan> {
@@ -186,6 +192,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match set_expr {
             SetExpr::Select(s) => self.select_to_plan(s.as_ref(), ctes, alias),
             SetExpr::Values(v) => self.sql_values_to_plan(v),
+            SetExpr::Query(query) => self.query_to_plan(query),
             SetExpr::SetOperation {
                 op,
                 left,
@@ -1515,7 +1522,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(e, schema),
-
+            SQLExpr::Subquery(query) => {
+                let plan = self.query_to_plan(query)?;
+                if plan.schema().fields().len() != 1 {
+                    return Err(DataFusionError::Plan(format!("Subquery in select should retrun one column, but retrun {:?} column", plan.schema().fields().len())));
+                }
+                Ok(Expr::Select(Box::from(plan)))
+            }
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node {:?} in sqltorel",
                 sql

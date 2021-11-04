@@ -368,6 +368,8 @@ pub enum Expr {
     },
     /// Represents a reference to all fields in a schema.
     Wildcard,
+    /// Select expr as subquery
+    Select(Box<LogicalPlan>),
 }
 
 impl Expr {
@@ -446,6 +448,7 @@ impl Expr {
 
                 get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
             }
+            Expr::Select(plan) => Ok(plan.schema().fields()[0].data_type().clone()),
         }
     }
 
@@ -505,6 +508,7 @@ impl Expr {
                 let data_type = expr.get_type(input_schema)?;
                 get_indexed_field(&data_type, key).map(|x| x.is_nullable())
             }
+            Expr::Select(plan) => Ok(plan.schema().fields()[0].is_nullable()),
         }
     }
 
@@ -945,6 +949,7 @@ impl Expr {
                 expr: rewrite_boxed(expr, rewriter)?,
                 key,
             },
+            Expr::Select(plan) => Expr::Select(plan.clone()),
         };
 
         // now rewrite this expression itself
@@ -1823,6 +1828,9 @@ impl fmt::Debug for Expr {
             Expr::Wildcard => write!(f, "*"),
             Expr::GetIndexedField { ref expr, key } => {
                 write!(f, "({:?})[{}]", expr, key)
+            }
+            Expr::Select(plan) => {
+                write!(f, "{:?}", plan)
             }
         }
     }

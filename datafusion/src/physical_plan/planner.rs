@@ -316,18 +316,12 @@ impl DefaultPhysicalPlanner {
             let batch_size = ctx_state.config.batch_size;
 
             let exec_plan: Result<Arc<dyn ExecutionPlan>> = match logical_plan {
-                LogicalPlan::TableScan {
-                    source,
-                    projection,
-                    filters,
-                    limit,
-                    ..
-                } => {
+                LogicalPlan::TableScan(table_scan) => {
                     // Remove all qualifiers from the scan as the provider
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query
-                    let filters = unnormalize_cols(filters.iter().cloned());
-                    source.scan(projection, batch_size, &filters, *limit).await
+                    let filters = unnormalize_cols(table_scan.filters.iter().cloned());
+                    source.scan(projection, batch_size, &filters, table_scan.limit).await
                 }
                 LogicalPlan::Values {
                     values,
@@ -803,8 +797,8 @@ impl DefaultPhysicalPlanner {
                     let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                     Ok(Arc::new(AnalyzeExec::new(*verbose, input, schema)))
                 }
-                LogicalPlan::Extension { node } => {
-                    let physical_inputs = futures::stream::iter(node.inputs())
+                LogicalPlan::Extension (extension)  => {
+                    let physical_inputs = futures::stream::iter(extension.node.inputs())
                         .then(|lp| self.create_initial_plan(lp, ctx_state))
                         .try_collect::<Vec<_>>()
                         .await?;

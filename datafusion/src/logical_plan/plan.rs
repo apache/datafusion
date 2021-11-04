@@ -30,9 +30,12 @@ use std::{
     fmt::{self, Display},
     sync::Arc,
 };
+use std::cmp::Ordering;
+use crate::logical_plan::table_scan_plan::TableScanPlan;
+use arrow::compute::filter;
 
 /// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
 pub enum JoinType {
     /// Inner Join
     Inner,
@@ -49,12 +52,60 @@ pub enum JoinType {
 }
 
 /// Join constraint
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum JoinConstraint {
     /// Join ON
     On,
     /// Join USING
     Using,
+}
+
+#[derive(Clone)]
+pub struct TableScanPlan {
+    /// The name of the table
+    pub table_name: String,
+    /// The source of the table
+    pub source: Arc<dyn TableProvider>,
+    /// Optional column indices to use as a projection
+    pub projection: Option<Vec<usize>>,
+    /// The schema description of the output
+    pub projected_schema: DFSchemaRef,
+    /// Optional expressions to be used as filters by the table provider
+    pub filters: Vec<Expr>,
+    /// Optional limit to skip reading
+    pub limit: Option<usize>,
+}
+
+
+impl PartialEq for TableScanPlan {
+    fn eq(&self, other: &Self) -> bool {
+        todo!()
+    }
+}
+
+impl PartialOrd for TableScanPlan {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        todo!()
+    }
+}
+
+
+#[derive(Clone)]
+pub struct Extension {
+    /// The runtime extension operator
+    pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
+}
+
+impl PartialEq for Extension {
+    fn eq(&self, other: &Self) -> bool {
+        todo!()
+    }
+}
+
+impl PartialOrd for Extension {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        todo!()
+    }
 }
 
 /// A LogicalPlan represents the different types of relational
@@ -65,7 +116,7 @@ pub enum JoinConstraint {
 /// an output relation (table) with a (potentially) different
 /// schema. A plan represents a dataflow tree where data flows
 /// from leaves up to the root to produce the query result.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
@@ -162,20 +213,7 @@ pub enum LogicalPlan {
         alias: Option<String>,
     },
     /// Produces rows from a table provider by reference or from the context
-    TableScan {
-        /// The name of the table
-        table_name: String,
-        /// The source of the table
-        source: Arc<dyn TableProvider>,
-        /// Optional column indices to use as a projection
-        projection: Option<Vec<usize>>,
-        /// The schema description of the output
-        projected_schema: DFSchemaRef,
-        /// Optional expressions to be used as filters by the table provider
-        filters: Vec<Expr>,
-        /// Optional limit to skip reading
-        limit: Option<usize>,
-    },
+    TableScan(TableScanPlan),
     /// Produces no rows: An empty relation with an empty schema
     EmptyRelation {
         /// Whether to produce a placeholder row
@@ -235,11 +273,9 @@ pub enum LogicalPlan {
         schema: DFSchemaRef,
     },
     /// Extension operator defined outside of DataFusion
-    Extension {
-        /// The runtime extension operator
-        node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
-    },
+    Extension(ExtensionPlan)
 }
+
 
 impl LogicalPlan {
     /// Get a reference to the logical plan's schema
@@ -247,9 +283,7 @@ impl LogicalPlan {
         match self {
             LogicalPlan::EmptyRelation { schema, .. } => schema,
             LogicalPlan::Values { schema, .. } => schema,
-            LogicalPlan::TableScan {
-                projected_schema, ..
-            } => projected_schema,
+            LogicalPlan::TableScan(table_scan) => table_scan.clone().projected_schema,
             LogicalPlan::Projection { schema, .. } => schema,
             LogicalPlan::Filter { input, .. } => input.schema(),
             LogicalPlan::Window { schema, .. } => schema,
@@ -262,7 +296,7 @@ impl LogicalPlan {
             LogicalPlan::CreateExternalTable { schema, .. } => schema,
             LogicalPlan::Explain { schema, .. } => schema,
             LogicalPlan::Analyze { schema, .. } => schema,
-            LogicalPlan::Extension { node } => node.schema(),
+            LogicalPlan::Extension(extension) => extension.clone().node.schema(),
             LogicalPlan::Union { schema, .. } => schema,
         }
     }
@@ -270,9 +304,7 @@ impl LogicalPlan {
     /// Get a vector of references to all schemas in every node of the logical plan
     pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
         match self {
-            LogicalPlan::TableScan {
-                projected_schema, ..
-            } => vec![projected_schema],
+            LogicalPlan::TableScan(table_scan) => vec![&table_scan.projected_schema],
             LogicalPlan::Values { schema, .. } => vec![schema],
             LogicalPlan::Window { input, schema, .. }
             | LogicalPlan::Aggregate { input, schema, .. }
@@ -300,7 +332,7 @@ impl LogicalPlan {
             LogicalPlan::Union { schema, .. } => {
                 vec![schema]
             }
-            LogicalPlan::Extension { node } => vec![node.schema()],
+            LogicalPlan::Extension(extension) => vec![&extension.node.schema()],
             LogicalPlan::Explain { schema, .. }
             | LogicalPlan::Analyze { schema, .. }
             | LogicalPlan::EmptyRelation { schema, .. }
@@ -348,7 +380,7 @@ impl LogicalPlan {
                 .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
                 .collect(),
             LogicalPlan::Sort { expr, .. } => expr.clone(),
-            LogicalPlan::Extension { node } => node.expressions(),
+            LogicalPlan::Extension (extension) => extension.node.expressions(),
             // plans without expressions
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -376,7 +408,7 @@ impl LogicalPlan {
             LogicalPlan::Join { left, right, .. } => vec![left, right],
             LogicalPlan::CrossJoin { left, right, .. } => vec![left, right],
             LogicalPlan::Limit { input, .. } => vec![input],
-            LogicalPlan::Extension { node } => node.inputs(),
+            LogicalPlan::Extension(extension) => extension.node.inputs(),
             LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
             LogicalPlan::Explain { plan, .. } => vec![plan],
             LogicalPlan::Analyze { input: plan, .. } => vec![plan],
@@ -425,7 +457,7 @@ impl LogicalPlan {
 }
 
 /// Logical partitioning schemes supported by the repartition operator.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
@@ -517,8 +549,8 @@ impl LogicalPlan {
                 true
             }
             LogicalPlan::Limit { input, .. } => input.accept(visitor)?,
-            LogicalPlan::Extension { node } => {
-                for input in node.inputs() {
+            LogicalPlan::Extension(extension) => {
+                for input in extension.node.inputs() {
                     if !input.accept(visitor)? {
                         return Ok(false);
                     }
@@ -737,24 +769,18 @@ impl LogicalPlan {
                         write!(f, "Values: {}{}", str_values.join(", "), elipse)
                     }
 
-                    LogicalPlan::TableScan {
-                        ref table_name,
-                        ref projection,
-                        ref filters,
-                        ref limit,
-                        ..
-                    } => {
+                    LogicalPlan::TableScan(table_scan)  => {
                         write!(
                             f,
                             "TableScan: {} projection={:?}",
-                            table_name, projection
+                            table_scan.table_name, table_scan.projection
                         )?;
 
-                        if !filters.is_empty() {
-                            write!(f, ", filters={:?}", filters)?;
+                        if !table_scan.filters.is_empty() {
+                            write!(f, ", filters={:?}", table_scan.filters)?;
                         }
 
-                        if let Some(n) = limit {
+                        if let Some(n) = table_scan.limit {
                             write!(f, ", limit={}", n)?;
                         }
 
@@ -849,7 +875,7 @@ impl LogicalPlan {
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union { .. } => write!(f, "Union"),
-                    LogicalPlan::Extension { ref node } => node.fmt_for_explain(f),
+                    LogicalPlan::Extension(extension) => extension.node.fmt_for_explain(f),
                 }
             }
         }
@@ -865,7 +891,7 @@ impl fmt::Debug for LogicalPlan {
 
 /// Represents which type of plan, when storing multiple
 /// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
@@ -905,7 +931,7 @@ impl fmt::Display for PlanType {
 }
 
 /// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 #[allow(clippy::rc_buffer)]
 pub struct StringifiedPlan {
     /// An identifier of what type of plan this string represents
