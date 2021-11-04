@@ -26,6 +26,7 @@ use crate::{
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};
+use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use std::fs::File;
 use std::io::prelude::*;
@@ -114,7 +115,16 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: &PrintOptions) {
                 query.push_str(&line);
                 query.push('\n');
             }
-            Err(_) => {
+            Err(ReadlineError::Interrupted) => {
+                println!("^C");
+                continue;
+            }
+            Err(ReadlineError::Eof) => {
+                println!("\\q");
+                break;
+            }
+            Err(err) => {
+                eprintln!("Unknown error happened {:?}", err);
                 break;
             }
         }
