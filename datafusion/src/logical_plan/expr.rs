@@ -1987,11 +1987,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
                 Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
             }
         }
-        Expr::Sort {
-            expr: _,
-            asc: _,
-            nulls_first: _,
-        } => Err(DataFusionError::Internal(
+        Expr::Sort { .. } => Err(DataFusionError::Internal(
             "Create name does not support sort expression".to_string(),
         )),
         Expr::Wildcard => Err(DataFusionError::Internal(
