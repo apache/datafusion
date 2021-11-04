@@ -133,6 +133,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => self.explain_statement_to_plan(*verbose, *analyze, statement),
             Statement::Query(query) => self.query_to_plan(query),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(variable),
+            Statement::CreateTable { query: Some(query), name, .. } => {
+                let plan = self.query_to_plan(query)?;
+
+                Ok(LogicalPlan::CreateMemoryTable {
+                    name: name.to_string(),
+                    input: Arc::new(plan),
+                })
+            }
+
             Statement::ShowColumns {
                 extended,
                 full,

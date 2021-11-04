@@ -1006,6 +1006,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
+            LogicalPlan::CreateMemoryTable { name, input } => todo!(),
         }
     }
 }
