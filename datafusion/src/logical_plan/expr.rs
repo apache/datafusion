@@ -1988,13 +1988,12 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             }
         }
         Expr::Sort {
-            expr,
+            expr: _,
             asc: _,
             nulls_first: _,
-        } => Err(DataFusionError::Internal(format!(
-            "Create name does not support logical expression {:?}",
-            expr
-        ))),
+        } => Err(DataFusionError::Internal(
+            "Create name does not support sort expression".to_string(),
+        )),
         Expr::Wildcard => Err(DataFusionError::Internal(
             "Create name does not support wildcard".to_string(),
         )),

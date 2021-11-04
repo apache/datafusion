@@ -197,10 +197,16 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
             }
         }
-        other => Err(DataFusionError::NotImplemented(format!(
-            "Cannot derive physical field name for logical expression {:?}",
-            other
-        ))),
+        Expr::Sort {
+            expr: _,
+            asc: _,
+            nulls_first: _,
+        } => Err(DataFusionError::Internal(
+            "Create physical name does not support sort expression".to_string(),
+        )),
+        Expr::Wildcard => Err(DataFusionError::Internal(
+            "Create physical name does not support wildcard".to_string(),
+        )),
     }
 }
 
