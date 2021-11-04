@@ -38,7 +38,7 @@ use std::time::Instant;
 pub async fn exec_from_lines(
     ctx: &mut Context,
     reader: &mut BufReader<File>,
-    print_options: PrintOptions,
+    print_options: &PrintOptions,
 ) {
     let mut query = "".to_owned();
 
@@ -51,7 +51,7 @@ pub async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match exec_and_print(ctx, print_options.clone(), query).await {
+                    match exec_and_print(ctx, print_options, query).await {
                         Ok(_) => {}
                         Err(err) => println!("{:?}", err),
                     }
@@ -76,7 +76,7 @@ pub async fn exec_from_lines(
 }
 
 /// run and execute SQL statements and commands against a context with the given print options
-pub async fn exec_from_repl(ctx: &mut Context, print_options: PrintOptions) {
+pub async fn exec_from_repl(ctx: &mut Context, print_options: &PrintOptions) {
     let mut rl = Editor::<()>::new();
     rl.load_history(".history").ok();
 
@@ -84,11 +84,12 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: PrintOptions) {
     loop {
         match rl.readline("> ") {
             Ok(line) if line.starts_with('\\') => {
+                rl.add_history_entry(line.trim_end());
                 if let Ok(cmd) = &line[1..].parse::<Command>() {
                     match cmd {
                         Command::Quit => break,
-                        others => {
-                            if let Err(e) = others.execute(ctx).await {
+                        _ => {
+                            if let Err(e) = cmd.execute(ctx, print_options).await {
                                 eprintln!("{}", e)
                             }
                         }
@@ -103,7 +104,7 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: PrintOptions) {
             Ok(line) if line.trim_end().ends_with(';') => {
                 query.push_str(line.trim_end());
                 rl.add_history_entry(query.clone());
-                match exec_and_print(ctx, print_options.clone(), query).await {
+                match exec_and_print(ctx, print_options, query).await {
                     Ok(_) => {}
                     Err(err) => eprintln!("{:?}", err),
                 }
@@ -124,7 +125,7 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: PrintOptions) {
 
 async fn exec_and_print(
     ctx: &mut Context,
-    print_options: PrintOptions,
+    print_options: &PrintOptions,
     sql: String,
 ) -> Result<()> {
     let now = Instant::now();

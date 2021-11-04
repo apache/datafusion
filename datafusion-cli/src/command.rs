@@ -18,13 +18,14 @@
 //! Command within CLI
 
 use crate::context::Context;
+use crate::print_options::PrintOptions;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Command
 #[derive(Debug)]
@@ -32,17 +33,32 @@ pub enum Command {
     Quit,
     Help,
     ListTables,
+    DescribeTable(String),
 }
 
 impl Command {
-    pub async fn execute(&self, ctx: &mut Context) -> Result<()> {
+    pub async fn execute(
+        &self,
+        ctx: &mut Context,
+        print_options: &PrintOptions,
+    ) -> Result<()> {
+        let now = Instant::now();
         match self {
-            Self::Help => pretty::print_batches(&[all_commands_info()])
+            Self::Help => print_options
+                .print_batches(&[all_commands_info()], now)
                 .map_err(|e| DataFusionError::Execution(e.to_string())),
             Self::ListTables => {
                 let df = ctx.sql("SHOW TABLES").await?;
                 let batches = df.collect().await?;
-                pretty::print_batches(&batches)
+                print_options
+                    .print_batches(&batches, now)
+                    .map_err(|e| DataFusionError::Execution(e.to_string()))
+            }
+            Self::DescribeTable(name) => {
+                let df = ctx.sql(&format!("SHOW COLUMNS FROM {}", name)).await?;
+                let batches = df.collect().await?;
+                print_options
+                    .print_batches(&batches, now)
                     .map_err(|e| DataFusionError::Execution(e.to_string()))
             }
             Self::Quit => Err(DataFusionError::Execution(
@@ -51,16 +67,22 @@ impl Command {
         }
     }
 
-    fn get_name_and_description(&self) -> (&str, &str) {
+    fn get_name_and_description(&self) -> (&'static str, &'static str) {
         match self {
             Self::Quit => ("\\q", "quit datafusion-cli"),
             Self::ListTables => ("\\d", "list tables"),
+            Self::DescribeTable(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 3] = [Command::ListTables, Command::Quit, Command::Help];
+const ALL_COMMANDS: [Command; 4] = [
+    Command::ListTables,
+    Command::DescribeTable(String::new()),
+    Command::Quit,
+    Command::Help,
+];
 
 fn all_commands_info() -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
@@ -68,7 +90,7 @@ fn all_commands_info() -> RecordBatch {
         Field::new("Description", DataType::Utf8, false),
     ]));
     let (names, description): (Vec<&str>, Vec<&str>) = ALL_COMMANDS
-        .iter()
+        .into_iter()
         .map(|c| c.get_name_and_description())
         .unzip();
     RecordBatch::try_new(
@@ -85,10 +107,16 @@ impl FromStr for Command {
     type Err = ();
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Ok(match s {
-            "q" => Self::Quit,
-            "d" => Self::ListTables,
-            "?" => Self::Help,
+        let (c, arg) = if let Some((a, b)) = s.split_once(' ') {
+            (a, Some(b))
+        } else {
+            (s, None)
+        };
+        Ok(match (c, arg) {
+            ("q", None) => Self::Quit,
+            ("d", None) => Self::ListTables,
+            ("d", Some(name)) => Self::DescribeTable(name.into()),
+            ("?", None) => Self::Help,
             _ => return Err(()),
         })
     }
