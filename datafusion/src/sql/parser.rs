@@ -294,7 +294,14 @@ impl<'a> DFParser<'a> {
     }
 
     fn consume_token(&mut self, expected: &Token) -> bool {
-        self.parser.consume_token(expected)
+        let token = self.parser.peek_token().to_string().to_uppercase();
+        let token = Token::make_keyword(&token);
+        if token == *expected {
+            self.parser.next_token();
+            true
+        } else {
+            false
+        }
     }
 
     fn parse_csv_has_header(&mut self) -> bool {
