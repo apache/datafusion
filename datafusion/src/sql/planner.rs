@@ -48,9 +48,9 @@ use arrow::datatypes::*;
 use hashbrown::HashMap;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
-    HiveDistributionStyle, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
-    Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableFactor,
-    TableWithJoins, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
+    Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query, Select, SelectItem,
+    SetExpr, SetOperator, ShowStatementFilter, TableFactor, TableWithJoins,
+    TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{OrderByExpr, Statement};
@@ -136,22 +136,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::CreateTable {
                 query: Some(query),
                 name,
-                //or_replace: false,
-                columns,
-                constraints,
-                hive_distribution: HiveDistributionStyle::NONE,
-                //hive_formats: None,
-                table_properties,
-                with_options,
-                file_format: None,
-                location: None,
-                like: None,
                 ..
-            } if columns.is_empty()
-                && constraints.is_empty()
-                && table_properties.is_empty()
-                && with_options.is_empty() =>
-            {
+            } => {
                 let plan = self.query_to_plan(query)?;
 
                 Ok(LogicalPlan::CreateMemoryTable {

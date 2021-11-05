@@ -792,11 +792,14 @@ impl DefaultPhysicalPlanner {
                     ))
                 }
                 | LogicalPlan::CreateMemoryTable {..} => {
-                    // Create a dummy exec.
-                    Ok(Arc::new(EmptyExec::new(
-                        false,
-                        SchemaRef::new(Schema::empty()),
-                    )))
+                     // There is no default plan for "CREATE
+                    // TABLE" -- it must be handled at a higher level (so
+                    // that the appropriate table can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: CreateMemoryTable".to_string(),
+                    ))
+
                 }
                 LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),

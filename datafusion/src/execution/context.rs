@@ -241,13 +241,12 @@ impl ExecutionContext {
             }
 
             LogicalPlan::CreateMemoryTable { input, name } => {
-                let plan = self.optimize(&input)?;
-                let physical = Arc::new(DataFrameImpl::new(self.state.clone(), &plan));
+                let physical = Arc::new(DataFrameImpl::new(self.state.clone(), &input));
 
-                let batches: Vec<_> = physical.collect_partitioned().await?;
+                let batches: Vec<_> = physical.collect().await?;
                 let table = Arc::new(MemTable::try_new(
-                    Arc::new(plan.schema().as_ref().into()),
-                    batches,
+                    Arc::new(input.schema().as_ref().into()),
+                    vec![batches],
                 )?);
                 self.register_table(name.as_str(), table)?;
 
