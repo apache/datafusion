@@ -136,17 +136,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::CreateTable {
                 query: Some(query),
                 name,
-                //or_replace: false,
+                or_replace: false,
                 columns,
                 constraints,
                 hive_distribution: HiveDistributionStyle::NONE,
-                //hive_formats: None,
+                hive_formats: _hive_formats,
                 table_properties,
                 with_options,
                 file_format: None,
                 location: None,
                 like: None,
-                ..
+                temporary: _temporary,
+                external: false,
+                if_not_exists: false,
+                without_rowid: _without_row_id
             } if columns.is_empty()
                 && constraints.is_empty()
                 && table_properties.is_empty()
