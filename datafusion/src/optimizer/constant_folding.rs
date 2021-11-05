@@ -167,9 +167,7 @@ impl<'a> Simplifier<'a> {
                         Box::new(Expr::Literal(ScalarValue::Boolean(*const_bool)));
                     let mut right = bool_expr;
                     if !left_right_order {
-                        left = right;
-                        right =
-                            Box::new(Expr::Literal(ScalarValue::Boolean(*const_bool)));
+                        std::mem::swap(&mut left, &mut right);
                     }
 
                     Expr::BinaryExpr {
@@ -213,9 +211,7 @@ impl<'a> Simplifier<'a> {
                         Box::new(Expr::Literal(ScalarValue::Boolean(*const_bool)));
                     let mut right = bool_expr;
                     if !left_right_order {
-                        left = right;
-                        right =
-                            Box::new(Expr::Literal(ScalarValue::Boolean(*const_bool)));
+                        std::mem::swap(&mut left, &mut right);
                     }
 
                     Expr::BinaryExpr {
