@@ -367,7 +367,7 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
-        // positive case: it is ok for case insensitive sql with `WITH HEADER ROW` tokens
+        // positive case: it is ok for case insensitive sql stmt with `WITH HEADER ROW` tokens
         let sqls = vec![
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH HEADER ROW LOCATION 'foo.csv'",
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV with header row LOCATION 'foo.csv'"
