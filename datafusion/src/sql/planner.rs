@@ -149,7 +149,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 temporary: _temporary,
                 external: false,
                 if_not_exists: false,
-                without_rowid: _without_row_id
+                without_rowid: _without_row_id,
             } if columns.is_empty()
                 && constraints.is_empty()
                 && table_properties.is_empty()
