@@ -390,12 +390,12 @@ impl LogicalPlan {
             LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
             LogicalPlan::Explain { plan, .. } => vec![plan],
             LogicalPlan::Analyze { input: plan, .. } => vec![plan],
+            LogicalPlan::CreateMemoryTable { input, .. } => vec![input],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::CreateMemoryTable { .. } => vec![],
+            | LogicalPlan::CreateExternalTable { .. } => vec![],
         }
     }
 
