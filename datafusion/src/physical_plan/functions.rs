@@ -506,6 +506,13 @@ pub fn return_type(
     // Note that this function *must* return the same type that the respective physical expression returns
     // or the execution panics.
 
+    if arg_types.is_empty() && !fun.supports_zero_argument() {
+        return Err(DataFusionError::Internal(format!(
+            "builtin scalar function {} does not support empty arguments",
+            fun
+        )));
+    }
+
     // verify that this is a valid set of data types for this function
     data_types(arg_types, &signature(fun))?;
 
@@ -621,18 +628,10 @@ pub fn return_type(
         | BuiltinScalarFunction::Sin
         | BuiltinScalarFunction::Sqrt
         | BuiltinScalarFunction::Tan
-        | BuiltinScalarFunction::Trunc => {
-            if arg_types.is_empty() {
-                return Err(DataFusionError::Internal(format!(
-                    "builtin scalar function {} does not support empty arguments",
-                    fun
-                )));
-            }
-            match arg_types[0] {
-                DataType::Float32 => Ok(DataType::Float32),
-                _ => Ok(DataType::Float64),
-            }
-        }
+        | BuiltinScalarFunction::Trunc => match arg_types[0] {
+            DataType::Float32 => Ok(DataType::Float32),
+            _ => Ok(DataType::Float64),
+        },
     }
 }
 
