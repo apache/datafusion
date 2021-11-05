@@ -1009,7 +1009,6 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
             LogicalPlan::CreateMemoryTable { .. } => {
                 return Err(proto_error(format!(
                     "Error converting CreateMemoryTable. Not yet supported in Ballista",
-                    listing_table.options().format
                 )))
             }
         }
