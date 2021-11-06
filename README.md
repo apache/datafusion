@@ -215,13 +215,13 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
 - [ ] Lists
 - [x] Subqueries
 - [x] Common table expressions
-- [ ] Set Operations
+- [x] Set Operations
   - [x] UNION ALL
   - [x] UNION
   - [x] INTERSECT
   - [x] INTERSECT ALL
-  - [ ] EXCEPT
-  - [ ] EXCEPT ALL
+  - [x] EXCEPT
+  - [x] EXCEPT ALL
 - [x] Joins
   - [x] INNER JOIN
   - [x] LEFT JOIN

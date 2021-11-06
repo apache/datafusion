@@ -240,6 +240,15 @@ impl DataFrame for DataFrameImpl {
             &LogicalPlanBuilder::intersect(left_plan, right_plan, true)?,
         )))
     }
+
+    fn except(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>> {
+        let left_plan = self.to_logical_plan();
+        let right_plan = dataframe.to_logical_plan();
+        Ok(Arc::new(DataFrameImpl::new(
+            self.ctx_state.clone(),
+            &LogicalPlanBuilder::except(left_plan, right_plan, true)?,
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -455,6 +464,20 @@ mod tests {
         let expected = create_plan(
             "SELECT c1, c3 FROM aggregate_test_100
             INTERSECT ALL SELECT c1, c3 FROM aggregate_test_100",
+        )
+        .await?;
+        assert_same_plan(&result, &expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn except() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c3"])?;
+        let plan = df.except(df.clone())?;
+        let result = plan.to_logical_plan();
+        let expected = create_plan(
+            "SELECT c1, c3 FROM aggregate_test_100
+            EXCEPT ALL SELECT c1, c3 FROM aggregate_test_100",
         )
         .await?;
         assert_same_plan(&result, &expected);
