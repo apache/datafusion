@@ -82,7 +82,11 @@ git fetch apache
 git checkout apache/master
 ```
 
-Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`.
+Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`:
+
+```
+./dev/update_datafusion_versions.py 5.1.0
+```
 
 If there is a ballista release, update versions in ballista Cargo.tomls, run
 
@@ -101,19 +105,9 @@ git commit -a -m 'Update version'
 
 ### Update CHANGELOG.md
 
-Create local release rc tags:
-
-```
-git tag -f 5.1.0-rc-local
-# if there is ballista release
-git tag -f ballista-0.5.0-rc-local
-# if there is python binding release
-git tag -f python-0.3.0-rc-local
-```
-
-Manully edit the previous release version tag in
+Manully edit the base version tag argument in
 `dev/release/update_change_log-{ballista,datafusion,python}.sh`. Commits
-between the previous verstion tag and the new rc tag will be used to
+between the base verstion tag and the latest upstream master will be used to
 populate the changelog content.
 
 ```bash
@@ -122,9 +116,6 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-all.sh
 # review change log / edit issues and labels if needed, rerun until you are happy with the result
 git commit -a -m 'Create changelog for release'
 ```
-
-Note that when reviewing the change log, rather than editing the
-`CHANGELOG.md`, it is preferred to update the issues and their labels.
 
 You can add `invalid` or `development-process` label to exclude items from
 release notes. Add `datafusion`, `ballista` and `python` labels to group items
