@@ -70,6 +70,7 @@ impl OptimizerRule for ConstantFolding {
             | LogicalPlan::Aggregate { .. }
             | LogicalPlan::Repartition { .. }
             | LogicalPlan::CreateExternalTable { .. }
+            | LogicalPlan::CreateMemoryTable { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::Extension { .. }
             | LogicalPlan::Sort { .. }

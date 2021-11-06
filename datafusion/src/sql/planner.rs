@@ -48,9 +48,9 @@ use arrow::datatypes::*;
 use hashbrown::HashMap;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
-    Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query, Select, SelectItem,
-    SetExpr, SetOperator, ShowStatementFilter, TableFactor, TableWithJoins,
-    TrimWhereField, UnaryOperator, Value, Values as SQLValues,
+    HiveDistributionStyle, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
+    Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableFactor,
+    TableWithJoins, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{OrderByExpr, Statement};
@@ -133,6 +133,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => self.explain_statement_to_plan(*verbose, *analyze, statement),
             Statement::Query(query) => self.query_to_plan(query),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(variable),
+            Statement::CreateTable {
+                query: Some(query),
+                name,
+                or_replace: false,
+                columns,
+                constraints,
+                hive_distribution: HiveDistributionStyle::NONE,
+                hive_formats: _hive_formats,
+                table_properties,
+                with_options,
+                file_format: None,
+                location: None,
+                like: None,
+                temporary: _temporary,
+                external: false,
+                if_not_exists: false,
+                without_rowid: _without_row_id,
+            } if columns.is_empty()
+                && constraints.is_empty()
+                && table_properties.is_empty()
+                && with_options.is_empty() =>
+            {
+                let plan = self.query_to_plan(query)?;
+
+                Ok(LogicalPlan::CreateMemoryTable {
+                    name: name.to_string(),
+                    input: Arc::new(plan),
+                })
+            }
+
             Statement::ShowColumns {
                 extended,
                 full,

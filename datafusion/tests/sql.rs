@@ -688,6 +688,30 @@ async fn select_all() -> Result<()> {
 }
 
 #[tokio::test]
+async fn create_table_as() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_simple_csv(&mut ctx).await?;
+
+    let sql = "CREATE TABLE my_table AS SELECT * FROM aggregate_simple";
+    ctx.sql(sql).await.unwrap();
+
+    let sql_all = "SELECT * FROM my_table order by c1 LIMIT 1";
+    let results_all = execute_to_batches(&mut ctx, sql_all).await;
+
+    let expected = vec![
+        "+---------+----------------+------+",
+        "| c1      | c2             | c3   |",
+        "+---------+----------------+------+",
+        "| 0.00001 | 0.000000000001 | true |",
+        "+---------+----------------+------+",
+    ];
+
+    assert_batches_eq!(expected, &results_all);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn select_distinct() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_simple_csv(&mut ctx).await?;
