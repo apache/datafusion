@@ -84,7 +84,7 @@ fn is_true(expr: &Expr) -> bool {
     }
 }
 
-fn is_null(expr: &Expr) -> bool {
+fn is_literal_null(expr: &Expr) -> bool {
     match expr {
         Expr::Literal(v) => v.is_null(),
         _ => false,
@@ -100,6 +100,8 @@ fn is_false(expr: &Expr) -> bool {
 
 fn simplify(expr: &Expr) -> Expr {
     match expr {
+        Expr::BinaryExpr { left, .. } if is_literal_null(left) => *left.clone(),
+        Expr::BinaryExpr { right, .. } if is_literal_null(right) => *right.clone(),
         Expr::BinaryExpr {
             left,
             op: Operator::Or,
@@ -155,11 +157,6 @@ fn simplify(expr: &Expr) -> Expr {
             op: Operator::Divide,
             right,
         } if is_one(right) => simplify(left),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Divide,
-            right,
-        } if left == right && is_null(left) => *left.clone(),
         Expr::BinaryExpr {
             left,
             op: Operator::Divide,
@@ -453,7 +450,7 @@ mod tests {
     fn test_simplify_and_and_false() -> Result<()> {
         let expr =
             binary_expr(lit(ScalarValue::Boolean(None)), Operator::And, lit(false));
-        let expr_eq = lit(false);
+        let expr_eq = null;
 
         assert_eq!(simplify(&expr), expr_eq);
         Ok(())
