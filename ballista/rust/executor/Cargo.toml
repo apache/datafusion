@@ -29,8 +29,8 @@ edition = "2018"
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
-arrow = { version = "6.0.0"  }
-arrow-flight = { version = "6.0.0"  }
+arrow = { version = "6.1.0"  }
+arrow-flight = { version = "6.1.0"  }
 anyhow = "1"
 async-trait = "0.1.36"
 ballista-core = { path = "../core", version = "0.6.0" }
