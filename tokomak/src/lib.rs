@@ -1,10 +1,9 @@
 #![allow(missing_docs)]
-
+#![allow(unused_imports)]
+#![allow(unused_variables)]
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::optimizer::utils::ConstEvaluator;
 use scalar::TokomakScalar;
-use std::cell::Cell;
 use std::convert::TryInto;
 use std::fmt::Display;
 use std::hash::Hash;
@@ -19,7 +18,7 @@ use log::debug;
 
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::context::ExecutionProps;
-use datafusion::logical_plan::{Column, Expr};
+use datafusion::logical_plan::Expr;
 use datafusion::{logical_plan::Operator, optimizer::utils};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -76,14 +75,14 @@ pub struct TokomakAnalysis<T: CustomTokomakAnalysis >{
 }
 
 impl<T:CustomTokomakAnalysis> TokomakAnalysis<T>{
-    fn new(analysis: T)->Self{
+    pub fn new(analysis: T)->Self{
         Self{
             custom: analysis
         }
     }
 
-    fn merge_builtin(&self, _to: &mut TokomakAnalysisData, _from: TokomakAnalysisData)->bool{
-        false
+    fn merge_builtin(&self, _to: &mut TokomakAnalysisData, _from: TokomakAnalysisData)->egg::DidMerge{
+        DidMerge(false,false)
     }
 }
 
@@ -96,7 +95,7 @@ pub struct TokomakAnalysisData{
 
 
 impl TokomakAnalysisData{
-    fn make<A: CustomTokomakAnalysis>(egraph: &EGraph<TokomakExpr, TokomakAnalysis<A>>, enode: &TokomakExpr)->Self{
+    fn make<A: CustomTokomakAnalysis>(_egraph: &EGraph<TokomakExpr, TokomakAnalysis<A>>, _enode: &TokomakExpr)->Self{
         Self{
             const_folding: None,
         }
@@ -130,10 +129,10 @@ impl<T:CustomTokomakAnalysis> Analysis<TokomakExpr> for TokomakAnalysis<T>{
         CustomTokomakData::make(egraph, enode) 
     }
 
-    fn merge(&self, to: &mut Self::Data, from: Self::Data) -> bool {
-        let merge_custom = self.custom.merge(&mut to.custom, from.custom);
-        let merge_builtin = self.merge_builtin(&mut to.tokomak, from.tokomak);
-        merge_custom || merge_builtin
+    fn merge(&self, a: &mut Self::Data, b: Self::Data) -> egg::DidMerge {
+        let merge_custom = self.custom.merge(&mut a.custom, b.custom);
+        let merge_builtin = self.merge_builtin(&mut a.tokomak, b.tokomak);
+        merge_custom | merge_builtin
     }
 
     fn modify(egraph: &mut EGraph<TokomakExpr,TokomakAnalysis<T>>, id: Id){
@@ -143,9 +142,9 @@ impl<T:CustomTokomakAnalysis> Analysis<TokomakExpr> for TokomakAnalysis<T>{
 
 pub trait CustomTokomakAnalysis: Sized + Default{
     type Data: std::fmt::Debug;
-    fn name(&self)->&str;
+    fn name()->&'static str;
     fn make(egraph: &EGraph<TokomakExpr, TokomakAnalysis<Self>>, enode: &TokomakExpr)->Self::Data;
-    fn merge(&self, to: &mut Self::Data, from: Self::Data)->bool;
+    fn merge(&self, a: &mut Self::Data, b: Self::Data)->egg::DidMerge;
     #[allow(unused_variables)]
     fn modify(egraph: &mut EGraph<TokomakExpr,TokomakAnalysis<Self>>, id: Id){}
 }
@@ -155,105 +154,24 @@ impl CustomTokomakAnalysis for (){
     type Data=();
     
     fn make(egraph: &EGraph<TokomakExpr, TokomakAnalysis<Self>>, enode: &TokomakExpr)->Self::Data {}
-    fn merge(&self, to: &mut Self::Data, from: Self::Data)->bool {
-        false
+    fn merge(&self, a: &mut Self::Data, b: Self::Data)->egg::DidMerge {
+        DidMerge(false, false)
     }
 
-    fn name(&self)->&str {
+    fn name()->&'static str {
         "<Default>"
     }
 }
 
 
 
-#[repr(transparent)]
-pub struct DefaultTokomakOptimizer(TokomakOptimizer);
-impl OptimizerRule for DefaultTokomakOptimizer{
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
-    ) -> DFResult<LogicalPlan> {
-        self.0.optimize(plan, execution_props)
-    }
-
-    fn name(&self) -> &str {
-        self.0.name()
-    }
-}
 
 
-type DefaultCostFunction=AstDepth;
 
-pub struct TokomakRunner<C=DefaultCostFunction>
-where
-    //A: CustomTokomakAnalysis + 'static,
-    C: CostFunction<TokomakExpr>,
-    //S: RewriteScheduler<TokomakExpr, TokomakAnalysis<A>> + Default,
+
+pub struct Tokomak
 {
-    cost_function: C,
-    settings: RunnerSettings,    
-}
-
-
-impl<C> TokomakRunner<C>
-where 
-    //A: CustomTokomakAnalysis + 'static,
-    C: CostFunction<TokomakExpr> + Clone,
-    //S: RewriteScheduler<TokomakExpr, TokomakAnalysis<A>> + Default,
-
-{
-    pub fn new(cost_function: C, settings: RunnerSettings)->Self{
-        Self{
-            cost_function,
-            settings,
-        }
-    }
-
-    fn optimize_expressions(&self, exprs: &[Expr], udf_reg: &mut HashMap<String, UDF>, rules: &[Rewrite<TokomakExpr, TokomakAnalysis<()>>])->Result<Vec<Expr>, DataFusionError>{
-        let mut runner = self.settings.create_runner();
-        let mut expr_map = Vec::with_capacity(exprs.len());
-        let mut root_idx:usize = 0;
-        for (idx, expr) in exprs.iter().enumerate(){
-            if let Ok(tokomak_expr) = convert_to_tokomak_expr(expr, udf_reg) {
-                let curr_idx = root_idx;
-                root_idx +=1;
-                expr_map.push(idx);
-                runner = runner.with_expr(&tokomak_expr);
-            }
-        }
-        runner = runner.run(rules);
-        let mut extractor = Extractor::new(&runner.egraph, self.cost_function.clone());
-        let mut best_exprs = Vec::with_capacity(runner.roots.len());
-        for root in &runner.roots{
-            let (_, best_expr) = extractor.find_best(*root);
-            let expr = to_expr(&best_expr, udf_reg)?;
-            best_exprs.push(expr);
-        }
-        let mut output_expressions = Vec::with_capacity(exprs.len());
-        for (expr, expr_idx) in best_exprs.into_iter().zip(expr_map){
-            while output_expressions.len() < expr_idx{
-                output_expressions.push(exprs[output_expressions.len()].clone());
-            }
-            output_expressions.push(expr);
-        }
-        
-
-        Ok(output_expressions)
-    }
-}
-
-
-
-
-
-
-pub struct TokomakOptimizer<A=()>
-where 
-    A: CustomTokomakAnalysis + 'static,
-{
-    analysis: TokomakAnalysis<A>,
-    rules: Vec<Rewrite<TokomakExpr, TokomakAnalysis<A>>>,
+    rules: Vec<Rewrite<TokomakExpr, ()>>,
     added_builtins: BuiltinRulesFlag,
     runner_settings: RunnerSettings,
     name: String,
@@ -286,18 +204,14 @@ impl std::ops::BitOrAssign for BuiltinRulesFlag{
 
 
 
-pub const CONST_FOLDING_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0x1);
-pub const SIMPLIFICATION_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0x2);
+pub const SIMPLIFICATION_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0x1);
 const NO_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0);
 
 
-const ALL_BUILTIN_RULES: [BuiltinRulesFlag; 2] = [CONST_FOLDING_RULES, SIMPLIFICATION_RULES];
+const ALL_BUILTIN_RULES: [BuiltinRulesFlag; 1] = [SIMPLIFICATION_RULES];
 
 impl BuiltinRulesFlag{
-    fn new()->Self{
-        NO_RULES
-    }
-
+    
     fn is_set(&self, other: BuiltinRulesFlag)->bool{
         (*self & other) != NO_RULES
     }
@@ -310,49 +224,17 @@ impl Default for BuiltinRulesFlag{
     }
 }
 
-pub struct TypeErasedScheulder<A:'static+ CustomTokomakAnalysis>{
-    scheduler: Box<dyn RewriteScheduler<TokomakExpr, TokomakAnalysis<A>>>
-}
-impl<A: CustomTokomakAnalysis> RewriteScheduler<TokomakExpr, TokomakAnalysis<A>> for TypeErasedScheulder<A>{
-    fn can_stop(&mut self, iteration: usize) -> bool {
-        self.scheduler.can_stop(iteration)
-    }
-
-    fn search_rewrite(
-        &mut self,
-        iteration: usize,
-        egraph: &EGraph<TokomakExpr, TokomakAnalysis<A>>,
-        rewrite: &Rewrite<TokomakExpr, TokomakAnalysis<A>>,
-    ) -> Vec<SearchMatches> {
-        self.scheduler.search_rewrite(iteration, egraph, rewrite)
-    }
-
-    fn apply_rewrite(
-        &mut self,
-        iteration: usize,
-        egraph: &mut EGraph<TokomakExpr, TokomakAnalysis<A>>,
-        rewrite: &Rewrite<TokomakExpr, TokomakAnalysis<A>>,
-        matches: Vec<SearchMatches>,
-    ) -> usize {
-        self.scheduler.apply_rewrite(iteration, egraph, rewrite, matches)
-    }
-}
-
 pub struct RunnerSettings{
     pub iter_limit: Option<usize>,
     pub node_limit: Option<usize>,
     pub time_limit: Option<Duration>,
 }
 impl  RunnerSettings{
-    fn new()->Self{
-        Self{
-            iter_limit: None,
-            node_limit: None,
-            time_limit: None,
-        }
+    pub fn new()->Self{
+        Self::default()
     }
-    fn create_runner<A: CustomTokomakAnalysis+'static>(&self)->Runner<TokomakExpr,TokomakAnalysis<A>>{
-        let mut runner = Runner::<TokomakExpr, TokomakAnalysis<A>>::new(TokomakAnalysis::<A>::default());
+    fn create_runner(&self)->Runner<TokomakExpr,()>{
+        let mut runner = Runner::<TokomakExpr,()>::new(());
         if let Some(iter_limit) = self.iter_limit{
             runner = runner.with_iter_limit(iter_limit);
         }
@@ -367,36 +249,43 @@ impl  RunnerSettings{
     }
 
 
-    pub fn with_iter_limit(&mut self, iter_limit: usize){
+    pub fn with_iter_limit(&mut self, iter_limit: usize)->&mut Self{
         self.iter_limit = Some(iter_limit);
+        self
     }
 
-    pub fn with_node_limit(&mut self, node_limit: usize){
+    pub fn with_node_limit(&mut self, node_limit: usize)->&mut Self{
         self.node_limit = Some(node_limit);
+        self
     }
 
-    pub fn optimize_exprs<A: CustomTokomakAnalysis +'static, C: CostFunction<TokomakExpr>>(&self, exprs: &[Expr], udf_reg: &mut HashMap<String, UDF>, rules: &[Rewrite<TokomakExpr, TokomakAnalysis<A>>], cost_function: C)->Result<Vec<Expr>, DataFusionError>{
-        println!("Optimizing:");
-        for e in exprs{
-            println!("\t{:#}", e)
-        }
+    pub fn with_time_limit(&mut self, time_limit: Duration)->&mut Self{
+        self.time_limit = Some(time_limit);
+        self
+    }
+
+    pub fn optimize_exprs<C: CostFunction<TokomakExpr>>(&self, exprs: &[Expr], udf_reg: &mut HashMap<String, UDF>, rules: &[Rewrite<TokomakExpr, ()>], cost_function: C)->Result<Vec<Expr>, DataFusionError>{
+        //println!("Optimizing:");
+        //for e in exprs{
+        //    println!("\t{:#}", e)
+        //}
         let rec_exprs = exprs.iter().map(|e| convert_to_tokomak_expr(e, udf_reg)).collect::<Result<Vec<_>,_>>()?;
-        let mut runner = self.create_runner::<A>();
+        let mut runner = self.create_runner();
         for expr in &rec_exprs{
-            println!("Adding {} to optimizer", expr.pretty(120));
+            //println!("Adding {} to optimizer", expr.pretty(120));
             runner = runner.with_expr(expr);
         }
-        println!("There are {} rules", rules.len());
+        //println!("There are {} rules", rules.len());
         runner = runner.run(rules);
-        for (idx,it) in runner.iterations.iter().enumerate(){
-            println!("[{}]{:?}", idx, it);
-        }
-        println!("Stopped optimizing: {:#?}", runner.stop_reason);
+        //for (idx,it) in runner.iterations.iter().enumerate(){
+        //    println!("[{}]{:?}", idx, it);
+        //}
+        //println!("Stopped optimizing: {:#?}", runner.stop_reason);
         let mut output_expressions= Vec::with_capacity(exprs.len());
-        let mut extractor= Extractor::new(&runner.egraph, cost_function);
+        let extractor= Extractor::new(&runner.egraph, cost_function);
         for id in &runner.roots{
             let (_, best) = extractor.find_best(*id);
-            println!("THe optimzed expr is: {}", best.pretty(120));
+            //println!("THe optimzed expr is: {}", best.pretty(120));
             let expr = to_expr(&best, udf_reg)?;
             output_expressions.push(expr);
         }
@@ -405,8 +294,14 @@ impl  RunnerSettings{
     }
 }
 
+impl Default for RunnerSettings {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-impl<T: CustomTokomakAnalysis> OptimizerRule for TokomakOptimizer<T>{
+
+impl OptimizerRule for Tokomak{
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -421,7 +316,6 @@ impl<T: CustomTokomakAnalysis> OptimizerRule for TokomakOptimizer<T>{
         let optimzed_expressions = self.runner_settings.optimize_exprs(&expressions, &mut  udf_registry, &self.rules, AstSize)?;
         let inputs: Vec<LogicalPlan> = inputs.iter().map(|p| (*p).to_owned()).collect();
         utils::from_plan(&plan, &optimzed_expressions, inputs.as_slice())
-        
     }
 
     fn name(&self) -> &str {
@@ -432,13 +326,11 @@ impl<T: CustomTokomakAnalysis> OptimizerRule for TokomakOptimizer<T>{
 
 
 
-impl<T: CustomTokomakAnalysis> TokomakOptimizer<T>{
+impl Tokomak{
     ///Creates a TokomakOptimizer with a custom analysis
-    pub fn new(analysis: T, runner_settings: RunnerSettings)->Self{
-        let analysis = TokomakAnalysis::new(analysis);
-        let name =format!("Tokomak[analysis={},runner=<Default>]", analysis.custom.name());
-        TokomakOptimizer{
-            analysis,
+    pub fn new( runner_settings: RunnerSettings)->Self{
+        let name ="Tokomak".to_owned();
+        Tokomak{
             added_builtins: NO_RULES,
             rules: Vec::new(),
             runner_settings,
@@ -447,8 +339,8 @@ impl<T: CustomTokomakAnalysis> TokomakOptimizer<T>{
         }
     }
     ///Creates a Tokomak optimizer with a custom analysis and the builtin rules defined by builtin_rules added.
-    pub fn with_builtin_rules(analysis: T,runner_settings: RunnerSettings,  builtin_rules: BuiltinRulesFlag )->Self{
-        let mut optimizer = Self::new(analysis, runner_settings);
+    pub fn with_builtin_rules(runner_settings: RunnerSettings,  builtin_rules: BuiltinRulesFlag )->Self{
+        let mut optimizer = Self::new( runner_settings);
         optimizer.add_builtin_rules(builtin_rules);
         optimizer
     }
@@ -459,7 +351,6 @@ impl<T: CustomTokomakAnalysis> TokomakOptimizer<T>{
             //If the current flag is set and the ruleset has not been added to optimizer already
             if builtin_rules.is_set(rule) && !self.added_builtins.is_set(rule){
                 match rule{
-                    CONST_FOLDING_RULES => self.add_constant_folding_rules(),
                     SIMPLIFICATION_RULES => self.add_simplification_rules(),
                     _ => panic!("Found invalid rule flag")
                 }
@@ -469,33 +360,6 @@ impl<T: CustomTokomakAnalysis> TokomakOptimizer<T>{
     
 }
 
-pub struct Tokomak {
-    rules: Vec<Rewrite<TokomakExpr, ()>>,
-    udf_aware_rules: Vec<Box<dyn UDFAwareRuleGenerator>>,
-}
-impl Tokomak {
-    #[allow(missing_docs)]
-    pub fn new() -> Self {
-        Self {
-            rules: Vec::new(),
-            udf_aware_rules: Vec::new(),
-        }
-    }
-    pub fn with_rules(custom_rules: &[Rewrite<TokomakExpr, ()>]) -> Self {
-        let mut new = Self::new();
-        new.add_rules(custom_rules);
-        new
-    }
-    pub fn add_rules(&mut self, rules: &[Rewrite<TokomakExpr, ()>]) {
-        self.rules.extend_from_slice(rules);
-    }
-    pub fn add_rule(&mut self, rule: Rewrite<TokomakExpr, ()>) {
-        self.rules.push(rule);
-    }
-    pub fn add_udf_aware_rules(&mut self, generator: Box<dyn UDFAwareRuleGenerator>) {
-        self.udf_aware_rules.push(generator);
-    }
-}
 
 fn convert_to_tokomak_expr(
     expr: &Expr,
@@ -503,7 +367,7 @@ fn convert_to_tokomak_expr(
 ) -> DFResult<RecExpr<TokomakExpr>> {
     let mut rec_expr = RecExpr::default();
     let mut converter = ExprConverter::new(&mut rec_expr, udf_reg);
-    converter.to_tokomak_expr(&expr)?;
+    converter.to_tokomak_expr(expr)?;
     Ok(rec_expr)
 }
 
@@ -797,7 +661,7 @@ impl<'a> TokomakExprConverter<'a> {
                     |e| DataFusionError::Internal(format!("WindowBuiltinCallUnframed could not transform the argument list: {:?}", e))
                 )?;
                 let window_frame = match self.get_ref(*frame){
-                    TokomakExpr::WindowFrame(f)=>f.clone(),
+                    TokomakExpr::WindowFrame(f)=>*f,
                     e=> return Err(DataFusionError::Internal(format!("WindowBuiltinCallFramed expected a WindowFrame expression, found: {:?}", e))),
                 };
                 Expr::WindowFunction{
@@ -811,7 +675,7 @@ impl<'a> TokomakExprConverter<'a> {
             TokomakExpr::Sort([e, sort_spec]) => {
                 let expr = self.convert_to_expr(*e)?;
                 let sort_spec = match self.get_ref(*sort_spec){
-                    TokomakExpr::SortSpec(s)=>s.clone(),
+                    TokomakExpr::SortSpec(s)=>*s,
                     e => return Err(unexpected_tokomak_expr("Sort", "SortSpec", e)),
                 };
                 let (asc, nulls_first)= match sort_spec{
@@ -863,12 +727,12 @@ impl<'a> ExprConverter<'a> {
 
     fn add_list(&mut self, exprs: &[Expr]) -> Result<Id, DataFusionError> {
         let list = exprs
-            .into_iter()
+            .iter()
             .map(|expr| self.to_tokomak_expr(expr))
             .collect::<Result<Vec<Id>, _>>()?;
         Ok(self.rec_expr.add(TokomakExpr::List(list)))
     }
-
+    #[allow(clippy::wrong_self_convention)]
     fn to_tokomak_expr(&mut self, expr: &Expr) -> Result<Id, DataFusionError> {
         Ok(match expr {
             Expr::BinaryExpr { left, op, right } => {
@@ -1125,7 +989,7 @@ impl FromStr for UDFName {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let first_char = s.chars().nth(0).ok_or(DataFusionError::Internal(
+        let first_char = s.chars().next().ok_or_else(|| DataFusionError::Internal(
             "Zero length udf name".to_string(),
         ))?;
         //for (pos, c) in s.chars().enumerate(){
@@ -1202,119 +1066,5 @@ impl FromStr for UDAFName {
 impl Display for UDAFName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "udaf[{}]", self.0)
-    }
-}
-
-impl OptimizerRule for Tokomak {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        props: &ExecutionProps,
-    ) -> DFResult<LogicalPlan> {
-        let inputs = plan.inputs();
-        let new_inputs: Vec<LogicalPlan> = inputs
-            .iter()
-            .map(|plan| self.optimize(plan, props))
-            .collect::<DFResult<Vec<_>>>()?;
-
-        
-        // optimize all expressions individual (for now)
-        let mut exprs = vec![];
-        for expr in plan.expressions().iter() {
-            let mut udf_registry = HashMap::new();
-            let rec_expr = &mut RecExpr::default();
-            let tok_expr = convert_to_tokomak_expr(expr, &mut udf_registry)
-                .map_err(|e| {
-                    debug!("Could not convert expression to tokomak expression: {}", e)
-                })
-                .ok();
-            let rc_udf_reg = Rc::new(udf_registry);
-
-            match tok_expr {
-                None => exprs.push(expr.clone()),
-                Some(_expr) => {
-                    let udf_aware = self
-                        .udf_aware_rules
-                        .iter()
-                        .flat_map(|f| (*f).generate_rules(Rc::clone(&rc_udf_reg)))
-                        .collect::<Vec<Rewrite<TokomakExpr, ()>>>();
-                    let runner = Runner::<TokomakExpr, (), ()>::default()
-                        .with_expr(rec_expr)
-                        .run(self.rules.iter().chain(&udf_aware));
-
-                    let mut extractor = Extractor::new(&runner.egraph, AstDepth);
-                    let (_, best_expr) = extractor.find_best(runner.roots[0]);
-                    match to_expr(&best_expr, &rc_udf_reg) {
-                        Ok(e) => exprs.push(e),
-                        Err(_) => exprs.push(expr.clone()),
-                    }
-                }
-            }
-        }
-
-        utils::from_plan(plan, &exprs, &new_inputs)
-    }
-
-    fn name(&self) -> &str {
-        "tokomak"
-    }
-}
-
-
-#[cfg(test)]
-mod test{
-    use std::time::Duration;
-
-    use crate::{RunnerSettings, TokomakOptimizer};
-
-    const q19: &'static str = "select
-    sum(l_extendedprice* (1 - l_discount)) as revenue
-from
-    lineitem,
-    part
-where
-    (
-                p_partkey = l_partkey
-            and p_brand = 'Brand#12'
-            and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
-            and l_quantity >= 1 and l_quantity <= 1 + 10
-            and p_size between 1 and 5
-            and l_shipmode in ('AIR', 'AIR REG')
-            and l_shipinstruct = 'DELIVER IN PERSON'
-        )
-   or
-    (
-                p_partkey = l_partkey
-            and p_brand = 'Brand#23'
-            and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
-            and l_quantity >= 10 and l_quantity <= 10 + 10
-            and p_size between 1 and 10
-            and l_shipmode in ('AIR', 'AIR REG')
-            and l_shipinstruct = 'DELIVER IN PERSON'
-        )
-   or
-    (
-                p_partkey = l_partkey
-            and p_brand = 'Brand#34'
-            and p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
-            and l_quantity >= 20 and l_quantity <= 20 + 10
-            and p_size between 1 and 15
-            and l_shipmode in ('AIR', 'AIR REG')
-            and l_shipinstruct = 'DELIVER IN PERSON'
-        );";
-        use datafusion::{execution::context::ExecutionProps, logical_plan::LogicalPlan, optimizer::optimizer::OptimizerRule};
-    #[test]
-    fn test_tpch_q19()->Result<(), datafusion::error::DataFusionError>{
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        
-        let mut ctx = datafusion::execution::context::ExecutionContext::new();
-        let plan = runtime.block_on(ctx.sql(q19))?;
-        let lplan = plan.to_logical_plan();
-        let runner_settings = RunnerSettings { iter_limit: Some(10), node_limit: Some(10000), time_limit: Some(Duration::from_secs_f64(15.0)) };
-        let mut optimzer = TokomakOptimizer::new((), runner_settings);
-        optimzer.add_simplification_rules();
-        let optimized_plan = optimzer.optimize(&lplan, &ExecutionProps::new())?;
-        println!("{:?}", optimized_plan);
-        Ok(())
     }
 }

@@ -2,7 +2,6 @@ use datafusion::error::DataFusionError;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use egg::*;
 use std::convert::TryFrom;
-use std::fmt::Display;
 use std::str::FromStr;
 
 define_language! {
@@ -22,22 +21,17 @@ define_language! {
         "float16" =Float16,
         "float32" =Float32,
         "float64" =Float64,
-        "utf8"=Utf8,
+        "utf8" =Utf8,
         "largeutf8"=LargeUtf8,
-        "time(s)"=TimestampSecond,
-        "time(ms)"=TimestampMillisecond,
-        "time(us)"=TimestampMicrosecond,
-        "time(ns)"=TimestampNanosecond,
-        "interval(yearmonth)"=IntervalYearMonth,
-        "interval(daytime)"=IntervalDayTime,
+        "time<s>"=TimestampSecond,
+        "time<m>)"=TimestampMillisecond,
+        "time<u>)"=TimestampMicrosecond,
+        "time<n>)"=TimestampNanosecond,
+        "interval<yearmonth>"=IntervalYearMonth,
+        "interval<daytime>"=IntervalDayTime,
     }
 }
 
-impl Display for TokomakDataType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{:?}", self))
-    }
-}
 
 impl From<&TokomakDataType> for DataType{
     fn from(val: &TokomakDataType) -> Self {
@@ -153,12 +147,12 @@ impl FromStr for TokomakDataType {
             "float64" => Ok(TokomakDataType::Float64),
             "utf8" => Ok(TokomakDataType::Utf8),
             "largeutf8" => Ok(TokomakDataType::LargeUtf8),
-            "time(s)" => Ok(TokomakDataType::TimestampSecond),
-            "time(ms)" => Ok(TokomakDataType::TimestampMillisecond),
-            "time(us)" => Ok(TokomakDataType::TimestampMicrosecond),
-            "time(ns)" => Ok(TokomakDataType::TimestampNanosecond),
-            "interval(yearmonth)" => Ok(TokomakDataType::IntervalYearMonth),
-            "interval(daytime)" => Ok(TokomakDataType::IntervalDayTime),
+            "time<s>"=> Ok(TokomakDataType::TimestampSecond),
+            "time<m>)"=> Ok(TokomakDataType::TimestampMillisecond),
+            "time<u>)"=> Ok(TokomakDataType::TimestampMicrosecond),
+            "time<n>)"=> Ok(TokomakDataType::TimestampNanosecond),
+            "interval<yearmonth>"=> Ok(TokomakDataType::IntervalYearMonth),
+            "interval<daytime>"=> Ok(TokomakDataType::IntervalDayTime),
             _ => Err(DataFusionError::Internal(
                 "Parsing string as TokomakDataType failed".to_string(),
             )),

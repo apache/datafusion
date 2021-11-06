@@ -1,11 +1,11 @@
 
-use crate::{CustomTokomakAnalysis, SIMPLIFICATION_RULES, TokomakAnalysis, TokomakOptimizer};
+use crate::{CustomTokomakAnalysis, SIMPLIFICATION_RULES, TokomakAnalysis, Tokomak};
 
 use super::super::{ TokomakExpr};
 
 use egg::{rewrite as rw, *};
 #[allow(unused_variables)]
-impl<T: CustomTokomakAnalysis> TokomakOptimizer<T>{
+impl Tokomak{
     #[allow(unused_variables, clippy::many_single_char_names)]
     pub(crate) fn add_simplification_rules(&mut self){
         let a: Var = "?a".parse().unwrap();
@@ -15,13 +15,17 @@ impl<T: CustomTokomakAnalysis> TokomakOptimizer<T>{
         let x: Var = "?x".parse().unwrap();
         //Add the one way rules first
         let mut rules = vec![
+            //Arithmetic rules
             rw!("commute-add"; "(+ ?x ?y)" => "(+ ?y ?x)"),
             rw!("commute-mul"; "(* ?x ?y)" => "(* ?y ?x)"),
             rw!("commute-and"; "(and ?x ?y)" => "(and ?y ?x)"),
             rw!("commute-or"; "(or ?x ?y)" => "(or ?y ?x)"),
             rw!("commute-eq"; "(= ?x ?y)" => "(= ?y ?x)"),
             rw!("commute-neq"; "(<> ?x ?y)" => "(<> ?y ?x)"),
-
+            
+            //Expression tree rotating
+            rw!("rotate-add"; "(+ ?x (+ ?y ?z))"=>"(+ (+ ?x ?y) ?z)"),
+            rw!("rotate-mul"; "(* ?x (* ?y ?z))"=>"(* (* ?x ?y) ?z)"),            
             rw!("rotate-and"; "(and ?a (and ?b ?c))"=>"(and (and ?a ?b) ?c)"),
             rw!("rotate-or"; "(or ?a (or ?b ?c))"=>"(or (or ?a ?b) ?c)"),
 
@@ -45,6 +49,11 @@ impl<T: CustomTokomakAnalysis> TokomakOptimizer<T>{
             rw!("and-false"; "(and false ?x)"=> "false"),
             rw!("or-false"; "(or false ?x)"=> "?x"),
             rw!("or-true"; "(or true ?x)"=> "true"),
+
+            rw!("or-to-inlist"; "(or (= ?x ?a) (= ?x ?b))"=>"(in_list ?x (list ?a ?b))"),
+            rw!("combine-or-inlist"; "(or (= ?x ?a) (in_list ?x (list ?b ?c)))"=> "(in_list ?x (list ?a ?b ?c))"),
+
+            //rw!("between-one-slice"; "(and (>= ?a ?b) (< ))"=>"()"),
 
             rw!("between-same"; "(between ?e ?a ?a)"=> "(= ?e ?a)"),
         
