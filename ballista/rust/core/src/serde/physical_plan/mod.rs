@@ -107,6 +107,7 @@ mod roundtrip_tests {
                     on.clone(),
                     join_type,
                     *partition_mode,
+                    &false,
                 )?))?;
             }
         }

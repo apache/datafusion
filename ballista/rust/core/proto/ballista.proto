@@ -435,6 +435,7 @@ message JoinNode {
   JoinConstraint join_constraint = 4;
   repeated Column left_join_column = 5;
   repeated Column right_join_column = 6;
+  bool null_equals_null = 7;
 }
 
 message CrossJoinNode {
@@ -649,6 +650,7 @@ message HashJoinExecNode {
   repeated JoinOn on = 3;
   JoinType join_type = 4;
   PartitionMode partition_mode = 6;
+  bool null_equals_null = 7;
 }
 
 message CrossJoinExecNode {

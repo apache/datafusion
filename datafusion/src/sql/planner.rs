@@ -192,23 +192,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 left,
                 right,
                 all,
-            } => match (op, all) {
+            } => {
+                let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
+                let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
+                match (op, all) {
                 (SetOperator::Union, true) => {
-                    let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
-                    let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
                     union_with_alias(left_plan, right_plan, alias)
                 }
                 (SetOperator::Union, false) => {
-                    let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
-                    let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
                     let union_plan = union_with_alias(left_plan, right_plan, alias)?;
                     LogicalPlanBuilder::from(union_plan).distinct()?.build()
                 }
+                (SetOperator::Intersect, true) => {
+                    let join_keys = left_plan.schema().fields().iter().zip(right_plan.schema().fields().iter()).map(|(left_field, right_field)| ((Column::from_name(left_field.name())), (Column::from_name(right_field.name())))).unzip();
+                    LogicalPlanBuilder::from(left_plan).join_detailed(&right_plan, JoinType::Semi, join_keys, true)?.build()
+                }
+                (SetOperator::Intersect, false) => {
+                    let join_keys = left_plan.schema().fields().iter().zip(right_plan.schema().fields().iter()).map(|(left_field, right_field)| ((Column::from_name(left_field.name())), (Column::from_name(right_field.name())))).unzip();
+                    LogicalPlanBuilder::from(left_plan).distinct()?.join_detailed(&right_plan, JoinType::Semi, join_keys, true)?.build()
+                }
                 _ => Err(DataFusionError::NotImplemented(format!(
-                    "Only UNION ALL and UNION [DISTINCT] are supported, found {}",
+                    "Only UNION ALL and UNION [DISTINCT] and INTERSECT and INTERSECT [DISTINCT] are supported, found {}",
                     op
                 ))),
-            },
+                }
+            }
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Query {} not implemented yet",
                 set_expr
@@ -3543,11 +3551,11 @@ mod tests {
     }
 
     #[test]
-    fn only_union_all_supported() {
+    fn except_not_supported() {
         let sql = "SELECT order_id from orders EXCEPT SELECT order_id FROM orders";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "NotImplemented(\"Only UNION ALL and UNION [DISTINCT] are supported, found EXCEPT\")",
+            "NotImplemented(\"Only UNION ALL and UNION [DISTINCT] and INTERSECT and INTERSECT [DISTINCT] are supported, found EXCEPT\")",
             format!("{:?}", err)
         );
     }
