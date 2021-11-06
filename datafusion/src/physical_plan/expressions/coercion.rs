@@ -128,36 +128,16 @@ pub fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
     // these are ordered from most informative to least informative so
     // that the coercion removes the least amount of information
     match (lhs_type, rhs_type) {
-        (Float64, _) => Some(Float64),
-        (_, Float64) => Some(Float64),
-
-        (_, Float32) => Some(Float32),
-        (Float32, _) => Some(Float32),
-
-        (Int64, _) => Some(Int64),
-        (_, Int64) => Some(Int64),
-
-        (Int32, _) => Some(Int32),
-        (_, Int32) => Some(Int32),
-
-        (Int16, _) => Some(Int16),
-        (_, Int16) => Some(Int16),
-
-        (Int8, _) => Some(Int8),
-        (_, Int8) => Some(Int8),
-
-        (UInt64, _) => Some(UInt64),
-        (_, UInt64) => Some(UInt64),
-
-        (UInt32, _) => Some(UInt32),
-        (_, UInt32) => Some(UInt32),
-
-        (UInt16, _) => Some(UInt16),
-        (_, UInt16) => Some(UInt16),
-
-        (UInt8, _) => Some(UInt8),
-        (_, UInt8) => Some(UInt8),
-
+        (Float64, _) | (_, Float64) => Some(Float64),
+        (_, Float32) | (Float32, _) => Some(Float32),
+        (Int64, _) | (_, Int64) => Some(Int64),
+        (Int32, _) | (_, Int32) => Some(Int32),
+        (Int16, _) | (_, Int16) => Some(Int16),
+        (Int8, _) | (_, Int8) => Some(Int8),
+        (UInt64, _) | (_, UInt64) => Some(UInt64),
+        (UInt32, _) | (_, UInt32) => Some(UInt32),
+        (UInt16, _) | (_, UInt16) => Some(UInt16),
+        (UInt8, _) | (_, UInt8) => Some(UInt8),
         _ => None,
     }
 }
