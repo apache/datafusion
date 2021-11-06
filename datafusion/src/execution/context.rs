@@ -21,13 +21,16 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
-    datasource::file_format::{
-        avro::AvroFormat,
-        csv::CsvFormat,
-        parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
-        FileFormat,
-    },
     datasource::listing::{ListingOptions, ListingTable},
+    datasource::{
+        file_format::{
+            avro::AvroFormat,
+            csv::CsvFormat,
+            parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
+            FileFormat,
+        },
+        MemTable,
+    },
     logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::eliminate_limit::EliminateLimit,
     physical_optimizer::{
@@ -233,6 +236,21 @@ impl ExecutionContext {
 
                 self.register_listing_table(name, location, options, provided_schema)
                     .await?;
+                let plan = LogicalPlanBuilder::empty(false).build()?;
+                Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+            }
+
+            LogicalPlan::CreateMemoryTable { input, name } => {
+                let plan = self.optimize(&input)?;
+                let physical = Arc::new(DataFrameImpl::new(self.state.clone(), &plan));
+
+                let batches: Vec<_> = physical.collect_partitioned().await?;
+                let table = Arc::new(MemTable::try_new(
+                    Arc::new(plan.schema().as_ref().into()),
+                    batches,
+                )?);
+                self.register_table(name.as_str(), table)?;
+
                 let plan = LogicalPlanBuilder::empty(false).build()?;
                 Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
             }

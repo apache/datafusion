@@ -802,7 +802,7 @@ impl DefaultPhysicalPlanner {
 
                     Ok(Arc::new(GlobalLimitExec::new(input, limit)))
                 }
-                LogicalPlan::CreateExternalTable { .. } => {
+                LogicalPlan::CreateExternalTable { .. }=> {
                     // There is no default plan for "CREATE EXTERNAL
                     // TABLE" -- it must be handled at a higher level (so
                     // that the appropriate table can be registered with
@@ -810,6 +810,13 @@ impl DefaultPhysicalPlanner {
                     Err(DataFusionError::Internal(
                         "Unsupported logical plan: CreateExternalTable".to_string(),
                     ))
+                }
+                | LogicalPlan::CreateMemoryTable {..} => {
+                    // Create a dummy exec.
+                    Ok(Arc::new(EmptyExec::new(
+                        false,
+                        SchemaRef::new(Schema::empty()),
+                    )))
                 }
                 LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),

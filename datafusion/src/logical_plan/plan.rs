@@ -205,6 +205,13 @@ pub enum LogicalPlan {
         /// Whether the CSV file contains a header
         has_header: bool,
     },
+    /// Creates an in memory table.
+    CreateMemoryTable {
+        /// The table name
+        name: String,
+        /// The logical plan
+        input: Arc<LogicalPlan>,
+    },
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
@@ -266,6 +273,7 @@ impl LogicalPlan {
             LogicalPlan::Analyze { schema, .. } => schema,
             LogicalPlan::Extension { node } => node.schema(),
             LogicalPlan::Union { schema, .. } => schema,
+            LogicalPlan::CreateMemoryTable { input, .. } => input.schema(),
         }
     }
 
@@ -310,6 +318,7 @@ impl LogicalPlan {
             LogicalPlan::Limit { input, .. }
             | LogicalPlan::Repartition { input, .. }
             | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::CreateMemoryTable { input, .. }
             | LogicalPlan::Filter { input, .. } => input.all_schemas(),
         }
     }
@@ -356,6 +365,7 @@ impl LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Limit { .. }
             | LogicalPlan::CreateExternalTable { .. }
+            | LogicalPlan::CreateMemoryTable { .. }
             | LogicalPlan::CrossJoin { .. }
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
@@ -382,6 +392,7 @@ impl LogicalPlan {
             LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
             LogicalPlan::Explain { plan, .. } => vec![plan],
             LogicalPlan::Analyze { input: plan, .. } => vec![plan],
+            LogicalPlan::CreateMemoryTable { input, .. } => vec![input],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -519,6 +530,7 @@ impl LogicalPlan {
                 true
             }
             LogicalPlan::Limit { input, .. } => input.accept(visitor)?,
+            LogicalPlan::CreateMemoryTable { input, .. } => input.accept(visitor)?,
             LogicalPlan::Extension { node } => {
                 for input in node.inputs() {
                     if !input.accept(visitor)? {
@@ -847,6 +859,9 @@ impl LogicalPlan {
                     LogicalPlan::Limit { ref n, .. } => write!(f, "Limit: {}", n),
                     LogicalPlan::CreateExternalTable { ref name, .. } => {
                         write!(f, "CreateExternalTable: {:?}", name)
+                    }
+                    LogicalPlan::CreateMemoryTable { ref name, .. } => {
+                        write!(f, "CreateMemoryTable: {:?}", name)
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
