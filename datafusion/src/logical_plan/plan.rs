@@ -135,6 +135,8 @@ pub enum LogicalPlan {
         join_constraint: JoinConstraint,
         /// The output schema, containing fields from the left and right inputs
         schema: DFSchemaRef,
+        /// If null_equals_null is true, null == null else null != null
+        null_equals_null: bool,
     },
     /// Apply Cross Join to two logical plans
     CrossJoin {

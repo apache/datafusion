@@ -493,6 +493,18 @@ impl LogicalPlanBuilder {
         join_type: JoinType,
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
     ) -> Result<Self> {
+        self.join_detailed(right, join_type, join_keys, false)
+    }
+
+    /// Apply a join with on constraint and specified null equality
+    /// If null_equals_null is true then null == null, else null != null
+    pub fn join_detailed(
+        &self,
+        right: &LogicalPlan,
+        join_type: JoinType,
+        join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
+        null_equals_null: bool,
+    ) -> Result<Self> {
         if join_keys.0.len() != join_keys.1.len() {
             return Err(DataFusionError::Plan(
                 "left_keys and right_keys were not the same length".to_string(),
@@ -580,6 +592,7 @@ impl LogicalPlanBuilder {
             join_type,
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
+            null_equals_null,
         }))
     }
 
@@ -611,6 +624,7 @@ impl LogicalPlanBuilder {
             join_type,
             join_constraint: JoinConstraint::Using,
             schema: DFSchemaRef::new(join_schema),
+            null_equals_null: false,
         }))
     }
 

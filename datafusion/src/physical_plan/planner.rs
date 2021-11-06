@@ -713,6 +713,7 @@ impl DefaultPhysicalPlanner {
                     right,
                     on: keys,
                     join_type,
+                    null_equals_null,
                     ..
                 } => {
                     let left_df_schema = left.schema();
@@ -761,6 +762,7 @@ impl DefaultPhysicalPlanner {
                             join_on,
                             join_type,
                             PartitionMode::Partitioned,
+                            null_equals_null,
                         )?))
                     } else {
                         Ok(Arc::new(HashJoinExec::try_new(
@@ -769,6 +771,7 @@ impl DefaultPhysicalPlanner {
                             join_on,
                             join_type,
                             PartitionMode::CollectLeft,
+                            null_equals_null,
                         )?))
                     }
                 }
