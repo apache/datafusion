@@ -20,13 +20,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
-
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
+use crate::record_batch::RecordBatch;
 use crate::{error::Result, scalar::ScalarValue};
+use arrow::datatypes::{DataType, Schema};
 
 /// Represents a literal value
 #[derive(Debug)]

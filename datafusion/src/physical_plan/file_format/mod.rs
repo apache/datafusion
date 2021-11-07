@@ -24,12 +24,12 @@ mod json;
 mod parquet;
 
 pub use self::parquet::ParquetExec;
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::{ArrayData, ArrayRef, DictionaryArray, UInt8BufferBuilder},
     buffer::Buffer,
     datatypes::{DataType, Field, Schema, SchemaRef, UInt8Type},
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
 pub use csv::CsvExec;

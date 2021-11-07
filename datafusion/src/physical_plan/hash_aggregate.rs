@@ -17,36 +17,31 @@
 
 //! Defines the execution plan for the hash aggregate operation
 
-use std::any::Any;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::vec;
-
-use ahash::RandomState;
-use futures::{
-    stream::{Stream, StreamExt},
-    Future,
-};
-
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{
     Accumulator, AggregateExpr, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
+use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
-
+use ahash::RandomState;
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::{array::ArrayRef, compute, compute::cast};
 use arrow::{
     array::{Array, UInt32Builder},
     error::{ArrowError, Result as ArrowResult},
 };
-use arrow::{
-    datatypes::{Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
+use futures::{
+    stream::{Stream, StreamExt},
+    Future,
 };
 use hashbrown::raw::RawTable;
 use pin_project_lite::pin_project;
+use std::any::Any;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::vec;
 
 use async_trait::async_trait;
 

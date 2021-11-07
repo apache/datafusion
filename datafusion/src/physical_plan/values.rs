@@ -23,10 +23,10 @@ use crate::physical_plan::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
+use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;

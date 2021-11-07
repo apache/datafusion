@@ -26,7 +26,7 @@ use std::{any::Any, vec};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -485,6 +485,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::record_batch::RecordBatch;
     use crate::{
         assert_batches_sorted_eq,
         physical_plan::{collect, expressions::col, memory::MemoryExec},
@@ -497,7 +498,6 @@ mod tests {
         },
     };
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
     use arrow::{
         array::{ArrayRef, StringArray, UInt32Array},
         error::ArrowError,

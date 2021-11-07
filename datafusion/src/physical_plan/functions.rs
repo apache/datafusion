@@ -41,6 +41,7 @@ use crate::physical_plan::expressions::{
 };
 use crate::physical_plan::math_expressions;
 use crate::physical_plan::string_expressions;
+use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -50,7 +51,6 @@ use arrow::{
     compute::kernels::length::{bit_length, length},
     datatypes::TimeUnit,
     datatypes::{DataType, Field, Int32Type, Int64Type, Schema},
-    record_batch::RecordBatch,
 };
 use fmt::{Debug, Formatter};
 use std::convert::From;
@@ -1668,6 +1668,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::record_batch::RecordBatch;
     use crate::{
         error::Result,
         physical_plan::expressions::{col, lit},
@@ -1679,7 +1680,6 @@ mod tests {
             Float64Array, Int32Array, StringArray, UInt32Array, UInt64Array,
         },
         datatypes::Field,
-        record_batch::RecordBatch,
     };
 
     /// $FUNC function to test

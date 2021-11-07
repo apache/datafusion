@@ -22,11 +22,11 @@ use std::sync::Arc;
 use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
+use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
 use arrow::compute;
 use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 
 /// TRY_CAST expression casts an expression to a specific data type and retuns NULL on invalid cast

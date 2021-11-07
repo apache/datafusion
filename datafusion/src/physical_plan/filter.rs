@@ -29,11 +29,11 @@ use crate::physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
+use crate::record_batch::RecordBatch;
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use async_trait::async_trait;
 
@@ -183,7 +183,9 @@ fn batch_filter(
                     .into_arrow_external_error()
                 })
                 // apply filter array to record batch
-                .and_then(|filter_array| filter_record_batch(batch, filter_array))
+                .and_then(|filter_array| {
+                    filter_record_batch(batch.into(), filter_array).into()
+                })
         })
 }
 

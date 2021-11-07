@@ -709,7 +709,7 @@ impl ExecutionContext {
                     let stream = plan.execute(i).await?;
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
                         stream
-                            .map(|batch| writer.write(&batch?))
+                            .map(|batch| writer.write(&batch?.into()))
                             .try_collect()
                             .await
                             .map_err(DataFusionError::from)
@@ -752,7 +752,7 @@ impl ExecutionContext {
                     let stream = plan.execute(i).await?;
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
                         stream
-                            .map(|batch| writer.write(&batch?))
+                            .map(|batch| writer.write(&batch?.into()))
                             .try_collect()
                             .await
                             .map_err(DataFusionError::from)?;
@@ -1168,6 +1168,7 @@ mod tests {
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::physical_plan::{collect, collect_partitioned};
+    use crate::record_batch::RecordBatch;
     use crate::test;
     use crate::variable::VarType;
     use crate::{
@@ -1187,7 +1188,6 @@ mod tests {
     };
     use arrow::compute::add;
     use arrow::datatypes::*;
-    use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
     use std::fs::File;
     use std::sync::Weak;

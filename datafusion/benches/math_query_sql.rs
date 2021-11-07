@@ -29,12 +29,11 @@ extern crate datafusion;
 use arrow::{
     array::{Float32Array, Float64Array},
     datatypes::{DataType, Field, Schema},
-    record_batch::RecordBatch,
 };
-use datafusion::error::Result;
-
 use datafusion::datasource::MemTable;
+use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
+use datafusion::record_batch::RecordBatch;
 
 fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();

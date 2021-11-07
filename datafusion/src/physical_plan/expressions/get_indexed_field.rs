@@ -20,13 +20,9 @@
 use std::convert::TryInto;
 use std::{any::Any, sync::Arc};
 
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
-
 use crate::arrow::array::Array;
 use crate::arrow::compute::concat;
+use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
 use crate::{
     error::DataFusionError,
@@ -35,6 +31,7 @@ use crate::{
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
 use arrow::array::{ListArray, StructArray};
+use arrow::datatypes::{DataType, Schema};
 use std::fmt::Debug;
 
 /// expression to get a field of a struct array.

@@ -17,15 +17,13 @@
 
 //! Stream wrappers for physical operators
 
-use arrow::{
-    datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
-};
+use super::common::AbortOnDropSingle;
+use super::{RecordBatchStream, SendableRecordBatchStream};
+use crate::record_batch::RecordBatch;
+use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 use futures::{Stream, StreamExt};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
-
-use super::common::AbortOnDropSingle;
-use super::{RecordBatchStream, SendableRecordBatchStream};
 
 /// Adapter for a tokio [`ReceiverStream`] that implements the
 /// [`SendableRecordBatchStream`]

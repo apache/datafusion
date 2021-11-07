@@ -27,7 +27,7 @@ use array::{
 };
 use arrow::array::{self, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;

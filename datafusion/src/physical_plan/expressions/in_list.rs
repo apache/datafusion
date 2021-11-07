@@ -20,23 +20,20 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::error::{DataFusionError, Result};
+use crate::physical_plan::{ColumnarValue, PhysicalExpr};
+use crate::record_batch::RecordBatch;
+use crate::scalar::ScalarValue;
 use arrow::array::GenericStringArray;
+use arrow::array::*;
 use arrow::array::{
     ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
     Int64Array, Int8Array, StringOffsetSizeTrait, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
 };
-use arrow::datatypes::ArrowPrimitiveType;
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
-
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
-use crate::scalar::ScalarValue;
-use arrow::array::*;
 use arrow::buffer::{Buffer, MutableBuffer};
+use arrow::datatypes::ArrowPrimitiveType;
+use arrow::datatypes::{DataType, Schema};
 
 macro_rules! compare_op_scalar {
     ($left: expr, $right:expr, $op:expr) => {{

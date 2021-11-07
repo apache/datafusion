@@ -38,11 +38,11 @@ use crate::{
     scalar::ScalarValue,
 };
 
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
 use log::debug;
 use parquet::file::{
@@ -425,7 +425,7 @@ fn read_partition(
                 Some(Ok(batch)) => {
                     total_rows += batch.num_rows();
                     let proj_batch = partition_column_projector
-                        .project(batch, &partitioned_file.partition_values);
+                        .project(batch.into(), &partitioned_file.partition_values);
 
                     send_result(&response_tx, proj_batch)?;
                     if limit.map(|l| total_rows >= l).unwrap_or(false) {

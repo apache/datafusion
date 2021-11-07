@@ -37,7 +37,7 @@ use arrow::compute::kernels::comparison::{
     regexp_is_match_utf8_scalar,
 };
 use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Operator;

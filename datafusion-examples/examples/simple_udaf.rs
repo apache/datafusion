@@ -17,12 +17,10 @@
 
 /// In this example we will declare a single-type, single return type UDAF that computes the geometric mean.
 /// The geometric mean is described here: https://en.wikipedia.org/wiki/Geometric_mean
-use datafusion::arrow::{
-    array::Float32Array, array::Float64Array, datatypes::DataType,
-    record_batch::RecordBatch,
-};
+use datafusion::arrow::{array::Float32Array, array::Float64Array, datatypes::DataType};
 
 use datafusion::physical_plan::functions::Volatility;
+use datafusion::record_batch::RecordBatch;
 use datafusion::{error::Result, logical_plan::create_udaf, physical_plan::Accumulator};
 use datafusion::{prelude::*, scalar::ScalarValue};
 use std::sync::Arc;

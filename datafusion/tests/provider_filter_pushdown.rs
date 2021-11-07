@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::record_batch::RecordBatch;
 use arrow::array::{as_primitive_array, Int32Builder, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::datasource::datasource::{TableProvider, TableProviderFilterPushDown};
 use datafusion::error::Result;

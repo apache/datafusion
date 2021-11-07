@@ -15,16 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::prelude::*;
+use datafusion::record_batch::RecordBatch;
 use datafusion::{
     arrow::{
         array::{ArrayRef, Float32Array, Float64Array},
         datatypes::DataType,
-        record_batch::RecordBatch,
     },
     physical_plan::functions::Volatility,
 };
-
-use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use std::sync::Arc;
 

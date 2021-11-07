@@ -20,16 +20,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::error::{DataFusionError, Result};
+use crate::physical_plan::{ColumnarValue, PhysicalExpr};
+use crate::record_batch::RecordBatch;
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::arithmetic::negate;
 use arrow::{
     array::{Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array},
     datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
 };
-
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 
 use super::coercion;
 

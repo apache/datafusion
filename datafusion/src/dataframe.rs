@@ -17,11 +17,11 @@
 
 //! DataFrame API for building and executing query plans.
 
-use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use crate::logical_plan::{
     DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, Partitioning,
 };
+use crate::record_batch::RecordBatch;
 use std::sync::Arc;
 
 use crate::physical_plan::SendableRecordBatchStream;

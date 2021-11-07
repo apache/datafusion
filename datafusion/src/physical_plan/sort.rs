@@ -27,11 +27,11 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
+use crate::record_batch::RecordBatch;
 pub use arrow::compute::SortOptions;
 use arrow::compute::{lexsort_to_indices, take, SortColumn, TakeOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, error::ArrowError};
 use async_trait::async_trait;
 use futures::stream::Stream;

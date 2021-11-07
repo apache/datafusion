@@ -23,18 +23,15 @@ extern crate datafusion;
 
 use std::{iter::FromIterator, sync::Arc};
 
-use arrow::{
-    array::{ArrayRef, Int64Array, StringArray},
-    record_batch::RecordBatch,
-};
-use tokio::runtime::Runtime;
-
+use arrow::array::{ArrayRef, Int64Array, StringArray};
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
     memory::MemoryExec,
     sort_preserving_merge::SortPreservingMergeExec,
 };
+use datafusion::record_batch::RecordBatch;
+use tokio::runtime::Runtime;
 
 // Initialise the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.

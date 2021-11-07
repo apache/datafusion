@@ -22,8 +22,8 @@ use std::sync::Arc;
 use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
+use crate::record_batch::RecordBatch;
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
-use arrow::record_batch::RecordBatch;
 
 mod approx_distinct;
 mod average;

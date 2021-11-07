@@ -20,6 +20,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use super::SendableRecordBatchStream;
+use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::StringifiedPlan,
@@ -28,9 +30,7 @@ use crate::{
         Statistics,
     },
 };
-use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
-
-use super::SendableRecordBatchStream;
+use arrow::{array::StringBuilder, datatypes::SchemaRef};
 use async_trait::async_trait;
 
 /// Explain execution plan operator. This operator contains the string

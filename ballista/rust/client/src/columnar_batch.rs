@@ -19,10 +19,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use ballista_core::error::{ballista_error, Result};
 
+use crate::record_batch::RecordBatch;
 use datafusion::arrow::{
     array::ArrayRef,
     datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
 };
 use datafusion::scalar::ScalarValue;
 

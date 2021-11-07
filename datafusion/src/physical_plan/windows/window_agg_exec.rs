@@ -26,11 +26,11 @@ use crate::physical_plan::{
     common, ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
 use async_trait::async_trait;
 use futures::stream::Stream;

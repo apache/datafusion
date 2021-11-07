@@ -22,7 +22,7 @@ use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use arrow::array::{self, *};
 use arrow::compute::{eq, eq_utf8};
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
 /// can be used. The first form consists of a series of boolean "when" expressions with

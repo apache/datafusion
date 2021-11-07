@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::{Float32Array, Float64Array},
     datatypes::{DataType, Field, Schema},
-    record_batch::RecordBatch,
 };
 use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::prelude::ExecutionContext;

@@ -19,6 +19,7 @@
 // data into a parquet file and then
 use std::sync::Arc;
 
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::{
         Array, ArrayRef, Date32Array, Date64Array, Float64Array, Int32Array, StringArray,
@@ -26,7 +27,6 @@ use arrow::{
         TimestampSecondArray,
     },
     datatypes::{DataType, Field, Schema},
-    record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use chrono::{Datelike, Duration};

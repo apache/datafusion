@@ -24,7 +24,7 @@ use crate::physical_plan::{
     expressions::PhysicalSortExpr, Accumulator, AggregateExpr, PhysicalExpr, WindowExpr,
 };
 use arrow::compute::concat;
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use std::any::Any;
 use std::iter::IntoIterator;

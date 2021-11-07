@@ -30,6 +30,7 @@ use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
+use crate::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::error::Result as ArrowResult;
@@ -40,7 +41,6 @@ use datafusion::arrow::{
     datatypes::{DataType, Field, SchemaRef},
     ipc::reader::FileReader,
     ipc::writer::FileWriter,
-    record_batch::RecordBatch,
 };
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::{

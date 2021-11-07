@@ -60,11 +60,11 @@
 
 use futures::{Stream, StreamExt};
 
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::{Int64Array, StringArray},
     datatypes::SchemaRef,
     error::ArrowError,
-    record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use datafusion::{

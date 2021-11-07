@@ -23,7 +23,7 @@ use std::{any::Any, sync::Arc, task::Poll};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 
 use futures::{Stream, TryStreamExt};
 

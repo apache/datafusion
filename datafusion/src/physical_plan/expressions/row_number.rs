@@ -20,9 +20,9 @@
 use crate::error::Result;
 use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
+use crate::record_batch::RecordBatch;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -84,7 +84,7 @@ impl PartitionEvaluator for NumRowsEvaluator {
 mod tests {
     use super::*;
     use crate::error::Result;
-    use arrow::record_batch::RecordBatch;
+    use crate::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
     #[test]

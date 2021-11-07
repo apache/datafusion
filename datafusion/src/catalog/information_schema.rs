@@ -24,13 +24,12 @@ use std::{
     sync::{Arc, Weak},
 };
 
+use crate::datasource::{MemTable, TableProvider, TableType};
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::{StringBuilder, UInt64Builder},
     datatypes::{DataType, Field, Schema},
-    record_batch::RecordBatch,
 };
-
-use crate::datasource::{MemTable, TableProvider, TableType};
 
 use super::{
     catalog::{CatalogList, CatalogProvider},

@@ -27,7 +27,7 @@ use futures::Stream;
 
 use async_trait::async_trait;
 
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 
 use super::common::AbortOnDropMany;

@@ -19,13 +19,13 @@
 
 use std::sync::Arc;
 
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::{
         Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringArray,
         StringBuilder, UInt64Array, UInt64Builder,
     },
     datatypes::{DataType, Field, Schema},
-    record_batch::RecordBatch,
 };
 use chrono::{TimeZone, Utc};
 use futures::{

@@ -19,14 +19,11 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::compute;
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
-
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
+use crate::record_batch::RecordBatch;
 use crate::{error::Result, scalar::ScalarValue};
+use arrow::compute;
+use arrow::datatypes::{DataType, Schema};
 
 /// IS NOT NULL expression
 #[derive(Debug)]
@@ -89,10 +86,10 @@ pub fn is_not_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> 
 mod tests {
     use super::*;
     use crate::physical_plan::expressions::col;
+    use crate::record_batch::RecordBatch;
     use arrow::{
         array::{BooleanArray, StringArray},
         datatypes::*,
-        record_batch::RecordBatch,
     };
     use std::sync::Arc;
 

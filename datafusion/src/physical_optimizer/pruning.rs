@@ -26,17 +26,9 @@
 //!
 //! This code is currently specific to Parquet, but soon (TM), via
 //! https://github.com/apache/arrow-datafusion/issues/363 it will
-//! be genericized.
+//! be generalized.
 
-use std::convert::TryFrom;
-use std::{collections::HashSet, sync::Arc};
-
-use arrow::{
-    array::{new_null_array, ArrayRef, BooleanArray},
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
-
+use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,
@@ -44,6 +36,12 @@ use crate::{
     optimizer::utils,
     physical_plan::{planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr},
 };
+use arrow::{
+    array::{new_null_array, ArrayRef, BooleanArray},
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
+use std::convert::TryFrom;
+use std::{collections::HashSet, sync::Arc};
 
 /// Interface to pass statistics information to [`PruningPredicates`]
 ///

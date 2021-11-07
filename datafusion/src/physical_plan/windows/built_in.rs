@@ -24,8 +24,8 @@ use crate::physical_plan::{
     window_functions::{BuiltInWindowFunction, BuiltInWindowFunctionExpr},
     PhysicalExpr, WindowExpr,
 };
+use crate::record_batch::RecordBatch;
 use arrow::compute::concat;
-use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use std::any::Any;
 use std::sync::Arc;

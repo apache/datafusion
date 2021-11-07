@@ -26,10 +26,10 @@ use crate::physical_plan::{
     aggregates, aggregates::AggregateFunction, functions::Signature,
     type_coercion::data_types, windows::find_ranges_in_range, PhysicalExpr,
 };
+use crate::record_batch::RecordBatch;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
-use arrow::record_batch::RecordBatch;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;

@@ -27,6 +27,7 @@ use ballista_core::error::BallistaError;
 use ballista_core::serde::decode_protobuf;
 use ballista_core::serde::scheduler::Action as BallistaAction;
 
+use crate::record_batch::RecordBatch;
 use arrow_flight::{
     flight_service_server::FlightService, Action, ActionType, Criteria, Empty,
     FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
@@ -34,7 +35,6 @@ use arrow_flight::{
 };
 use datafusion::arrow::{
     error::ArrowError, ipc::reader::FileReader, ipc::writer::IpcWriteOptions,
-    record_batch::RecordBatch,
 };
 use futures::{Stream, StreamExt};
 use log::{info, warn};

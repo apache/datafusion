@@ -223,6 +223,7 @@ pub mod optimizer;
 pub mod physical_optimizer;
 pub mod physical_plan;
 pub mod prelude;
+pub mod record_batch;
 pub mod scalar;
 pub mod sql;
 pub mod variable;

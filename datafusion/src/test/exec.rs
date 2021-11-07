@@ -26,10 +26,10 @@ use std::{
 };
 use tokio::sync::Barrier;
 
+use crate::record_batch::RecordBatch;
 use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
 use futures::Stream;
 

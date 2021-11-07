@@ -23,6 +23,7 @@ use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
 use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -31,7 +32,6 @@ use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use async_trait::async_trait;
 pub use display::DisplayFormatType;

@@ -17,12 +17,9 @@
 
 use std::sync::Arc;
 
+use crate::record_batch::RecordBatch;
+use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::{
-    array::{Int32Array, StringArray},
-    record_batch::RecordBatch,
-};
-
 use datafusion::error::Result;
 use datafusion::{datasource::MemTable, prelude::JoinType};
 

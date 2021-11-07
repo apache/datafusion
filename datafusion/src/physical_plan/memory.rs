@@ -27,9 +27,9 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::error::{DataFusionError, Result};
+use crate::record_batch::RecordBatch;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use async_trait::async_trait;
 use futures::Stream;

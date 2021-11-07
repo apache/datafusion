@@ -279,9 +279,9 @@ impl Accumulator for SumAccumulator {
 mod tests {
     use super::*;
     use crate::physical_plan::expressions::col;
+    use crate::record_batch::RecordBatch;
     use crate::{error::Result, generic_test_op};
     use arrow::datatypes::*;
-    use arrow::record_batch::RecordBatch;
 
     #[test]
     fn sum_i32() -> Result<()> {

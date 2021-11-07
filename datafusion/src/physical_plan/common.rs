@@ -20,11 +20,11 @@
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
+use crate::record_batch::RecordBatch;
 use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 use futures::channel::mpsc;
 use futures::{Future, SinkExt, Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
@@ -276,10 +276,10 @@ impl<T> Drop for AbortOnDropMany<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::record_batch::RecordBatch;
     use arrow::{
         array::{Float32Array, Float64Array},
         datatypes::{DataType, Field, Schema},
-        record_batch::RecordBatch,
     };
 
     #[test]

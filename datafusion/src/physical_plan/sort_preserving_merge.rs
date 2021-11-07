@@ -19,26 +19,25 @@
 
 use super::common::AbortOnDropMany;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use std::any::Any;
-use std::cmp::Ordering;
-use std::collections::VecDeque;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
+use crate::record_batch::RecordBatch;
 use arrow::array::DynComparator;
 use arrow::{
     array::{make_array as make_arrow_array, ArrayRef, MutableArrayData},
     compute::SortOptions,
     datatypes::SchemaRef,
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::FusedStream;
 use futures::{Stream, StreamExt};
 use hashbrown::HashMap;
+use std::any::Any;
+use std::cmp::Ordering;
+use std::collections::VecDeque;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{

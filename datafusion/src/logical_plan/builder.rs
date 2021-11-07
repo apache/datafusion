@@ -27,11 +27,9 @@ use crate::datasource::{
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::ToStringifiedPlan;
 use crate::prelude::*;
+use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
-use arrow::{
-    datatypes::{DataType, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use std::convert::TryFrom;
 use std::iter;
 use std::{

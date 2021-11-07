@@ -21,11 +21,11 @@
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
+use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
 use arrow::array::{new_null_array, ArrayRef};
 use arrow::compute::kernels::window::shift;
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
 use std::any::Any;
 use std::iter;
 use std::ops::Range;
@@ -199,7 +199,7 @@ mod tests {
     use super::*;
     use crate::error::Result;
     use crate::physical_plan::expressions::Column;
-    use arrow::record_batch::RecordBatch;
+    use crate::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
     fn test_i32_result(expr: NthValue, expected: Int32Array) -> Result<()> {

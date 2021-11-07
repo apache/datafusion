@@ -23,10 +23,10 @@ use arrow::{
     array::StringArray,
     array::UInt64Array,
     datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
 };
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
+use datafusion::record_batch::RecordBatch;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};

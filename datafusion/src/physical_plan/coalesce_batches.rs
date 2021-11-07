@@ -32,7 +32,7 @@ use crate::physical_plan::{
 use arrow::compute::kernels::concat::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 use log::debug;

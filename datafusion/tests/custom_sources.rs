@@ -19,7 +19,7 @@ use arrow::array::{Int32Array, PrimitiveArray, UInt64Array};
 use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::scalar::ScalarValue;

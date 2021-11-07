@@ -26,7 +26,7 @@ use crate::physical_plan::{
 };
 use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 
 use super::{common, SendableRecordBatchStream, Statistics};
 

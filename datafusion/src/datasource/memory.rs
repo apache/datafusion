@@ -24,7 +24,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 use async_trait::async_trait;
 
 use crate::datasource::TableProvider;
