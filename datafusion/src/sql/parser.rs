@@ -293,8 +293,10 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    fn consume_token(&mut self, expected: &str) -> bool {
-        if self.parser.peek_token().to_string() == *expected {
+    fn consume_token(&mut self, expected: &Token) -> bool {
+        let token = self.parser.peek_token().to_string().to_uppercase();
+        let token = Token::make_keyword(&token);
+        if token == *expected {
             self.parser.next_token();
             true
         } else {
@@ -303,9 +305,9 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_csv_has_header(&mut self) -> bool {
-        self.consume_token("WITH")
-            & self.consume_token("HEADER")
-            & self.consume_token("ROW")
+        self.consume_token(&Token::make_keyword("WITH"))
+            & self.consume_token(&Token::make_keyword("HEADER"))
+            & self.consume_token(&Token::make_keyword("ROW"))
     }
 }
 
@@ -371,6 +373,22 @@ mod tests {
             location: "foo.csv".into(),
         });
         expect_parse_ok(sql, expected)?;
+
+        // positive case: it is ok for case insensitive sql stmt with `WITH HEADER ROW` tokens
+        let sqls = vec![
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH HEADER ROW LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV with header row LOCATION 'foo.csv'"
+        ];
+        for sql in sqls {
+            let expected = Statement::CreateExternalTable(CreateExternalTable {
+                name: "t".into(),
+                columns: vec![make_column_def("c1", DataType::Int(display))],
+                file_type: FileType::CSV,
+                has_header: true,
+                location: "foo.csv".into(),
+            });
+            expect_parse_ok(sql, expected)?;
+        }
 
         // positive case: it is ok for parquet files not to have columns specified
         let sql = "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet'";
