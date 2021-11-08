@@ -506,6 +506,13 @@ pub fn return_type(
     // Note that this function *must* return the same type that the respective physical expression returns
     // or the execution panics.
 
+    if arg_types.is_empty() && !fun.supports_zero_argument() {
+        return Err(DataFusionError::Internal(format!(
+            "Builtin scalar function {} does not support empty arguments",
+            fun
+        )));
+    }
+
     // verify that this is a valid set of data types for this function
     data_types(arg_types, &signature(fun))?;
 
@@ -621,18 +628,10 @@ pub fn return_type(
         | BuiltinScalarFunction::Sin
         | BuiltinScalarFunction::Sqrt
         | BuiltinScalarFunction::Tan
-        | BuiltinScalarFunction::Trunc => {
-            if arg_types.is_empty() {
-                return Err(DataFusionError::Internal(format!(
-                    "builtin scalar function {} does not support empty arguments",
-                    fun
-                )));
-            }
-            match arg_types[0] {
-                DataType::Float32 => Ok(DataType::Float32),
-                _ => Ok(DataType::Float64),
-            }
-        }
+        | BuiltinScalarFunction::Trunc => match arg_types[0] {
+            DataType::Float32 => Ok(DataType::Float32),
+            _ => Ok(DataType::Float64),
+        },
     }
 }
 
@@ -1135,6 +1134,15 @@ pub fn create_physical_expr(
     input_schema: &Schema,
     ctx_state: &ExecutionContextState,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    let args = coerce(args, input_schema, &signature(fun))?;
+
+    let arg_types = args
+        .iter()
+        .map(|e| e.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let data_type = return_type(fun, &arg_types)?;
+
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation
         // Unlike the string functions, which actually figure out the function to use with each array,
@@ -1223,18 +1231,12 @@ pub fn create_physical_expr(
         // These don't need args and input schema
         _ => create_physical_fun(fun, ctx_state)?,
     };
-    let args = coerce(args, input_schema, &signature(fun))?;
-
-    let arg_types = args
-        .iter()
-        .map(|e| e.data_type(input_schema))
-        .collect::<Result<Vec<_>>>()?;
 
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{}", fun),
         fun_expr,
         args,
-        &return_type(fun, &arg_types)?,
+        &data_type,
     )))
 }
 
@@ -3859,28 +3861,59 @@ mod tests {
     }
 
     #[test]
-    fn test_concat_error() -> Result<()> {
+    fn test_empty_arguments_error() -> Result<()> {
         let ctx_state = ExecutionContextState::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
-        let expr = create_physical_expr(
-            &BuiltinScalarFunction::Concat,
-            &[],
-            &schema,
-            &ctx_state,
-        )?;
+        // pick some arbitrary functions to test
+        let funs = [
+            BuiltinScalarFunction::Concat,
+            BuiltinScalarFunction::ToTimestamp,
+            BuiltinScalarFunction::Abs,
+            BuiltinScalarFunction::Repeat,
+        ];
 
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-        let result = expr.evaluate(&batch);
+        for fun in funs.iter() {
+            let expr = create_physical_expr(fun, &[], &schema, &ctx_state);
 
-        if result.is_ok() {
-            Err(DataFusionError::Plan(
-                "Function 'concat' cannot accept zero arguments".to_string(),
-            ))
-        } else {
-            Ok(())
+            match expr {
+                Ok(..) => {
+                    return Err(DataFusionError::Plan(format!(
+                        "Builtin scalar function {} does not support empty arguments",
+                        fun
+                    )));
+                }
+                Err(DataFusionError::Internal(err)) => {
+                    if err
+                        != format!(
+                            "Builtin scalar function {} does not support empty arguments",
+                            fun
+                        )
+                    {
+                        return Err(DataFusionError::Internal(format!(
+                            "Builtin scalar function {} didn't got the right error message with empty arguments", fun)));
+                    }
+                }
+                Err(..) => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Builtin scalar function {} didn't got the right error with empty arguments", fun)));
+                }
+            }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_arguments() -> Result<()> {
+        let ctx_state = ExecutionContextState::new();
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        let funs = [BuiltinScalarFunction::Now, BuiltinScalarFunction::Random];
+
+        for fun in funs.iter() {
+            create_physical_expr(fun, &[], &schema, &ctx_state)?;
+        }
+        Ok(())
     }
 
     fn generic_test_array(
