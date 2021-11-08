@@ -715,6 +715,65 @@ impl LogicalPlanBuilder {
         }
     }
 
+    /// Process intersect set operator
+    pub(crate) fn intersect(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        is_all: bool,
+    ) -> Result<LogicalPlan> {
+        LogicalPlanBuilder::intersect_or_except(
+            left_plan,
+            right_plan,
+            JoinType::Semi,
+            is_all,
+        )
+    }
+
+    /// Process except set operator
+    pub(crate) fn except(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        is_all: bool,
+    ) -> Result<LogicalPlan> {
+        LogicalPlanBuilder::intersect_or_except(
+            left_plan,
+            right_plan,
+            JoinType::Anti,
+            is_all,
+        )
+    }
+
+    /// Process intersect or except
+    fn intersect_or_except(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        join_type: JoinType,
+        is_all: bool,
+    ) -> Result<LogicalPlan> {
+        let join_keys = left_plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(right_plan.schema().fields().iter())
+            .map(|(left_field, right_field)| {
+                (
+                    (Column::from_name(left_field.name())),
+                    (Column::from_name(right_field.name())),
+                )
+            })
+            .unzip();
+        if is_all {
+            LogicalPlanBuilder::from(left_plan)
+                .join_detailed(&right_plan, join_type, join_keys, true)?
+                .build()
+        } else {
+            LogicalPlanBuilder::from(left_plan)
+                .distinct()?
+                .join_detailed(&right_plan, join_type, join_keys, true)?
+                .build()
+        }
+    }
+
     /// Build the plan
     pub fn build(&self) -> Result<LogicalPlan> {
         Ok(self.plan.clone())
