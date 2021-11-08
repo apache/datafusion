@@ -228,6 +228,13 @@ pub fn from_plan(
                 name: name.clone(),
             })
         }
+        LogicalPlan::DropMemoryTable { name, if_exist, .. } => {
+            Ok(LogicalPlan::DropMemoryTable {
+                if_exist: if_exist.clone(),
+                name: name.clone(),
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            })
+        }
         LogicalPlan::Extension { node } => Ok(LogicalPlan::Extension {
             node: node.from_template(expr, inputs),
         }),

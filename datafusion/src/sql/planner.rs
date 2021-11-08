@@ -29,8 +29,8 @@ use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_wildcard, col, lit, normalize_col, union_with_alias, Column,
-    DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema,
-    ToStringifiedPlan,
+    DFSchema, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
+    ToDFSchema, ToStringifiedPlan,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -53,7 +53,7 @@ use sqlparser::ast::{
     TableWithJoins, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
-use sqlparser::ast::{OrderByExpr, Statement};
+use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
 
 use super::{
@@ -65,6 +65,7 @@ use super::{
     },
 };
 use crate::logical_plan::builder::project_with_alias;
+use regex::internal::Input;
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
@@ -162,6 +163,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input: Arc::new(plan),
                 })
             }
+
+            Statement::Drop {
+                object_type: ObjectType::Table,
+                if_exists,
+                names,
+                cascade: _,
+                purge: _,
+            } => Ok(LogicalPlan::DropMemoryTable {
+                name: names.get(0).unwrap().to_string(),
+                if_exist: if_exists.clone(),
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            }),
 
             Statement::ShowColumns {
                 extended,

@@ -255,6 +255,19 @@ impl ExecutionContext {
                 Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
             }
 
+            LogicalPlan::DropMemoryTable { name, if_exist, .. } => {
+                let returned = self.deregister_table(name.as_str())?;
+                if !if_exist && returned.is_none() {
+                    Err(DataFusionError::Execution(format!(
+                        "Memory table {:?} doesn't exist.",
+                        name
+                    )))
+                } else {
+                    let plan = LogicalPlanBuilder::empty(false).build()?;
+                    Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                }
+            }
+
             plan => Ok(Arc::new(DataFrameImpl::new(
                 self.state.clone(),
                 &self.optimize(&plan)?,
