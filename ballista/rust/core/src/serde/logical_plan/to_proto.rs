@@ -1012,7 +1012,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 "Error converting CreateMemoryTable. Not yet supported in Ballista",
             )),
             LogicalPlan::DropTable { .. } => Err(proto_error(
-                "Error converting DropMemoryTable. Not yet supported in Ballista",
+                "Error converting DropTable. Not yet supported in Ballista",
             )),
         }
     }

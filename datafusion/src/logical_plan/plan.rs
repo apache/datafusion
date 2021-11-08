@@ -877,8 +877,10 @@ impl LogicalPlan {
                     LogicalPlan::CreateMemoryTable { ref name, .. } => {
                         write!(f, "CreateMemoryTable: {:?}", name)
                     }
-                    LogicalPlan::DropTable { ref name, .. } => {
-                        write!(f, "DropTable: {:?}", name)
+                    LogicalPlan::DropTable {
+                        ref name, if_exist, ..
+                    } => {
+                        write!(f, "DropTable: {:?} if not exist:={}", name, if_exist)
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),

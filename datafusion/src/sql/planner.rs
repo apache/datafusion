@@ -169,11 +169,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 names,
                 cascade: _,
                 purge: _,
-            } => Ok(LogicalPlan::DropTable {
-                name: names.get(0).unwrap().to_string(),
-                if_exist: *if_exists,
-                schema: DFSchemaRef::new(DFSchema::empty()),
-            }),
+            } =>
+            // We don't support cascade and purge for now.
+            {
+                Ok(LogicalPlan::DropTable {
+                    name: names.get(0).unwrap().to_string(),
+                    if_exist: *if_exists,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                })
+            }
 
             Statement::ShowColumns {
                 extended,

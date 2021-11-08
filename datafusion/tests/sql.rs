@@ -725,6 +725,9 @@ async fn drop_table() -> Result<()> {
     let result = ctx.table("my_table");
     assert!(result.is_err(), "drop table should deregister table.");
 
+    let sql = "DROP TABLE IF EXISTS my_table";
+    ctx.sql(sql).await.unwrap();
+
     Ok(())
 }
 
