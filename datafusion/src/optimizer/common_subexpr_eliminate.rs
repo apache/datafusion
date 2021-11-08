@@ -206,7 +206,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::Explain { .. }
         | LogicalPlan::Analyze { .. }
         | LogicalPlan::CreateMemoryTable { .. }
-        | LogicalPlan::DropMemoryTable { .. }
+        | LogicalPlan::DropTable { .. }
         | LogicalPlan::Extension { .. } => {
             // apply the optimization to all inputs of the plan
             let expr = plan.expressions();

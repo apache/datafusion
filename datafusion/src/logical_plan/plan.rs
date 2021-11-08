@@ -212,8 +212,8 @@ pub enum LogicalPlan {
         /// The logical plan
         input: Arc<LogicalPlan>,
     },
-    /// Drops an in memory table.
-    DropMemoryTable {
+    /// Drops a table.
+    DropTable {
         /// The table name
         name: String,
         /// If the table exists
@@ -283,7 +283,7 @@ impl LogicalPlan {
             LogicalPlan::Extension { node } => node.schema(),
             LogicalPlan::Union { schema, .. } => schema,
             LogicalPlan::CreateMemoryTable { input, .. } => input.schema(),
-            LogicalPlan::DropMemoryTable { schema, .. } => schema,
+            LogicalPlan::DropTable { schema, .. } => schema,
         }
     }
 
@@ -330,7 +330,7 @@ impl LogicalPlan {
             | LogicalPlan::Sort { input, .. }
             | LogicalPlan::CreateMemoryTable { input, .. }
             | LogicalPlan::Filter { input, .. } => input.all_schemas(),
-            LogicalPlan::DropMemoryTable { .. } => vec![],
+            LogicalPlan::DropTable { .. } => vec![],
         }
     }
 
@@ -377,7 +377,7 @@ impl LogicalPlan {
             | LogicalPlan::Limit { .. }
             | LogicalPlan::CreateExternalTable { .. }
             | LogicalPlan::CreateMemoryTable { .. }
-            | LogicalPlan::DropMemoryTable { .. }
+            | LogicalPlan::DropTable { .. }
             | LogicalPlan::CrossJoin { .. }
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
@@ -410,7 +410,7 @@ impl LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::DropMemoryTable { .. } => vec![],
+            | LogicalPlan::DropTable { .. } => vec![],
         }
     }
 
@@ -559,7 +559,7 @@ impl LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::DropMemoryTable { .. } => true,
+            | LogicalPlan::DropTable { .. } => true,
         };
         if !recurse {
             return Ok(false);
@@ -877,8 +877,8 @@ impl LogicalPlan {
                     LogicalPlan::CreateMemoryTable { ref name, .. } => {
                         write!(f, "CreateMemoryTable: {:?}", name)
                     }
-                    LogicalPlan::DropMemoryTable { ref name, .. } => {
-                        write!(f, "DropMemoryTable: {:?}", name)
+                    LogicalPlan::DropTable { ref name, .. } => {
+                        write!(f, "DropTable: {:?}", name)
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),

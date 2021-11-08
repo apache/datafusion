@@ -170,7 +170,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 names,
                 cascade: _,
                 purge: _,
-            } => Ok(LogicalPlan::DropMemoryTable {
+            } => Ok(LogicalPlan::DropTable {
                 name: names.get(0).unwrap().to_string(),
                 if_exist: if_exists.clone(),
                 schema: DFSchemaRef::new(DFSchema::empty()),

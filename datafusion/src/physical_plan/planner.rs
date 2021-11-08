@@ -811,7 +811,7 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateExternalTable".to_string(),
                     ))
                 }
-                | LogicalPlan::CreateMemoryTable {..} | LogicalPlan::DropMemoryTable {..} => {
+                | LogicalPlan::CreateMemoryTable {..} | LogicalPlan::DropTable {..} => {
                     // Create a dummy exec.
                     Ok(Arc::new(EmptyExec::new(
                         false,

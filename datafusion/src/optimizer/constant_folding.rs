@@ -71,7 +71,7 @@ impl OptimizerRule for ConstantFolding {
             | LogicalPlan::Repartition { .. }
             | LogicalPlan::CreateExternalTable { .. }
             | LogicalPlan::CreateMemoryTable { .. }
-            | LogicalPlan::DropMemoryTable { .. }
+            | LogicalPlan::DropTable { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::Extension { .. }
             | LogicalPlan::Sort { .. }

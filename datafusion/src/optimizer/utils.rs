@@ -228,13 +228,6 @@ pub fn from_plan(
                 name: name.clone(),
             })
         }
-        LogicalPlan::DropMemoryTable { name, if_exist, .. } => {
-            Ok(LogicalPlan::DropMemoryTable {
-                if_exist: if_exist.clone(),
-                name: name.clone(),
-                schema: DFSchemaRef::new(DFSchema::empty()),
-            })
-        }
         LogicalPlan::Extension { node } => Ok(LogicalPlan::Extension {
             node: node.from_template(expr, inputs),
         }),
@@ -270,7 +263,8 @@ pub fn from_plan(
         }
         LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::TableScan { .. }
-        | LogicalPlan::CreateExternalTable { .. } => {
+        | LogicalPlan::CreateExternalTable { .. }
+        | LogicalPlan::DropTable { .. } => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{:?} should have no exprs", plan);
             assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
