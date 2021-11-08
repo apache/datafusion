@@ -65,7 +65,6 @@ use super::{
     },
 };
 use crate::logical_plan::builder::project_with_alias;
-use regex::internal::Input;
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
