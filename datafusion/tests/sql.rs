@@ -29,7 +29,7 @@ extern crate datafusion;
 
 use arrow::{
     array::*, datatypes::*, record_batch::RecordBatch,
-    util::display::array_value_to_string, util::pretty::pretty_format_batches,
+    util::display::array_value_to_string,
 };
 
 use datafusion::assert_batches_eq;
@@ -2699,28 +2699,33 @@ async fn csv_explain() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute(&mut ctx, sql).await;
+    let actual = normalize_vec_for_explain(actual);
+
+    // Note can't use `assert_batches_eq` as the plan needs to be
+    // normalized for filenames and number of cores
     let expected = vec![
-        "+---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-        "| plan_type     | plan                                                                                                                                                                  |",
-        "+---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-        "| logical_plan  | Projection: #aggregate_test_100.c1                                                                                                                                    |",
-        "|               |   Filter: #aggregate_test_100.c2 > Int64(10)                                                                                                                          |",
-        "|               |     TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]                                                               |",
-        "| physical_plan | ProjectionExec: expr=[c1@0 as c1]                                                                                                                                     |",
-        "|               |   CoalesceBatchesExec: target_batch_size=4096                                                                                                                         |",
-        "|               |     FilterExec: CAST(c2@1 AS Int64) > 10                                                                                                                              |",
-        "|               |       RepartitionExec: partitioning=RoundRobinBatch(8)                                                                                                                |",
-        "|               |         CsvExec: files=[/Users/matth/OpenSource/arrow-datafusion/datafusion/../testing/data/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None |",
-        "|               |                                                                                                                                                                       |",
-        "+---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+        vec![
+            "logical_plan",
+            "Projection: #aggregate_test_100.c1\
+             \n  Filter: #aggregate_test_100.c2 > Int64(10)\
+             \n    TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]"
+        ],
+        vec!["physical_plan",
+             "ProjectionExec: expr=[c1@0 as c1]\
+              \n  CoalesceBatchesExec: target_batch_size=4096\
+              \n    FilterExec: CAST(c2@1 AS Int64) > 10\
+              \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
+              \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None\
+              \n"
+    ]];
+    assert_eq!(expected, actual);
 
     // Also, expect same result with lowercase explain
     let sql = "explain SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute_to_batches(&mut ctx, sql).await;
-    assert_batches_eq!(expected, &actual);
+    let actual = execute(&mut ctx, sql).await;
+    let actual = normalize_vec_for_explain(actual);
+    assert_eq!(expected, actual);
 }
 
 #[tokio::test]
@@ -2731,7 +2736,6 @@ async fn csv_explain_analyze() {
     let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
-    let formatted = normalize_for_explain(&formatted);
 
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
@@ -2752,7 +2756,6 @@ async fn csv_explain_analyze_verbose() {
         "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
-    let formatted = normalize_for_explain(&formatted);
 
     let verbose_needle = "Output Rows";
     assert_contains!(formatted, verbose_needle);
@@ -2802,7 +2805,6 @@ async fn explain_analyze_baseline_metrics() {
     let results = collect(physical_plan.clone()).await.unwrap();
     let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
     println!("Query Output:\n\n{}", formatted);
-    let formatted = normalize_for_explain(&formatted);
 
     assert_metrics!(
         &formatted,
@@ -3601,8 +3603,6 @@ async fn query_array() -> Result<()> {
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT array(c1, cast(c2 as varchar)) FROM test";
     let actual = execute(&mut ctx, sql).await;
-    // let a = execute_to_batches(&mut ctx, sql).await;
-    // println!("{}", pretty_format_batches(&a).unwrap());
     let expected = vec![
         vec!["[,0]"],
         vec!["[a,1]"],
@@ -3802,8 +3802,6 @@ async fn count_distinct_timestamps() -> Result<()> {
 
     let sql = "SELECT COUNT(DISTINCT(ts)) FROM ts_data";
     let actual = execute(&mut ctx, sql).await;
-    // let a = execute_to_batches(&mut ctx, sql).await;
-    // println!("{}", pretty_format_batches(&a).unwrap());
 
     let expected = vec![vec!["3"]];
     assert_eq!(expected, actual);
