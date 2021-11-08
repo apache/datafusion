@@ -48,9 +48,9 @@ use arrow::datatypes::*;
 use hashbrown::HashMap;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
-    Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query, Select, SelectItem,
-    SetExpr, SetOperator, ShowStatementFilter, TableFactor, TableWithJoins,
-    TrimWhereField, UnaryOperator, Value, Values as SQLValues,
+    HiveDistributionStyle, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
+    Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableFactor,
+    TableWithJoins, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{OrderByExpr, Statement};
@@ -133,6 +133,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => self.explain_statement_to_plan(*verbose, *analyze, statement),
             Statement::Query(query) => self.query_to_plan(query),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(variable),
+            Statement::CreateTable {
+                query: Some(query),
+                name,
+                or_replace: false,
+                columns,
+                constraints,
+                hive_distribution: HiveDistributionStyle::NONE,
+                hive_formats: _hive_formats,
+                table_properties,
+                with_options,
+                file_format: None,
+                location: None,
+                like: None,
+                temporary: _temporary,
+                external: false,
+                if_not_exists: false,
+                without_rowid: _without_row_id,
+            } if columns.is_empty()
+                && constraints.is_empty()
+                && table_properties.is_empty()
+                && with_options.is_empty() =>
+            {
+                let plan = self.query_to_plan(query)?;
+
+                Ok(LogicalPlan::CreateMemoryTable {
+                    name: name.to_string(),
+                    input: Arc::new(plan),
+                })
+            }
+
             Statement::ShowColumns {
                 extended,
                 full,
@@ -192,23 +222,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 left,
                 right,
                 all,
-            } => match (op, all) {
-                (SetOperator::Union, true) => {
-                    let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
-                    let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
-                    union_with_alias(left_plan, right_plan, alias)
+            } => {
+                let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
+                let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
+                match (op, all) {
+                    (SetOperator::Union, true) => {
+                        union_with_alias(left_plan, right_plan, alias)
+                    }
+                    (SetOperator::Union, false) => {
+                        let union_plan = union_with_alias(left_plan, right_plan, alias)?;
+                        LogicalPlanBuilder::from(union_plan).distinct()?.build()
+                    }
+                    (SetOperator::Intersect, true) => {
+                        LogicalPlanBuilder::intersect(left_plan, right_plan, true)
+                    }
+                    (SetOperator::Intersect, false) => {
+                        LogicalPlanBuilder::intersect(left_plan, right_plan, false)
+                    }
+                    (SetOperator::Except, true) => {
+                        LogicalPlanBuilder::except(left_plan, right_plan, true)
+                    }
+                    (SetOperator::Except, false) => {
+                        LogicalPlanBuilder::except(left_plan, right_plan, false)
+                    }
                 }
-                (SetOperator::Union, false) => {
-                    let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
-                    let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
-                    let union_plan = union_with_alias(left_plan, right_plan, alias)?;
-                    LogicalPlanBuilder::from(union_plan).distinct()?.build()
-                }
-                _ => Err(DataFusionError::NotImplemented(format!(
-                    "Only UNION ALL and UNION [DISTINCT] are supported, found {}",
-                    op
-                ))),
-            },
+            }
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Query {} not implemented yet",
                 set_expr
@@ -3540,16 +3578,6 @@ mod tests {
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.price ASC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
-    }
-
-    #[test]
-    fn only_union_all_supported() {
-        let sql = "SELECT order_id from orders EXCEPT SELECT order_id FROM orders";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "NotImplemented(\"Only UNION ALL and UNION [DISTINCT] are supported, found EXCEPT\")",
-            format!("{:?}", err)
-        );
     }
 
     #[test]

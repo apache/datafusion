@@ -198,6 +198,7 @@ pub fn from_plan(
             join_type,
             join_constraint,
             on,
+            null_equals_null,
             ..
         } => {
             let schema =
@@ -209,6 +210,7 @@ pub fn from_plan(
                 join_constraint: *join_constraint,
                 on: on.clone(),
                 schema: DFSchemaRef::new(schema),
+                null_equals_null: *null_equals_null,
             })
         }
         LogicalPlan::CrossJoin { .. } => {
@@ -220,6 +222,12 @@ pub fn from_plan(
             n: *n,
             input: Arc::new(inputs[0].clone()),
         }),
+        LogicalPlan::CreateMemoryTable { name, .. } => {
+            Ok(LogicalPlan::CreateMemoryTable {
+                input: Arc::new(inputs[0].clone()),
+                name: name.clone(),
+            })
+        }
         LogicalPlan::Extension { node } => Ok(LogicalPlan::Extension {
             node: node.from_template(expr, inputs),
         }),

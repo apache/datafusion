@@ -182,10 +182,27 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
-        other => Err(DataFusionError::NotImplemented(format!(
-            "Cannot derive physical field name for logical expression {:?}",
-            other
-        ))),
+        Expr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => {
+            let expr = create_physical_name(expr, false)?;
+            let low = create_physical_name(low, false)?;
+            let high = create_physical_name(high, false)?;
+            if *negated {
+                Ok(format!("{} NOT BETWEEN {} AND {}", expr, low, high))
+            } else {
+                Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
+            }
+        }
+        Expr::Sort { .. } => Err(DataFusionError::Internal(
+            "Create physical name does not support sort expression".to_string(),
+        )),
+        Expr::Wildcard => Err(DataFusionError::Internal(
+            "Create physical name does not support wildcard".to_string(),
+        )),
     }
 }
 
@@ -696,6 +713,7 @@ impl DefaultPhysicalPlanner {
                     right,
                     on: keys,
                     join_type,
+                    null_equals_null,
                     ..
                 } => {
                     let left_df_schema = left.schema();
@@ -744,6 +762,7 @@ impl DefaultPhysicalPlanner {
                             join_on,
                             join_type,
                             PartitionMode::Partitioned,
+                            null_equals_null,
                         )?))
                     } else {
                         Ok(Arc::new(HashJoinExec::try_new(
@@ -752,6 +771,7 @@ impl DefaultPhysicalPlanner {
                             join_on,
                             join_type,
                             PartitionMode::CollectLeft,
+                            null_equals_null,
                         )?))
                     }
                 }
@@ -782,7 +802,7 @@ impl DefaultPhysicalPlanner {
 
                     Ok(Arc::new(GlobalLimitExec::new(input, limit)))
                 }
-                LogicalPlan::CreateExternalTable { .. } => {
+                LogicalPlan::CreateExternalTable { .. }=> {
                     // There is no default plan for "CREATE EXTERNAL
                     // TABLE" -- it must be handled at a higher level (so
                     // that the appropriate table can be registered with
@@ -790,6 +810,13 @@ impl DefaultPhysicalPlanner {
                     Err(DataFusionError::Internal(
                         "Unsupported logical plan: CreateExternalTable".to_string(),
                     ))
+                }
+                | LogicalPlan::CreateMemoryTable {..} => {
+                    // Create a dummy exec.
+                    Ok(Arc::new(EmptyExec::new(
+                        false,
+                        SchemaRef::new(Schema::empty()),
+                    )))
                 }
                 LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),

@@ -162,6 +162,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                         on,
                         join_type: join_type.into(),
                         partition_mode: partition_mode.into(),
+                        null_equals_null: *exec.null_equals_null(),
                     },
                 ))),
             })

@@ -850,6 +850,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 on,
                 join_type,
                 join_constraint,
+                null_equals_null,
                 ..
             } => {
                 let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
@@ -868,6 +869,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                             join_constraint: join_constraint.into(),
                             left_join_column,
                             right_join_column,
+                            null_equals_null: *null_equals_null,
                         },
                     ))),
                 })
@@ -1006,6 +1008,9 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
+            LogicalPlan::CreateMemoryTable { .. } => Err(proto_error(
+                "Error converting CreateMemoryTable. Not yet supported in Ballista",
+            )),
         }
     }
 }

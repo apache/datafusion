@@ -195,6 +195,7 @@ fn optimize_plan(
             on,
             join_type,
             join_constraint,
+            null_equals_null,
             ..
         } => {
             for (l, r) in on {
@@ -231,6 +232,7 @@ fn optimize_plan(
                 join_constraint: *join_constraint,
                 on: on.clone(),
                 schema: DFSchemaRef::new(schema),
+                null_equals_null: *null_equals_null,
             })
         }
         LogicalPlan::Window {
@@ -434,6 +436,7 @@ fn optimize_plan(
         | LogicalPlan::Values { .. }
         | LogicalPlan::Sort { .. }
         | LogicalPlan::CreateExternalTable { .. }
+        | LogicalPlan::CreateMemoryTable { .. }
         | LogicalPlan::CrossJoin { .. }
         | LogicalPlan::Extension { .. } => {
             let expr = plan.expressions();
