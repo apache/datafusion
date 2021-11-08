@@ -3865,6 +3865,7 @@ mod tests {
         let ctx_state = ExecutionContextState::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
+        // pick some arbitrary functions to test
         let funs = [
             BuiltinScalarFunction::Concat,
             BuiltinScalarFunction::ToTimestamp,
@@ -3880,22 +3881,24 @@ mod tests {
                     return Err(DataFusionError::Plan(format!(
                         "Builtin scalar function {} does not support empty arguments",
                         fun
-                    )))
+                    )));
                 }
-                Err(err) => match err {
-                    DataFusionError::Internal(err)
-                        if err
-                            == format!(
+                Err(DataFusionError::Internal(err)) => {
+                    if err
+                        != format!(
                             "Builtin scalar function {} does not support empty arguments",
                             fun
-                        ) => {}
-                    _ => {
+                        )
+                    {
                         return Err(DataFusionError::Internal(format!(
-                            "Builtin scalar function {} didn't got the right error message with empty arguments", fun)
-                        ))
+                            "Builtin scalar function {} didn't got the right error message with empty arguments", fun)));
                     }
-                },
-            };
+                }
+                Err(..) => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Builtin scalar function {} didn't got the right error with empty arguments", fun)));
+                }
+            }
         }
         Ok(())
     }
