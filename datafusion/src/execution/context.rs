@@ -3890,8 +3890,8 @@ mod tests {
     async fn create_external_table_with_timestamps() {
         let mut ctx = ExecutionContext::new();
 
-        let data = "Jorge,2018-12-13T12:12:10.011\n\
-                    Andrew,2018-11-13T17:11:10.011";
+        let data = "Jorge,2018-12-13T12:12:10.011Z\n\
+                    Andrew,2018-11-13T17:11:10.011Z";
 
         let tmp_dir = TempDir::new().unwrap();
         let file_path = tmp_dir.path().join("timestamps.csv");
