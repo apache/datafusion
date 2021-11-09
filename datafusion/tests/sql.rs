@@ -2296,8 +2296,6 @@ async fn left_join_using() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn equijoin_implicit_syntax() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
@@ -2306,13 +2304,17 @@ async fn equijoin_implicit_syntax() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id",
     ];
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -2326,13 +2328,17 @@ async fn equijoin_implicit_syntax_with_filter() -> Result<()> {
         AND t1_id = t2_id \
         AND t2_id < 99 \
         ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -2341,13 +2347,17 @@ async fn equijoin_implicit_syntax_reversed() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["11", "a", "z"],
-        vec!["22", "b", "y"],
-        vec!["44", "d", "x"],
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -2366,31 +2376,35 @@ async fn cross_join() {
     assert_eq!(4 * 4, actual.len());
 
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2";
-    let actual = execute(&mut ctx, sql).await;
 
+    let actual = execute(&mut ctx, sql).await;
     assert_eq!(4 * 4, actual.len());
 
-    assert_eq!(
-        actual,
-        [
-            ["11", "a", "z"],
-            ["11", "a", "y"],
-            ["11", "a", "x"],
-            ["11", "a", "w"],
-            ["22", "b", "z"],
-            ["22", "b", "y"],
-            ["22", "b", "x"],
-            ["22", "b", "w"],
-            ["33", "c", "z"],
-            ["33", "c", "y"],
-            ["33", "c", "x"],
-            ["33", "c", "w"],
-            ["44", "d", "z"],
-            ["44", "d", "y"],
-            ["44", "d", "x"],
-            ["44", "d", "w"]
-        ]
-    );
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 11    | a       | y       |",
+        "| 11    | a       | x       |",
+        "| 11    | a       | w       |",
+        "| 22    | b       | z       |",
+        "| 22    | b       | y       |",
+        "| 22    | b       | x       |",
+        "| 22    | b       | w       |",
+        "| 33    | c       | z       |",
+        "| 33    | c       | y       |",
+        "| 33    | c       | x       |",
+        "| 33    | c       | w       |",
+        "| 44    | d       | z       |",
+        "| 44    | d       | y       |",
+        "| 44    | d       | x       |",
+        "| 44    | d       | w       |",
+        "+-------+---------+---------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
 
     // Two partitions (from UNION) on the left
     let sql = "SELECT * FROM (SELECT t1_id, t1_name FROM t1 UNION ALL SELECT t1_id, t1_name FROM t1) AS t1 CROSS JOIN t2";
@@ -2413,33 +2427,34 @@ async fn cross_join_unbalanced() {
     // the order of the values is not determinisitic, so we need to sort to check the values
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id, t1_name";
-    let actual = execute(&mut ctx, sql).await;
-
-    assert_eq!(
-        actual,
-        [
-            ["11", "a", "z"],
-            ["11", "a", "y"],
-            ["11", "a", "x"],
-            ["11", "a", "w"],
-            ["22", "b", "z"],
-            ["22", "b", "y"],
-            ["22", "b", "x"],
-            ["22", "b", "w"],
-            ["33", "c", "z"],
-            ["33", "c", "y"],
-            ["33", "c", "x"],
-            ["33", "c", "w"],
-            ["44", "d", "z"],
-            ["44", "d", "y"],
-            ["44", "d", "x"],
-            ["44", "d", "w"],
-            ["77", "e", "z"],
-            ["77", "e", "y"],
-            ["77", "e", "x"],
-            ["77", "e", "w"]
-        ]
-    );
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 11    | a       | y       |",
+        "| 11    | a       | x       |",
+        "| 11    | a       | w       |",
+        "| 22    | b       | z       |",
+        "| 22    | b       | y       |",
+        "| 22    | b       | x       |",
+        "| 22    | b       | w       |",
+        "| 33    | c       | z       |",
+        "| 33    | c       | y       |",
+        "| 33    | c       | x       |",
+        "| 33    | c       | w       |",
+        "| 44    | d       | z       |",
+        "| 44    | d       | y       |",
+        "| 44    | d       | x       |",
+        "| 44    | d       | w       |",
+        "| 77    | e       | z       |",
+        "| 77    | e       | y       |",
+        "| 77    | e       | x       |",
+        "| 77    | e       | w       |",
+        "+-------+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -2710,6 +2725,9 @@ async fn csv_explain() {
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
     let actual = execute(&mut ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
+
+    // Note can't use `assert_batches_eq` as the plan needs to be
+    // normalized for filenames and number of cores
     let expected = vec![
         vec![
             "logical_plan",
@@ -2742,7 +2760,6 @@ async fn csv_explain_analyze() {
     let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
-    let formatted = normalize_for_explain(&formatted);
 
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
@@ -2763,7 +2780,6 @@ async fn csv_explain_analyze_verbose() {
         "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
-    let formatted = normalize_for_explain(&formatted);
 
     let verbose_needle = "Output Rows";
     assert_contains!(formatted, verbose_needle);
@@ -2813,7 +2829,6 @@ async fn explain_analyze_baseline_metrics() {
     let results = collect(physical_plan.clone()).await.unwrap();
     let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
     println!("Query Output:\n\n{}", formatted);
-    let formatted = normalize_for_explain(&formatted);
 
     assert_metrics!(
         &formatted,
@@ -3541,9 +3556,17 @@ async fn query_not() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT NOT c1 FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["true"], vec!["NULL"], vec!["false"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------+",
+        "| NOT test.c1 |",
+        "+-------------+",
+        "| true        |",
+        "|             |",
+        "| false       |",
+        "+-------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -3567,17 +3590,22 @@ async fn query_concat() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT concat(c1, '-hi-', cast(c2 as varchar)) FROM test";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["-hi-0"],
-        vec!["a-hi-1"],
-        vec!["aa-hi-"],
-        vec!["aaa-hi-3"],
+        "+----------------------------------------------------+",
+        "| concat(test.c1,Utf8(\"-hi-\"),CAST(test.c2 AS Utf8)) |",
+        "+----------------------------------------------------+",
+        "| -hi-0                                              |",
+        "| a-hi-1                                             |",
+        "| aa-hi-                                             |",
+        "| aaa-hi-3                                           |",
+        "+----------------------------------------------------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
+// Revisit
 #[tokio::test]
 async fn query_array() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
@@ -3626,27 +3654,24 @@ async fn query_where_neg_num() -> Result<()> {
 
     // Negative numbers do not parse correctly as of Arrow 2.0.0
     let sql = "select c7, c8 from aggregate_test_100 where c7 >= -2 and c7 < 10";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["7", "45465"],
-        vec!["5", "40622"],
-        vec!["0", "61069"],
-        vec!["2", "20120"],
-        vec!["4", "39363"],
+        "+----+-------+",
+        "| c7 | c8    |",
+        "+----+-------+",
+        "| 7  | 45465 |",
+        "| 5  | 40622 |",
+        "| 0  | 61069 |",
+        "| 2  | 20120 |",
+        "| 4  | 39363 |",
+        "+----+-------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 
     // Also check floating point neg numbers
     let sql = "select c7, c8 from aggregate_test_100 where c7 >= -2.9 and c7 < 10";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![
-        vec!["7", "45465"],
-        vec!["5", "40622"],
-        vec!["0", "61069"],
-        vec!["2", "20120"],
-        vec!["4", "39363"],
-    ];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -3656,10 +3681,15 @@ async fn like() -> Result<()> {
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT COUNT(c1) FROM aggregate_test_100 WHERE c13 LIKE '%FB%'";
     // check that the physical and logical schemas are equal
-    let actual = execute(&mut ctx, sql).await;
-
-    let expected = vec![vec!["1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+------------------------------+",
+        "| COUNT(aggregate_test_100.c1) |",
+        "+------------------------------+",
+        "| 1                            |",
+        "+------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -3712,10 +3742,16 @@ async fn to_timestamp() -> Result<()> {
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp('2020-09-08T12:00:00+00:00')";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
 
-    let expected = vec![vec!["2"]];
-    assert_eq!(expected, actual);
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 2               |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -3728,10 +3764,15 @@ async fn to_timestamp_millis() -> Result<()> {
     )?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_millis('2020-09-08T12:00:00+00:00')";
-    let actual = execute(&mut ctx, sql).await;
-
-    let expected = vec![vec!["2"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 2               |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -3744,10 +3785,16 @@ async fn to_timestamp_micros() -> Result<()> {
     )?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_micros('2020-09-08T12:00:00+00:00')";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
 
-    let expected = vec![vec!["2"]];
-    assert_eq!(expected, actual);
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 2               |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -3757,12 +3804,20 @@ async fn to_timestamp_seconds() -> Result<()> {
     ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
 
-    let expected = vec![vec!["2"]];
-    assert_eq!(expected, actual);
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 2               |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn count_distinct_timestamps() -> Result<()> {
