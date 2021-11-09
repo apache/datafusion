@@ -2309,7 +2309,7 @@ mod tests {
 
             // generate some data
             for i in 0..10 {
-                let data = format!("{},2020-12-{}T00:00:00.000\n", i, i + 10);
+                let data = format!("{},2020-12-{}T00:00:00.000Z\n", i, i + 10);
                 file.write_all(data.as_bytes())?;
             }
         }
