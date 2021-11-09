@@ -224,13 +224,13 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
 fn to_arrays(
     expr: &[Expr],
     input: &LogicalPlan,
-    mut expr_set: &mut ExprSet,
+    expr_set: &mut ExprSet,
 ) -> Result<Vec<Vec<(usize, String)>>> {
     expr.iter()
         .map(|e| {
             let data_type = e.get_type(input.schema())?;
             let mut id_array = vec![];
-            expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
+            expr_to_identifier(e, expr_set, &mut id_array, data_type)?;
 
             Ok(id_array)
         })
