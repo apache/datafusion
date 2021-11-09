@@ -4139,28 +4139,38 @@ async fn query_on_string_dictionary() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    // --- End Test Porting ---
-
     // grouping
     let sql = "SELECT d1, COUNT(*) FROM test group by d1";
-    let mut actual = execute(&mut ctx, sql).await;
-    actual.sort();
-    let a = execute_to_batches(&mut ctx, sql).await;
-    println!("{}", pretty_format_batches(&a).unwrap());
-    let expected = vec![vec!["NULL", "1"], vec!["one", "1"], vec!["three", "1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+-----------------+",
+        "| d1    | COUNT(UInt8(1)) |",
+        "+-------+-----------------+",
+        "| one   | 1               |",
+        "|       | 1               |",
+        "| three | 1               |",
+        "+-------+-----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
 
     // window functions
     let sql = "SELECT d1, row_number() OVER (partition by d1) FROM test";
-    let mut actual = execute(&mut ctx, sql).await;
-    actual.sort();
-    let a = execute_to_batches(&mut ctx, sql).await;
-    println!("{}", pretty_format_batches(&a).unwrap());
-    let expected = vec![vec!["NULL", "1"], vec!["one", "1"], vec!["three", "1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+--------------+",
+        "| d1    | ROW_NUMBER() |",
+        "+-------+--------------+",
+        "|       | 1            |",
+        "| one   | 1            |",
+        "| three | 1            |",
+        "+-------+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
 
     Ok(())
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn query_without_from() -> Result<()> {
