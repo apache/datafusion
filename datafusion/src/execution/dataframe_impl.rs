@@ -231,6 +231,15 @@ impl DataFrame for DataFrameImpl {
                 .build()?,
         )))
     }
+
+    fn intersect(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>> {
+        let left_plan = self.to_logical_plan();
+        let right_plan = dataframe.to_logical_plan();
+        Ok(Arc::new(DataFrameImpl::new(
+            self.ctx_state.clone(),
+            &LogicalPlanBuilder::intersect(left_plan, right_plan, true)?,
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -436,6 +445,20 @@ mod tests {
                 .expect("should be usable in a task")
         });
         task.await.expect("task completed successfully");
+    }
+
+    #[tokio::test]
+    async fn intersect() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c3"])?;
+        let plan = df.intersect(df.clone())?;
+        let result = plan.to_logical_plan();
+        let expected = create_plan(
+            "SELECT c1, c3 FROM aggregate_test_100
+            INTERSECT ALL SELECT c1, c3 FROM aggregate_test_100",
+        )
+        .await?;
+        assert_same_plan(&result, &expected);
+        Ok(())
     }
 
     /// Compare the formatted string representation of two plans for equality

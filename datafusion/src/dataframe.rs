@@ -375,4 +375,19 @@ pub trait DataFrame: Send + Sync {
     /// # }
     /// ```
     fn registry(&self) -> Arc<dyn FunctionRegistry>;
+
+    /// Calculate the intersection of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let mut ctx = ExecutionContext::new();
+    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = df.intersect(df.clone())?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn intersect(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>>;
 }
