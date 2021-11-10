@@ -263,7 +263,8 @@ pub fn from_plan(
         }
         LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::TableScan { .. }
-        | LogicalPlan::CreateExternalTable { .. } => {
+        | LogicalPlan::CreateExternalTable { .. }
+        | LogicalPlan::DropTable { .. } => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{:?} should have no exprs", plan);
             assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);

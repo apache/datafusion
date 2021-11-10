@@ -802,7 +802,7 @@ impl DefaultPhysicalPlanner {
 
                     Ok(Arc::new(GlobalLimitExec::new(input, limit)))
                 }
-                LogicalPlan::CreateExternalTable { .. }=> {
+                LogicalPlan::CreateExternalTable { .. } => {
                     // There is no default plan for "CREATE EXTERNAL
                     // TABLE" -- it must be handled at a higher level (so
                     // that the appropriate table can be registered with
@@ -811,7 +811,7 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateExternalTable".to_string(),
                     ))
                 }
-                | LogicalPlan::CreateMemoryTable {..} => {
+                | LogicalPlan::CreateMemoryTable {..} | LogicalPlan::DropTable {..} => {
                     // Create a dummy exec.
                     Ok(Arc::new(EmptyExec::new(
                         false,
