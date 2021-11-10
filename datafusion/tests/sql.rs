@@ -712,6 +712,26 @@ async fn create_table_as() -> Result<()> {
 }
 
 #[tokio::test]
+async fn drop_table() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_simple_csv(&mut ctx).await?;
+
+    let sql = "CREATE TABLE my_table AS SELECT * FROM aggregate_simple";
+    ctx.sql(sql).await.unwrap();
+
+    let sql = "DROP TABLE my_table";
+    ctx.sql(sql).await.unwrap();
+
+    let result = ctx.table("my_table");
+    assert!(result.is_err(), "drop table should deregister table.");
+
+    let sql = "DROP TABLE IF EXISTS my_table";
+    ctx.sql(sql).await.unwrap();
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn select_distinct() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_simple_csv(&mut ctx).await?;
