@@ -34,6 +34,7 @@ pub enum Command {
     Help,
     ListTables,
     DescribeTable(String),
+    FunctionList,
 }
 
 impl Command {
@@ -117,6 +118,7 @@ impl FromStr for Command {
             ("d", None) => Self::ListTables,
             ("d", Some(name)) => Self::DescribeTable(name.into()),
             ("?", None) => Self::Help,
+            ("h", None) => Self::FunctionList,
             _ => return Err(()),
         })
     }
