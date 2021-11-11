@@ -33,3 +33,11 @@ exclude = ["python"]
 [profile.release]
 lto = true
 codegen-units = 1
+
+
+# experimentally try arrow 6.x with upgraded prost/tonic
+# from https://github.com/apache/arrow-rs/pull/945
+[patch.crates-io]
+arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/try_backporting_deps" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/try_backporting_deps" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/try_backporting_deps" }
