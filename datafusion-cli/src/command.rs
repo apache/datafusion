@@ -18,6 +18,7 @@
 //! Command within CLI
 
 use crate::context::Context;
+use crate::functions::{display_all_functions, Function};
 use crate::print_options::PrintOptions;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -35,6 +36,7 @@ pub enum Command {
     ListTables,
     DescribeTable(String),
     FunctionList,
+    FunctionSearch(String),
 }
 
 impl Command {
@@ -65,6 +67,11 @@ impl Command {
             Self::Quit => Err(DataFusionError::Execution(
                 "Unexpected quit, this should be handled outside".into(),
             )),
+            Self::FunctionList => display_all_functions(),
+            Self::FunctionSearch(function) => {
+                let func = function.parse::<Function>().unwrap();
+                func.function_details()
+            }
         }
     }
 
@@ -74,15 +81,19 @@ impl Command {
             Self::ListTables => ("\\d", "list tables"),
             Self::DescribeTable(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
+            Self::FunctionList => ("\\h", "function list"),
+            Self::FunctionSearch(_) => ("\\h function", "search function"),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 4] = [
+const ALL_COMMANDS: [Command; 6] = [
     Command::ListTables,
     Command::DescribeTable(String::new()),
     Command::Quit,
     Command::Help,
+    Command::FunctionList,
+    Command::FunctionSearch(String::new()),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -119,6 +130,7 @@ impl FromStr for Command {
             ("d", Some(name)) => Self::DescribeTable(name.into()),
             ("?", None) => Self::Help,
             ("h", None) => Self::FunctionList,
+            ("h", Some(function)) => Self::FunctionSearch(function.into()),
             _ => return Err(()),
         })
     }

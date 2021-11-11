@@ -16,3 +16,49 @@
 // under the License.
 
 //! Command within CLI
+use datafusion::error::{DataFusionError, Result};
+use std::str::FromStr;
+
+#[derive(Debug)]
+pub enum Function {
+    SELECT,
+    EXPLAIN,
+}
+
+const ALL_FUNCTIONS: [Function; 2] = [Function::SELECT, Function::EXPLAIN];
+
+impl Function {
+    pub fn function_details(&self) -> Result<()> {
+        match self {
+            Function::SELECT => {
+                let details = "Description: Select rows from table
+                Syntax: SELECT expression
+                    [FROM from_item]";
+                println!("{}", details)
+            }
+            Function::EXPLAIN => {
+                let details = "Show execution plan of a statement";
+                println!("{}", details)
+            }
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for Function {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(match s.to_uppercase().as_str() {
+            "SELECT" => Self::SELECT,
+            "EXPLAIN" => Self::EXPLAIN,
+            _ => return Err(()),
+        })
+    }
+}
+
+pub fn display_all_functions() -> Result<()> {
+    println!("Available help:");
+    ALL_FUNCTIONS.iter().for_each(|f| println!("{:?}", f));
+    Ok(())
+}
