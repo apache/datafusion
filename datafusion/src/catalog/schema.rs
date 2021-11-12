@@ -57,6 +57,13 @@ pub trait SchemaProvider: Sync + Send {
             "schema provider does not support deregistering tables".to_owned(),
         ))
     }
+
+    /// If supported by the implementation, checks the table exist in the schema provider or not.
+    /// If no matched table in the schema provider, return false.
+    /// Otherwise, return true.
+    fn table_exist(&self, _name: &str) -> bool {
+        false
+    }
 }
 
 /// Simple in-memory implementation of a schema.
@@ -93,6 +100,12 @@ impl SchemaProvider for MemorySchemaProvider {
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
+        if self.table_exist(name.as_str()) {
+            return Err(DataFusionError::Plan(format!(
+                "The table {} already exists",
+                name
+            )));
+        }
         let mut tables = self.tables.write().unwrap();
         Ok(tables.insert(name, table))
     }
@@ -100,5 +113,74 @@ impl SchemaProvider for MemorySchemaProvider {
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         let mut tables = self.tables.write().unwrap();
         Ok(tables.remove(name))
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        let tables = self.tables.read().unwrap();
+        tables.contains_key(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::arrow::datatypes::SchemaRef;
+    use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
+    use crate::datasource::TableProvider;
+    use crate::logical_plan::Expr;
+    use crate::physical_plan::ExecutionPlan;
+    use std::any::Any;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+
+    #[tokio::test]
+    async fn test_mem_provider() {
+        struct TestTableProvider();
+
+        impl TestTableProvider {
+            fn new() -> Self {
+                TestTableProvider()
+            }
+        }
+
+        #[async_trait]
+        impl TableProvider for TestTableProvider {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn schema(&self) -> SchemaRef {
+                unimplemented!()
+            }
+
+            async fn scan(
+                &self,
+                projection: &Option<Vec<usize>>,
+                batch_size: usize,
+                filters: &[Expr],
+                limit: Option<usize>,
+            ) -> crate::error::Result<Arc<dyn ExecutionPlan>> {
+                unimplemented!()
+            }
+        }
+
+        let provider = MemorySchemaProvider::new();
+        let table_name = "table_name";
+        assert_eq!(false, provider.table_exist(table_name));
+        assert_eq!(
+            true,
+            provider.deregister_table(table_name).unwrap().is_none()
+        );
+        let test_table = TestTableProvider::new();
+        // register table successfully
+        provider
+            .register_table(table_name.to_string(), Arc::new(test_table))
+            .unwrap()
+            .is_some();
+        assert_eq!(true, provider.table_exist(table_name));
+        let other_table = TestTableProvider::new();
+        let result =
+            provider.register_table(table_name.to_string(), Arc::new(other_table));
+        assert_eq!(true, result.is_err());
     }
 }
