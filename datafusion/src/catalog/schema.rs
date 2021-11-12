@@ -155,10 +155,10 @@ mod tests {
 
             async fn scan(
                 &self,
-                projection: &Option<Vec<usize>>,
-                batch_size: usize,
-                filters: &[Expr],
-                limit: Option<usize>,
+                _projection: &Option<Vec<usize>>,
+                _batch_size: usize,
+                _filters: &[Expr],
+                _limit: Option<usize>,
             ) -> crate::error::Result<Arc<dyn ExecutionPlan>> {
                 unimplemented!()
             }
@@ -166,21 +166,18 @@ mod tests {
 
         let provider = MemorySchemaProvider::new();
         let table_name = "table_name";
-        assert_eq!(false, provider.table_exist(table_name));
-        assert_eq!(
-            true,
-            provider.deregister_table(table_name).unwrap().is_none()
-        );
+        assert!(!provider.table_exist(table_name));
+        assert!(provider.deregister_table(table_name).unwrap().is_none());
         let test_table = TestTableProvider::new();
         // register table successfully
-        provider
+        assert!(provider
             .register_table(table_name.to_string(), Arc::new(test_table))
             .unwrap()
-            .is_some();
-        assert_eq!(true, provider.table_exist(table_name));
+            .is_some());
+        assert!(provider.table_exist(table_name));
         let other_table = TestTableProvider::new();
         let result =
             provider.register_table(table_name.to_string(), Arc::new(other_table));
-        assert_eq!(true, result.is_err());
+        assert!(result.is_err());
     }
 }
