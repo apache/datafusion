@@ -31,7 +31,7 @@ use datafusion::{
 
 use datafusion::execution::context::ExecutionContext;
 use datafusion::logical_plan::{
-    col, Expr, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    col, plan::TableScanPlan, Expr, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use datafusion::physical_plan::{
     ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -217,11 +217,11 @@ async fn custom_source_dataframe() -> Result<()> {
     let optimized_plan = ctx.optimize(&logical_plan)?;
     match &optimized_plan {
         LogicalPlan::Projection { input, .. } => match &**input {
-            LogicalPlan::TableScan {
+            LogicalPlan::TableScan(TableScanPlan {
                 source,
                 projected_schema,
                 ..
-            } => {
+            }) => {
                 assert_eq!(source.schema().fields().len(), 2);
                 assert_eq!(projected_schema.fields().len(), 1);
             }

@@ -20,6 +20,7 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::TableScanPlan;
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
     LogicalPlanBuilder, ToDFSchema,
@@ -328,13 +329,13 @@ fn optimize_plan(
         }
         // scans:
         // * remove un-used columns from the scan projection
-        LogicalPlan::TableScan {
+        LogicalPlan::TableScan(TableScanPlan {
             table_name,
             source,
             filters,
             limit,
             ..
-        } => {
+        }) => {
             let (projection, projected_schema) = get_projected_schema(
                 Some(table_name),
                 &source.schema(),
@@ -342,14 +343,14 @@ fn optimize_plan(
                 has_projection,
             )?;
             // return the table scan with projection
-            Ok(LogicalPlan::TableScan {
+            Ok(LogicalPlan::TableScan(TableScanPlan {
                 table_name: table_name.clone(),
                 source: source.clone(),
                 projection: Some(projection),
                 projected_schema,
                 filters: filters.clone(),
                 limit: *limit,
-            })
+            }))
         }
         LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
             "Unsupported logical plan: Explain must be root of the plan".to_string(),

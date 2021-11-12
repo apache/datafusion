@@ -36,6 +36,7 @@ use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::assert_contains;
 use datafusion::assert_not_contains;
+use datafusion::logical_plan::plan::TableScanPlan;
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::metrics::MetricValue;
@@ -92,10 +93,10 @@ async fn nyc() -> Result<()> {
     match &optimized_plan {
         LogicalPlan::Projection { input, .. } => match input.as_ref() {
             LogicalPlan::Aggregate { input, .. } => match input.as_ref() {
-                LogicalPlan::TableScan {
+                LogicalPlan::TableScan(TableScanPlan {
                     ref projected_schema,
                     ..
-                } => {
+                }) => {
                     assert_eq!(2, projected_schema.fields().len());
                     assert_eq!(projected_schema.field(0).name(), "passenger_count");
                     assert_eq!(projected_schema.field(1).name(), "fare_amount");

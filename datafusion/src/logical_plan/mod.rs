@@ -27,7 +27,7 @@ mod display;
 mod expr;
 mod extension;
 mod operators;
-mod plan;
+pub mod plan;
 mod registry;
 pub mod window_frames;
 pub use builder::{
