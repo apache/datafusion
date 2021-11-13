@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [python-0.4.0](https://github.com/apache/arrow-datafusion/tree/python-0.4.0) (2021-11-12)
+## [python-0.4.0](https://github.com/apache/arrow-datafusion/tree/python-0.4.0) (2021-11-13)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/python-0.3.0...python-0.4.0)
 
@@ -56,6 +56,7 @@
 
 **Documentation updates:**
 
+- python: update docs to use new APIs [\#1287](https://github.com/apache/arrow-datafusion/pull/1287) ([houqp](https://github.com/houqp))
 - Fix typo on Python functions [\#1207](https://github.com/apache/arrow-datafusion/pull/1207) ([j-a-m-l](https://github.com/j-a-m-l))
 - fix deadlink in python/readme [\#1002](https://github.com/apache/arrow-datafusion/pull/1002) ([waynexia](https://github.com/waynexia))
 

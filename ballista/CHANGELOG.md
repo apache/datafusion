@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [ballista-0.6.0](https://github.com/apache/arrow-datafusion/tree/ballista-0.6.0) (2021-11-12)
+## [ballista-0.6.0](https://github.com/apache/arrow-datafusion/tree/ballista-0.6.0) (2021-11-13)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/ballista-0.5.0...ballista-0.6.0)
 
