@@ -3625,7 +3625,7 @@ async fn query_concat() -> Result<()> {
     Ok(())
 }
 
-// Revisit
+// Revisit after implementing https://github.com/apache/arrow-rs/issues/925
 #[tokio::test]
 async fn query_array() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
@@ -3837,18 +3837,22 @@ async fn to_timestamp_seconds() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn count_distinct_timestamps() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     let sql = "SELECT COUNT(DISTINCT(ts)) FROM ts_data";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
 
-    let expected = vec![vec!["3"]];
-    assert_eq!(expected, actual);
+    let expected = vec![
+        "+----------------------------+",
+        "| COUNT(DISTINCT ts_data.ts) |",
+        "+----------------------------+",
+        "| 3                          |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -3870,9 +3874,17 @@ async fn query_is_null() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT c1 IS NULL FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["false"], vec!["true"], vec!["false"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------+",
+        "| test.c1 IS NULL |",
+        "+-----------------+",
+        "| false           |",
+        "| true            |",
+        "| false           |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -3894,10 +3906,17 @@ async fn query_is_not_null() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT c1 IS NOT NULL FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["true"], vec!["false"], vec!["true"]];
-
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| test.c1 IS NOT NULL |",
+        "+---------------------+",
+        "| true                |",
+        "| false               |",
+        "| true                |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -3921,9 +3940,15 @@ async fn query_count_distinct() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT COUNT(DISTINCT c1) FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["3".to_string()]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------+",
+        "| COUNT(DISTINCT test.c1) |",
+        "+-------------------------+",
+        "| 3                       |",
+        "+-------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -4047,59 +4072,120 @@ async fn query_on_string_dictionary() -> Result<()> {
 
     // Basic SELECT
     let sql = "SELECT * FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["one"], vec!["NULL"], vec!["three"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| one   |",
+        "|       |",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     // basic filtering
     let sql = "SELECT * FROM test WHERE d1 IS NOT NULL";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["one"], vec!["three"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| one   |",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     // filtering with constant
     let sql = "SELECT * FROM test WHERE d1 = 'three'";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["three"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     // Expression evaluation
     let sql = "SELECT concat(d1, '-foo') FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["one-foo"], vec!["-foo"], vec!["three-foo"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+------------------------------+",
+        "| concat(test.d1,Utf8(\"-foo\")) |",
+        "+------------------------------+",
+        "| one-foo                      |",
+        "| -foo                         |",
+        "| three-foo                    |",
+        "+------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     // aggregation
     let sql = "SELECT COUNT(d1) FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["2"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------------+",
+        "| COUNT(test.d1) |",
+        "+----------------+",
+        "| 2              |",
+        "+----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     // aggregation min
     let sql = "SELECT MIN(d1) FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["one"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+--------------+",
+        "| MIN(test.d1) |",
+        "+--------------+",
+        "| one          |",
+        "+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     // aggregation max
     let sql = "SELECT MAX(d1) FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["three"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+--------------+",
+        "| MAX(test.d1) |",
+        "+--------------+",
+        "| three        |",
+        "+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     // grouping
     let sql = "SELECT d1, COUNT(*) FROM test group by d1";
-    let mut actual = execute(&mut ctx, sql).await;
-    actual.sort();
-    let expected = vec![vec!["NULL", "1"], vec!["one", "1"], vec!["three", "1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+-----------------+",
+        "| d1    | COUNT(UInt8(1)) |",
+        "+-------+-----------------+",
+        "| one   | 1               |",
+        "|       | 1               |",
+        "| three | 1               |",
+        "+-------+-----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
 
     // window functions
     let sql = "SELECT d1, row_number() OVER (partition by d1) FROM test";
-    let mut actual = execute(&mut ctx, sql).await;
-    actual.sort();
-    let expected = vec![vec!["NULL", "1"], vec!["one", "1"], vec!["three", "1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+--------------+",
+        "| d1    | ROW_NUMBER() |",
+        "+-------+--------------+",
+        "|       | 1            |",
+        "| one   | 1            |",
+        "| three | 1            |",
+        "+-------+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
 
     Ok(())
 }
@@ -4111,14 +4197,26 @@ async fn query_without_from() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 
     let sql = "SELECT 1";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------+",
+        "| Int64(1) |",
+        "+----------+",
+        "| 1        |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT 1+2, 3/4, cos(0)";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["3", "0", "1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------+----------+------------+",
+        "| Int64(3) | Int64(0) | Float64(1) |",
+        "+----------+----------+------------+",
+        "| 3        | 0        | 1          |",
+        "+----------+----------+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     Ok(())
 }
@@ -4131,28 +4229,34 @@ async fn query_cte() -> Result<()> {
 
     // simple with
     let sql = "WITH t AS (SELECT 1) SELECT * FROM t";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------+",
+        "| Int64(1) |",
+        "+----------+",
+        "| 1        |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     // with + union
     let sql =
         "WITH t AS (SELECT 1 AS a), u AS (SELECT 2 AS a) SELECT * FROM t UNION ALL SELECT * FROM u";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"], vec!["2"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "| 2 |", "+---+"];
+    assert_batches_eq!(expected, &actual);
 
     // with + join
     let sql = "WITH t AS (SELECT 1 AS id1), u AS (SELECT 1 AS id2, 5 as x) SELECT x FROM t JOIN u ON (id1 = id2)";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["5"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec!["+---+", "| x |", "+---+", "| 5 |", "+---+"];
+    assert_batches_eq!(expected, &actual);
 
     // backward reference
     let sql = "WITH t AS (SELECT 1 AS id1), u AS (SELECT * FROM t) SELECT * from u";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec!["+-----+", "| id1 |", "+-----+", "| 1   |", "+-----+"];
+    assert_batches_eq!(expected, &actual);
 
     Ok(())
 }
@@ -4210,9 +4314,18 @@ async fn query_scalar_minus_array() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT 4 - c1 FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["4"], vec!["3"], vec!["NULL"], vec!["1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+------------------------+",
+        "| Int64(4) Minus test.c1 |",
+        "+------------------------+",
+        "| 4                      |",
+        "| 3                      |",
+        "|                        |",
+        "| 1                      |",
+        "+------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -4238,10 +4351,15 @@ async fn csv_between_expr() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c4 FROM aggregate_test_100 WHERE c12 BETWEEN 0.995 AND 1.0";
-    let mut actual = execute(&mut ctx, sql).await;
-    actual.sort();
-    let expected = vec![vec!["10837"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c4    |",
+        "+-------+",
+        "| 10837 |",
+        "+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
     Ok(())
 }
 
@@ -4250,10 +4368,15 @@ async fn csv_between_expr_negated() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c4 FROM aggregate_test_100 WHERE c12 NOT BETWEEN 0 AND 0.995";
-    let mut actual = execute(&mut ctx, sql).await;
-    actual.sort();
-    let expected = vec![vec!["10837"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c4    |",
+        "+-------+",
+        "| 10837 |",
+        "+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
     Ok(())
 }
 
@@ -4289,11 +4412,16 @@ async fn csv_group_by_date() -> Result<()> {
 
     ctx.register_table("dates", Arc::new(table))?;
     let sql = "SELECT SUM(cnt) FROM dates GROUP BY date";
-    let actual = execute(&mut ctx, sql).await;
-    let mut actual: Vec<String> = actual.iter().flatten().cloned().collect();
-    actual.sort();
-    let expected = vec!["6", "9"];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------------+",
+        "| SUM(dates.cnt) |",
+        "+----------------+",
+        "| 6              |",
+        "| 9              |",
+        "+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
     Ok(())
 }
 
@@ -4331,12 +4459,20 @@ async fn group_by_timestamp_millis() -> Result<()> {
 
     let sql =
         "SELECT timestamp, SUM(count) FROM t1 GROUP BY timestamp ORDER BY timestamp ASC";
-    let actual = execute(&mut ctx, sql).await;
-    let actual: Vec<String> = actual.iter().map(|row| row[1].clone()).collect();
-    let expected = vec!["80", "130"];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------------------+---------------+",
+        "| timestamp           | SUM(t1.count) |",
+        "+---------------------+---------------+",
+        "| 2018-07-01 06:00:00 | 80            |",
+        "| 2018-07-01 07:00:00 | 130           |",
+        "+---------------------+---------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+// --- End Test Porting ---
 
 macro_rules! test_expression {
     ($SQL:expr, $EXPECTED:expr) => {
