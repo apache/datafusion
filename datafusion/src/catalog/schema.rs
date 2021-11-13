@@ -164,7 +164,7 @@ mod tests {
         }
 
         let provider = MemorySchemaProvider::new();
-        let table_name = "test_table_exist";
+        let table_name = "test_table";
         assert!(!provider.table_exist(table_name));
         assert!(provider.deregister_table(table_name).unwrap().is_none());
         let test_table = TestTableProvider::new();
@@ -172,7 +172,7 @@ mod tests {
         assert!(provider
             .register_table(table_name.to_string(), Arc::new(test_table))
             .unwrap()
-            .is_some());
+            .is_none());
         assert!(provider.table_exist(table_name));
         let other_table = TestTableProvider::new();
         let result =
