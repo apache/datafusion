@@ -62,7 +62,9 @@ pub trait SchemaProvider: Sync + Send {
     /// If no matched table in the schema provider, return false.
     /// Otherwise, return true.
     #[allow(unused_variables)]
-    fn table_exist(&self, name: &str) -> bool;
+    fn table_exist(&self, name: &str) -> bool {
+        unreachable!();
+    }
 }
 
 /// Simple in-memory implementation of a schema.

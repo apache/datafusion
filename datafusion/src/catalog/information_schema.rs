@@ -187,10 +187,6 @@ impl SchemaProvider for InformationSchemaProvider {
             None
         }
     }
-
-    fn table_exist(&self, _name: &str) -> bool {
-        unreachable!();
-    }
 }
 
 /// Builds the `information_schema.TABLE` table row by row
