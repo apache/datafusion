@@ -166,7 +166,7 @@ mod tests {
         }
 
         let provider = MemorySchemaProvider::new();
-        let table_name = "test_table";
+        let table_name = "test_table_exist";
         assert!(!provider.table_exist(table_name));
         assert!(provider.deregister_table(table_name).unwrap().is_none());
         let test_table = TestTableProvider::new();
