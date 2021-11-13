@@ -61,9 +61,8 @@ pub trait SchemaProvider: Sync + Send {
     /// If supported by the implementation, checks the table exist in the schema provider or not.
     /// If no matched table in the schema provider, return false.
     /// Otherwise, return true.
-    fn table_exist(&self, _name: &str) -> bool {
-        false
-    }
+    #[allow(unused_variables)]
+    fn table_exist(&self, name: &str) -> bool;
 }
 
 /// Simple in-memory implementation of a schema.
@@ -165,7 +164,7 @@ mod tests {
         }
 
         let provider = MemorySchemaProvider::new();
-        let table_name = "table_name";
+        let table_name = "test_table_exist";
         assert!(!provider.table_exist(table_name));
         assert!(provider.deregister_table(table_name).unwrap().is_none());
         let test_table = TestTableProvider::new();
