@@ -28,6 +28,7 @@ from ._internal import (
     ScalarUDF,
 )
 
+
 __all__ = [
     "DataFrame",
     "ExecutionContext",
@@ -61,10 +62,16 @@ def column(value):
     return Expression.column(value)
 
 
+col = column
+
+
 def literal(value):
     if not isinstance(value, pa.Scalar):
         value = pa.scalar(value)
     return Expression.literal(value)
+
+
+lit = literal
 
 
 def udf(func, input_types, return_type, volatility, name=None):
