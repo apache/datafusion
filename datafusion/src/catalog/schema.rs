@@ -18,11 +18,12 @@
 //! Describes the interface and built-in implementations of schemas,
 //! representing collections of named tables.
 
-use crate::datasource::TableProvider;
-use crate::error::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+
+use crate::datasource::TableProvider;
+use crate::error::{DataFusionError, Result};
 
 /// Represents a schema, comprising a number of named tables.
 pub trait SchemaProvider: Sync + Send {
@@ -37,7 +38,7 @@ pub trait SchemaProvider: Sync + Send {
     fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>>;
 
     /// If supported by the implementation, adds a new table to this schema.
-    /// If a table of the same name existed before, it is replaced in the schema and returned.
+    /// If a table of the same name existed before, it returns "Table already exists" error.
     #[allow(unused_variables)]
     fn register_table(
         &self,
@@ -62,9 +63,7 @@ pub trait SchemaProvider: Sync + Send {
     /// If no matched table in the schema provider, return false.
     /// Otherwise, return true.
     #[allow(unused_variables)]
-    fn table_exist(&self, name: &str) -> bool {
-        unreachable!();
-    }
+    fn table_exist(&self, name: &str) -> bool;
 }
 
 /// Simple in-memory implementation of a schema.
@@ -102,7 +101,7 @@ impl SchemaProvider for MemorySchemaProvider {
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         if self.table_exist(name.as_str()) {
-            return Err(DataFusionError::Plan(format!(
+            return Err(DataFusionError::Execution(format!(
                 "The table {} already exists",
                 name
             )));
@@ -124,59 +123,27 @@ impl SchemaProvider for MemorySchemaProvider {
 
 #[cfg(test)]
 mod tests {
-    use crate::arrow::datatypes::SchemaRef;
-    use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
-    use crate::datasource::TableProvider;
-    use crate::logical_plan::Expr;
-    use crate::physical_plan::ExecutionPlan;
-    use std::any::Any;
     use std::sync::Arc;
 
-    use async_trait::async_trait;
+    use arrow::datatypes::Schema;
+
+    use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
+    use crate::datasource::empty::EmptyTable;
 
     #[tokio::test]
     async fn test_mem_provider() {
-        struct TestTableProvider();
-
-        impl TestTableProvider {
-            fn new() -> Self {
-                TestTableProvider()
-            }
-        }
-
-        #[async_trait]
-        impl TableProvider for TestTableProvider {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-
-            fn schema(&self) -> SchemaRef {
-                unimplemented!()
-            }
-
-            async fn scan(
-                &self,
-                _projection: &Option<Vec<usize>>,
-                _batch_size: usize,
-                _filters: &[Expr],
-                _limit: Option<usize>,
-            ) -> crate::error::Result<Arc<dyn ExecutionPlan>> {
-                unimplemented!()
-            }
-        }
-
         let provider = MemorySchemaProvider::new();
         let table_name = "test_table_exist";
         assert!(!provider.table_exist(table_name));
         assert!(provider.deregister_table(table_name).unwrap().is_none());
-        let test_table = TestTableProvider::new();
+        let test_table = EmptyTable::new(Arc::new(Schema::empty()));
         // register table successfully
         assert!(provider
             .register_table(table_name.to_string(), Arc::new(test_table))
             .unwrap()
             .is_none());
         assert!(provider.table_exist(table_name));
-        let other_table = TestTableProvider::new();
+        let other_table = EmptyTable::new(Arc::new(Schema::empty()));
         let result =
             provider.register_table(table_name.to_string(), Arc::new(other_table));
         assert!(result.is_err());
