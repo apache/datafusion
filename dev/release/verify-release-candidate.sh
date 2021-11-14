@@ -59,9 +59,7 @@ fetch_archive() {
   download_rc_file ${dist_name}.tar.gz.asc
   download_rc_file ${dist_name}.tar.gz.sha256
   download_rc_file ${dist_name}.tar.gz.sha512
-  gpg --verify ${dist_name}.tar.gz.asc ${dist_name}.tar.gz
-  shasum -a 256 -c ${dist_name}.tar.gz.sha256
-  shasum -a 512 -c ${dist_name}.tar.gz.sha512
+  verify_dir_artifact_signatures
 }
 
 verify_dir_artifact_signatures() {
@@ -74,9 +72,7 @@ verify_dir_artifact_signatures() {
     # basename of the artifact
     pushd $(dirname $artifact)
     base_artifact=$(basename $artifact)
-    if [ -f $base_artifact.sha256 ]; then
-      shasum -a 256 -c $base_artifact.sha256 || exit 1
-    fi
+    shasum -a 256 -c $base_artifact.sha256 || exit 1
     shasum -a 512 -c $base_artifact.sha512 || exit 1
     popd
   done
@@ -142,7 +138,14 @@ import_gpg_keys
 fetch_archive ${dist_name}
 tar xf ${dist_name}.tar.gz
 pushd ${dist_name}
-test_source_distribution
+    test_source_distribution
+popd
+
+echo "Verifying python artifacts..."
+svn co $ARROW_DIST_URL/apache-arrow-datafusion-${VERSION}-rc${RC_NUMBER}/python python-artifacts
+pushd python-artifacts
+    verify_dir_artifact_signatures
+    twine check *.{whl,tar.gz}
 popd
 
 TEST_SUCCESS=yes
