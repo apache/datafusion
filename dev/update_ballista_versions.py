@@ -35,10 +35,12 @@ def update_cargo_toml(cargo_toml: str, new_version: str):
         data = f.read()
 
     doc = tomlkit.parse(data)
-    doc.get('package')['version'] = new_version
+    if cargo_toml.startswith("ballista/"):
+        doc.get('package')['version'] = new_version
 
     # ballista crates also depend on each other
     ballista_deps = (
+        'ballista',
         'ballista-core',
         'ballista-executor',
         'ballista-scheduler',
@@ -80,6 +82,7 @@ def main():
             'ballista/rust/scheduler',
             'ballista/rust/executor',
             'ballista/rust/client',
+            'datafusion-cli',
         ]
     ])
     new_version = args.new_version
@@ -89,7 +92,10 @@ def main():
     for cargo_toml in ballista_crates:
         update_cargo_toml(cargo_toml, new_version)
 
-    for path in ("benchmarks/docker-compose.yaml", "docs/user-guide/src/distributed/docker-compose.md"):
+    for path in (
+        "benchmarks/docker-compose.yaml",
+        "docs/source/user-guide/distributed/deployment/docker-compose.md",
+    ):
         path = os.path.join(repo_root, path)
         update_docker_compose(path, new_version)
 

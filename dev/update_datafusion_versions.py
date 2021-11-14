@@ -22,6 +22,7 @@
 # dependencies:
 # pip install tomlkit
 
+import re
 import os
 import argparse
 from pathlib import Path
@@ -61,6 +62,15 @@ def update_downstream_versions(cargo_toml: str, new_version: str):
         f.write(tomlkit.dumps(doc))
 
 
+def update_docs(path: str, new_version: str):
+    print(f"updating docs in {path}")
+    with open(path, 'r+') as fd:
+        content = fd.read()
+        fd.seek(0)
+        content = re.sub(r'datafusion = "(.+)"', f'datafusion = "{new_version}"', content)
+        fd.write(content)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=(
@@ -78,6 +88,8 @@ def main():
     update_datafusion_version("datafusion/Cargo.toml", new_version)
     for cargo_toml in repo_root.rglob('Cargo.toml'):
         update_downstream_versions(cargo_toml, new_version)
+
+    update_docs("README.md", new_version)
 
 
 if __name__ == "__main__":

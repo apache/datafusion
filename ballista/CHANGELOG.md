@@ -17,9 +17,95 @@
   under the License.
 -->
 
-For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)
-
 # Changelog
+
+## [ballista-0.6.0](https://github.com/apache/arrow-datafusion/tree/ballista-0.6.0) (2021-11-13)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/ballista-0.5.0...ballista-0.6.0)
+
+**Breaking changes:**
+
+- File partitioning for ListingTable [\#1141](https://github.com/apache/arrow-datafusion/pull/1141) ([rdettai](https://github.com/rdettai))
+- Register tables in BallistaContext using TableProviders instead of Dataframe [\#1028](https://github.com/apache/arrow-datafusion/pull/1028) ([rdettai](https://github.com/rdettai))
+- Make TableProvider.scan\(\) and PhysicalPlanner::create\_physical\_plan\(\) async [\#1013](https://github.com/apache/arrow-datafusion/pull/1013) ([rdettai](https://github.com/rdettai))
+- Reorganize table providers by table format [\#1010](https://github.com/apache/arrow-datafusion/pull/1010) ([rdettai](https://github.com/rdettai))
+- Move CBOs and Statistics to physical plan [\#965](https://github.com/apache/arrow-datafusion/pull/965) ([rdettai](https://github.com/rdettai))
+- Update to sqlparser v 0.10.0 [\#934](https://github.com/apache/arrow-datafusion/pull/934) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- FilePartition and PartitionedFile for scanning flexibility [\#932](https://github.com/apache/arrow-datafusion/pull/932) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([yjshen](https://github.com/yjshen))
+- Improve SQLMetric APIs, port existing metrics [\#908](https://github.com/apache/arrow-datafusion/pull/908) ([alamb](https://github.com/alamb))
+- Add support for EXPLAIN ANALYZE [\#858](https://github.com/apache/arrow-datafusion/pull/858) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- Rename concurrency to target\_partitions [\#706](https://github.com/apache/arrow-datafusion/pull/706) ([andygrove](https://github.com/andygrove))
+
+**Implemented enhancements:**
+
+- Update datafusion-cli to support Ballista, or implement new ballista-cli [\#886](https://github.com/apache/arrow-datafusion/issues/886)
+- Prepare Ballista crates for publishing [\#509](https://github.com/apache/arrow-datafusion/issues/509)
+- Add drop table support [\#1266](https://github.com/apache/arrow-datafusion/pull/1266) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([viirya](https://github.com/viirya))
+- use arrow 6.1.0 [\#1255](https://github.com/apache/arrow-datafusion/pull/1255) ([Jimexist](https://github.com/Jimexist))
+- Add support for `create table as` via MemTable [\#1243](https://github.com/apache/arrow-datafusion/pull/1243) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Dandandan](https://github.com/Dandandan))
+- add values list expression [\#1165](https://github.com/apache/arrow-datafusion/pull/1165) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jimexist](https://github.com/Jimexist))
+- Multiple files per partitions for CSV Avro Json [\#1138](https://github.com/apache/arrow-datafusion/pull/1138) ([rdettai](https://github.com/rdettai))
+- Implement INTERSECT & INTERSECT DISTINCT [\#1135](https://github.com/apache/arrow-datafusion/pull/1135) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([xudong963](https://github.com/xudong963))
+- Simplify file struct abstractions [\#1120](https://github.com/apache/arrow-datafusion/pull/1120) ([rdettai](https://github.com/rdettai))
+- Implement `is [not] distinct from` [\#1117](https://github.com/apache/arrow-datafusion/pull/1117) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Dandandan](https://github.com/Dandandan))
+- add digest\(utf8, method\) function and refactor all current hash digest functions [\#1090](https://github.com/apache/arrow-datafusion/pull/1090) ([Jimexist](https://github.com/Jimexist))
+- \[crypto\] add `blake3` algorithm to `digest` function [\#1086](https://github.com/apache/arrow-datafusion/pull/1086) ([Jimexist](https://github.com/Jimexist))
+- \[crypto\] add blake2b and blake2s functions [\#1081](https://github.com/apache/arrow-datafusion/pull/1081) ([Jimexist](https://github.com/Jimexist))
+-  Update sqlparser-rs to 0.11 [\#1052](https://github.com/apache/arrow-datafusion/pull/1052) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- remove hard coded partition count in ballista logicalplan deserialization [\#1044](https://github.com/apache/arrow-datafusion/pull/1044) ([xudong963](https://github.com/xudong963))
+- Indexed field access for List [\#1006](https://github.com/apache/arrow-datafusion/pull/1006) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Igosuki](https://github.com/Igosuki))
+- Update DataFusion to arrow 6.0 [\#984](https://github.com/apache/arrow-datafusion/pull/984) ([alamb](https://github.com/alamb))
+- Implement Display for Expr, improve operator display [\#971](https://github.com/apache/arrow-datafusion/pull/971) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([matthewmturner](https://github.com/matthewmturner))
+- ObjectStore API to read from remote storage systems [\#950](https://github.com/apache/arrow-datafusion/pull/950) ([yjshen](https://github.com/yjshen))
+- fixes \#933 replace placeholder fmt\_as fr ExecutionPlan impls [\#939](https://github.com/apache/arrow-datafusion/pull/939) ([tiphaineruy](https://github.com/tiphaineruy))
+- Support `NotLike` in Ballista [\#916](https://github.com/apache/arrow-datafusion/pull/916) ([Dandandan](https://github.com/Dandandan))
+- Avro Table Provider [\#910](https://github.com/apache/arrow-datafusion/pull/910) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Igosuki](https://github.com/Igosuki))
+- Add BaselineMetrics, Timestamp metrics, add for `CoalescePartitionsExec`, rename output\_time -\> elapsed\_compute [\#909](https://github.com/apache/arrow-datafusion/pull/909) ([alamb](https://github.com/alamb))
+- \[Ballista\] Add executor last seen info to the ui [\#895](https://github.com/apache/arrow-datafusion/pull/895) ([msathis](https://github.com/msathis))
+- add cross join support to ballista [\#891](https://github.com/apache/arrow-datafusion/pull/891) ([houqp](https://github.com/houqp))
+- Add Ballista support to DataFusion CLI [\#889](https://github.com/apache/arrow-datafusion/pull/889) ([andygrove](https://github.com/andygrove))
+- Add support for PostgreSQL regex match [\#870](https://github.com/apache/arrow-datafusion/pull/870) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([b41sh](https://github.com/b41sh))
+
+**Fixed bugs:**
+
+- Test execution\_plans::shuffle\_writer::tests::test Fail [\#1040](https://github.com/apache/arrow-datafusion/issues/1040)
+- Integration test fails to build docker images [\#918](https://github.com/apache/arrow-datafusion/issues/918)
+- Ballista: Remove hard-coded concurrency from logical plan serde code [\#708](https://github.com/apache/arrow-datafusion/issues/708)
+- How can I make ballista distributed compute work? [\#327](https://github.com/apache/arrow-datafusion/issues/327)
+- fix subquery alias [\#1067](https://github.com/apache/arrow-datafusion/pull/1067) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([xudong963](https://github.com/xudong963))
+- Fix compilation for ballista in stand-alone mode [\#1008](https://github.com/apache/arrow-datafusion/pull/1008) ([Igosuki](https://github.com/Igosuki))
+
+**Documentation updates:**
+
+- Add Ballista roadmap [\#1166](https://github.com/apache/arrow-datafusion/pull/1166) ([andygrove](https://github.com/andygrove))
+- Adds note on compatible rust version [\#1097](https://github.com/apache/arrow-datafusion/pull/1097) ([1nF0rmed](https://github.com/1nF0rmed))
+- implement `approx_distinct` function using HyperLogLog [\#1087](https://github.com/apache/arrow-datafusion/pull/1087) ([Jimexist](https://github.com/Jimexist))
+- Improve User Guide [\#954](https://github.com/apache/arrow-datafusion/pull/954) ([andygrove](https://github.com/andygrove))
+- Update plan\_query\_stages doc [\#951](https://github.com/apache/arrow-datafusion/pull/951) ([rdettai](https://github.com/rdettai))
+- \[DataFusion\] -  Add show and show\_limit function for DataFrame [\#923](https://github.com/apache/arrow-datafusion/pull/923) ([francis-du](https://github.com/francis-du))
+- update docs related to protoc and optional syntax [\#902](https://github.com/apache/arrow-datafusion/pull/902) ([Jimexist](https://github.com/Jimexist))
+- Improve Ballista crate README content [\#878](https://github.com/apache/arrow-datafusion/pull/878) ([andygrove](https://github.com/andygrove))
+
+**Performance improvements:**
+
+- optimize build profile for datafusion python binding, cli and ballista [\#1137](https://github.com/apache/arrow-datafusion/pull/1137) ([houqp](https://github.com/houqp))
+
+**Closed issues:**
+
+- InList expr with NULL literals do not work [\#1190](https://github.com/apache/arrow-datafusion/issues/1190)
+- update the homepage README to include values, `approx_distinct`, etc. [\#1171](https://github.com/apache/arrow-datafusion/issues/1171)
+- \[Python\]: Inconsistencies with Python package name  [\#1011](https://github.com/apache/arrow-datafusion/issues/1011)
+- Wanting to contribute to project where to start? [\#983](https://github.com/apache/arrow-datafusion/issues/983)
+- delete redundant code [\#973](https://github.com/apache/arrow-datafusion/issues/973)
+- How to build DataFusion python wheel  [\#853](https://github.com/apache/arrow-datafusion/issues/853)
+- Produce a design for a metrics framework [\#21](https://github.com/apache/arrow-datafusion/issues/21)
+
+**Merged pull requests:**
+
+- \[nit\] simplify ballista executor `CollectExec` impl codes [\#1140](https://github.com/apache/arrow-datafusion/pull/1140) ([panarch](https://github.com/panarch))
+
+
+For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)
 
 ## [ballista-0.5.0](https://github.com/apache/arrow-datafusion/tree/ballista-0.5.0) (2021-08-10)
 

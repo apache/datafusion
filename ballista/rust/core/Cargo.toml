@@ -45,7 +45,7 @@ chrono = "0.4"
 
 arrow-flight = { version = "6.1.0"  }
 
-datafusion = { path = "../../../datafusion", version = "5.1.0" }
+datafusion = { path = "../../../datafusion", version = "6.0.0" }
 
 [dev-dependencies]
 tempfile = "3"
