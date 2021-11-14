@@ -300,4 +300,17 @@ Call the vote on the Arrow dev list by replying to the RC voting thread. The
 reply should have a new subject constructed by adding `[RESULT]` prefix to the
 old subject line.
 
-TODO: add example mail
+```
+To: dev@arrow.apache.org
+Subject: [RESULT][VOTE][Datafusion] Release Apache Arrow Datafusion 5.0.0 RC0
+
+The vote passes/fails with X +1 votes,  Y -1 votes and Z 0 votes.
+
+The release is available here:
+
+  https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-5.0.0/
+
+The code has also been released to crates.io:
+https://crates.io/crates/datafusion/5.0.0
+https://crates.io/crates/ballista/0.5.0
+```
