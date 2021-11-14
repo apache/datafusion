@@ -17,7 +17,7 @@
 
 [package]
 name = "datafusion-python"
-version = "0.3.0"
+version = "0.4.0"
 homepage = "https://github.com/apache/arrow"
 repository = "https://github.com/apache/arrow"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -31,7 +31,7 @@ rust-version = "1.56"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 rand = "0.7"
 pyo3 = { version = "0.14", features = ["extension-module", "abi3", "abi3-py36"] }
-datafusion = { path = "../datafusion", version = "5.1.0", features = ["pyarrow"] }
+datafusion = { path = "../datafusion", version = "6.0.0", features = ["pyarrow"] }
 uuid = { version = "0.8", features = ["v4"] }
 
 [lib]
