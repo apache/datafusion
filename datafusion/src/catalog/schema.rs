@@ -62,7 +62,6 @@ pub trait SchemaProvider: Sync + Send {
     /// If supported by the implementation, checks the table exist in the schema provider or not.
     /// If no matched table in the schema provider, return false.
     /// Otherwise, return true.
-    #[allow(unused_variables)]
     fn table_exist(&self, name: &str) -> bool;
 }
 
