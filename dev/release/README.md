@@ -219,6 +219,8 @@ changes into master if there is any and try again with the next RC number.
 
 ## Finalize the release
 
+NOTE: steps in this section can only be done by PMC members.
+
 ### After the release is approved
 
 Move artifacts to the release location in SVN, e.g.
@@ -236,7 +238,7 @@ Congratulations! The release is now offical!
 Tag the same release candidate commit with the final release tag
 
 ```
-git co apache/5.1.0-RC0
+git co apache/5.1.0-rc0
 git tag 5.1.0
 git push 5.1.0
 ```
