@@ -2841,6 +2841,7 @@ mod tests {
             let batch =
                 RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
             let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+            ctx.deregister_table("t").unwrap();
             ctx.register_table("t", Arc::new(provider)).unwrap();
             let expected = vec![
                 "+-----------+",
