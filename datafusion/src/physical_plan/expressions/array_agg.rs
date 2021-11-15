@@ -97,10 +97,8 @@ pub(crate) struct ArrayAggAccumulator {
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given element data type
     pub fn try_new(datatype: &DataType) -> Result<Self> {
-        let array_type =
-            DataType::List(Box::new(Field::new("item", datatype.clone(), true)));
         Ok(Self {
-            array: ScalarValue::try_from(&array_type)?,
+            array: ScalarValue::List(Some(Box::new(vec![])), Box::new(datatype.clone())),
         })
     }
 }
@@ -112,19 +110,14 @@ impl Accumulator for ArrayAggAccumulator {
 
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         let value = &values[0];
-        let mut new_array: Vec<ScalarValue> = vec![];
 
-        let nested_datatype = match self.array {
-            ScalarValue::List(Some(ref accu_array), ref dt) => {
-                new_array.extend(accu_array.clone().into_iter());
-                dt.clone()
+        match self.array {
+            ScalarValue::List(Some(ref mut accu_array), _) => {
+                accu_array.push(value.clone());
             }
-            ScalarValue::List(None, ref dt) => dt.clone(),
             _ => unreachable!(),
         };
-        new_array.push(value.clone());
 
-        self.array = ScalarValue::List(Some(Box::new(new_array)), nested_datatype);
         Ok(())
     }
 
