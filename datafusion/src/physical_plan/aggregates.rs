@@ -109,7 +109,7 @@ pub fn return_type(fun: &AggregateFunction, arg_types: &[DataType]) -> Result<Da
         AggregateFunction::Sum => sum_return_type(&arg_types[0]),
         AggregateFunction::Avg => avg_return_type(&arg_types[0]),
         AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(
-            "element",
+            "item",
             arg_types[0].clone(),
             true,
         )))),

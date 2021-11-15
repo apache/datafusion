@@ -1281,6 +1281,60 @@ async fn csv_query_approx_count() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn csv_query_array_agg() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql =
+        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 2) test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+------------------------------------------------------------------+",
+        "| ARRAYAGG(test.c13)                                               |",
+        "+------------------------------------------------------------------+",
+        "| [6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW, C2GT5KVyOPZpgKVl110TyZO0NcJ434] |",
+        "+------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_array_agg_empty() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql =
+        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+--------------------+",
+        "| ARRAYAGG(test.c13) |",
+        "+--------------------+",
+        "| []                 |",
+        "+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_array_agg_one() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql =
+        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 1) test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------------------------------+",
+        "| ARRAYAGG(test.c13)               |",
+        "+----------------------------------+",
+        "| [6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW] |",
+        "+----------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
 async fn csv_query_window_with_empty_over() -> Result<()> {

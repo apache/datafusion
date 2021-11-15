@@ -57,7 +57,7 @@ impl AggregateExpr for ArrayAgg {
         Ok(Field::new(
             &self.name,
             DataType::List(Box::new(Field::new(
-                "element",
+                "item",
                 self.input_data_type.clone(),
                 true,
             ))),
@@ -95,7 +95,7 @@ pub(crate) struct ArrayAggAccumulator {
 }
 
 impl ArrayAggAccumulator {
-    /// new array_agg accumulator based on given element data type
+    /// new array_agg accumulator based on given item data type
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             array: vec![],
@@ -120,7 +120,17 @@ impl Accumulator for ArrayAggAccumulator {
     }
 
     fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        self.update(states)
+        if states.is_empty() {
+            return Ok(());
+        };
+
+        match &states[0] {
+            ScalarValue::List(Some(array), _) => {
+                self.array.extend((&**array).clone());
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
