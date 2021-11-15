@@ -33,7 +33,7 @@ use datafusion::datasource::listing::ListingTable;
 use datafusion::logical_plan::{
     exprlist_to_fields,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, Expr, JoinConstraint, JoinType, LogicalPlan,
+    Column, CreateExternalTable, Expr, JoinConstraint, JoinType, LogicalPlan,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -944,13 +944,13 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     },
                 )),
             }),
-            LogicalPlan::CreateExternalTable {
+            LogicalPlan::CreateExternalTable(CreateExternalTable {
                 name,
                 location,
                 file_type,
                 has_header,
                 schema: df_schema,
-            } => {
+            }) => {
                 use datafusion::sql::parser::FileType;
 
                 let pb_file_type: protobuf::FileType = match file_type {
@@ -1008,10 +1008,10 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::CreateMemoryTable { .. } => Err(proto_error(
+            LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
                 "Error converting CreateMemoryTable. Not yet supported in Ballista",
             )),
-            LogicalPlan::DropTable { .. } => Err(proto_error(
+            LogicalPlan::DropTable(_) => Err(proto_error(
                 "Error converting DropTable. Not yet supported in Ballista",
             )),
         }
