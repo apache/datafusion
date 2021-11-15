@@ -28,6 +28,7 @@ use crate::optimizer::utils;
 use arrow::datatypes::DataType;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
@@ -77,12 +78,12 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
     let mut expr_set = ExprSet::new();
 
     match plan {
-        LogicalPlan::Projection {
+        LogicalPlan::Projection(ProjectionPlan {
             expr,
             input,
             schema,
             alias,
-        } => {
+        }) => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
@@ -94,14 +95,14 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Projection {
+            Ok(LogicalPlan::Projection(ProjectionPlan {
                 expr: new_expr.pop().unwrap(),
                 input: Arc::new(new_input),
                 schema: schema.clone(),
                 alias: alias.clone(),
-            })
+            }))
         }
-        LogicalPlan::Filter { predicate, input } => {
+        LogicalPlan::Filter(FilterPlan { predicate, input }) => {
             let schemas = plan.all_schemas();
             let all_schema =
                 schemas.into_iter().fold(DFSchema::empty(), |mut lhs, rhs| {
@@ -122,16 +123,16 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Filter {
+            Ok(LogicalPlan::Filter(FilterPlan {
                 predicate: new_expr.pop().unwrap().pop().unwrap(),
                 input: Arc::new(new_input),
-            })
+            }))
         }
-        LogicalPlan::Window {
+        LogicalPlan::Window(WindowPlan {
             input,
             window_expr,
             schema,
-        } => {
+        }) => {
             let arrays = to_arrays(window_expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
@@ -143,11 +144,11 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Window {
+            Ok(LogicalPlan::Window(WindowPlan {
                 input: Arc::new(new_input),
                 window_expr: new_expr.pop().unwrap(),
                 schema: schema.clone(),
-            })
+            }))
         }
         LogicalPlan::Aggregate {
             input,
@@ -265,12 +266,12 @@ fn build_project_plan(
     let mut schema = DFSchema::new(fields)?;
     schema.merge(input.schema());
 
-    Ok(LogicalPlan::Projection {
+    Ok(LogicalPlan::Projection(ProjectionPlan {
         expr: project_exprs,
         input: Arc::new(input),
         schema: Arc::new(schema),
         alias: None,
-    })
+    }))
 }
 
 #[inline]

@@ -50,6 +50,7 @@ use std::{
     boxed,
     convert::{TryFrom, TryInto},
 };
+use datafusion::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 
 impl protobuf::IntervalUnit {
     pub fn from_arrow_interval_unit(interval_unit: &IntervalUnit) -> Self {
@@ -777,9 +778,9 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )))
                 }
             }
-            LogicalPlan::Projection {
+            LogicalPlan::Projection(ProjectionPlan {
                 expr, input, alias, ..
-            } => Ok(protobuf::LogicalPlanNode {
+            }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
                     protobuf::ProjectionNode {
                         input: Some(Box::new(input.as_ref().try_into()?)),
@@ -794,7 +795,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     },
                 ))),
             }),
-            LogicalPlan::Filter { predicate, input } => {
+            LogicalPlan::Filter(FilterPlan { predicate, input }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
@@ -805,9 +806,9 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Window {
+            LogicalPlan::Window(WindowPlan {
                 input, window_expr, ..
-            } => {
+            }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Window(Box::new(

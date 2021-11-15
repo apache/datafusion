@@ -23,6 +23,7 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::LogicalPlan;
 use crate::optimizer::optimizer::OptimizerRule;
 use std::sync::Arc;
+use crate::logical_plan::plan::ProjectionPlan;
 
 /// Optimization rule that tries pushes down LIMIT n
 /// where applicable to reduce the amount of scanned / processed data
@@ -76,16 +77,16 @@ fn limit_push_down(
             projected_schema: projected_schema.clone(),
         }),
         (
-            LogicalPlan::Projection {
+            LogicalPlan::Projection(ProjectionPlan {
                 expr,
                 input,
                 schema,
                 alias,
-            },
+            }),
             upper_limit,
         ) => {
             // Push down limit directly (projection doesn't change number of rows)
-            Ok(LogicalPlan::Projection {
+            Ok(LogicalPlan::Projection(ProjectionPlan {
                 expr: expr.clone(),
                 input: Arc::new(limit_push_down(
                     optimizer,
@@ -95,7 +96,7 @@ fn limit_push_down(
                 )?),
                 schema: schema.clone(),
                 alias: alias.clone(),
-            })
+            }))
         }
         (
             LogicalPlan::Union {

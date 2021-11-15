@@ -25,6 +25,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+use crate::logical_plan::plan::{FilterPlan, ProjectionPlan};
 
 /// Filter Push Down optimizer rule pushes filter clauses down the plan
 /// # Introduction
@@ -179,10 +180,10 @@ fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
             and(acc, (*predicate).to_owned())
         });
 
-    LogicalPlan::Filter {
+    LogicalPlan::Filter(FilterPlan {
         predicate,
         input: Arc::new(plan),
-    }
+    })
 }
 
 // remove all filters from `filters` that are in `predicate_columns`
@@ -285,7 +286,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             push_down(&state, plan)
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
-        LogicalPlan::Filter { input, predicate } => {
+        LogicalPlan::Filter(FilterPlan { input, predicate }) => {
             let mut predicates = vec![];
             split_members(predicate, &mut predicates);
 
@@ -314,12 +315,12 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 optimize(input, state)
             }
         }
-        LogicalPlan::Projection {
+        LogicalPlan::Projection(ProjectionPlan {
             input,
             expr,
             schema,
             alias: _,
-        } => {
+        }) => {
             // A projection is filter-commutable, but re-writes all predicate expressions
             // collect projection.
             let projection = schema

@@ -1208,6 +1208,7 @@ mod tests {
     use std::{io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
     use test::*;
+    use crate::logical_plan::plan::ProjectionPlan;
 
     #[test]
     fn optimize_explain() {
@@ -1420,7 +1421,7 @@ mod tests {
 
         let optimized_plan = ctx.optimize(&logical_plan)?;
         match &optimized_plan {
-            LogicalPlan::Projection { input, .. } => match &**input {
+            LogicalPlan::Projection(ProjectionPlan { input, .. }) => match &**input {
                 LogicalPlan::TableScan {
                     source,
                     projected_schema,
@@ -1493,7 +1494,7 @@ mod tests {
         let ctx = ExecutionContext::new();
         let optimized_plan = ctx.optimize(&plan)?;
         match &optimized_plan {
-            LogicalPlan::Projection { input, .. } => match &**input {
+            LogicalPlan::Projection(ProjectionPlan { input, .. }) => match &**input {
                 LogicalPlan::TableScan {
                     source,
                     projected_schema,

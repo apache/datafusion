@@ -25,7 +25,7 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::plan::ToStringifiedPlan;
+use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, ToStringifiedPlan, WindowPlan};
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
 use arrow::{
@@ -450,10 +450,10 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(&self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Ok(Self::from(LogicalPlan::Filter {
+        Ok(Self::from(LogicalPlan::Filter(FilterPlan {
             predicate: expr,
             input: Arc::new(self.plan.clone()),
-        }))
+        })))
     }
 
     /// Apply a limit
@@ -657,11 +657,11 @@ impl LogicalPlanBuilder {
         let mut window_fields: Vec<DFField> =
             exprlist_to_fields(all_expr, self.plan.schema())?;
         window_fields.extend_from_slice(self.plan.schema().fields());
-        Ok(Self::from(LogicalPlan::Window {
+        Ok(Self::from(LogicalPlan::Window(WindowPlan {
             input: Arc::new(self.plan.clone()),
             window_expr,
             schema: Arc::new(DFSchema::new(window_fields)?),
-        }))
+        })))
     }
 
     /// Apply an aggregate: grouping on the `group_expr` expressions
@@ -897,12 +897,12 @@ pub fn project_with_alias(
         Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
         None => input_schema,
     };
-    Ok(LogicalPlan::Projection {
+    Ok(LogicalPlan::Projection(ProjectionPlan {
         expr: projected_expr,
         input: Arc::new(plan.clone()),
         schema: DFSchemaRef::new(schema),
         alias,
-    })
+    }))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.

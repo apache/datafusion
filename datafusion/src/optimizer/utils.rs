@@ -36,6 +36,7 @@ use crate::{
     logical_plan::ExpressionVisitor,
 };
 use std::{collections::HashSet, sync::Arc};
+use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
 const CASE_ELSE_MARKER: &str = "__DATAFUSION_CASE_ELSE__";
@@ -143,12 +144,12 @@ pub fn from_plan(
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Projection { schema, alias, .. } => Ok(LogicalPlan::Projection {
+        LogicalPlan::Projection(ProjectionPlan { schema, alias, .. }) => Ok(LogicalPlan::Projection(ProjectionPlan {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),
             schema: schema.clone(),
             alias: alias.clone(),
-        }),
+        })),
         LogicalPlan::Values { schema, .. } => Ok(LogicalPlan::Values {
             schema: schema.clone(),
             values: expr
@@ -156,10 +157,10 @@ pub fn from_plan(
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>(),
         }),
-        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter {
+        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter(FilterPlan {
             predicate: expr[0].clone(),
             input: Arc::new(inputs[0].clone()),
-        }),
+        })),
         LogicalPlan::Repartition {
             partitioning_scheme,
             ..
@@ -173,15 +174,15 @@ pub fn from_plan(
                 input: Arc::new(inputs[0].clone()),
             }),
         },
-        LogicalPlan::Window {
+        LogicalPlan::Window(WindowPlan {
             window_expr,
             schema,
             ..
-        } => Ok(LogicalPlan::Window {
+        }) => Ok(LogicalPlan::Window(WindowPlan {
             input: Arc::new(inputs[0].clone()),
             window_expr: expr[0..window_expr.len()].to_vec(),
             schema: schema.clone(),
-        }),
+        })),
         LogicalPlan::Aggregate {
             group_expr, schema, ..
         } => Ok(LogicalPlan::Aggregate {

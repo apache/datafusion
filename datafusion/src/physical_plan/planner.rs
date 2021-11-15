@@ -62,6 +62,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::debug;
 use std::sync::Arc;
+use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 
 fn create_function_physical_name(
     fun: &str,
@@ -370,9 +371,9 @@ impl DefaultPhysicalPlanner {
                     )?;
                     Ok(Arc::new(value_exec))
                 }
-                LogicalPlan::Window {
+                LogicalPlan::Window(WindowPlan {
                     input, window_expr, ..
-                } => {
+                }) => {
                     if window_expr.is_empty() {
                         return Err(DataFusionError::Internal(
                             "Impossibly got empty window expression".to_owned(),
@@ -576,7 +577,7 @@ impl DefaultPhysicalPlanner {
                         physical_input_schema.clone(),
                     )?) )
                 }
-                LogicalPlan::Projection { input, expr, .. } => {
+                LogicalPlan::Projection(ProjectionPlan { input, expr, .. }) => {
                     let input_exec = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = input.as_ref().schema();
 
@@ -628,9 +629,9 @@ impl DefaultPhysicalPlanner {
                         input_exec,
                     )?) )
                 }
-                LogicalPlan::Filter {
+                LogicalPlan::Filter(FilterPlan {
                     input, predicate, ..
-                } => {
+                }) => {
                     let physical_input = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = input.as_ref().schema();

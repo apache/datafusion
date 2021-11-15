@@ -33,6 +33,7 @@ use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
 };
+use crate::logical_plan::plan::{ProjectionPlan, WindowPlan};
 
 /// Optimizer that removes unused projections and aggregations from plans
 /// This reduces both scans and
@@ -130,12 +131,12 @@ fn optimize_plan(
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
     match plan {
-        LogicalPlan::Projection {
+        LogicalPlan::Projection(ProjectionPlan {
             input,
             expr,
             schema,
             alias,
-        } => {
+        }) => {
             // projection:
             // * remove any expression that is not required
             // * construct the new set of required columns
@@ -181,12 +182,12 @@ fn optimize_plan(
                 // no need for an expression at all
                 Ok(new_input)
             } else {
-                Ok(LogicalPlan::Projection {
+                Ok(LogicalPlan::Projection(ProjectionPlan {
                     expr: new_expr,
                     input: Arc::new(new_input),
                     schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
                     alias: alias.clone(),
-                })
+                }))
             }
         }
         LogicalPlan::Join {
@@ -235,12 +236,12 @@ fn optimize_plan(
                 null_equals_null: *null_equals_null,
             })
         }
-        LogicalPlan::Window {
+        LogicalPlan::Window(WindowPlan {
             schema,
             window_expr,
             input,
             ..
-        } => {
+        }) => {
             // Gather all columns needed for expressions in this Window
             let mut new_window_expr = Vec::new();
             {
@@ -747,12 +748,12 @@ mod tests {
         let expr = vec![col("a"), col("b")];
         let projected_fields = exprlist_to_fields(&expr, input_schema).unwrap();
         let projected_schema = DFSchema::new(projected_fields).unwrap();
-        let plan = LogicalPlan::Projection {
+        let plan = LogicalPlan::Projection(ProjectionPlan {
             expr,
             input: Arc::new(table_scan),
             schema: Arc::new(projected_schema),
             alias: None,
-        };
+        });
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 
