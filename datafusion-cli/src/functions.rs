@@ -28,11 +28,13 @@ pub enum Function {
     CreateTable,
     CreateTableAs,
     Insert,
+    DropTable,
 }
 
-const ALL_FUNCTIONS: [Function; 6] = [
+const ALL_FUNCTIONS: [Function; 7] = [
     Function::CreateTable,
     Function::CreateTableAs,
+    Function::DropTable,
     Function::Explain,
     Function::Insert,
     Function::Select,
@@ -138,6 +140,15 @@ INSERT INTO table_name [ ( column_name [, ...] ) ]
 ";
                 println!("{}", details)
             }
+            Function::DropTable => {
+                let details = "
+Command:     DROP TABLE
+Description: remove a table
+Syntax:
+DROP TABLE [ IF EXISTS ] name [, ...]
+";
+                println!("{}", details)
+            }
         }
         Ok(())
     }
@@ -154,6 +165,7 @@ impl FromStr for Function {
             "CREATE TABLE" => Self::CreateTable,
             "CREATE TABLE AS" => Self::CreateTableAs,
             "INSERT" => Self::Insert,
+            "DROP TABLE" => Self::DropTable,
             _ => return Err(()),
         })
     }
@@ -168,6 +180,7 @@ impl fmt::Display for Function {
             Function::CreateTable => write!(f, "CREATE TABLE"),
             Function::CreateTableAs => write!(f, "CREATE TABLE AS"),
             Function::Insert => write!(f, "INSERT"),
+            Function::DropTable => write!(f, "DROP TABLE"),
         }
     }
 }
