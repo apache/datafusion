@@ -20,10 +20,10 @@
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::ProjectionPlan;
 use crate::logical_plan::LogicalPlan;
 use crate::optimizer::optimizer::OptimizerRule;
 use std::sync::Arc;
-use crate::logical_plan::plan::ProjectionPlan;
 
 /// Optimization rule that tries pushes down LIMIT n
 /// where applicable to reduce the amount of scanned / processed data

@@ -30,6 +30,7 @@ use datafusion::datasource::TableProvider;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
+use datafusion::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 use datafusion::logical_plan::{
     exprlist_to_fields,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
@@ -50,7 +51,6 @@ use std::{
     boxed,
     convert::{TryFrom, TryInto},
 };
-use datafusion::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 
 impl protobuf::IntervalUnit {
     pub fn from_arrow_interval_unit(interval_unit: &IntervalUnit) -> Self {

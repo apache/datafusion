@@ -23,6 +23,7 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
+use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 use crate::logical_plan::{
     unnormalize_cols, DFSchema, Expr, LogicalPlan, Operator,
     Partitioning as LogicalPartitioning, PlanType, ToStringifiedPlan,
@@ -62,7 +63,6 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::debug;
 use std::sync::Arc;
-use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 
 fn create_function_physical_name(
     fun: &str,

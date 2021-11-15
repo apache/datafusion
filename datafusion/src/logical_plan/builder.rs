@@ -25,7 +25,9 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, ToStringifiedPlan, WindowPlan};
+use crate::logical_plan::plan::{
+    FilterPlan, ProjectionPlan, ToStringifiedPlan, WindowPlan,
+};
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
 use arrow::{

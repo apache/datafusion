@@ -57,6 +57,8 @@ pub enum JoinConstraint {
     Using,
 }
 
+/// Evaluates an arbitrary list of expressions (essentially a
+/// SELECT with an expression list) on its input.
 #[derive(Clone)]
 pub struct ProjectionPlan {
     /// The list of expressions
@@ -69,6 +71,14 @@ pub struct ProjectionPlan {
     pub alias: Option<String>,
 }
 
+/// Filters rows from its input that do not match an
+/// expression (essentially a WHERE clause with a predicate
+/// expression).
+///
+/// Semantically, `<predicate>` is evaluated for each row of the input;
+/// If the value of `<predicate>` is true, the input row is passed to
+/// the output. If the value of `<predicate>` is false, the row is
+/// discarded.
 #[derive(Clone)]
 pub struct FilterPlan {
     /// The predicate expression, which must have Boolean type.
@@ -77,6 +87,7 @@ pub struct FilterPlan {
     pub input: Arc<LogicalPlan>,
 }
 
+/// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
 #[derive(Clone)]
 pub struct WindowPlan {
     /// The incoming logical plan
@@ -97,19 +108,11 @@ pub struct WindowPlan {
 /// from leaves up to the root to produce the query result.
 #[derive(Clone)]
 pub enum LogicalPlan {
-    /// Evaluates an arbitrary list of expressions (essentially a
-    /// SELECT with an expression list) on its input.
+    /// the ProjectionPlan
     Projection(ProjectionPlan),
-    /// Filters rows from its input that do not match an
-    /// expression (essentially a WHERE clause with a predicate
-    /// expression).
-    ///
-    /// Semantically, `<predicate>` is evaluated for each row of the input;
-    /// If the value of `<predicate>` is true, the input row is passed to
-    /// the output. If the value of `<predicate>` is false, the row is
-    /// discarded.
+    /// the FilterPlan
     Filter(FilterPlan),
-    /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
+    /// the WindowPlan
     Window(WindowPlan),
     /// Aggregates its input based on a set of grouping and aggregate
     /// expressions (e.g. SUM).
@@ -533,7 +536,9 @@ impl LogicalPlan {
         }
 
         let recurse = match self {
-            LogicalPlan::Projection(ProjectionPlan { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Projection(ProjectionPlan { input, .. }) => {
+                input.accept(visitor)?
+            }
             LogicalPlan::Filter(FilterPlan { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Repartition { input, .. } => input.accept(visitor)?,
             LogicalPlan::Window(WindowPlan { input, .. }) => input.accept(visitor)?,

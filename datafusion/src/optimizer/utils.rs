@@ -23,6 +23,7 @@ use arrow::record_batch::RecordBatch;
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
+use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 use crate::logical_plan::{
     build_join_schema, Column, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan,
     LogicalPlanBuilder, Operator, Partitioning, Recursion, RewriteRecursion,
@@ -36,7 +37,6 @@ use crate::{
     logical_plan::ExpressionVisitor,
 };
 use std::{collections::HashSet, sync::Arc};
-use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
 const CASE_ELSE_MARKER: &str = "__DATAFUSION_CASE_ELSE__";
@@ -144,12 +144,14 @@ pub fn from_plan(
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Projection(ProjectionPlan { schema, alias, .. }) => Ok(LogicalPlan::Projection(ProjectionPlan {
-            expr: expr.to_vec(),
-            input: Arc::new(inputs[0].clone()),
-            schema: schema.clone(),
-            alias: alias.clone(),
-        })),
+        LogicalPlan::Projection(ProjectionPlan { schema, alias, .. }) => {
+            Ok(LogicalPlan::Projection(ProjectionPlan {
+                expr: expr.to_vec(),
+                input: Arc::new(inputs[0].clone()),
+                schema: schema.clone(),
+                alias: alias.clone(),
+            }))
+        }
         LogicalPlan::Values { schema, .. } => Ok(LogicalPlan::Values {
             schema: schema.clone(),
             values: expr

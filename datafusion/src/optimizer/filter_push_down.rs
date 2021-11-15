@@ -16,6 +16,7 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::{FilterPlan, ProjectionPlan};
 use crate::logical_plan::{and, replace_col, Column, LogicalPlan};
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
@@ -25,7 +26,6 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-use crate::logical_plan::plan::{FilterPlan, ProjectionPlan};
 
 /// Filter Push Down optimizer rule pushes filter clauses down the plan
 /// # Introduction

@@ -19,6 +19,7 @@
 
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 use crate::logical_plan::{
     col, DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor, LogicalPlan,
     Recursion, RewriteRecursion,
@@ -28,7 +29,6 @@ use crate::optimizer::utils;
 use arrow::datatypes::DataType;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)

@@ -20,6 +20,7 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::{ProjectionPlan, WindowPlan};
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
     LogicalPlanBuilder, ToDFSchema,
@@ -33,7 +34,6 @@ use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
 };
-use crate::logical_plan::plan::{ProjectionPlan, WindowPlan};
 
 /// Optimizer that removes unused projections and aggregations from plans
 /// This reduces both scans and
