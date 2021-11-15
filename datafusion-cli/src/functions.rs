@@ -17,20 +17,32 @@
 
 //! Command within CLI
 use datafusion::error::{DataFusionError, Result};
+use std::fmt;
 use std::str::FromStr;
 
 #[derive(Debug)]
 pub enum Function {
-    SELECT,
-    EXPLAIN,
+    Select,
+    Explain,
+    Show,
+    CreateTable,
+    CreateTableAs,
+    Insert,
 }
 
-const ALL_FUNCTIONS: [Function; 2] = [Function::SELECT, Function::EXPLAIN];
+const ALL_FUNCTIONS: [Function; 6] = [
+    Function::CreateTable,
+    Function::CreateTableAs,
+    Function::Explain,
+    Function::Insert,
+    Function::Select,
+    Function::Show,
+];
 
 impl Function {
     pub fn function_details(&self) -> Result<()> {
         match self {
-            Function::SELECT => {
+            Function::Select => {
                 let details = "
 Command:     SELECT
 Description: retrieve rows from a table or view
@@ -74,12 +86,55 @@ and with_query is:
 TABLE [ ONLY ] table_name [ * ]";
                 println!("{}", details)
             }
-            Function::EXPLAIN => {
+            Function::Explain => {
                 let details = "
 Command:     EXPLAIN
 Description: show the execution plan of a statement
 Syntax:
 EXPLAIN [ ANALYZE ] statement
+";
+                println!("{}", details)
+            }
+            Function::Show => {
+                let details = "
+Command:     SHOW
+Description: show the value of a run-time parameter
+Syntax:
+SHOW name
+";
+                println!("{}", details)
+            }
+            Function::CreateTable => {
+                let details = "
+Command:     CREATE TABLE
+Description: define a new table
+Syntax:
+CREATE [ EXTERNAL ]  TABLE table_name ( [
+  { column_name data_type }
+    [, ... ]
+] )
+";
+                println!("{}", details)
+            }
+            Function::CreateTableAs => {
+                let details = "
+Command:     CREATE TABLE AS
+Description: define a new table from the results of a query
+Syntax:
+CREATE TABLE table_name
+    [ (column_name [, ...] ) ]
+    AS query
+    [ WITH [ NO ] DATA ]
+";
+                println!("{}", details)
+            }
+            Function::Insert => {
+                let details = "
+Command:     INSERT
+Description: create new rows in a table
+Syntax:
+INSERT INTO table_name [ ( column_name [, ...] ) ]
+    { VALUES ( { expression } [, ...] ) [, ...] }
 ";
                 println!("{}", details)
             }
@@ -93,15 +148,32 @@ impl FromStr for Function {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Ok(match s.to_uppercase().as_str() {
-            "SELECT" => Self::SELECT,
-            "EXPLAIN" => Self::EXPLAIN,
+            "SELECT" => Self::Select,
+            "EXPLAIN" => Self::Explain,
+            "SHOW" => Self::Show,
+            "CREATE TABLE" => Self::CreateTable,
+            "CREATE TABLE AS" => Self::CreateTableAs,
+            "INSERT" => Self::Insert,
             _ => return Err(()),
         })
     }
 }
 
+impl fmt::Display for Function {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Function::Select => write!(f, "SELECT"),
+            Function::Explain => write!(f, "EXPLAIN"),
+            Function::Show => write!(f, "SHOW"),
+            Function::CreateTable => write!(f, "CREATE TABLE"),
+            Function::CreateTableAs => write!(f, "CREATE TABLE AS"),
+            Function::Insert => write!(f, "INSERT"),
+        }
+    }
+}
+
 pub fn display_all_functions() -> Result<()> {
     println!("Available help:");
-    ALL_FUNCTIONS.iter().for_each(|f| println!("{:?}", f));
+    ALL_FUNCTIONS.iter().for_each(|f| println!("{}", f));
     Ok(())
 }
