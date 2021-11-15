@@ -50,7 +50,7 @@ release backport branch.
 As part of the Apache governance model, official releases consist of signed
 source tarballs approved by the PMC.
 
-We then use the code in the approved source tarball to release to crates.io and
+We then use the code in the approved artifacts to release to crates.io and
 PyPI.
 
 ### Change Log
@@ -126,9 +126,9 @@ could change the change log content landed in the `master` branch before you
 could merge the PR, you need to rerun the changelog update script to regenerate
 the changelog and update the PR accordingly.
 
-## Prepare release candidate tarball
+## Prepare release candidate artifacts
 
-After the PR gets merged, you are ready to create a releaes tarball from the
+After the PR gets merged, you are ready to create releaes artifacts based off the
 merged commit.
 
 (Note you need to be a committer to run these scripts as they upload to the apache svn distribution servers)
@@ -139,7 +139,8 @@ Pick numbers in sequential order, with `0` for `rc0`, `1` for `rc1`, etc.
 
 ### Create git tag for the release:
 
-While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
+While the official release artifacts are signed tarballs and zip files, we also
+tag the commit it was created for convenience and code archaeology.
 
 Using a string such as `5.1.0` as the `<version>`, create and push the tag thusly:
 
@@ -150,24 +151,27 @@ git tag <version>-<rc> apache/master
 git push apache <version>
 ```
 
-### Create, sign, and upload tarball
+This should trigger the `Python Release Build` Github Action workflow for the
+pushed tag. You can monitor the pipline run status at https://github.com/apache/arrow-datafusion/actions/workflows/python_build.yml.
+
+### Create, sign, and upload artifacts
 
 Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps:
 
 ```shell
-./dev/release/create-tarball.sh 5.1.0 0
+GH_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 5.1.0 0
 ```
 
 The `create-tarball.sh` script
 
-1. creates and uploads a release candidate tarball to the [arrow
+1. creates and uploads all release candidate artifacts to the [arrow
    dev](https://dist.apache.org/repos/dist/dev/arrow) location on the
    apache distribution svn server
 
 2. provide you an email template to
    send to dev@arrow.apache.org for release voting.
 
-### Vote on Release Candidate tarball
+### Vote on Release Candidate artifacts
 
 Send the email output from the script to dev@arrow.apache.org. The email should look like
 
@@ -181,7 +185,7 @@ I would like to propose a release of Apache Arrow Datafusion Implementation,
 version 5.1.0.
 
 This release candidate is based on commit: a5dd428f57e62db20a945e8b1895de91405958c4 [1]
-The proposed release tarball and signatures are hosted at [2].
+The proposed release artifacts and signatures are hosted at [2].
 The changelog is located at [3].
 
 Please download, verify checksums and signatures, run the unit tests,
@@ -215,9 +219,11 @@ changes into master if there is any and try again with the next RC number.
 
 ## Finalize the release
 
+NOTE: steps in this section can only be done by PMC members.
+
 ### After the release is approved
 
-Move tarball to the release location in SVN, e.g.
+Move artifacts to the release location in SVN, e.g.
 https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-5.1.0/, using
 the `release-tarball.sh` script:
 
@@ -232,7 +238,7 @@ Congratulations! The release is now offical!
 Tag the same release candidate commit with the final release tag
 
 ```
-git co apache/5.1.0-RC0
+git co apache/5.1.0-rc0
 git tag 5.1.0
 git push 5.1.0
 ```
@@ -292,7 +298,20 @@ If there is a ballista release, run
 
 ### Publish on PyPI
 
-TODO
+Only approved releases of the source tarball and wheels should be published to
+PyPI, in order to conform to Apache Software Foundation governance standards.
+
+First, download all official python release artifacts:
+
+```shell
+svn co https://dist.apache.org/repos/dist/release/arrow/apache-arrow-datafusion-5.1.0-rc0/python ./python-artifacts
+```
+
+Use [twine](https://pypi.org/project/twine/) to perform the upload.
+
+```shell
+twine upload ./python-artifactl/*.{tar.gz,whl}
+```
 
 ### Call the vote
 
@@ -300,4 +319,21 @@ Call the vote on the Arrow dev list by replying to the RC voting thread. The
 reply should have a new subject constructed by adding `[RESULT]` prefix to the
 old subject line.
 
-TODO: add example mail
+Sample announcement template:
+
+```
+The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
+with the release verification.
+```
+
+You can include mention crates.io and PyPI version URLs in the email if applicable.
+
+```
+We have published new versions of datafusion and ballista to crates.io:
+
+https://crates.io/crates/datafusion/5.0.0
+https://crates.io/crates/ballista/0.5.0
+https://crates.io/crates/ballista-core/0.5.0
+https://crates.io/crates/ballista-executor/0.5.0
+https://crates.io/crates/ballista-scheduler/0.5.0
+```
