@@ -124,6 +124,7 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         };
 
+        assert!(states.len() == 1, "states length should be 1!");
         match &states[0] {
             ScalarValue::List(Some(array), _) => {
                 self.array.extend((&**array).clone());
