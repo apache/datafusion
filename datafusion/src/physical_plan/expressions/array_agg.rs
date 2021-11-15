@@ -90,32 +90,31 @@ impl AggregateExpr for ArrayAgg {
 
 #[derive(Debug)]
 pub(crate) struct ArrayAggAccumulator {
-    array: ScalarValue,
+    array: Vec<ScalarValue>,
+    datatype: DataType,
 }
 
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given element data type
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
-            array: ScalarValue::List(Some(Box::new(vec![])), Box::new(datatype.clone())),
+            array: vec![],
+            datatype: datatype.clone(),
         })
     }
 }
 
 impl Accumulator for ArrayAggAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.array.clone()])
+        Ok(vec![ScalarValue::List(
+            Some(Box::new(self.array.clone())),
+            Box::new(self.datatype.clone()),
+        )])
     }
 
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         let value = &values[0];
-
-        match self.array {
-            ScalarValue::List(Some(ref mut accu_array), _) => {
-                accu_array.push(value.clone());
-            }
-            _ => unreachable!(),
-        };
+        self.array.push(value.clone());
 
         Ok(())
     }
@@ -125,7 +124,10 @@ impl Accumulator for ArrayAggAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(self.array.clone())
+        Ok(ScalarValue::List(
+            Some(Box::new(self.array.clone())),
+            Box::new(self.datatype.clone()),
+        ))
     }
 }
 
