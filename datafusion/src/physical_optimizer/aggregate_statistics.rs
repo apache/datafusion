@@ -58,11 +58,11 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 if let Some((non_null_rows, name)) =
-                    take_optimizable_count_with_nulls(&**expr, &stats)
+                    take_optimizable_column_count(&**expr, &stats)
                 {
                     projections.push((expressions::lit(non_null_rows), name.to_owned()));
                 } else if let Some((num_rows, name)) =
-                    take_optimizable_count(&**expr, &stats)
+                    take_optimizable_table_count(&**expr, &stats)
                 {
                     projections.push((expressions::lit(num_rows), name.to_owned()));
                 } else if let Some((min, name)) = take_optimizable_min(&**expr, &stats) {
@@ -133,7 +133,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
 }
 
 /// If this agg_expr is a count that is defined in the statistics, return it
-fn take_optimizable_count(
+fn take_optimizable_table_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, &'static str)> {
@@ -160,7 +160,7 @@ fn take_optimizable_count(
 }
 
 /// If this agg_expr is a count that can be derived from the statistics, return it
-fn take_optimizable_count_with_nulls(
+fn take_optimizable_column_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
