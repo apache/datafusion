@@ -162,6 +162,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input: Arc::new(plan),
                 })
             }
+            Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(
+                "Only `CREATE TABLE table_name AS SELECT ...` statement is supported"
+                    .to_string(),
+            )),
 
             Statement::Drop {
                 object_type: ObjectType::Table,
@@ -185,9 +189,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_name,
                 filter,
             } => self.show_columns_to_plan(*extended, *full, table_name, filter.as_ref()),
-            _ => Err(DataFusionError::NotImplemented(
-                "Only SELECT statements are implemented".to_string(),
-            )),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported SQL statement: {:?}",
+                sql
+            ))),
         }
     }
 
