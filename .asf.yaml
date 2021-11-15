@@ -24,11 +24,15 @@ github:
   description: "Apache Arrow DataFusion and Ballista query engines"
   homepage: https://arrow.apache.org/datafusion
   labels:
-    - rust
-    - python
-    - sql
-    - datafusion
+    - arrow
     - big-data
+    - dataframe
+    - datafusion
+    - olap
+    - python
+    - query-engine
+    - rust
+    - sql
   enabled_merge_buttons:
     squash: true
     merge: false
