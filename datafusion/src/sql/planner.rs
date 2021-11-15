@@ -150,25 +150,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 external: false,
                 if_not_exists: false,
                 without_rowid: _without_row_id,
-            } => {
-                if columns.is_empty()
-                    && constraints.is_empty()
-                    && table_properties.is_empty()
-                    && with_options.is_empty()
-                {
-                    let plan = self.query_to_plan(query)?;
+            } if columns.is_empty()
+                && constraints.is_empty()
+                && table_properties.is_empty()
+                && with_options.is_empty() =>
+            {
+                let plan = self.query_to_plan(query)?;
 
-                    Ok(LogicalPlan::CreateMemoryTable {
-                        name: name.to_string(),
-                        input: Arc::new(plan),
-                    })
-                } else {
-                    Err(DataFusionError::NotImplemented(
-                        "Only `CREATE TABLE table_name AS SELECT ...` statement is supported"
-                            .to_string(),
-                    ))
-                }
+                Ok(LogicalPlan::CreateMemoryTable {
+                    name: name.to_string(),
+                    input: Arc::new(plan),
+                })
             }
+            Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(
+                "Only `CREATE TABLE table_name AS SELECT ...` statement is supported"
+                    .to_string(),
+            )),
 
             Statement::Drop {
                 object_type: ObjectType::Table,
