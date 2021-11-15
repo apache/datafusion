@@ -23,7 +23,6 @@ use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 /// ARRAY_AGG aggregate expression
