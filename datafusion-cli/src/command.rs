@@ -35,8 +35,8 @@ pub enum Command {
     Help,
     ListTables,
     DescribeTable(String),
-    FunctionList,
-    FunctionSearch(String),
+    ListFunctions,
+    SearchFunctions(String),
 }
 
 impl Command {
@@ -67,8 +67,8 @@ impl Command {
             Self::Quit => Err(DataFusionError::Execution(
                 "Unexpected quit, this should be handled outside".into(),
             )),
-            Self::FunctionList => display_all_functions(),
-            Self::FunctionSearch(function) => {
+            Self::ListFunctions => display_all_functions(),
+            Self::SearchFunctions(function) => {
                 let func = function.parse::<Function>().unwrap();
                 func.function_details()
             }
@@ -81,8 +81,8 @@ impl Command {
             Self::ListTables => ("\\d", "list tables"),
             Self::DescribeTable(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
-            Self::FunctionList => ("\\h", "function list"),
-            Self::FunctionSearch(_) => ("\\h function", "search function"),
+            Self::ListFunctions => ("\\h", "function list"),
+            Self::SearchFunctions(_) => ("\\h function", "search function"),
         }
     }
 }
@@ -92,8 +92,8 @@ const ALL_COMMANDS: [Command; 6] = [
     Command::DescribeTable(String::new()),
     Command::Quit,
     Command::Help,
-    Command::FunctionList,
-    Command::FunctionSearch(String::new()),
+    Command::ListFunctions,
+    Command::SearchFunctions(String::new()),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -129,8 +129,8 @@ impl FromStr for Command {
             ("d", None) => Self::ListTables,
             ("d", Some(name)) => Self::DescribeTable(name.into()),
             ("?", None) => Self::Help,
-            ("h", None) => Self::FunctionList,
-            ("h", Some(function)) => Self::FunctionSearch(function.into()),
+            ("h", None) => Self::ListFunctions,
+            ("h", Some(function)) => Self::SearchFunctions(function.into()),
             _ => return Err(()),
         })
     }
