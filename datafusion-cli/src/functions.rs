@@ -158,7 +158,7 @@ impl FromStr for Function {
     type Err = ();
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Ok(match s.to_uppercase().as_str() {
+        Ok(match s.trim().to_uppercase().as_str() {
             "SELECT" => Self::Select,
             "EXPLAIN" => Self::Explain,
             "SHOW" => Self::Show,

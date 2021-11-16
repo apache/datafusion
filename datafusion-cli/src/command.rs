@@ -69,8 +69,12 @@ impl Command {
             )),
             Self::ListFunctions => display_all_functions(),
             Self::SearchFunctions(function) => {
-                let func = function.parse::<Function>().unwrap();
-                func.function_details()
+                if let Ok(func) = function.parse::<Function>() {
+                    func.function_details()?
+                } else {
+                    eprintln!("{} is not a supported function", function)
+                }
+                Ok(())
             }
         }
     }
