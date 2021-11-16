@@ -289,20 +289,19 @@ fn optimize_plan(
 
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
-            aggr_expr.iter().try_for_each(|expr| {
-                let name = &expr.name(schema)?;
-                let column = Column::from_name(name);
-
-                if required_columns.contains(&column) {
-                    new_aggr_expr.push(expr.clone());
-                    new_required_columns.insert(column);
-
-                    // add to the new set of required columns
-                    utils::expr_to_columns(expr, &mut new_required_columns)
-                } else {
-                    Ok(())
-                }
-            })?;
+            schema.fields()[group_expr.len()..]
+                .to_vec()
+                .iter()
+                .enumerate()
+                .try_for_each(|(i, field)| {
+                    if required_columns.contains(&field.qualified_column()) {
+                        new_aggr_expr.push(aggr_expr[i].clone());
+                        // add to the new set of required columns
+                        utils::expr_to_columns(&aggr_expr[i], &mut new_required_columns)
+                    } else {
+                        Ok(())
+                    }
+                })?;
 
             let new_schema = DFSchema::new(
                 schema
