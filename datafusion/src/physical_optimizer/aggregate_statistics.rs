@@ -150,7 +150,7 @@ fn take_optimizable_table_count(
                 if lit_expr.value() == &ScalarValue::UInt8(Some(1)) {
                     return Some((
                         ScalarValue::UInt64(Some(num_rows as u64)),
-                        "COUNT(Uint8(1))",
+                        "COUNT(UInt8(1))",
                     ));
                 }
             }
@@ -297,7 +297,7 @@ mod tests {
         let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
 
         let (col, count) = match nulls {
-            false => (Field::new("COUNT(Uint8(1))", DataType::UInt64, false), 3),
+            false => (Field::new("COUNT(UInt8(1))", DataType::UInt64, false), 3),
             true => (Field::new("COUNT(a)", DataType::UInt64, false), 2),
         };
 
