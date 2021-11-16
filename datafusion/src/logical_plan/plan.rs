@@ -57,6 +57,23 @@ pub enum JoinConstraint {
     Using,
 }
 
+/// Produces rows from a table provider by reference or from the context
+#[derive(Clone)]
+pub struct TableScanPlan {
+    /// The name of the table
+    pub table_name: String,
+    /// The source of the table
+    pub source: Arc<dyn TableProvider>,
+    /// Optional column indices to use as a projection
+    pub projection: Option<Vec<usize>>,
+    /// The schema description of the output
+    pub projected_schema: DFSchemaRef,
+    /// Optional expressions to be used as filters by the table provider
+    pub filters: Vec<Expr>,
+    /// Optional limit to skip reading
+    pub limit: Option<usize>,
+}
+
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -164,20 +181,7 @@ pub enum LogicalPlan {
         alias: Option<String>,
     },
     /// Produces rows from a table provider by reference or from the context
-    TableScan {
-        /// The name of the table
-        table_name: String,
-        /// The source of the table
-        source: Arc<dyn TableProvider>,
-        /// Optional column indices to use as a projection
-        projection: Option<Vec<usize>>,
-        /// The schema description of the output
-        projected_schema: DFSchemaRef,
-        /// Optional expressions to be used as filters by the table provider
-        filters: Vec<Expr>,
-        /// Optional limit to skip reading
-        limit: Option<usize>,
-    },
+    TableScan(TableScanPlan),
     /// Produces no rows: An empty relation with an empty schema
     EmptyRelation {
         /// Whether to produce a placeholder row
@@ -265,9 +269,9 @@ impl LogicalPlan {
         match self {
             LogicalPlan::EmptyRelation { schema, .. } => schema,
             LogicalPlan::Values { schema, .. } => schema,
-            LogicalPlan::TableScan {
+            LogicalPlan::TableScan(TableScanPlan {
                 projected_schema, ..
-            } => projected_schema,
+            }) => projected_schema,
             LogicalPlan::Projection { schema, .. } => schema,
             LogicalPlan::Filter { input, .. } => input.schema(),
             LogicalPlan::Window { schema, .. } => schema,
@@ -290,9 +294,9 @@ impl LogicalPlan {
     /// Get a vector of references to all schemas in every node of the logical plan
     pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
         match self {
-            LogicalPlan::TableScan {
+            LogicalPlan::TableScan(TableScanPlan {
                 projected_schema, ..
-            } => vec![projected_schema],
+            }) => vec![projected_schema],
             LogicalPlan::Values { schema, .. } => vec![schema],
             LogicalPlan::Window { input, schema, .. }
             | LogicalPlan::Aggregate { input, schema, .. }
@@ -765,13 +769,13 @@ impl LogicalPlan {
                         write!(f, "Values: {}{}", str_values.join(", "), elipse)
                     }
 
-                    LogicalPlan::TableScan {
+                    LogicalPlan::TableScan(TableScanPlan {
                         ref table_name,
                         ref projection,
                         ref filters,
                         ref limit,
                         ..
-                    } => {
+                    }) => {
                         write!(
                             f,
                             "TableScan: {} projection={:?}",

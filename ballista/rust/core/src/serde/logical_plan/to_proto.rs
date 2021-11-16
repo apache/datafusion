@@ -32,6 +32,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
 use datafusion::logical_plan::{
     exprlist_to_fields,
+    plan::TableScanPlan,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
     Column, Expr, JoinConstraint, JoinType, LogicalPlan,
 };
@@ -695,13 +696,13 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )),
                 })
             }
-            LogicalPlan::TableScan {
+            LogicalPlan::TableScan(TableScanPlan {
                 table_name,
                 source,
                 filters,
                 projection,
                 ..
-            } => {
+            }) => {
                 let schema = source.schema();
                 let source = source.as_any();
 

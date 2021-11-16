@@ -23,6 +23,7 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
+use crate::logical_plan::plan::TableScanPlan;
 use crate::logical_plan::{
     unnormalize_cols, DFSchema, Expr, LogicalPlan, Operator,
     Partitioning as LogicalPartitioning, PlanType, ToStringifiedPlan,
@@ -333,13 +334,13 @@ impl DefaultPhysicalPlanner {
             let batch_size = ctx_state.config.batch_size;
 
             let exec_plan: Result<Arc<dyn ExecutionPlan>> = match logical_plan {
-                LogicalPlan::TableScan {
+                LogicalPlan::TableScan (TableScanPlan {
                     source,
                     projection,
                     filters,
                     limit,
                     ..
-                } => {
+                }) => {
                     // Remove all qualifiers from the scan as the provider
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query

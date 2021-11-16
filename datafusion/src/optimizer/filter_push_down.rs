@@ -16,6 +16,7 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::TableScanPlan;
 use crate::logical_plan::{and, replace_col, Column, LogicalPlan};
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
@@ -451,14 +452,14 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             optimize_join(state, plan, left, right)
         }
-        LogicalPlan::TableScan {
+        LogicalPlan::TableScan(TableScanPlan {
             source,
             projected_schema,
             filters,
             projection,
             table_name,
             limit,
-        } => {
+        }) => {
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
 
@@ -487,14 +488,14 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             issue_filters(
                 state,
                 used_columns,
-                &LogicalPlan::TableScan {
+                &LogicalPlan::TableScan(TableScanPlan {
                     source: source.clone(),
                     projection: projection.clone(),
                     projected_schema: projected_schema.clone(),
                     table_name: table_name.clone(),
                     filters: new_filters,
                     limit: *limit,
-                },
+                }),
             )
         }
         _ => {
@@ -1174,7 +1175,7 @@ mod tests {
     ) -> Result<LogicalPlan> {
         let test_provider = PushDownProvider { filter_support };
 
-        let table_scan = LogicalPlan::TableScan {
+        let table_scan = LogicalPlan::TableScan(TableScanPlan {
             table_name: "test".to_string(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
@@ -1183,7 +1184,7 @@ mod tests {
             projection: None,
             source: Arc::new(test_provider),
             limit: None,
-        };
+        });
 
         LogicalPlanBuilder::from(table_scan)
             .filter(col("a").eq(lit(1i64)))?

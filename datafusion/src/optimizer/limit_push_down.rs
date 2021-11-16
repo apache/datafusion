@@ -20,6 +20,7 @@
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::TableScanPlan;
 use crate::logical_plan::LogicalPlan;
 use crate::optimizer::optimizer::OptimizerRule;
 use std::sync::Arc;
@@ -56,16 +57,16 @@ fn limit_push_down(
             })
         }
         (
-            LogicalPlan::TableScan {
+            LogicalPlan::TableScan(TableScanPlan {
                 table_name,
                 source,
                 projection,
                 filters,
                 limit,
                 projected_schema,
-            },
+            }),
             Some(upper_limit),
-        ) => Ok(LogicalPlan::TableScan {
+        ) => Ok(LogicalPlan::TableScan(TableScanPlan {
             table_name: table_name.clone(),
             source: source.clone(),
             projection: projection.clone(),
@@ -74,7 +75,7 @@ fn limit_push_down(
                 .map(|x| std::cmp::min(x, upper_limit))
                 .or(Some(upper_limit)),
             projected_schema: projected_schema.clone(),
-        }),
+        })),
         (
             LogicalPlan::Projection {
                 expr,
