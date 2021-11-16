@@ -25,7 +25,7 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::plan::ToStringifiedPlan;
+use crate::logical_plan::plan::{TableScanPlan, ToStringifiedPlan};
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
 use arrow::{
@@ -392,15 +392,14 @@ impl LogicalPlanBuilder {
                 DFSchema::try_from_qualified_schema(&table_name, &schema)
             })?;
 
-        let table_scan = LogicalPlan::TableScan {
+        let table_scan = LogicalPlan::TableScan(TableScanPlan {
             table_name,
             source: provider,
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
             limit: None,
-        };
-
+        });
         Ok(Self::from(table_scan))
     }
     /// Wrap a plan in a window

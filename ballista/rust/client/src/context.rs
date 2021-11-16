@@ -30,6 +30,7 @@ use datafusion::dataframe::DataFrame;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::dataframe_impl::DataFrameImpl;
+use datafusion::logical_plan::plan::TableScanPlan;
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::prelude::{AvroReadOptions, CsvReadOptions};
 use datafusion::sql::parser::FileType;
@@ -212,14 +213,18 @@ impl BallistaContext {
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
         match self.read_csv(path, options).await?.to_logical_plan() {
-            LogicalPlan::TableScan { source, .. } => self.register_table(name, source),
+            LogicalPlan::TableScan(TableScanPlan { source, .. }) => {
+                self.register_table(name, source)
+            }
             _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
         }
     }
 
     pub async fn register_parquet(&self, name: &str, path: &str) -> Result<()> {
         match self.read_parquet(path).await?.to_logical_plan() {
-            LogicalPlan::TableScan { source, .. } => self.register_table(name, source),
+            LogicalPlan::TableScan(TableScanPlan { source, .. }) => {
+                self.register_table(name, source)
+            }
             _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
         }
     }
@@ -231,7 +236,9 @@ impl BallistaContext {
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
         match self.read_avro(path, options).await?.to_logical_plan() {
-            LogicalPlan::TableScan { source, .. } => self.register_table(name, source),
+            LogicalPlan::TableScan(TableScanPlan { source, .. }) => {
+                self.register_table(name, source)
+            }
             _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
         }
     }
