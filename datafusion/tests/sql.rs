@@ -1283,6 +1283,22 @@ async fn csv_query_approx_count() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_count_without_from() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT count(1 + 1)";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(Int64(2)) |",
+        "+-----------------+",
+        "| 1               |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_array_agg() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
