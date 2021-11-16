@@ -29,7 +29,7 @@ extern crate datafusion;
 
 use arrow::{
     array::*, datatypes::*, record_batch::RecordBatch,
-    util::display::array_value_to_string,
+    util::display::array_value_to_string, util::pretty::pretty_format_batches,
 };
 
 use datafusion::assert_batches_eq;
@@ -4527,8 +4527,6 @@ async fn group_by_timestamp_millis() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 macro_rules! test_expression {
     ($SQL:expr, $EXPECTED:expr) => {
         let mut ctx = ExecutionContext::new();
@@ -5023,17 +5021,21 @@ async fn in_list_array() -> Result<()> {
             ,c1 NOT IN ('a', 'c') AS utf8_not_in_false
             ,NULL IN ('a', 'c') AS utf8_in_null
         FROM aggregate_test_100 WHERE c12 < 0.05";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["true", "false", "true", "false", "NULL"],
-        vec!["true", "false", "true", "false", "NULL"],
-        vec!["true", "false", "true", "false", "NULL"],
-        vec!["false", "false", "true", "true", "NULL"],
-        vec!["false", "false", "true", "true", "NULL"],
-        vec!["false", "false", "true", "true", "NULL"],
-        vec!["false", "false", "true", "true", "NULL"],
-    ];
-    assert_eq!(expected, actual);
+            "+--------------+---------------+------------------+-------------------+--------------+",
+            "| utf8_in_true | utf8_in_false | utf8_not_in_true | utf8_not_in_false | utf8_in_null |",
+            "+--------------+---------------+------------------+-------------------+--------------+",
+            "| true         | false         | true             | false             |              |",
+            "| true         | false         | true             | false             |              |",
+            "| true         | false         | true             | false             |              |",
+            "| false        | false         | true             | true              |              |",
+            "| false        | false         | true             | true              |              |",
+            "| false        | false         | true             | true              |              |",
+            "| false        | false         | true             | true              |              |",
+            "+--------------+---------------+------------------+-------------------+--------------+",
+        ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5055,15 +5057,19 @@ async fn inner_join_qualified_names() -> Result<()> {
     ];
 
     let expected = vec![
-        vec!["1", "10", "50", "1", "100", "500"],
-        vec!["2", "20", "60", "2", "20", "600"],
-        vec!["4", "40", "80", "4", "400", "800"],
+        "+---+----+----+---+-----+-----+",
+        "| a | b  | c  | a | b   | c   |",
+        "+---+----+----+---+-----+-----+",
+        "| 1 | 10 | 50 | 1 | 100 | 500 |",
+        "| 2 | 20 | 60 | 2 | 200 | 600 |",
+        "| 4 | 40 | 80 | 4 | 400 | 800 |",
+        "+---+----+----+---+-----+-----+",
     ];
 
     for sql in equivalent_sql.iter() {
         let mut ctx = create_join_context_qualified()?;
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -5073,14 +5079,16 @@ async fn inner_join_nulls() {
     let sql = "SELECT * FROM (SELECT null AS id1) t1
             INNER JOIN (SELECT null AS id2) t2 ON id1 = id2";
 
-    let expected: &[&[&str]] = &[];
+    let expected = vec!["++", "++"];
 
     let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
 
     // left and right shouldn't match anything
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn qualified_table_references() -> Result<()> {
@@ -5094,6 +5102,8 @@ async fn qualified_table_references() -> Result<()> {
     ] {
         let sql = format!("SELECT COUNT(*) FROM {}", table_ref);
         let results = execute(&mut ctx, &sql).await;
+        // let a = execute_to_batches(&mut ctx, sql).await;
+        // println!("{}", pretty_format_batches(&a).unwrap());
         assert_eq!(results, vec![vec!["100"]]);
     }
     Ok(())
