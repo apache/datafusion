@@ -92,9 +92,9 @@ impl OptimizerRule for ConstantFolding {
                     .expressions()
                     .into_iter()
                     .map(|e| {
-                        // We need to keep original expression name, constant folding
-                        // should not change expression name.
-                        let name = &e.name(plan.schema())?;
+                        // We need to keep original expression name, if any.
+                        // Constant folding should not change expression name.
+                        let name = &e.name(plan.schema());
 
                         // TODO iterate until no changes are made
                         // during rewrite (evaluating constants can
@@ -106,7 +106,11 @@ impl OptimizerRule for ConstantFolding {
                             .rewrite(&mut const_evaluator)?
                             .rewrite(&mut simplifier)?;
 
-                        Ok(new_e.alias(name))
+                        if let Ok(expr_name) = name {
+                            Ok(new_e.alias(expr_name))
+                        } else {
+                            Ok(new_e)
+                        }
                     })
                     .collect::<Result<Vec<_>>>()?;
 
