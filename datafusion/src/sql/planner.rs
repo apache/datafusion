@@ -65,6 +65,7 @@ use super::{
     },
 };
 use crate::logical_plan::builder::project_with_alias;
+use crate::logical_plan::plan::{AnalyzePlan, ExplainPlan};
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
@@ -328,20 +329,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(LogicalPlan::Analyze {
+            Ok(LogicalPlan::Analyze(AnalyzePlan {
                 verbose,
                 input: plan,
                 schema,
-            })
+            }))
         } else {
             let stringified_plans =
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
-            Ok(LogicalPlan::Explain {
+            Ok(LogicalPlan::Explain(ExplainPlan {
                 verbose,
                 plan,
                 stringified_plans,
                 schema,
-            })
+            }))
         }
     }
 
