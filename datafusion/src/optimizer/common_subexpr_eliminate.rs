@@ -195,9 +195,9 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             })
         }
         LogicalPlan::Join { .. }
-        | LogicalPlan::CrossJoin { .. }
-        | LogicalPlan::Repartition { .. }
-        | LogicalPlan::Union { .. }
+        | LogicalPlan::CrossJoin(_)
+        | LogicalPlan::Repartition(_)
+        | LogicalPlan::Union(_)
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::Values { .. }
         | LogicalPlan::EmptyRelation { .. }

@@ -34,7 +34,7 @@ use datafusion::logical_plan::{
     exprlist_to_fields,
     plan::TableScanPlan,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, Expr, JoinConstraint, JoinType, LogicalPlan,
+    Column, CrossJoin, Expr, JoinConstraint, JoinType, LogicalPlan, Repartition,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -901,10 +901,10 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Repartition {
+            LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
-            } => {
+            }) => {
                 use datafusion::logical_plan::Partitioning;
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
 
@@ -996,8 +996,8 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 })
             }
             LogicalPlan::Extension { .. } => unimplemented!(),
-            LogicalPlan::Union { .. } => unimplemented!(),
-            LogicalPlan::CrossJoin { left, right, .. } => {
+            LogicalPlan::Union(_) => unimplemented!(),
+            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
                 let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {

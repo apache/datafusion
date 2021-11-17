@@ -25,7 +25,8 @@ use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
 use crate::logical_plan::{
     build_join_schema, Column, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan,
-    LogicalPlanBuilder, Operator, Partitioning, Recursion, RewriteRecursion,
+    LogicalPlanBuilder, Operator, Partitioning, Recursion, Repartition, RewriteRecursion,
+    Union,
 };
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -160,18 +161,20 @@ pub fn from_plan(
             predicate: expr[0].clone(),
             input: Arc::new(inputs[0].clone()),
         }),
-        LogicalPlan::Repartition {
+        LogicalPlan::Repartition(Repartition {
             partitioning_scheme,
             ..
-        } => match partitioning_scheme {
-            Partitioning::RoundRobinBatch(n) => Ok(LogicalPlan::Repartition {
-                partitioning_scheme: Partitioning::RoundRobinBatch(*n),
-                input: Arc::new(inputs[0].clone()),
-            }),
-            Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition {
+        }) => match partitioning_scheme {
+            Partitioning::RoundRobinBatch(n) => {
+                Ok(LogicalPlan::Repartition(Repartition {
+                    partitioning_scheme: Partitioning::RoundRobinBatch(*n),
+                    input: Arc::new(inputs[0].clone()),
+                }))
+            }
+            Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition(Repartition {
                 partitioning_scheme: Partitioning::Hash(expr.to_owned(), *n),
                 input: Arc::new(inputs[0].clone()),
-            }),
+            })),
         },
         LogicalPlan::Window {
             window_expr,
@@ -213,7 +216,7 @@ pub fn from_plan(
                 null_equals_null: *null_equals_null,
             })
         }
-        LogicalPlan::CrossJoin { .. } => {
+        LogicalPlan::CrossJoin(_) => {
             let left = inputs[0].clone();
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
@@ -231,11 +234,13 @@ pub fn from_plan(
         LogicalPlan::Extension { node } => Ok(LogicalPlan::Extension {
             node: node.from_template(expr, inputs),
         }),
-        LogicalPlan::Union { schema, alias, .. } => Ok(LogicalPlan::Union {
-            inputs: inputs.to_vec(),
-            schema: schema.clone(),
-            alias: alias.clone(),
-        }),
+        LogicalPlan::Union(Union { schema, alias, .. }) => {
+            Ok(LogicalPlan::Union(Union {
+                inputs: inputs.to_vec(),
+                schema: schema.clone(),
+                alias: alias.clone(),
+            }))
+        }
         LogicalPlan::Analyze {
             verbose, schema, ..
         } => {

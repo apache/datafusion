@@ -23,7 +23,7 @@ use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::TableScanPlan;
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
-    LogicalPlanBuilder, ToDFSchema,
+    LogicalPlanBuilder, ToDFSchema, Union,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -380,11 +380,11 @@ fn optimize_plan(
                 schema: schema.clone(),
             })
         }
-        LogicalPlan::Union {
+        LogicalPlan::Union(Union {
             inputs,
             schema,
             alias,
-        } => {
+        }) => {
             // UNION inputs will reference the same column with different identifiers, so we need
             // to populate new_required_columns by unqualified column name based on required fields
             // from the resulting UNION output
@@ -422,24 +422,24 @@ fn optimize_plan(
                     .cloned()
                     .collect(),
             )?;
-            Ok(LogicalPlan::Union {
+            Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs,
                 schema: Arc::new(new_schema),
                 alias: alias.clone(),
-            })
+            }))
         }
         // all other nodes: Add any additional columns used by
         // expressions in this node to the list of required columns
         LogicalPlan::Limit { .. }
         | LogicalPlan::Filter { .. }
-        | LogicalPlan::Repartition { .. }
+        | LogicalPlan::Repartition(_)
         | LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::Values { .. }
         | LogicalPlan::Sort { .. }
         | LogicalPlan::CreateExternalTable { .. }
         | LogicalPlan::CreateMemoryTable { .. }
         | LogicalPlan::DropTable { .. }
-        | LogicalPlan::CrossJoin { .. }
+        | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Extension { .. } => {
             let expr = plan.expressions();
             // collect all required columns by this plan
