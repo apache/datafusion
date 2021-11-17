@@ -26,8 +26,8 @@ use crate::datasource::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::{
-    AnalyzePlan, EmptyRelation, ExplainPlan, Filter, Projection, TableScanPlan,
-    ToStringifiedPlan, Union, Window,
+    Aggregate, AnalyzePlan, EmptyRelation, ExplainPlan, Filter, Projection,
+    TableScanPlan, ToStringifiedPlan, Union, Window,
 };
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
@@ -680,12 +680,12 @@ impl LogicalPlanBuilder {
         validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
         let aggr_schema =
             DFSchema::new(exprlist_to_fields(all_expr, self.plan.schema())?)?;
-        Ok(Self::from(LogicalPlan::Aggregate {
+        Ok(Self::from(LogicalPlan::Aggregate(Aggregate {
             input: Arc::new(self.plan.clone()),
             group_expr,
             aggr_expr,
             schema: DFSchemaRef::new(aggr_schema),
-        }))
+        })))
     }
 
     /// Create an expression to represent the explanation of the plan

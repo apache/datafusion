@@ -23,7 +23,9 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
-use crate::logical_plan::plan::{EmptyRelation, Filter, Projection, Window};
+use crate::logical_plan::plan::{
+    AggregatePlan, EmptyRelation, Filter, Projection, TableScanPlan, Window,
+};
 use crate::logical_plan::{
     unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
     Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
@@ -478,12 +480,12 @@ impl DefaultPhysicalPlanner {
                         physical_input_schema,
                     )?) )
                 }
-                LogicalPlan::Aggregate {
+                LogicalPlan::Aggregate(AggregatePlan {
                     input,
                     group_expr,
                     aggr_expr,
                     ..
-                } => {
+                }) => {
                     // Initially need to perform the aggregate and then merge the partitions
                     let input_exec = self.create_initial_plan(input, ctx_state).await?;
                     let physical_input_schema = input_exec.schema();
