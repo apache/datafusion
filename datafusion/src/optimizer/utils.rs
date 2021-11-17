@@ -23,9 +23,10 @@ use arrow::record_batch::RecordBatch;
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
+use crate::logical_plan::plan::Values;
 use crate::logical_plan::{
-    build_join_schema, Column, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan,
-    LogicalPlanBuilder, Operator, Partitioning, Recursion, RewriteRecursion,
+    build_join_schema, Column, DFSchema, DFSchemaRef, Expr, ExprRewriter, Limit,
+    LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion, RewriteRecursion,
 };
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -149,13 +150,13 @@ pub fn from_plan(
             schema: schema.clone(),
             alias: alias.clone(),
         }),
-        LogicalPlan::Values { schema, .. } => Ok(LogicalPlan::Values {
+        LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
             values: expr
                 .chunks_exact(schema.fields().len())
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>(),
-        }),
+        })),
         LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter {
             predicate: expr[0].clone(),
             input: Arc::new(inputs[0].clone()),
@@ -218,10 +219,10 @@ pub fn from_plan(
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
-        LogicalPlan::Limit { n, .. } => Ok(LogicalPlan::Limit {
+        LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
             n: *n,
             input: Arc::new(inputs[0].clone()),
-        }),
+        })),
         LogicalPlan::CreateMemoryTable { name, .. } => {
             Ok(LogicalPlan::CreateMemoryTable {
                 input: Arc::new(inputs[0].clone()),
@@ -261,7 +262,7 @@ pub fn from_plan(
             );
             Ok(plan.clone())
         }
-        LogicalPlan::EmptyRelation { .. }
+        LogicalPlan::EmptyRelation(_)
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable { .. }
         | LogicalPlan::DropTable { .. } => {

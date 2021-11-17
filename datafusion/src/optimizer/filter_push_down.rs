@@ -17,7 +17,7 @@
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::TableScanPlan;
-use crate::logical_plan::{and, replace_col, Column, LogicalPlan};
+use crate::logical_plan::{and, replace_col, Column, Limit, LogicalPlan};
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -379,7 +379,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // union all is filter-commutable
             push_down(&state, plan)
         }
-        LogicalPlan::Limit { input, .. } => {
+        LogicalPlan::Limit(Limit { input, .. }) => {
             // limit is _not_ filter-commutable => collect all columns from its input
             let used_columns = input
                 .schema()

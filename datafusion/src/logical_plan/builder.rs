@@ -25,7 +25,7 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::plan::{TableScanPlan, ToStringifiedPlan};
+use crate::logical_plan::plan::{TableScanPlan, ToStringifiedPlan, Values};
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
 use arrow::{
@@ -43,7 +43,7 @@ use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
-    DFSchemaRef, Partitioning,
+    DFSchemaRef, EmptyRelation, Limit, Partitioning,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 
@@ -107,10 +107,10 @@ impl LogicalPlanBuilder {
     ///
     /// `produce_one_row` set to true means this empty node needs to produce a placeholder row.
     pub fn empty(produce_one_row: bool) -> Self {
-        Self::from(LogicalPlan::EmptyRelation {
+        Self::from(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
-        })
+        }))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
@@ -184,7 +184,7 @@ impl LogicalPlanBuilder {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
         let schema = DFSchemaRef::new(DFSchema::new(fields)?);
-        Ok(Self::from(LogicalPlan::Values { schema, values }))
+        Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
     /// Scan a memory data source
@@ -457,10 +457,10 @@ impl LogicalPlanBuilder {
 
     /// Apply a limit
     pub fn limit(&self, n: usize) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Limit {
+        Ok(Self::from(LogicalPlan::Limit(Limit {
             n,
             input: Arc::new(self.plan.clone()),
-        }))
+        })))
     }
 
     /// Apply a sort

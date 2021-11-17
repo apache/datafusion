@@ -72,12 +72,12 @@ impl OptimizerRule for ConstantFolding {
             | LogicalPlan::CreateExternalTable { .. }
             | LogicalPlan::CreateMemoryTable { .. }
             | LogicalPlan::DropTable { .. }
-            | LogicalPlan::Values { .. }
+            | LogicalPlan::Values(_)
             | LogicalPlan::Extension { .. }
             | LogicalPlan::Sort { .. }
             | LogicalPlan::Explain { .. }
             | LogicalPlan::Analyze { .. }
-            | LogicalPlan::Limit { .. }
+            | LogicalPlan::Limit(_)
             | LogicalPlan::Union { .. }
             | LogicalPlan::Join { .. }
             | LogicalPlan::CrossJoin { .. } => {
@@ -107,7 +107,7 @@ impl OptimizerRule for ConstantFolding {
 
                 utils::from_plan(plan, &expr, &new_inputs)
             }
-            LogicalPlan::TableScan { .. } | LogicalPlan::EmptyRelation { .. } => {
+            LogicalPlan::TableScan { .. } | LogicalPlan::EmptyRelation(_) => {
                 Ok(plan.clone())
             }
         }
