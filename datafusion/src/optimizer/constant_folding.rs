@@ -106,10 +106,15 @@ impl OptimizerRule for ConstantFolding {
                             .rewrite(&mut const_evaluator)?
                             .rewrite(&mut simplifier)?;
 
-                        if let Ok(expr_name) = name {
-                            Ok(new_e.alias(expr_name))
-                        } else {
-                            Ok(new_e)
+                        match &new_e {
+                            Expr::Alias(_, _) | Expr::Column(_) => Ok(new_e),
+                            _ => {
+                                if let Ok(expr_name) = name {
+                                    Ok(new_e.alias(expr_name))
+                                } else {
+                                    Ok(new_e)
+                                }
+                            }
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
