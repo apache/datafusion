@@ -18,6 +18,8 @@
 # under the License.
 #
 
+set -e
+
 # Usage:
 # CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-datafusion.sh
 

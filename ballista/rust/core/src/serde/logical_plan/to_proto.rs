@@ -34,6 +34,7 @@ use datafusion::logical_plan::{
     exprlist_to_fields,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
     Column, CreateExternalTable, Expr, JoinConstraint, JoinType, LogicalPlan,
+    TableScanPlan,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -695,13 +696,13 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )),
                 })
             }
-            LogicalPlan::TableScan {
+            LogicalPlan::TableScan(TableScanPlan {
                 table_name,
                 source,
                 filters,
                 projection,
                 ..
-            } => {
+            }) => {
                 let schema = source.schema();
                 let source = source.as_any();
 
@@ -1124,6 +1125,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::ApproxDistinct => {
                         protobuf::AggregateFunction::ApproxDistinct
                     }
+                    AggregateFunction::ArrayAgg => protobuf::AggregateFunction::ArrayAgg,
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
                     AggregateFunction::Max => protobuf::AggregateFunction::Max,
                     AggregateFunction::Sum => protobuf::AggregateFunction::Sum,
@@ -1358,6 +1360,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Avg => Self::Avg,
             AggregateFunction::Count => Self::Count,
             AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
+            AggregateFunction::ArrayAgg => Self::ArrayAgg,
         }
     }
 }

@@ -90,6 +90,10 @@ impl PyObjectProtocol for PyExpr {
         };
         expr.into()
     }
+
+    fn __str__(&self) -> PyResult<String> {
+        Ok(format!("{}", self.expr))
+    }
 }
 
 #[pymethods]

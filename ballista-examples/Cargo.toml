@@ -31,7 +31,7 @@ rust-version = "1.56"
 [dependencies]
 arrow-flight = { version = "6.1.0" }
 datafusion = { path = "../datafusion" }
-ballista = { path = "../ballista/rust/client" }
+ballista = { path = "../ballista/rust/client", version = "0.6.0"}
 prost = "0.8"
 tonic = "0.5"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }

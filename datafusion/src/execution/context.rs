@@ -1179,6 +1179,7 @@ impl FunctionRegistry for ExecutionContextState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logical_plan::TableScanPlan;
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::physical_plan::{collect, collect_partitioned};
@@ -1422,11 +1423,11 @@ mod tests {
         let optimized_plan = ctx.optimize(&logical_plan)?;
         match &optimized_plan {
             LogicalPlan::Projection { input, .. } => match &**input {
-                LogicalPlan::TableScan {
+                LogicalPlan::TableScan(TableScanPlan {
                     source,
                     projected_schema,
                     ..
-                } => {
+                }) => {
                     assert_eq!(source.schema().fields().len(), 3);
                     assert_eq!(projected_schema.fields().len(), 1);
                 }
@@ -1495,11 +1496,11 @@ mod tests {
         let optimized_plan = ctx.optimize(&plan)?;
         match &optimized_plan {
             LogicalPlan::Projection { input, .. } => match &**input {
-                LogicalPlan::TableScan {
+                LogicalPlan::TableScan(TableScanPlan {
                     source,
                     projected_schema,
                     ..
-                } => {
+                }) => {
                     assert_eq!(source.schema().fields().len(), 3);
                     assert_eq!(projected_schema.fields().len(), 1);
                 }
@@ -2842,6 +2843,7 @@ mod tests {
             let batch =
                 RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
             let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+            ctx.deregister_table("t").unwrap();
             ctx.register_table("t", Arc::new(provider)).unwrap();
             let expected = vec![
                 "+-----------+",

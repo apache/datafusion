@@ -50,7 +50,7 @@ jobs:
         run: |
           source venv/bin/activate
           flake8 python --ignore=E501
-          black --line-length 79 --check python
+          black --line-length 79 --diff --check python
       - name: Run tests
         run: |
           source venv/bin/activate

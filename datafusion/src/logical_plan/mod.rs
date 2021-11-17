@@ -52,7 +52,7 @@ pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
 pub use plan::{
     CreateExternalTable, CreateMemoryTable, DropTable, JoinConstraint, JoinType,
-    LogicalPlan, Partitioning, PlanType, PlanVisitor,
+    LogicalPlan, Partitioning, PlanType, PlanVisitor, TableScanPlan,
 };
 pub(crate) use plan::{StringifiedPlan, ToStringifiedPlan};
 pub use registry::FunctionRegistry;
