@@ -20,8 +20,8 @@
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
-    col, DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor, LogicalPlan,
-    Recursion, RewriteRecursion,
+    col, plan::AggregatePlan, DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor,
+    LogicalPlan, Recursion, RewriteRecursion,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -149,33 +149,30 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 schema: schema.clone(),
             })
         }
-        LogicalPlan::Aggregate {
-            input,
-            group_expr,
-            aggr_expr,
-            schema,
-        } => {
-            let group_arrays = to_arrays(group_expr, input, &mut expr_set)?;
-            let aggr_arrays = to_arrays(aggr_expr, input, &mut expr_set)?;
+        LogicalPlan::Aggregate(aggregate) => {
+            let group_arrays =
+                to_arrays(&aggregate.group_expr, &aggregate.input, &mut expr_set)?;
+            let aggr_arrays =
+                to_arrays(&aggregate.aggr_expr, &aggregate.input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
-                &[group_expr, aggr_expr],
+                &[&aggregate.group_expr, &aggregate.aggr_expr],
                 &[&group_arrays, &aggr_arrays],
-                input,
+                &aggregate.input,
                 &mut expr_set,
-                schema,
+                &aggregate.schema,
                 execution_props,
             )?;
             // note the reversed pop order.
             let new_aggr_expr = new_expr.pop().unwrap();
             let new_group_expr = new_expr.pop().unwrap();
 
-            Ok(LogicalPlan::Aggregate {
+            Ok(LogicalPlan::Aggregate(AggregatePlan {
                 input: Arc::new(new_input),
                 group_expr: new_group_expr,
                 aggr_expr: new_aggr_expr,
-                schema: schema.clone(),
-            })
+                schema: aggregate.schema.clone(),
+            }))
         }
         LogicalPlan::Sort { expr, input } => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
