@@ -23,6 +23,7 @@ use datafusion::physical_plan::{
     aggregates::AggregateFunction, functions::BuiltinScalarFunction,
 };
 
+use crate::errors;
 use crate::expression::PyExpr;
 
 #[pyfunction]
@@ -83,6 +84,63 @@ fn concat(args: Vec<PyExpr>) -> PyResult<PyExpr> {
 fn concat_ws(sep: String, args: Vec<PyExpr>) -> PyResult<PyExpr> {
     let args = args.into_iter().map(|e| e.expr).collect::<Vec<_>>();
     Ok(logical_plan::concat_ws(sep, &args).into())
+}
+
+/// Creates a new Sort expression
+#[pyfunction]
+fn order_by(
+    expr: PyExpr,
+    asc: Option<bool>,
+    nulls_first: Option<bool>,
+) -> PyResult<PyExpr> {
+    Ok(PyExpr {
+        expr: datafusion::logical_plan::Expr::Sort {
+            expr: Box::new(expr.expr),
+            asc: asc.unwrap_or(true),
+            nulls_first: nulls_first.unwrap_or(true),
+        },
+    })
+}
+
+/// Creates a new Alias expression
+#[pyfunction]
+fn alias(expr: PyExpr, name: &str) -> PyResult<PyExpr> {
+    Ok(PyExpr {
+        expr: datafusion::logical_plan::Expr::Alias(
+            Box::new(expr.expr),
+            String::from(name),
+        ),
+    })
+}
+
+/// Creates a new Window function expression
+#[pyfunction]
+fn window(
+    name: &str,
+    args: Vec<PyExpr>,
+    partition_by: Option<Vec<PyExpr>>,
+    order_by: Option<Vec<PyExpr>>,
+) -> PyResult<PyExpr> {
+    use std::str::FromStr;
+    let fun = datafusion::physical_plan::window_functions::WindowFunction::from_str(name)
+        .map_err(|e| -> errors::DataFusionError { e.into() })?;
+    Ok(PyExpr {
+        expr: datafusion::logical_plan::Expr::WindowFunction {
+            fun,
+            args: args.into_iter().map(|x| x.expr).collect::<Vec<_>>(),
+            partition_by: partition_by
+                .unwrap_or(vec![])
+                .into_iter()
+                .map(|x| x.expr)
+                .collect::<Vec<_>>(),
+            order_by: order_by
+                .unwrap_or(vec![])
+                .into_iter()
+                .map(|x| x.expr)
+                .collect::<Vec<_>>(),
+            window_frame: None,
+        },
+    })
 }
 
 macro_rules! scalar_function {
@@ -218,6 +276,7 @@ pub(crate) fn init_module(m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(abs))?;
     m.add_wrapped(wrap_pyfunction!(acos))?;
     m.add_wrapped(wrap_pyfunction!(approx_distinct))?;
+    m.add_wrapped(wrap_pyfunction!(alias))?;
     m.add_wrapped(wrap_pyfunction!(array))?;
     m.add_wrapped(wrap_pyfunction!(ascii))?;
     m.add_wrapped(wrap_pyfunction!(asin))?;
@@ -249,6 +308,7 @@ pub(crate) fn init_module(m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(min))?;
     m.add_wrapped(wrap_pyfunction!(now))?;
     m.add_wrapped(wrap_pyfunction!(octet_length))?;
+    m.add_wrapped(wrap_pyfunction!(order_by))?;
     m.add_wrapped(wrap_pyfunction!(random))?;
     m.add_wrapped(wrap_pyfunction!(regexp_match))?;
     m.add_wrapped(wrap_pyfunction!(regexp_replace))?;
@@ -278,5 +338,6 @@ pub(crate) fn init_module(m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(trim))?;
     m.add_wrapped(wrap_pyfunction!(trunc))?;
     m.add_wrapped(wrap_pyfunction!(upper))?;
+    m.add_wrapped(wrap_pyfunction!(window))?;
     Ok(())
 }
