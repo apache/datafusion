@@ -25,7 +25,9 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::plan::{TableScanPlan, ToStringifiedPlan};
+use crate::logical_plan::plan::{
+    AnalyzePlan, ExplainPlan, TableScanPlan, ToStringifiedPlan,
+};
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
 use arrow::{
@@ -696,21 +698,21 @@ impl LogicalPlanBuilder {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(Self::from(LogicalPlan::Analyze {
+            Ok(Self::from(LogicalPlan::Analyze(AnalyzePlan {
                 verbose,
                 input: Arc::new(self.plan.clone()),
                 schema,
-            }))
+            })))
         } else {
             let stringified_plans =
                 vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
-            Ok(Self::from(LogicalPlan::Explain {
+            Ok(Self::from(LogicalPlan::Explain(ExplainPlan {
                 verbose,
                 plan: Arc::new(self.plan.clone()),
                 stringified_plans,
                 schema,
-            }))
+            })))
         }
     }
 

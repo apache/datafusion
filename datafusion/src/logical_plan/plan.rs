@@ -74,6 +74,39 @@ pub struct TableScanPlan {
     pub limit: Option<usize>,
 }
 
+/// Produces a relation with string representations of
+/// various parts of the plan
+#[derive(Clone)]
+pub struct ExplainPlan {
+    /// Should extra (detailed, intermediate plans) be included?
+    pub verbose: bool,
+    /// The logical plan that is being EXPLAIN'd
+    pub plan: Arc<LogicalPlan>,
+    /// Represent the various stages plans have gone through
+    pub stringified_plans: Vec<StringifiedPlan>,
+    /// The output schema of the explain (2 columns of text)
+    pub schema: DFSchemaRef,
+}
+
+/// Runs the actual plan, and then prints the physical plan with
+/// with execution metrics.
+#[derive(Clone)]
+pub struct AnalyzePlan {
+    /// Should extra detail be included?
+    pub verbose: bool,
+    /// The logical plan that is being EXPLAIN ANALYZE'd
+    pub input: Arc<LogicalPlan>,
+    /// The output schema of the explain (2 columns of text)
+    pub schema: DFSchemaRef,
+}
+
+/// Extension operator defined outside of DataFusion
+#[derive(Clone)]
+pub struct ExtensionPlan {
+    /// The runtime extension operator
+    pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
+}
+
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -236,31 +269,12 @@ pub enum LogicalPlan {
     },
     /// Produces a relation with string representations of
     /// various parts of the plan
-    Explain {
-        /// Should extra (detailed, intermediate plans) be included?
-        verbose: bool,
-        /// The logical plan that is being EXPLAIN'd
-        plan: Arc<LogicalPlan>,
-        /// Represent the various stages plans have gone through
-        stringified_plans: Vec<StringifiedPlan>,
-        /// The output schema of the explain (2 columns of text)
-        schema: DFSchemaRef,
-    },
+    Explain(ExplainPlan),
     /// Runs the actual plan, and then prints the physical plan with
     /// with execution metrics.
-    Analyze {
-        /// Should extra detail be included?
-        verbose: bool,
-        /// The logical plan that is being EXPLAIN ANALYZE'd
-        input: Arc<LogicalPlan>,
-        /// The output schema of the explain (2 columns of text)
-        schema: DFSchemaRef,
-    },
+    Analyze(AnalyzePlan),
     /// Extension operator defined outside of DataFusion
-    Extension {
-        /// The runtime extension operator
-        node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
-    },
+    Extension(ExtensionPlan),
 }
 
 impl LogicalPlan {
@@ -282,9 +296,9 @@ impl LogicalPlan {
             LogicalPlan::Repartition { input, .. } => input.schema(),
             LogicalPlan::Limit { input, .. } => input.schema(),
             LogicalPlan::CreateExternalTable { schema, .. } => schema,
-            LogicalPlan::Explain { schema, .. } => schema,
-            LogicalPlan::Analyze { schema, .. } => schema,
-            LogicalPlan::Extension { node } => node.schema(),
+            LogicalPlan::Explain(explain) => &explain.schema,
+            LogicalPlan::Analyze(analyze) => &analyze.schema,
+            LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::Union { schema, .. } => schema,
             LogicalPlan::CreateMemoryTable { input, .. } => input.schema(),
             LogicalPlan::DropTable { schema, .. } => schema,
@@ -324,9 +338,9 @@ impl LogicalPlan {
             LogicalPlan::Union { schema, .. } => {
                 vec![schema]
             }
-            LogicalPlan::Extension { node } => vec![node.schema()],
-            LogicalPlan::Explain { schema, .. }
-            | LogicalPlan::Analyze { schema, .. }
+            LogicalPlan::Extension(extension) => vec![extension.node.schema()],
+            LogicalPlan::Explain(ExplainPlan { schema, .. })
+            | LogicalPlan::Analyze(AnalyzePlan { schema, .. })
             | LogicalPlan::EmptyRelation { schema, .. }
             | LogicalPlan::CreateExternalTable { schema, .. } => vec![schema],
             LogicalPlan::Limit { input, .. }
@@ -374,7 +388,7 @@ impl LogicalPlan {
                 .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
                 .collect(),
             LogicalPlan::Sort { expr, .. } => expr.clone(),
-            LogicalPlan::Extension { node } => node.expressions(),
+            LogicalPlan::Extension(extension) => extension.node.expressions(),
             // plans without expressions
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -404,10 +418,10 @@ impl LogicalPlan {
             LogicalPlan::Join { left, right, .. } => vec![left, right],
             LogicalPlan::CrossJoin { left, right, .. } => vec![left, right],
             LogicalPlan::Limit { input, .. } => vec![input],
-            LogicalPlan::Extension { node } => node.inputs(),
+            LogicalPlan::Extension(extension) => extension.node.inputs(),
             LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
-            LogicalPlan::Explain { plan, .. } => vec![plan],
-            LogicalPlan::Analyze { input: plan, .. } => vec![plan],
+            LogicalPlan::Explain(explain) => vec![&explain.plan],
+            LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::CreateMemoryTable { input, .. } => vec![input],
             // plans without inputs
             LogicalPlan::TableScan { .. }
@@ -548,16 +562,16 @@ impl LogicalPlan {
             }
             LogicalPlan::Limit { input, .. } => input.accept(visitor)?,
             LogicalPlan::CreateMemoryTable { input, .. } => input.accept(visitor)?,
-            LogicalPlan::Extension { node } => {
-                for input in node.inputs() {
+            LogicalPlan::Extension(extension) => {
+                for input in extension.node.inputs() {
                     if !input.accept(visitor)? {
                         return Ok(false);
                     }
                 }
                 true
             }
-            LogicalPlan::Explain { plan, .. } => plan.accept(visitor)?,
-            LogicalPlan::Analyze { input: plan, .. } => plan.accept(visitor)?,
+            LogicalPlan::Explain(explain) => explain.plan.accept(visitor)?,
+            LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -889,7 +903,7 @@ impl LogicalPlan {
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union { .. } => write!(f, "Union"),
-                    LogicalPlan::Extension { ref node } => node.fmt_for_explain(f),
+                    LogicalPlan::Extension(e) => e.node.fmt_for_explain(f),
                 }
             }
         }
