@@ -3114,7 +3114,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ctx_sql_should_not_optimize_plan() -> Result<()> {
+    async fn ctx_sql_should_optimize_plan() -> Result<()> {
         let mut ctx = ExecutionContext::new();
         let plan1 = ctx
             .create_logical_plan("SELECT * FROM (SELECT 1) AS one WHERE TRUE AND TRUE")?;
@@ -3125,14 +3125,9 @@ mod tests {
             .sql("SELECT * FROM (SELECT 1) AS one WHERE TRUE AND TRUE")
             .await?;
 
-        assert_ne!(
-            format!("{:?}", opt_plan1),
-            format!("{:?}", plan2.to_logical_plan())
-        );
-
         assert_eq!(
             format!("{:?}", opt_plan1),
-            format!("{:?}", ctx.optimize(&plan2.to_logical_plan())?)
+            format!("{:?}", plan2.to_logical_plan())
         );
 
         Ok(())
