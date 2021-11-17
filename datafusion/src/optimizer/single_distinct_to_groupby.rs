@@ -19,7 +19,7 @@
 
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::{DFSchema, Expr, LogicalPlan};
+use crate::logical_plan::{columnize_expr, DFSchema, Expr, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use std::sync::Arc;
@@ -27,18 +27,16 @@ use std::sync::Arc;
 /// single distinct to group by optimizer rule
 ///   - Aggregation
 ///          GROUP BY (k)
-///          F1(DISTINCT s0, s1, ...),
-///          F2(DISTINCT s0, s1, ...),
+///          F1(DISTINCT s)
 ///       - X
 ///
 ///   into
 ///
 ///   - Aggregation
 ///            GROUP BY (k)
-///            F1(x)
-///            F2(x)
+///            F1(s)
 ///       - Aggregation
-///               GROUP BY (k, s0, s1, ...)
+///               GROUP BY (k, s)
 ///            - X
 ///   </pre>
 ///   <p>
@@ -51,97 +49,115 @@ impl SingleDistinctToGroupBy {
     }
 }
 
-fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<LogicalPlan> {
+fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Aggregate {
             input,
             aggr_expr,
-            schema: _,
+            schema,
             group_expr,
         } => {
-            match is_single_agg(plan) {
-                true => {
-                    let mut all_group_args: Vec<Expr> = Vec::new();
-                    all_group_args.append(&mut group_expr.clone());
-                    // remove distinct and collection args
-                    let mut new_aggr_expr = aggr_expr
-                        .iter()
-                        .map(|aggfunc| match aggfunc {
-                            Expr::AggregateFunction { fun, args, .. } => {
-                                all_group_args.append(&mut args.clone());
-                                Expr::AggregateFunction {
-                                    fun: fun.clone(),
-                                    args: args.clone(),
-                                    distinct: false,
-                                }
+            if is_single_distinct_agg(plan) {
+                let mut all_group_args = Vec::with_capacity(group_expr.len());
+                all_group_args.append(&mut group_expr.clone());
+                // remove distinct and collection args
+                let new_aggr_expr = aggr_expr
+                    .iter()
+                    .map(|agg_expr| match agg_expr {
+                        Expr::AggregateFunction { fun, args, .. } => {
+                            all_group_args.append(&mut args.clone());
+                            Expr::AggregateFunction {
+                                fun: fun.clone(),
+                                args: args.clone(),
+                                distinct: false,
                             }
-                            _ => aggfunc.clone(),
-                        })
-                        .collect::<Vec<_>>();
+                        }
+                        _ => agg_expr.clone(),
+                    })
+                    .collect::<Vec<_>>();
 
-                    let all_field = all_group_args
-                        .iter()
-                        .map(|expr| expr.to_field(input.schema()).unwrap())
-                        .collect::<Vec<_>>();
+                let all_field = all_group_args
+                    .iter()
+                    .map(|expr| expr.to_field(input.schema()).unwrap())
+                    .collect::<Vec<_>>();
 
-                    let grouped_schema = Arc::new(DFSchema::new(all_field).unwrap());
-                    let new_aggregate = LogicalPlan::Aggregate {
-                        input: input.clone(),
-                        group_expr: all_group_args,
-                        aggr_expr: Vec::new(),
-                        schema: grouped_schema,
-                    };
-                    let mut expres = group_expr.clone();
-                    expres.append(&mut new_aggr_expr);
-                    utils::from_plan(plan, &expres, &[new_aggregate])
-                }
-                false => {
-                    let expr = plan.expressions();
-                    // apply the optimization to all inputs of the plan
-                    let inputs = plan.inputs();
+                let grouped_schema = DFSchema::new(all_field).unwrap();
+                let grouped_agg = LogicalPlan::Aggregate {
+                    input: input.clone(),
+                    group_expr: all_group_args,
+                    aggr_expr: Vec::new(),
+                    schema: Arc::new(grouped_schema.clone()),
+                };
+                let grouped_agg = optimize_children(&grouped_agg);
+                let final_agg_schema = Arc::new(
+                    DFSchema::new(
+                        group_expr
+                            .iter()
+                            .chain(new_aggr_expr.iter())
+                            .map(|expr| expr.to_field(&grouped_schema).unwrap())
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap(),
+                );
 
-                    let new_inputs = inputs
-                        .iter()
-                        .map(|plan| optimize(plan, execution_props))
-                        .collect::<Result<Vec<_>>>()?;
+                let final_agg = LogicalPlan::Aggregate {
+                    input: Arc::new(grouped_agg.unwrap()),
+                    aggr_expr: new_aggr_expr,
+                    schema: final_agg_schema.clone(),
+                    group_expr: group_expr.clone(),
+                };
 
-                    utils::from_plan(plan, &expr, &new_inputs)
-                }
+                let mut alias_expr: Vec<Expr> = Vec::new();
+                final_agg
+                    .expressions()
+                    .iter()
+                    .enumerate()
+                    .for_each(|(i, field)| {
+                        alias_expr.push(columnize_expr(
+                            field.clone().alias(schema.clone().fields()[i].name()),
+                            &final_agg_schema,
+                        ));
+                    });
+
+                Ok(LogicalPlan::Projection {
+                    expr: alias_expr,
+                    input: Arc::new(final_agg),
+                    schema: schema.clone(),
+                    alias: Option::None,
+                })
+            } else {
+                optimize_children(plan)
             }
         }
-        _ => {
-            let expr = plan.expressions();
-            let inputs = plan.inputs();
-            let new_inputs = inputs
-                .iter()
-                .map(|plan| optimize(plan, execution_props))
-                .collect::<Result<Vec<_>>>()?;
-            utils::from_plan(plan, &expr, &new_inputs)
-        }
+        _ => optimize_children(plan),
     }
 }
 
-fn is_single_agg(plan: &LogicalPlan) -> bool {
+fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
+    let expr = plan.expressions();
+    let inputs = plan.inputs();
+    let new_inputs = inputs
+        .iter()
+        .map(|plan| optimize(plan))
+        .collect::<Result<Vec<_>>>()?;
+    utils::from_plan(plan, &expr, &new_inputs)
+}
+
+fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
     match plan {
-        LogicalPlan::Aggregate {
-            input: _,
-            aggr_expr,
-            ..
-        } => {
-            let mut distinct_agg_num = 0;
-            aggr_expr.iter().for_each(|aggfunc| {
-                if let Expr::AggregateFunction {
-                    fun: _,
-                    args: _,
-                    distinct,
-                } = aggfunc
-                {
-                    if *distinct {
-                        distinct_agg_num += 1;
-                    }
-                }
-            });
-            !aggr_expr.is_empty() && aggr_expr.len() == distinct_agg_num
+        LogicalPlan::Aggregate { aggr_expr, .. } => {
+            aggr_expr.len() == 1
+                && aggr_expr
+                    .iter()
+                    .filter(|expr| {
+                        let mut is_distinct = false;
+                        if let Expr::AggregateFunction { distinct, .. } = expr {
+                            is_distinct = *distinct;
+                        }
+                        is_distinct
+                    })
+                    .count()
+                    == 1
         }
         _ => false,
     }
@@ -151,9 +167,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        execution_props: &ExecutionProps,
+        _execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
-        optimize(plan, execution_props)
+        optimize(plan)
     }
     fn name(&self) -> &str {
         "SingleDistinctAggregationToGroupBy"
@@ -198,9 +214,10 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(#test.b)]] [COUNT(DISTINCT test.b):UInt64;N]\
-                            \n  Aggregate: groupBy=[[#test.b]], aggr=[[]] [b:UInt32]\
-                            \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        let expected = "Projection: #COUNT(test.b) AS COUNT(DISTINCT test.b) [COUNT(DISTINCT test.b):UInt64;N]\
+                            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#test.b)]] [COUNT(test.b):UInt64;N]\
+                            \n    Aggregate: groupBy=[[#test.b]], aggr=[[]] [b:UInt32]\
+                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -214,9 +231,10 @@ mod tests {
             .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#test.b)]] [a:UInt32, COUNT(DISTINCT test.b):UInt64;N]\
-                            \n  Aggregate: groupBy=[[#test.a, #test.b]], aggr=[[]] [a:UInt32, b:UInt32]\
-                            \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        let expected = "Projection: #test.a AS a, #COUNT(test.b) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):UInt64;N]\
+                            \n  Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#test.b)]] [a:UInt32, COUNT(test.b):UInt64;N]\
+                            \n    Aggregate: groupBy=[[#test.a, #test.b]], aggr=[[]] [a:UInt32, b:UInt32]\
+                            \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -233,9 +251,8 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#test.b), COUNT(#test.c)]] [a:UInt32, COUNT(DISTINCT test.b):UInt64;N, COUNT(DISTINCT test.c):UInt64;N]\
-                            \n  Aggregate: groupBy=[[#test.a, #test.b, #test.c]], aggr=[[]] [a:UInt32, b:UInt32, c:UInt32]\
-                            \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(DISTINCT #test.b), COUNT(DISTINCT #test.c)]] [a:UInt32, COUNT(DISTINCT test.b):UInt64;N, COUNT(DISTINCT test.c):UInt64;N]\
+                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
