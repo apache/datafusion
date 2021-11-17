@@ -898,13 +898,13 @@ impl Default for ExecutionConfig {
             target_partitions: num_cpus::get(),
             batch_size: 8192,
             optimizers: vec![
+                Arc::new(ConstantFolding::new()),
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(SimplifyExpressions::new()),
                 Arc::new(LimitPushDown::new()),
-                Arc::new(ConstantFolding::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(AggregateStatistics::new()),

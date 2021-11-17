@@ -1342,6 +1342,17 @@ impl DefaultPhysicalPlanner {
         }
     }
 
+    fn remove_aliases<'a>(&self, expr: &'a Expr) -> Result<(String, &'a Expr)> {
+        let (name, e) = match expr {
+            Expr::Alias(sub_expr, alias) => match &**sub_expr {
+                Expr::Alias(nested_expr, _) => self.remove_aliases(&*nested_expr)?,
+                _ => (alias.clone(), sub_expr.as_ref()),
+            },
+            _ => (physical_name(expr)?, expr),
+        };
+        Ok((name, e))
+    }
+
     /// Create an aggregate expression from a logical expression or an alias
     pub fn create_aggregate_expr(
         &self,
@@ -1350,11 +1361,8 @@ impl DefaultPhysicalPlanner {
         physical_input_schema: &Schema,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn AggregateExpr>> {
-        // unpack aliased logical expressions, e.g. "sum(col) as total"
-        let (name, e) = match e {
-            Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-            _ => (physical_name(e)?, e),
-        };
+        // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
+        let (name, e) = self.remove_aliases(e)?;
 
         self.create_aggregate_expr_with_name(
             e,

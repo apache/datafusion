@@ -1288,11 +1288,11 @@ async fn query_count_without_from() -> Result<()> {
     let sql = "SELECT count(1 + 1)";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+-----------------+",
-        "| COUNT(Int64(2)) |",
-        "+-----------------+",
-        "| 1               |",
-        "+-----------------+",
+        "+----------------------------+",
+        "| COUNT(Int64(1) + Int64(1)) |",
+        "+----------------------------+",
+        "| 1                          |",
+        "+----------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
