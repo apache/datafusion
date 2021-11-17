@@ -70,11 +70,13 @@ impl Command {
             Self::ListFunctions => display_all_functions(),
             Self::SearchFunctions(function) => {
                 if let Ok(func) = function.parse::<Function>() {
-                    func.function_details()?
+                    let details = func.function_details()?;
+                    println!("{}", details);
+                    Ok(())
                 } else {
-                    eprintln!("{} is not a supported function", function)
+                    let msg = format!("{} is not a supported function", function);
+                    Err(DataFusionError::Execution(msg))
                 }
-                Ok(())
             }
         }
     }

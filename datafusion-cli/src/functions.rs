@@ -16,9 +16,14 @@
 // under the License.
 
 //! Command within CLI
+use arrow::array::StringArray;
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+use arrow::util::pretty::pretty_format_batches;
 use datafusion::error::{DataFusionError, Result};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum Function {
@@ -42,10 +47,10 @@ const ALL_FUNCTIONS: [Function; 7] = [
 ];
 
 impl Function {
-    pub fn function_details(&self) -> Result<()> {
-        match self {
+    pub fn function_details(&self) -> Result<&str> {
+        let details = match self {
             Function::Select => {
-                let details = "
+                r#"
 Command:     SELECT
 Description: retrieve rows from a table or view
 Syntax:
@@ -85,29 +90,26 @@ and with_query is:
 
     with_query_name [ ( column_name [, ...] ) ] AS [ [ NOT ] MATERIALIZED ] ( select | values | insert | update | delete )
 
-TABLE [ ONLY ] table_name [ * ]";
-                println!("{}", details)
+TABLE [ ONLY ] table_name [ * ]"#
             }
             Function::Explain => {
-                let details = "
+                r#"
 Command:     EXPLAIN
 Description: show the execution plan of a statement
 Syntax:
 EXPLAIN [ ANALYZE ] statement
-";
-                println!("{}", details)
+"#
             }
             Function::Show => {
-                let details = "
+                r#"
 Command:     SHOW
 Description: show the value of a run-time parameter
 Syntax:
 SHOW name
-";
-                println!("{}", details)
+"#
             }
             Function::CreateTable => {
-                let details = "
+                r#"
 Command:     CREATE TABLE
 Description: define a new table
 Syntax:
@@ -115,11 +117,10 @@ CREATE [ EXTERNAL ]  TABLE table_name ( [
   { column_name data_type }
     [, ... ]
 ] )
-";
-                println!("{}", details)
+"#
             }
             Function::CreateTableAs => {
-                let details = "
+                r#"
 Command:     CREATE TABLE AS
 Description: define a new table from the results of a query
 Syntax:
@@ -127,30 +128,27 @@ CREATE TABLE table_name
     [ (column_name [, ...] ) ]
     AS query
     [ WITH [ NO ] DATA ]
-";
-                println!("{}", details)
+"#
             }
             Function::Insert => {
-                let details = "
+                r#"
 Command:     INSERT
 Description: create new rows in a table
 Syntax:
 INSERT INTO table_name [ ( column_name [, ...] ) ]
     { VALUES ( { expression } [, ...] ) [, ...] }
-";
-                println!("{}", details)
+"#
             }
             Function::DropTable => {
-                let details = "
+                r#"
 Command:     DROP TABLE
 Description: remove a table
 Syntax:
 DROP TABLE [ IF EXISTS ] name [, ...]
-";
-                println!("{}", details)
+"#
             }
-        }
-        Ok(())
+        };
+        Ok(details)
     }
 }
 
@@ -187,6 +185,14 @@ impl fmt::Display for Function {
 
 pub fn display_all_functions() -> Result<()> {
     println!("Available help:");
-    ALL_FUNCTIONS.iter().for_each(|f| println!("{}", f));
+    let array = StringArray::from(
+        ALL_FUNCTIONS
+            .iter()
+            .map(|f| format!("{}", f))
+            .collect::<Vec<String>>(),
+    );
+    let schema = Schema::new(vec![Field::new("Function", DataType::Utf8, false)]);
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)])?;
+    println!("{}", pretty_format_batches(&[batch]).unwrap());
     Ok(())
 }
