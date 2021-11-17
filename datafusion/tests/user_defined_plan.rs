@@ -86,6 +86,7 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::execution::context::ExecutionProps;
+use datafusion::logical_plan::plan::ExtensionPlan;
 use datafusion::logical_plan::DFSchemaRef;
 
 /// Execute the specified sql and return the resulting record batches
@@ -295,13 +296,13 @@ impl OptimizerRule for TopKOptimizerRule {
             {
                 if expr.len() == 1 {
                     // we found a sort with a single sort expr, replace with a a TopK
-                    return Ok(LogicalPlan::Extension {
+                    return Ok(LogicalPlan::Extension(ExtensionPlan {
                         node: Arc::new(TopKPlanNode {
                             k: *n,
                             input: self.optimize(input.as_ref(), execution_props)?,
                             expr: expr[0].clone(),
                         }),
-                    });
+                    }));
                 }
             }
         }

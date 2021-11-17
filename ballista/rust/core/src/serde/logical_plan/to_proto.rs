@@ -32,6 +32,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
 use datafusion::logical_plan::{
     exprlist_to_fields,
+    plan::TableScanPlan,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
     Column, Expr, JoinConstraint, JoinType, LogicalPlan,
 };
@@ -695,13 +696,13 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )),
                 })
             }
-            LogicalPlan::TableScan {
+            LogicalPlan::TableScan(TableScanPlan {
                 table_name,
                 source,
                 filters,
                 projection,
                 ..
-            } => {
+            }) => {
                 let schema = source.schema();
                 let source = source.as_any();
 
@@ -972,24 +973,24 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )),
                 })
             }
-            LogicalPlan::Analyze { verbose, input, .. } => {
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+            LogicalPlan::Analyze(a) => {
+                let input: protobuf::LogicalPlanNode = a.input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Analyze(Box::new(
                         protobuf::AnalyzeNode {
                             input: Some(Box::new(input)),
-                            verbose: *verbose,
+                            verbose: a.verbose,
                         },
                     ))),
                 })
             }
-            LogicalPlan::Explain { verbose, plan, .. } => {
-                let input: protobuf::LogicalPlanNode = plan.as_ref().try_into()?;
+            LogicalPlan::Explain(a) => {
+                let input: protobuf::LogicalPlanNode = a.plan.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Explain(Box::new(
                         protobuf::ExplainNode {
                             input: Some(Box::new(input)),
-                            verbose: *verbose,
+                            verbose: a.verbose,
                         },
                     ))),
                 })
@@ -1124,6 +1125,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::ApproxDistinct => {
                         protobuf::AggregateFunction::ApproxDistinct
                     }
+                    AggregateFunction::ArrayAgg => protobuf::AggregateFunction::ArrayAgg,
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
                     AggregateFunction::Max => protobuf::AggregateFunction::Max,
                     AggregateFunction::Sum => protobuf::AggregateFunction::Sum,
@@ -1358,6 +1360,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Avg => Self::Avg,
             AggregateFunction::Count => Self::Count,
             AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
+            AggregateFunction::ArrayAgg => Self::ArrayAgg,
         }
     }
 }

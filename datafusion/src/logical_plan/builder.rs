@@ -25,7 +25,9 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::plan::ToStringifiedPlan;
+use crate::logical_plan::plan::{
+    AnalyzePlan, ExplainPlan, TableScanPlan, ToStringifiedPlan,
+};
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
 use arrow::{
@@ -392,15 +394,14 @@ impl LogicalPlanBuilder {
                 DFSchema::try_from_qualified_schema(&table_name, &schema)
             })?;
 
-        let table_scan = LogicalPlan::TableScan {
+        let table_scan = LogicalPlan::TableScan(TableScanPlan {
             table_name,
             source: provider,
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
             limit: None,
-        };
-
+        });
         Ok(Self::from(table_scan))
     }
     /// Wrap a plan in a window
@@ -697,21 +698,21 @@ impl LogicalPlanBuilder {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(Self::from(LogicalPlan::Analyze {
+            Ok(Self::from(LogicalPlan::Analyze(AnalyzePlan {
                 verbose,
                 input: Arc::new(self.plan.clone()),
                 schema,
-            }))
+            })))
         } else {
             let stringified_plans =
                 vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
-            Ok(Self::from(LogicalPlan::Explain {
+            Ok(Self::from(LogicalPlan::Explain(ExplainPlan {
                 verbose,
                 plan: Arc::new(self.plan.clone()),
                 stringified_plans,
                 schema,
-            }))
+            })))
         }
     }
 
