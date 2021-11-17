@@ -268,10 +268,7 @@ impl ExecutionContext {
                 }
             }
 
-            plan => Ok(Arc::new(DataFrameImpl::new(
-                self.state.clone(),
-                &self.optimize(&plan)?,
-            ))),
+            plan => Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan))),
         }
     }
 
