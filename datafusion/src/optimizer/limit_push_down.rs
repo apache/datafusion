@@ -20,8 +20,8 @@
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::LogicalPlan;
 use crate::logical_plan::TableScanPlan;
+use crate::logical_plan::{LogicalPlan, Union};
 use crate::optimizer::optimizer::OptimizerRule;
 use std::sync::Arc;
 
@@ -99,11 +99,11 @@ fn limit_push_down(
             })
         }
         (
-            LogicalPlan::Union {
+            LogicalPlan::Union(Union {
                 inputs,
                 alias,
                 schema,
-            },
+            }),
             Some(upper_limit),
         ) => {
             // Push down limit through UNION
@@ -121,11 +121,11 @@ fn limit_push_down(
                     })
                 })
                 .collect::<Result<_>>()?;
-            Ok(LogicalPlan::Union {
+            Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs,
                 alias: alias.clone(),
                 schema: schema.clone(),
-            })
+            }))
         }
         // For other nodes we can't push down the limit
         // But try to recurse and find other limit nodes to push down

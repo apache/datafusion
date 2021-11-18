@@ -68,7 +68,7 @@ impl OptimizerRule for ConstantFolding {
             | LogicalPlan::Projection { .. }
             | LogicalPlan::Window { .. }
             | LogicalPlan::Aggregate { .. }
-            | LogicalPlan::Repartition { .. }
+            | LogicalPlan::Repartition(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::DropTable(_)
@@ -78,9 +78,9 @@ impl OptimizerRule for ConstantFolding {
             | LogicalPlan::Explain { .. }
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Limit { .. }
-            | LogicalPlan::Union { .. }
+            | LogicalPlan::Union(_)
             | LogicalPlan::Join { .. }
-            | LogicalPlan::CrossJoin { .. } => {
+            | LogicalPlan::CrossJoin(_) => {
                 // apply the optimization to all inputs of the plan
                 let inputs = plan.inputs();
                 let new_inputs = inputs

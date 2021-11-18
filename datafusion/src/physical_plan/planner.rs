@@ -25,8 +25,8 @@ use super::{
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::TableScanPlan;
 use crate::logical_plan::{
-    unnormalize_cols, DFSchema, Expr, LogicalPlan, Operator,
-    Partitioning as LogicalPartitioning, PlanType, ToStringifiedPlan,
+    unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
+    Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
     UserDefinedLogicalNode,
 };
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
@@ -643,17 +643,17 @@ impl DefaultPhysicalPlanner {
                     )?;
                     Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?) )
                 }
-                LogicalPlan::Union { inputs, .. } => {
+                LogicalPlan::Union(Union { inputs, .. }) => {
                     let physical_plans = futures::stream::iter(inputs)
                         .then(|lp| self.create_initial_plan(lp, ctx_state))
                         .try_collect::<Vec<_>>()
                         .await?;
                     Ok(Arc::new(UnionExec::new(physical_plans)) )
                 }
-                LogicalPlan::Repartition {
+                LogicalPlan::Repartition(Repartition {
                     input,
                     partitioning_scheme,
-                } => {
+                }) => {
                     let physical_input = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = physical_input.schema();
                     let input_dfschema = input.as_ref().schema();
@@ -776,7 +776,7 @@ impl DefaultPhysicalPlanner {
                         )?))
                     }
                 }
-                LogicalPlan::CrossJoin { left, right, .. } => {
+                LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                     let left = self.create_initial_plan(left, ctx_state).await?;
                     let right = self.create_initial_plan(right, ctx_state).await?;
                     Ok(Arc::new(CrossJoinExec::try_new(left, right)?))

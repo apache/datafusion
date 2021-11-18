@@ -16,7 +16,9 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::{and, replace_col, Column, LogicalPlan, TableScanPlan};
+use crate::logical_plan::{
+    and, replace_col, Column, CrossJoin, LogicalPlan, TableScanPlan,
+};
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -374,7 +376,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // sort is filter-commutable
             push_down(&state, plan)
         }
-        LogicalPlan::Union { .. } => {
+        LogicalPlan::Union(_) => {
             // union all is filter-commutable
             push_down(&state, plan)
         }
@@ -388,7 +390,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .collect::<HashSet<_>>();
             issue_filters(state, used_columns, plan)
         }
-        LogicalPlan::CrossJoin { left, right, .. } => {
+        LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
             optimize_join(state, plan, left, right)
         }
         LogicalPlan::Join {

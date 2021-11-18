@@ -74,6 +74,37 @@ pub struct TableScanPlan {
     pub limit: Option<usize>,
 }
 
+/// Apply Cross Join to two logical plans
+#[derive(Clone)]
+pub struct CrossJoin {
+    /// Left input
+    pub left: Arc<LogicalPlan>,
+    /// Right input
+    pub right: Arc<LogicalPlan>,
+    /// The output schema, containing fields from the left and right inputs
+    pub schema: DFSchemaRef,
+}
+
+/// Repartition the plan based on a partitioning scheme.
+#[derive(Clone)]
+pub struct Repartition {
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+    /// The partitioning scheme
+    pub partitioning_scheme: Partitioning,
+}
+
+/// Union multiple inputs
+#[derive(Clone)]
+pub struct Union {
+    /// Inputs to merge
+    pub inputs: Vec<LogicalPlan>,
+    /// Union schema. Should be the same for all inputs.
+    pub schema: DFSchemaRef,
+    /// Union output relation alias
+    pub alias: Option<String>,
+}
+
 /// Creates an in memory table.
 #[derive(Clone)]
 pub struct CreateMemoryTable {
@@ -224,30 +255,11 @@ pub enum LogicalPlan {
         null_equals_null: bool,
     },
     /// Apply Cross Join to two logical plans
-    CrossJoin {
-        /// Left input
-        left: Arc<LogicalPlan>,
-        /// Right input
-        right: Arc<LogicalPlan>,
-        /// The output schema, containing fields from the left and right inputs
-        schema: DFSchemaRef,
-    },
+    CrossJoin(CrossJoin),
     /// Repartition the plan based on a partitioning scheme.
-    Repartition {
-        /// The incoming logical plan
-        input: Arc<LogicalPlan>,
-        /// The partitioning scheme
-        partitioning_scheme: Partitioning,
-    },
+    Repartition(Repartition),
     /// Union multiple inputs
-    Union {
-        /// Inputs to merge
-        inputs: Vec<LogicalPlan>,
-        /// Union schema. Should be the same for all inputs.
-        schema: DFSchemaRef,
-        /// Union output relation alias
-        alias: Option<String>,
-    },
+    Union(Union),
     /// Produces rows from a table provider by reference or from the context
     TableScan(TableScanPlan),
     /// Produces no rows: An empty relation with an empty schema
@@ -304,8 +316,8 @@ impl LogicalPlan {
             LogicalPlan::Aggregate { schema, .. } => schema,
             LogicalPlan::Sort { input, .. } => input.schema(),
             LogicalPlan::Join { schema, .. } => schema,
-            LogicalPlan::CrossJoin { schema, .. } => schema,
-            LogicalPlan::Repartition { input, .. } => input.schema(),
+            LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
+            LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit { input, .. } => input.schema(),
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 schema
@@ -313,7 +325,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
-            LogicalPlan::Union { schema, .. } => schema,
+            LogicalPlan::Union(Union { schema, .. }) => schema,
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
                 input.schema()
             }
@@ -341,17 +353,17 @@ impl LogicalPlan {
                 schema,
                 ..
             }
-            | LogicalPlan::CrossJoin {
+            | LogicalPlan::CrossJoin(CrossJoin {
                 left,
                 right,
                 schema,
-            } => {
+            }) => {
                 let mut schemas = left.all_schemas();
                 schemas.extend(right.all_schemas());
                 schemas.insert(0, schema);
                 schemas
             }
-            LogicalPlan::Union { schema, .. } => {
+            LogicalPlan::Union(Union { schema, .. }) => {
                 vec![schema]
             }
             LogicalPlan::Extension(extension) => vec![extension.node.schema()],
@@ -362,7 +374,7 @@ impl LogicalPlan {
                 vec![schema]
             }
             LogicalPlan::Limit { input, .. }
-            | LogicalPlan::Repartition { input, .. }
+            | LogicalPlan::Repartition(Repartition { input, .. })
             | LogicalPlan::Sort { input, .. }
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::Filter { input, .. } => input.all_schemas(),
@@ -388,10 +400,10 @@ impl LogicalPlan {
                 values.iter().flatten().cloned().collect()
             }
             LogicalPlan::Filter { predicate, .. } => vec![predicate.clone()],
-            LogicalPlan::Repartition {
+            LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
-            } => match partitioning_scheme {
+            }) => match partitioning_scheme {
                 Partitioning::Hash(expr, _) => expr.clone(),
                 _ => vec![],
             },
@@ -414,10 +426,10 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::DropTable(_)
-            | LogicalPlan::CrossJoin { .. }
+            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
-            | LogicalPlan::Union { .. } => {
+            | LogicalPlan::Union(_) => {
                 vec![]
             }
         }
@@ -429,15 +441,15 @@ impl LogicalPlan {
         match self {
             LogicalPlan::Projection { input, .. } => vec![input],
             LogicalPlan::Filter { input, .. } => vec![input],
-            LogicalPlan::Repartition { input, .. } => vec![input],
+            LogicalPlan::Repartition(Repartition { input, .. }) => vec![input],
             LogicalPlan::Window { input, .. } => vec![input],
             LogicalPlan::Aggregate { input, .. } => vec![input],
             LogicalPlan::Sort { input, .. } => vec![input],
             LogicalPlan::Join { left, right, .. } => vec![left, right],
-            LogicalPlan::CrossJoin { left, right, .. } => vec![left, right],
+            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
             LogicalPlan::Limit { input, .. } => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
-            LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
+            LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
@@ -564,15 +576,17 @@ impl LogicalPlan {
         let recurse = match self {
             LogicalPlan::Projection { input, .. } => input.accept(visitor)?,
             LogicalPlan::Filter { input, .. } => input.accept(visitor)?,
-            LogicalPlan::Repartition { input, .. } => input.accept(visitor)?,
+            LogicalPlan::Repartition(Repartition { input, .. }) => {
+                input.accept(visitor)?
+            }
             LogicalPlan::Window { input, .. } => input.accept(visitor)?,
             LogicalPlan::Aggregate { input, .. } => input.accept(visitor)?,
             LogicalPlan::Sort { input, .. } => input.accept(visitor)?,
             LogicalPlan::Join { left, right, .. }
-            | LogicalPlan::CrossJoin { left, right, .. } => {
+            | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 left.accept(visitor)? && right.accept(visitor)?
             }
-            LogicalPlan::Union { inputs, .. } => {
+            LogicalPlan::Union(Union { inputs, .. }) => {
                 for input in inputs {
                     if !input.accept(visitor)? {
                         return Ok(false);
@@ -887,13 +901,13 @@ impl LogicalPlan {
                             }
                         }
                     }
-                    LogicalPlan::CrossJoin { .. } => {
+                    LogicalPlan::CrossJoin(_) => {
                         write!(f, "CrossJoin:")
                     }
-                    LogicalPlan::Repartition {
+                    LogicalPlan::Repartition(Repartition {
                         partitioning_scheme,
                         ..
-                    } => match partitioning_scheme {
+                    }) => match partitioning_scheme {
                         Partitioning::RoundRobinBatch(n) => write!(
                             f,
                             "Repartition: RoundRobinBatch partition_count={}",
@@ -927,7 +941,7 @@ impl LogicalPlan {
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
-                    LogicalPlan::Union { .. } => write!(f, "Union"),
+                    LogicalPlan::Union(_) => write!(f, "Union"),
                     LogicalPlan::Extension(e) => e.node.fmt_for_explain(f),
                 }
             }
