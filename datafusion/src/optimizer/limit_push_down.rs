@@ -20,7 +20,7 @@
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::TableScanPlan;
+use crate::logical_plan::TableScanPlan;
 use crate::logical_plan::{LogicalPlan, Union};
 use crate::optimizer::optimizer::OptimizerRule;
 use std::sync::Arc;

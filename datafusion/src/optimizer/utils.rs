@@ -23,10 +23,11 @@ use arrow::record_batch::RecordBatch;
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
+use crate::logical_plan::plan::{AnalyzePlan, ExtensionPlan};
 use crate::logical_plan::{
-    build_join_schema, Column, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan,
-    LogicalPlanBuilder, Operator, Partitioning, Recursion, Repartition, RewriteRecursion,
-    Union,
+    build_join_schema, Column, CreateMemoryTable, DFSchema, DFSchemaRef, Expr,
+    ExprRewriter, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
+    Repartition, RewriteRecursion, Union,
 };
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -225,15 +226,15 @@ pub fn from_plan(
             n: *n,
             input: Arc::new(inputs[0].clone()),
         }),
-        LogicalPlan::CreateMemoryTable { name, .. } => {
-            Ok(LogicalPlan::CreateMemoryTable {
+        LogicalPlan::CreateMemoryTable(CreateMemoryTable { name, .. }) => {
+            Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 input: Arc::new(inputs[0].clone()),
                 name: name.clone(),
-            })
+            }))
         }
-        LogicalPlan::Extension { node } => Ok(LogicalPlan::Extension {
-            node: node.from_template(expr, inputs),
-        }),
+        LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(ExtensionPlan {
+            node: e.node.from_template(expr, inputs),
+        })),
         LogicalPlan::Union(Union { schema, alias, .. }) => {
             Ok(LogicalPlan::Union(Union {
                 inputs: inputs.to_vec(),
@@ -241,18 +242,16 @@ pub fn from_plan(
                 alias: alias.clone(),
             }))
         }
-        LogicalPlan::Analyze {
-            verbose, schema, ..
-        } => {
+        LogicalPlan::Analyze(a) => {
             assert!(expr.is_empty());
             assert_eq!(inputs.len(), 1);
-            Ok(LogicalPlan::Analyze {
-                verbose: *verbose,
-                schema: schema.clone(),
+            Ok(LogicalPlan::Analyze(AnalyzePlan {
+                verbose: a.verbose,
+                schema: a.schema.clone(),
                 input: Arc::new(inputs[0].clone()),
-            })
+            }))
         }
-        LogicalPlan::Explain { .. } => {
+        LogicalPlan::Explain(_) => {
             // Explain should be handled specially in the optimizers;
             // If this assert fails it means some optimizer pass is
             // trying to optimize Explain directly
@@ -268,8 +267,8 @@ pub fn from_plan(
         }
         LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::TableScan { .. }
-        | LogicalPlan::CreateExternalTable { .. }
-        | LogicalPlan::DropTable { .. } => {
+        | LogicalPlan::CreateExternalTable(_)
+        | LogicalPlan::DropTable(_) => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{:?} should have no exprs", plan);
             assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);

@@ -16,8 +16,9 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::TableScanPlan;
-use crate::logical_plan::{and, replace_col, Column, CrossJoin, LogicalPlan};
+use crate::logical_plan::{
+    and, replace_col, Column, CrossJoin, LogicalPlan, TableScanPlan,
+};
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
