@@ -433,9 +433,9 @@ fn optimize_plan(
         | LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::Values { .. }
         | LogicalPlan::Sort { .. }
-        | LogicalPlan::CreateExternalTable { .. }
-        | LogicalPlan::CreateMemoryTable { .. }
-        | LogicalPlan::DropTable { .. }
+        | LogicalPlan::CreateExternalTable(_)
+        | LogicalPlan::CreateMemoryTable(_)
+        | LogicalPlan::DropTable(_)
         | LogicalPlan::CrossJoin { .. }
         | LogicalPlan::Extension { .. } => {
             let expr = plan.expressions();

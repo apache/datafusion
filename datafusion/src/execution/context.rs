@@ -63,7 +63,8 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::execution::dataframe_impl::DataFrameImpl;
 use crate::logical_plan::{
-    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    CreateExternalTable, CreateMemoryTable, DropTable, FunctionRegistry, LogicalPlan,
+    LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::constant_folding::ConstantFolding;
@@ -191,13 +192,13 @@ impl ExecutionContext {
     pub async fn sql(&mut self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let plan = self.create_logical_plan(sql)?;
         match plan {
-            LogicalPlan::CreateExternalTable {
+            LogicalPlan::CreateExternalTable(CreateExternalTable {
                 ref schema,
                 ref name,
                 ref location,
                 ref file_type,
                 ref has_header,
-            } => {
+            }) => {
                 let file_format = match file_type {
                     FileType::CSV => {
                         Ok(Arc::new(CsvFormat::default().with_has_header(*has_header))
@@ -241,7 +242,7 @@ impl ExecutionContext {
                 Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
             }
 
-            LogicalPlan::CreateMemoryTable { input, name } => {
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { name, input }) => {
                 let plan = self.optimize(&input)?;
                 let physical = Arc::new(DataFrameImpl::new(self.state.clone(), &plan));
 
@@ -256,7 +257,7 @@ impl ExecutionContext {
                 Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
             }
 
-            LogicalPlan::DropTable { name, if_exist, .. } => {
+            LogicalPlan::DropTable(DropTable { name, if_exist, .. }) => {
                 let returned = self.deregister_table(name.as_str())?;
                 if !if_exist && returned.is_none() {
                     Err(DataFusionError::Execution(format!(
@@ -1174,7 +1175,7 @@ impl FunctionRegistry for ExecutionContextState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::plan::TableScanPlan;
+    use crate::logical_plan::TableScanPlan;
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::physical_plan::{collect, collect_partitioned};

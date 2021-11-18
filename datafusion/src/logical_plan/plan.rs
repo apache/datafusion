@@ -74,6 +74,41 @@ pub struct TableScanPlan {
     pub limit: Option<usize>,
 }
 
+/// Creates an in memory table.
+#[derive(Clone)]
+pub struct CreateMemoryTable {
+    /// The table name
+    pub name: String,
+    /// The logical plan
+    pub input: Arc<LogicalPlan>,
+}
+
+/// Creates an external table.
+#[derive(Clone)]
+pub struct CreateExternalTable {
+    /// The table schema
+    pub schema: DFSchemaRef,
+    /// The table name
+    pub name: String,
+    /// The physical location
+    pub location: String,
+    /// The file type of physical file
+    pub file_type: FileType,
+    /// Whether the CSV file contains a header
+    pub has_header: bool,
+}
+
+/// Drops a table.
+#[derive(Clone)]
+pub struct DropTable {
+    /// The table name
+    pub name: String,
+    /// If the table exists
+    pub if_exist: bool,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
 /// Produces a relation with string representations of
 /// various parts of the plan
 #[derive(Clone)]
@@ -230,34 +265,11 @@ pub enum LogicalPlan {
         input: Arc<LogicalPlan>,
     },
     /// Creates an external table.
-    CreateExternalTable {
-        /// The table schema
-        schema: DFSchemaRef,
-        /// The table name
-        name: String,
-        /// The physical location
-        location: String,
-        /// The file type of physical file
-        file_type: FileType,
-        /// Whether the CSV file contains a header
-        has_header: bool,
-    },
+    CreateExternalTable(CreateExternalTable),
     /// Creates an in memory table.
-    CreateMemoryTable {
-        /// The table name
-        name: String,
-        /// The logical plan
-        input: Arc<LogicalPlan>,
-    },
+    CreateMemoryTable(CreateMemoryTable),
     /// Drops a table.
-    DropTable {
-        /// The table name
-        name: String,
-        /// If the table exists
-        if_exist: bool,
-        /// Dummy schema
-        schema: DFSchemaRef,
-    },
+    DropTable(DropTable),
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
@@ -295,13 +307,17 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin { schema, .. } => schema,
             LogicalPlan::Repartition { input, .. } => input.schema(),
             LogicalPlan::Limit { input, .. } => input.schema(),
-            LogicalPlan::CreateExternalTable { schema, .. } => schema,
+            LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
+                schema
+            }
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::Union { schema, .. } => schema,
-            LogicalPlan::CreateMemoryTable { input, .. } => input.schema(),
-            LogicalPlan::DropTable { schema, .. } => schema,
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
+                input.schema()
+            }
+            LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
         }
     }
 
@@ -342,13 +358,15 @@ impl LogicalPlan {
             LogicalPlan::Explain(ExplainPlan { schema, .. })
             | LogicalPlan::Analyze(AnalyzePlan { schema, .. })
             | LogicalPlan::EmptyRelation { schema, .. }
-            | LogicalPlan::CreateExternalTable { schema, .. } => vec![schema],
+            | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
+                vec![schema]
+            }
             LogicalPlan::Limit { input, .. }
             | LogicalPlan::Repartition { input, .. }
             | LogicalPlan::Sort { input, .. }
-            | LogicalPlan::CreateMemoryTable { input, .. }
+            | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::Filter { input, .. } => input.all_schemas(),
-            LogicalPlan::DropTable { .. } => vec![],
+            LogicalPlan::DropTable(_) => vec![],
         }
     }
 
@@ -393,9 +411,9 @@ impl LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Limit { .. }
-            | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::CreateMemoryTable { .. }
-            | LogicalPlan::DropTable { .. }
+            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::DropTable(_)
             | LogicalPlan::CrossJoin { .. }
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
@@ -422,13 +440,15 @@ impl LogicalPlan {
             LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
-            LogicalPlan::CreateMemoryTable { input, .. } => vec![input],
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
+                vec![input]
+            }
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::DropTable { .. } => vec![],
+            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::DropTable(_) => vec![],
         }
     }
 
@@ -561,7 +581,9 @@ impl LogicalPlan {
                 true
             }
             LogicalPlan::Limit { input, .. } => input.accept(visitor)?,
-            LogicalPlan::CreateMemoryTable { input, .. } => input.accept(visitor)?,
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
+                input.accept(visitor)?
+            }
             LogicalPlan::Extension(extension) => {
                 for input in extension.node.inputs() {
                     if !input.accept(visitor)? {
@@ -576,8 +598,8 @@ impl LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::DropTable { .. } => true,
+            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::DropTable(_) => true,
         };
         if !recurse {
             return Ok(false);
@@ -889,15 +911,18 @@ impl LogicalPlan {
                         }
                     },
                     LogicalPlan::Limit { ref n, .. } => write!(f, "Limit: {}", n),
-                    LogicalPlan::CreateExternalTable { ref name, .. } => {
+                    LogicalPlan::CreateExternalTable(CreateExternalTable {
+                        ref name,
+                        ..
+                    }) => {
                         write!(f, "CreateExternalTable: {:?}", name)
                     }
-                    LogicalPlan::CreateMemoryTable { ref name, .. } => {
+                    LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                        name, ..
+                    }) => {
                         write!(f, "CreateMemoryTable: {:?}", name)
                     }
-                    LogicalPlan::DropTable {
-                        ref name, if_exist, ..
-                    } => {
+                    LogicalPlan::DropTable(DropTable { name, if_exist, .. }) => {
                         write!(f, "DropTable: {:?} if not exist:={}", name, if_exist)
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
