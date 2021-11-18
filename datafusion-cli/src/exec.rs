@@ -84,6 +84,8 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: &PrintOptions) {
     rl.set_helper(Some(CliHelper::default()));
     rl.load_history(".history").ok();
 
+    let mut print_options = print_options.clone();
+
     loop {
         match rl.readline("❯ ") {
             Ok(line) if line.starts_with('\\') => {
@@ -91,8 +93,11 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: &PrintOptions) {
                 if let Ok(cmd) = &line[1..].parse::<Command>() {
                     match cmd {
                         Command::Quit => break,
+                        Command::QuietMode(quiet) => {
+                            print_options.quiet = *quiet;
+                        }
                         _ => {
-                            if let Err(e) = cmd.execute(ctx, print_options).await {
+                            if let Err(e) = cmd.execute(ctx, &print_options).await {
                                 eprintln!("{}", e)
                             }
                         }
@@ -103,7 +108,7 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: &PrintOptions) {
             }
             Ok(line) => {
                 rl.add_history_entry(line.trim_end());
-                match exec_and_print(ctx, print_options, line).await {
+                match exec_and_print(ctx, &print_options, line).await {
                     Ok(_) => {}
                     Err(err) => eprintln!("{:?}", err),
                 }
