@@ -111,12 +111,12 @@ impl OptimizerRule for ConstantFolding {
                         // Some plans will be candidates in projection pushdown rule to
                         // trim expressions based on expression names. We need to keep
                         // expression name for them.
-                        let is_plan_for_projection_pushdown = match plan {
+                        let is_plan_for_projection_pushdown = matches!(
+                            plan,
                             LogicalPlan::Window { .. }
-                            | LogicalPlan::Aggregate { .. }
-                            | LogicalPlan::Union { .. } => true,
-                            _ => false,
-                        };
+                                | LogicalPlan::Aggregate { .. }
+                                | LogicalPlan::Union { .. }
+                        );
 
                         if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
                             if expr_name != new_expr_name
