@@ -23,7 +23,7 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
-use crate::logical_plan::plan::TableScanPlan;
+use crate::logical_plan::TableScanPlan;
 use crate::logical_plan::{
     unnormalize_cols, DFSchema, Expr, LogicalPlan, Operator,
     Partitioning as LogicalPartitioning, PlanType, ToStringifiedPlan,
@@ -803,7 +803,7 @@ impl DefaultPhysicalPlanner {
 
                     Ok(Arc::new(GlobalLimitExec::new(input, limit)))
                 }
-                LogicalPlan::CreateExternalTable { .. } => {
+                LogicalPlan::CreateExternalTable(_) => {
                     // There is no default plan for "CREATE EXTERNAL
                     // TABLE" -- it must be handled at a higher level (so
                     // that the appropriate table can be registered with
@@ -812,7 +812,7 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateExternalTable".to_string(),
                     ))
                 }
-                | LogicalPlan::CreateMemoryTable {..} | LogicalPlan::DropTable {..} => {
+                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable (_) => {
                     // Create a dummy exec.
                     Ok(Arc::new(EmptyExec::new(
                         false,

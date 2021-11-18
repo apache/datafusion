@@ -28,7 +28,8 @@ mod roundtrip_tests {
         arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit},
         datasource::object_store::local::LocalFileSystem,
         logical_plan::{
-            col, Expr, LogicalPlan, LogicalPlanBuilder, Partitioning, ToDFSchema,
+            col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder,
+            Partitioning, ToDFSchema,
         },
         physical_plan::functions::BuiltinScalarFunction::Sqrt,
         prelude::*,
@@ -655,13 +656,14 @@ mod roundtrip_tests {
         ];
 
         for file in filetypes.iter() {
-            let create_table_node = LogicalPlan::CreateExternalTable {
-                schema: df_schema_ref.clone(),
-                name: String::from("TestName"),
-                location: String::from("employee.csv"),
-                file_type: *file,
-                has_header: true,
-            };
+            let create_table_node =
+                LogicalPlan::CreateExternalTable(CreateExternalTable {
+                    schema: df_schema_ref.clone(),
+                    name: String::from("TestName"),
+                    location: String::from("employee.csv"),
+                    file_type: *file,
+                    has_header: true,
+                });
 
             roundtrip_test!(create_table_node);
         }
