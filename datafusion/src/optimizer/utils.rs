@@ -23,7 +23,9 @@ use arrow::record_batch::RecordBatch;
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
-use crate::logical_plan::plan::{AnalyzePlan, ExtensionPlan, Filter, Projection, Window};
+use crate::logical_plan::plan::{
+    Aggregate, AnalyzePlan, ExtensionPlan, Filter, Projection, Window,
+};
 use crate::logical_plan::{
     build_join_schema, Column, CreateMemoryTable, DFSchema, DFSchemaRef, Expr,
     ExprRewriter, Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning,
@@ -188,14 +190,14 @@ pub fn from_plan(
             window_expr: expr[0..window_expr.len()].to_vec(),
             schema: schema.clone(),
         })),
-        LogicalPlan::Aggregate {
-            group_expr, schema, ..
-        } => Ok(LogicalPlan::Aggregate {
-            group_expr: expr[0..group_expr.len()].to_vec(),
-            aggr_expr: expr[group_expr.len()..].to_vec(),
-            input: Arc::new(inputs[0].clone()),
-            schema: schema.clone(),
-        }),
+        LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
+            Ok(LogicalPlan::Aggregate(AggregatePlan {
+                group_expr: expr[0..group_expr.len()].to_vec(),
+                aggr_expr: expr[group_expr.len()..].to_vec(),
+                input: Arc::new(inputs[0].clone()),
+                schema: schema.clone(),
+            }))
+        }
         LogicalPlan::Sort { .. } => Ok(LogicalPlan::Sort {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),

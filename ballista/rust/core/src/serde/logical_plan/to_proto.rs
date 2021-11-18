@@ -30,7 +30,9 @@ use datafusion::datasource::TableProvider;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
-use datafusion::logical_plan::plan::{EmptyRelation, Filter, Projection, Window};
+use datafusion::logical_plan::plan::{
+    Aggregate, EmptyRelation, Filter, Projection, Window,
+};
 use datafusion::logical_plan::{
     exprlist_to_fields,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
@@ -823,12 +825,12 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Aggregate {
-                input,
+            LogicalPlan::Aggregate(Aggregate {
                 group_expr,
                 aggr_expr,
+                input,
                 ..
-            } => {
+            }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Aggregate(Box::new(
