@@ -106,15 +106,28 @@ impl OptimizerRule for ConstantFolding {
                             .rewrite(&mut const_evaluator)?
                             .rewrite(&mut simplifier)?;
 
-                        match &new_e {
-                            Expr::Alias(_, _) | Expr::Column(_) => Ok(new_e),
-                            _ => {
-                                if let Ok(expr_name) = name {
-                                    Ok(new_e.alias(expr_name))
-                                } else {
-                                    Ok(new_e)
-                                }
+                        let new_name = &new_e.name(plan.schema());
+
+                        // Some plans will be candidates in projection pushdown rule to
+                        // trim expressions based on expression names. We need to keep
+                        // expression name for them.
+                        let is_plan_for_projection_pushdown = match plan {
+                            LogicalPlan::Window { .. }
+                            | LogicalPlan::Aggregate { .. }
+                            | LogicalPlan::Union { .. } => true,
+                            _ => false,
+                        };
+
+                        if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
+                            if expr_name != new_expr_name
+                                && is_plan_for_projection_pushdown
+                            {
+                                Ok(new_e.alias(expr_name))
+                            } else {
+                                Ok(new_e)
                             }
+                        } else {
+                            Ok(new_e)
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -747,7 +760,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b), MIN(#test.b)]]\
+        Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b) AS MAX(test.b = Boolean(true)), MIN(#test.b)]]\
         \n  Projection: #test.a, #test.c, #test.b\
         \n    TableScan: test projection=None";
 
