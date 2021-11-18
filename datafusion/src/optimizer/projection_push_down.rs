@@ -20,7 +20,7 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{AnalyzePlan, TableScanPlan};
+use crate::logical_plan::plan::{AggregatePlan, AnalyzePlan, TableScanPlan};
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
     LogicalPlanBuilder, ToDFSchema,
@@ -275,23 +275,17 @@ fn optimize_plan(
             .window(new_window_expr)?
             .build()
         }
-        LogicalPlan::Aggregate {
-            schema,
-            input,
-            group_expr,
-            aggr_expr,
-            ..
-        } => {
+        LogicalPlan::Aggregate(aggregate) => {
             // aggregate:
             // * remove any aggregate expression that is not required
             // * construct the new set of required columns
 
-            utils::exprlist_to_columns(group_expr, &mut new_required_columns)?;
+            utils::exprlist_to_columns(&aggregate.group_expr, &mut new_required_columns)?;
 
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
-            aggr_expr.iter().try_for_each(|expr| {
-                let name = &expr.name(schema)?;
+            aggregate.aggr_expr.iter().try_for_each(|expr| {
+                let name = &expr.name(&aggregate.schema)?;
                 let column = Column::from_name(name);
 
                 if required_columns.contains(&column) {
@@ -306,7 +300,8 @@ fn optimize_plan(
             })?;
 
             let new_schema = DFSchema::new(
-                schema
+                aggregate
+                    .schema
                     .fields()
                     .iter()
                     .filter(|x| new_required_columns.contains(&x.qualified_column()))
@@ -314,18 +309,18 @@ fn optimize_plan(
                     .collect(),
             )?;
 
-            Ok(LogicalPlan::Aggregate {
-                group_expr: group_expr.clone(),
+            Ok(LogicalPlan::Aggregate(AggregatePlan {
+                group_expr: aggregate.group_expr.clone(),
                 aggr_expr: new_aggr_expr,
                 input: Arc::new(optimize_plan(
                     optimizer,
-                    input,
+                    &aggregate.input,
                     &new_required_columns,
                     true,
                     execution_props,
                 )?),
                 schema: DFSchemaRef::new(new_schema),
-            })
+            }))
         }
         // scans:
         // * remove un-used columns from the scan projection

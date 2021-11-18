@@ -23,7 +23,7 @@ use arrow::record_batch::RecordBatch;
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
-use crate::logical_plan::plan::{AnalyzePlan, ExtensionPlan};
+use crate::logical_plan::plan::{AggregatePlan, AnalyzePlan, ExtensionPlan};
 use crate::logical_plan::{
     build_join_schema, Column, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan,
     LogicalPlanBuilder, Operator, Partitioning, Recursion, RewriteRecursion,
@@ -183,14 +183,12 @@ pub fn from_plan(
             window_expr: expr[0..window_expr.len()].to_vec(),
             schema: schema.clone(),
         }),
-        LogicalPlan::Aggregate {
-            group_expr, schema, ..
-        } => Ok(LogicalPlan::Aggregate {
-            group_expr: expr[0..group_expr.len()].to_vec(),
-            aggr_expr: expr[group_expr.len()..].to_vec(),
+        LogicalPlan::Aggregate(aggregate) => Ok(LogicalPlan::Aggregate(AggregatePlan {
+            group_expr: expr[0..aggregate.group_expr.len()].to_vec(),
+            aggr_expr: expr[aggregate.group_expr.len()..].to_vec(),
             input: Arc::new(inputs[0].clone()),
-            schema: schema.clone(),
-        }),
+            schema: aggregate.schema.clone(),
+        })),
         LogicalPlan::Sort { .. } => Ok(LogicalPlan::Sort {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),

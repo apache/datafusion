@@ -32,7 +32,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
 use datafusion::logical_plan::{
     exprlist_to_fields,
-    plan::TableScanPlan,
+    plan::{AggregatePlan, TableScanPlan},
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
     Column, Expr, JoinConstraint, JoinType, LogicalPlan,
 };
@@ -822,22 +822,20 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Aggregate {
-                input,
-                group_expr,
-                aggr_expr,
-                ..
-            } => {
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+            LogicalPlan::Aggregate(aggregate) => {
+                let input: protobuf::LogicalPlanNode =
+                    aggregate.input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Aggregate(Box::new(
                         protobuf::AggregateNode {
                             input: Some(Box::new(input)),
-                            group_expr: group_expr
+                            group_expr: aggregate
+                                .group_expr
                                 .iter()
                                 .map(|expr| expr.try_into())
                                 .collect::<Result<Vec<_>, _>>()?,
-                            aggr_expr: aggr_expr
+                            aggr_expr: aggregate
+                                .aggr_expr
                                 .iter()
                                 .map(|expr| expr.try_into())
                                 .collect::<Result<Vec<_>, _>>()?,
