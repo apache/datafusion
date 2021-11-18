@@ -26,7 +26,7 @@ use crate::datasource::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::{
-    AnalyzePlan, ExplainPlan, TableScanPlan, ToStringifiedPlan,
+    AnalyzePlan, ExplainPlan, TableScanPlan, ToStringifiedPlan, Union,
 };
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
@@ -44,8 +44,8 @@ use std::{
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
-    DFSchemaRef, Partitioning,
+    columnize_expr, normalize_col, normalize_cols, Column, CrossJoin, DFField, DFSchema,
+    DFSchemaRef, Partitioning, Repartition,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 
@@ -632,19 +632,19 @@ impl LogicalPlanBuilder {
     /// Apply a cross join
     pub fn cross_join(&self, right: &LogicalPlan) -> Result<Self> {
         let schema = self.plan.schema().join(right.schema())?;
-        Ok(Self::from(LogicalPlan::CrossJoin {
+        Ok(Self::from(LogicalPlan::CrossJoin(CrossJoin {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             schema: DFSchemaRef::new(schema),
-        }))
+        })))
     }
 
     /// Repartition
     pub fn repartition(&self, partitioning_scheme: Partitioning) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Repartition {
+        Ok(Self::from(LogicalPlan::Repartition(Repartition {
             input: Arc::new(self.plan.clone()),
             partitioning_scheme,
-        }))
+        })))
     }
 
     /// Apply a window functions to extend the schema
@@ -840,7 +840,7 @@ pub fn union_with_alias(
     let inputs = vec![left_plan, right_plan]
         .into_iter()
         .flat_map(|p| match p {
-            LogicalPlan::Union { inputs, .. } => inputs,
+            LogicalPlan::Union(Union { inputs, .. }) => inputs,
             x => vec![x],
         })
         .collect::<Vec<_>>();
@@ -863,11 +863,11 @@ pub fn union_with_alias(
         ));
     }
 
-    Ok(LogicalPlan::Union {
+    Ok(LogicalPlan::Union(Union {
         schema: union_schema,
         inputs,
         alias,
-    })
+    }))
 }
 
 /// Project with optional alias
