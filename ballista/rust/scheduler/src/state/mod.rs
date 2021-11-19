@@ -242,6 +242,18 @@ impl SchedulerState {
             .collect()
     }
 
+    pub async fn get_tasks_with_job_id(
+        &self,
+        job_id: &str,
+    ) -> Result<HashMap<String, TaskStatus>> {
+        self.config_client
+            .get_from_prefix(&get_task_prefix_for_job(&self.namespace, job_id))
+            .await?
+            .into_iter()
+            .map(|(key, bytes)| Ok((key, decode_protobuf(&bytes)?)))
+            .collect()
+    }
+
     /// This function ensures that the task wasn't assigned to an executor that died.
     /// If that is the case, then the task is re-scheduled.
     /// Returns true if the task was dead, false otherwise.
@@ -279,8 +291,20 @@ impl SchedulerState {
     pub async fn assign_next_schedulable_task(
         &self,
         executor_id: &str,
+        job_ids: Vec<String>,
     ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
-        let tasks = self.get_all_tasks().await?;
+        // Will assign the task with same jobId to same executor to improve locality.
+        let tasks;
+        let mut tasks_by_job_id: HashMap<String, TaskStatus> = Default::default();
+        for job_id in job_ids {
+            tasks_by_job_id.extend(self.get_tasks_with_job_id(&job_id).await?);
+        }
+        tasks_by_job_id.retain(|_, v| v.status.is_none());
+        if tasks_by_job_id.is_empty() {
+            tasks = self.get_all_tasks().await?;
+        } else {
+            tasks = tasks_by_job_id;
+        }
         // TODO: Make the duration a configurable parameter
         let executors = self
             .get_alive_executors_metadata(Duration::from_secs(60))

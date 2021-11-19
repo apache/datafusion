@@ -201,6 +201,7 @@ impl SchedulerGrpc for SchedulerServer {
                     error!("{}", msg);
                     tonic::Status::internal(msg)
                 })?;
+            let mut job_ids = vec![];
             for task_status in task_status {
                 self.state
                     .save_task_status(&task_status)
@@ -210,11 +211,12 @@ impl SchedulerGrpc for SchedulerServer {
                         error!("{}", msg);
                         tonic::Status::internal(msg)
                     })?;
+                job_ids.push(task_status.partition_id.as_ref().unwrap().job_id.clone());
             }
             let task: Result<Option<_>, Status> = if can_accept_task {
                 let plan = self
                     .state
-                    .assign_next_schedulable_task(&metadata.id)
+                    .assign_next_schedulable_task(&metadata.id, job_ids)
                     .await
                     .map_err(|e| {
                         let msg = format!("Error finding next assignable task: {}", e);
