@@ -20,8 +20,8 @@
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::ProjectionPlan;
-use crate::logical_plan::LogicalPlan;
+use crate::logical_plan::TableScanPlan;
+use crate::logical_plan::{LogicalPlan, Union};
 use crate::optimizer::optimizer::OptimizerRule;
 use std::sync::Arc;
 
@@ -57,16 +57,16 @@ fn limit_push_down(
             })
         }
         (
-            LogicalPlan::TableScan {
+            LogicalPlan::TableScan(TableScanPlan {
                 table_name,
                 source,
                 projection,
                 filters,
                 limit,
                 projected_schema,
-            },
+            }),
             Some(upper_limit),
-        ) => Ok(LogicalPlan::TableScan {
+        ) => Ok(LogicalPlan::TableScan(TableScanPlan {
             table_name: table_name.clone(),
             source: source.clone(),
             projection: projection.clone(),
@@ -75,18 +75,18 @@ fn limit_push_down(
                 .map(|x| std::cmp::min(x, upper_limit))
                 .or(Some(upper_limit)),
             projected_schema: projected_schema.clone(),
-        }),
+        })),
         (
-            LogicalPlan::Projection(ProjectionPlan {
+            LogicalPlan::Projection {
                 expr,
                 input,
                 schema,
                 alias,
-            }),
+            },
             upper_limit,
         ) => {
             // Push down limit directly (projection doesn't change number of rows)
-            Ok(LogicalPlan::Projection(ProjectionPlan {
+            Ok(LogicalPlan::Projection {
                 expr: expr.clone(),
                 input: Arc::new(limit_push_down(
                     optimizer,
@@ -96,14 +96,14 @@ fn limit_push_down(
                 )?),
                 schema: schema.clone(),
                 alias: alias.clone(),
-            }))
+            })
         }
         (
-            LogicalPlan::Union {
+            LogicalPlan::Union(Union {
                 inputs,
                 alias,
                 schema,
-            },
+            }),
             Some(upper_limit),
         ) => {
             // Push down limit through UNION
@@ -121,11 +121,11 @@ fn limit_push_down(
                     })
                 })
                 .collect::<Result<_>>()?;
-            Ok(LogicalPlan::Union {
+            Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs,
                 alias: alias.clone(),
                 schema: schema.clone(),
-            })
+            }))
         }
         // For other nodes we can't push down the limit
         // But try to recurse and find other limit nodes to push down

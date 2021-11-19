@@ -33,8 +33,8 @@ use datafusion::logical_plan::window_frames::{
 };
 use datafusion::logical_plan::{
     abs, acos, asin, atan, ceil, cos, digest, exp, floor, ln, log10, log2, round, signum,
-    sin, sqrt, tan, trunc, Column, DFField, DFSchema, Expr, JoinConstraint, JoinType,
-    LogicalPlan, LogicalPlanBuilder, Operator,
+    sin, sqrt, tan, trunc, Column, CreateExternalTable, DFField, DFSchema, Expr,
+    JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
@@ -271,13 +271,13 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                 let pb_file_type: protobuf::FileType =
                     create_extern_table.file_type.try_into()?;
 
-                Ok(LogicalPlan::CreateExternalTable {
+                Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
                     name: create_extern_table.name.clone(),
                     location: create_extern_table.location.clone(),
                     file_type: pb_file_type.into(),
                     has_header: create_extern_table.has_header,
-                })
+                }))
             }
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan = convert_box_required!(analyze.input)?;

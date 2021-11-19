@@ -36,6 +36,8 @@
 # 2. Logged into the apache svn server with the appropriate
 # credentials
 #
+# 3. Install the requests python package
+#
 #
 # Based in part on 02-source.sh from apache/arrow
 #
@@ -48,7 +50,12 @@ SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 if [ "$#" -ne 2 ]; then
     echo "Usage: $0 <version> <rc>"
     echo "ex. $0 4.1.0 2"
-  exit
+    exit
+fi
+
+if [[ -z "${GH_TOKEN}" ]]; then
+    echo "Please set personal github token through GH_TOKEN environment variable"
+    exit
 fi
 
 version=$1
@@ -118,8 +125,15 @@ gpg --armor --output ${tarball}.asc --detach-sig ${tarball}
 (cd ${distdir} && shasum -a 256 ${tarname}) > ${tarball}.sha256
 (cd ${distdir} && shasum -a 512 ${tarname}) > ${tarball}.sha512
 
+# download python binary releases from Github Action
+python_distdir=${distdir}/python
+echo "Preparing python release artifacts"
+test -d ${python_distdir} || mkdir -p ${python_distdir}
+pushd "${python_distdir}"
+    python ${SOURCE_DIR}/download-python-wheels.py "${tag}"
+popd
+
 echo "Uploading to apache dist/dev to ${url}"
 svn co --depth=empty https://dist.apache.org/repos/dist/dev/arrow ${SOURCE_TOP_DIR}/dev/dist
 svn add ${distdir}
 svn ci -m "Apache Arrow Datafusion ${version} ${rc}" ${distdir}
-

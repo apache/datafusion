@@ -38,6 +38,7 @@ use datafusion::assert_contains;
 use datafusion::assert_not_contains;
 use datafusion::logical_plan::plan::ProjectionPlan;
 use datafusion::logical_plan::LogicalPlan;
+use datafusion::logical_plan::TableScanPlan;
 use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
@@ -93,10 +94,10 @@ async fn nyc() -> Result<()> {
     match &optimized_plan {
         LogicalPlan::Projection(ProjectionPlan { input, .. }) => match input.as_ref() {
             LogicalPlan::Aggregate { input, .. } => match input.as_ref() {
-                LogicalPlan::TableScan {
+                LogicalPlan::TableScan(TableScanPlan {
                     ref projected_schema,
                     ..
-                } => {
+                }) => {
                     assert_eq!(2, projected_schema.fields().len());
                     assert_eq!(projected_schema.field(0).name(), "passenger_count");
                     assert_eq!(projected_schema.field(1).name(), "fare_amount");
@@ -1277,6 +1278,60 @@ async fn csv_query_approx_count() -> Result<()> {
         "+----------+--------------+",
         "| 100      | 99           |",
         "+----------+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_array_agg() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql =
+        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+------------------------------------------------------------------+",
+        "| ARRAYAGG(test.c13)                                               |",
+        "+------------------------------------------------------------------+",
+        "| [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB] |",
+        "+------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_array_agg_empty() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql =
+        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+--------------------+",
+        "| ARRAYAGG(test.c13) |",
+        "+--------------------+",
+        "| []                 |",
+        "+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_array_agg_one() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql =
+        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------------------------------+",
+        "| ARRAYAGG(test.c13)               |",
+        "+----------------------------------+",
+        "| [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm] |",
+        "+----------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

@@ -55,7 +55,7 @@ Here are some of the projects known to use DataFusion:
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [datafusion-python](https://pypi.org/project/datafusion)
-- [datafusion-java](https://github.com/Jimexist/datafusion-java)
+- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
 - [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
 - [delta-rs](https://github.com/delta-io/delta-rs)
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database

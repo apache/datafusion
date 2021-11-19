@@ -23,10 +23,11 @@ use arrow::record_batch::RecordBatch;
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
-use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
+use crate::logical_plan::plan::{AnalyzePlan, ExtensionPlan};
 use crate::logical_plan::{
-    build_join_schema, Column, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan,
-    LogicalPlanBuilder, Operator, Partitioning, Recursion, RewriteRecursion,
+    build_join_schema, Column, CreateMemoryTable, DFSchema, DFSchemaRef, Expr,
+    ExprRewriter, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
+    Repartition, RewriteRecursion, Union,
 };
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -144,14 +145,12 @@ pub fn from_plan(
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Projection(ProjectionPlan { schema, alias, .. }) => {
-            Ok(LogicalPlan::Projection(ProjectionPlan {
-                expr: expr.to_vec(),
-                input: Arc::new(inputs[0].clone()),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
-        }
+        LogicalPlan::Projection { schema, alias, .. } => Ok(LogicalPlan::Projection {
+            expr: expr.to_vec(),
+            input: Arc::new(inputs[0].clone()),
+            schema: schema.clone(),
+            alias: alias.clone(),
+        }),
         LogicalPlan::Values { schema, .. } => Ok(LogicalPlan::Values {
             schema: schema.clone(),
             values: expr
@@ -159,32 +158,34 @@ pub fn from_plan(
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>(),
         }),
-        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter(FilterPlan {
+        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter {
             predicate: expr[0].clone(),
             input: Arc::new(inputs[0].clone()),
-        })),
-        LogicalPlan::Repartition {
+        }),
+        LogicalPlan::Repartition(Repartition {
             partitioning_scheme,
             ..
-        } => match partitioning_scheme {
-            Partitioning::RoundRobinBatch(n) => Ok(LogicalPlan::Repartition {
-                partitioning_scheme: Partitioning::RoundRobinBatch(*n),
-                input: Arc::new(inputs[0].clone()),
-            }),
-            Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition {
+        }) => match partitioning_scheme {
+            Partitioning::RoundRobinBatch(n) => {
+                Ok(LogicalPlan::Repartition(Repartition {
+                    partitioning_scheme: Partitioning::RoundRobinBatch(*n),
+                    input: Arc::new(inputs[0].clone()),
+                }))
+            }
+            Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition(Repartition {
                 partitioning_scheme: Partitioning::Hash(expr.to_owned(), *n),
                 input: Arc::new(inputs[0].clone()),
-            }),
+            })),
         },
-        LogicalPlan::Window(WindowPlan {
+        LogicalPlan::Window {
             window_expr,
             schema,
             ..
-        }) => Ok(LogicalPlan::Window(WindowPlan {
+        } => Ok(LogicalPlan::Window {
             input: Arc::new(inputs[0].clone()),
             window_expr: expr[0..window_expr.len()].to_vec(),
             schema: schema.clone(),
-        })),
+        }),
         LogicalPlan::Aggregate {
             group_expr, schema, ..
         } => Ok(LogicalPlan::Aggregate {
@@ -216,7 +217,7 @@ pub fn from_plan(
                 null_equals_null: *null_equals_null,
             })
         }
-        LogicalPlan::CrossJoin { .. } => {
+        LogicalPlan::CrossJoin(_) => {
             let left = inputs[0].clone();
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
@@ -225,32 +226,32 @@ pub fn from_plan(
             n: *n,
             input: Arc::new(inputs[0].clone()),
         }),
-        LogicalPlan::CreateMemoryTable { name, .. } => {
-            Ok(LogicalPlan::CreateMemoryTable {
+        LogicalPlan::CreateMemoryTable(CreateMemoryTable { name, .. }) => {
+            Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 input: Arc::new(inputs[0].clone()),
                 name: name.clone(),
-            })
+            }))
         }
-        LogicalPlan::Extension { node } => Ok(LogicalPlan::Extension {
-            node: node.from_template(expr, inputs),
-        }),
-        LogicalPlan::Union { schema, alias, .. } => Ok(LogicalPlan::Union {
-            inputs: inputs.to_vec(),
-            schema: schema.clone(),
-            alias: alias.clone(),
-        }),
-        LogicalPlan::Analyze {
-            verbose, schema, ..
-        } => {
+        LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(ExtensionPlan {
+            node: e.node.from_template(expr, inputs),
+        })),
+        LogicalPlan::Union(Union { schema, alias, .. }) => {
+            Ok(LogicalPlan::Union(Union {
+                inputs: inputs.to_vec(),
+                schema: schema.clone(),
+                alias: alias.clone(),
+            }))
+        }
+        LogicalPlan::Analyze(a) => {
             assert!(expr.is_empty());
             assert_eq!(inputs.len(), 1);
-            Ok(LogicalPlan::Analyze {
-                verbose: *verbose,
-                schema: schema.clone(),
+            Ok(LogicalPlan::Analyze(AnalyzePlan {
+                verbose: a.verbose,
+                schema: a.schema.clone(),
                 input: Arc::new(inputs[0].clone()),
-            })
+            }))
         }
-        LogicalPlan::Explain { .. } => {
+        LogicalPlan::Explain(_) => {
             // Explain should be handled specially in the optimizers;
             // If this assert fails it means some optimizer pass is
             // trying to optimize Explain directly
@@ -266,8 +267,8 @@ pub fn from_plan(
         }
         LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::TableScan { .. }
-        | LogicalPlan::CreateExternalTable { .. }
-        | LogicalPlan::DropTable { .. } => {
+        | LogicalPlan::CreateExternalTable(_)
+        | LogicalPlan::DropTable(_) => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{:?} should have no exprs", plan);
             assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);

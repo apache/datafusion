@@ -34,7 +34,7 @@ use super::{
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
-use arrow::datatypes::{DataType, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use expressions::{avg_return_type, sum_return_type};
 use std::{fmt, str::FromStr, sync::Arc};
 /// the implementation of an aggregate function
@@ -46,7 +46,7 @@ pub type AccumulatorFunctionImplementation =
 pub type StateTypeFunction =
     Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
 
-/// Enum of all built-in scalar functions
+/// Enum of all built-in aggregate functions
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub enum AggregateFunction {
     /// count
@@ -61,6 +61,8 @@ pub enum AggregateFunction {
     Avg,
     /// Approximate aggregate function
     ApproxDistinct,
+    /// array_agg
+    ArrayAgg,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -80,6 +82,7 @@ impl FromStr for AggregateFunction {
             "avg" => AggregateFunction::Avg,
             "sum" => AggregateFunction::Sum,
             "approx_distinct" => AggregateFunction::ApproxDistinct,
+            "array_agg" => AggregateFunction::ArrayAgg,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",
@@ -105,6 +108,11 @@ pub fn return_type(fun: &AggregateFunction, arg_types: &[DataType]) -> Result<Da
         AggregateFunction::Max | AggregateFunction::Min => Ok(arg_types[0].clone()),
         AggregateFunction::Sum => sum_return_type(&arg_types[0]),
         AggregateFunction::Avg => avg_return_type(&arg_types[0]),
+        AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(
+            "item",
+            arg_types[0].clone(),
+            true,
+        )))),
     }
 }
 
@@ -157,6 +165,9 @@ pub fn create_aggregate_expr(
         (AggregateFunction::ApproxDistinct, _) => Arc::new(
             expressions::ApproxDistinct::new(arg, name, arg_types[0].clone()),
         ),
+        (AggregateFunction::ArrayAgg, _) => {
+            Arc::new(expressions::ArrayAgg::new(arg, name, arg_types[0].clone()))
+        }
         (AggregateFunction::Min, _) => {
             Arc::new(expressions::Min::new(arg, name, return_type))
         }
@@ -202,9 +213,9 @@ static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 pub fn signature(fun: &AggregateFunction) -> Signature {
     // note: the physical expression must accept the type returned by this function or the execution panics.
     match fun {
-        AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
-            Signature::any(1, Volatility::Immutable)
-        }
+        AggregateFunction::Count
+        | AggregateFunction::ApproxDistinct
+        | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
         AggregateFunction::Min | AggregateFunction::Max => {
             let valid = STRINGS
                 .iter()

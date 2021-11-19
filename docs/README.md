@@ -21,7 +21,7 @@
 
 ## Dependencies
 
-It's recommended to install build dependencies and build the the documentation
+It's recommended to install build dependencies and build the documentation
 inside a Python virtualenv.
 
 - Python

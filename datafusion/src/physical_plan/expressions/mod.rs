@@ -26,6 +26,7 @@ use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 
 mod approx_distinct;
+mod array_agg;
 mod average;
 #[macro_use]
 mod binary;
@@ -58,6 +59,7 @@ pub mod helpers {
 }
 
 pub use approx_distinct::ApproxDistinct;
+pub use array_agg::ArrayAgg;
 pub use average::{avg_return_type, Avg, AvgAccumulator};
 pub use binary::{binary, binary_operator_data_type, BinaryExpr};
 pub use case::{case, CaseExpr};

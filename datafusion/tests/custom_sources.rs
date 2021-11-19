@@ -31,7 +31,7 @@ use datafusion::{
 
 use datafusion::execution::context::ExecutionContext;
 use datafusion::logical_plan::{
-    col, Expr, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    col, Expr, LogicalPlan, LogicalPlanBuilder, TableScanPlan, UNNAMED_TABLE,
 };
 use datafusion::physical_plan::{
     ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -45,7 +45,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use datafusion::logical_plan::plan::ProjectionPlan;
 
 //// Custom source dataframe tests ////
 
@@ -217,12 +216,12 @@ async fn custom_source_dataframe() -> Result<()> {
 
     let optimized_plan = ctx.optimize(&logical_plan)?;
     match &optimized_plan {
-        LogicalPlan::Projection(ProjectionPlan { input, .. }) => match &**input {
-            LogicalPlan::TableScan {
+        LogicalPlan::Projection { input, .. } => match &**input {
+            LogicalPlan::TableScan(TableScanPlan {
                 source,
                 projected_schema,
                 ..
-            } => {
+            }) => {
                 assert_eq!(source.schema().fields().len(), 2);
                 assert_eq!(projected_schema.fields().len(), 1);
             }

@@ -196,18 +196,18 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             })
         }
         LogicalPlan::Join { .. }
-        | LogicalPlan::CrossJoin { .. }
-        | LogicalPlan::Repartition { .. }
-        | LogicalPlan::Union { .. }
+        | LogicalPlan::CrossJoin(_)
+        | LogicalPlan::Repartition(_)
+        | LogicalPlan::Union(_)
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::Values { .. }
         | LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::Limit { .. }
-        | LogicalPlan::CreateExternalTable { .. }
+        | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::Explain { .. }
         | LogicalPlan::Analyze { .. }
-        | LogicalPlan::CreateMemoryTable { .. }
-        | LogicalPlan::DropTable { .. }
+        | LogicalPlan::CreateMemoryTable(_)
+        | LogicalPlan::DropTable(_)
         | LogicalPlan::Extension { .. } => {
             // apply the optimization to all inputs of the plan
             let expr = plan.expressions();

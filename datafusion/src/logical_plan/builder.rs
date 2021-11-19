@@ -26,7 +26,7 @@ use crate::datasource::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::{
-    FilterPlan, ProjectionPlan, ToStringifiedPlan, WindowPlan,
+    AnalyzePlan, ExplainPlan, TableScanPlan, ToStringifiedPlan, Union,
 };
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
@@ -44,8 +44,8 @@ use std::{
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
-    DFSchemaRef, Partitioning,
+    columnize_expr, normalize_col, normalize_cols, Column, CrossJoin, DFField, DFSchema,
+    DFSchemaRef, Partitioning, Repartition,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 
@@ -394,15 +394,14 @@ impl LogicalPlanBuilder {
                 DFSchema::try_from_qualified_schema(&table_name, &schema)
             })?;
 
-        let table_scan = LogicalPlan::TableScan {
+        let table_scan = LogicalPlan::TableScan(TableScanPlan {
             table_name,
             source: provider,
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
             limit: None,
-        };
-
+        });
         Ok(Self::from(table_scan))
     }
     /// Wrap a plan in a window
@@ -452,10 +451,10 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(&self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Ok(Self::from(LogicalPlan::Filter(FilterPlan {
+        Ok(Self::from(LogicalPlan::Filter {
             predicate: expr,
             input: Arc::new(self.plan.clone()),
-        })))
+        }))
     }
 
     /// Apply a limit
@@ -633,19 +632,19 @@ impl LogicalPlanBuilder {
     /// Apply a cross join
     pub fn cross_join(&self, right: &LogicalPlan) -> Result<Self> {
         let schema = self.plan.schema().join(right.schema())?;
-        Ok(Self::from(LogicalPlan::CrossJoin {
+        Ok(Self::from(LogicalPlan::CrossJoin(CrossJoin {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             schema: DFSchemaRef::new(schema),
-        }))
+        })))
     }
 
     /// Repartition
     pub fn repartition(&self, partitioning_scheme: Partitioning) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Repartition {
+        Ok(Self::from(LogicalPlan::Repartition(Repartition {
             input: Arc::new(self.plan.clone()),
             partitioning_scheme,
-        }))
+        })))
     }
 
     /// Apply a window functions to extend the schema
@@ -659,11 +658,11 @@ impl LogicalPlanBuilder {
         let mut window_fields: Vec<DFField> =
             exprlist_to_fields(all_expr, self.plan.schema())?;
         window_fields.extend_from_slice(self.plan.schema().fields());
-        Ok(Self::from(LogicalPlan::Window(WindowPlan {
+        Ok(Self::from(LogicalPlan::Window {
             input: Arc::new(self.plan.clone()),
             window_expr,
             schema: Arc::new(DFSchema::new(window_fields)?),
-        })))
+        }))
     }
 
     /// Apply an aggregate: grouping on the `group_expr` expressions
@@ -699,21 +698,21 @@ impl LogicalPlanBuilder {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(Self::from(LogicalPlan::Analyze {
+            Ok(Self::from(LogicalPlan::Analyze(AnalyzePlan {
                 verbose,
                 input: Arc::new(self.plan.clone()),
                 schema,
-            }))
+            })))
         } else {
             let stringified_plans =
                 vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
-            Ok(Self::from(LogicalPlan::Explain {
+            Ok(Self::from(LogicalPlan::Explain(ExplainPlan {
                 verbose,
                 plan: Arc::new(self.plan.clone()),
                 stringified_plans,
                 schema,
-            }))
+            })))
         }
     }
 
@@ -841,7 +840,7 @@ pub fn union_with_alias(
     let inputs = vec![left_plan, right_plan]
         .into_iter()
         .flat_map(|p| match p {
-            LogicalPlan::Union { inputs, .. } => inputs,
+            LogicalPlan::Union(Union { inputs, .. }) => inputs,
             x => vec![x],
         })
         .collect::<Vec<_>>();
@@ -864,11 +863,11 @@ pub fn union_with_alias(
         ));
     }
 
-    Ok(LogicalPlan::Union {
+    Ok(LogicalPlan::Union(Union {
         schema: union_schema,
         inputs,
         alias,
-    })
+    }))
 }
 
 /// Project with optional alias
@@ -899,12 +898,12 @@ pub fn project_with_alias(
         Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
         None => input_schema,
     };
-    Ok(LogicalPlan::Projection(ProjectionPlan {
+    Ok(LogicalPlan::Projection {
         expr: projected_expr,
         input: Arc::new(plan.clone()),
         schema: DFSchemaRef::new(schema),
         alias,
-    }))
+    })
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
