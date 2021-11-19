@@ -29,7 +29,7 @@ extern crate datafusion;
 
 use arrow::{
     array::*, datatypes::*, record_batch::RecordBatch,
-    util::display::array_value_to_string, util::pretty::pretty_format_batches,
+    util::display::array_value_to_string,
 };
 
 use datafusion::assert_batches_eq;
@@ -5728,8 +5728,6 @@ async fn case_with_bool_type_result() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn use_between_expression_in_select_query() -> Result<()> {
     let mut ctx = ExecutionContext::new();
@@ -5778,6 +5776,8 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     Ok(())
 }
 
+// --- End Test Porting ---
+
 #[tokio::test]
 async fn query_get_indexed_field() -> Result<()> {
     let mut ctx = ExecutionContext::new();
@@ -5804,9 +5804,11 @@ async fn query_get_indexed_field() -> Result<()> {
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0"], vec!["4"], vec!["7"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, &sql).await;
+    let expected = vec![
+        "+----+", "| i0 |", "+----+", "| 0  |", "| 4  |", "| 7  |", "+----+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5848,13 +5850,23 @@ async fn query_nested_get_indexed_field() -> Result<()> {
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["[0, 1]"], vec!["[5, 6]"], vec!["[11, 12]"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, &sql).await;
+    let expected = vec![
+        "+----------+",
+        "| i0       |",
+        "+----------+",
+        "| [0, 1]   |",
+        "| [5, 6]   |",
+        "| [11, 12] |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     let sql = "SELECT some_list[0][0] as i0 FROM ints LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0"], vec!["5"], vec!["11"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, &sql).await;
+    let expected = vec![
+        "+----+", "| i0 |", "+----+", "| 0  |", "| 5  |", "| 11 |", "+----+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5888,17 +5900,23 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_struct[\"bar\"] as l0 FROM structs LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, &sql).await;
     let expected = vec![
-        vec!["[0, 1, 2, 3]"],
-        vec!["[4, 5, 6, 7]"],
-        vec!["[8, 9, 10, 11]"],
+        "+----------------+",
+        "| l0             |",
+        "+----------------+",
+        "| [0, 1, 2, 3]   |",
+        "| [4, 5, 6, 7]   |",
+        "| [8, 9, 10, 11] |",
+        "+----------------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     let sql = "SELECT some_struct[\"bar\"][0] as i0 FROM structs LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0"], vec!["4"], vec!["8"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, &sql).await;
+    let expected = vec![
+        "+----+", "| i0 |", "+----+", "| 0  |", "| 4  |", "| 8  |", "+----+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5907,12 +5925,10 @@ async fn intersect_with_null_not_equal() {
     let sql = "SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
             INTERSECT SELECT * FROM (SELECT null AS id1, 2 AS id2) t2";
 
-    let expected: &[&[&str]] = &[];
-
+    let expected = vec!["++", "++"];
     let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute(&mut ctx, sql).await;
-
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, &sql).await;
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -5920,12 +5936,18 @@ async fn intersect_with_null_equal() {
     let sql = "SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
             INTERSECT SELECT * FROM (SELECT null AS id1, 1 AS id2) t2";
 
-    let expected = vec![vec!["NULL", "1"]];
+    let expected = vec![
+        "+-----+-----+",
+        "| id1 | id2 |",
+        "+-----+-----+",
+        "|     | 1   |",
+        "+-----+-----+",
+    ];
 
     let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, &sql).await;
 
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -5972,12 +5994,18 @@ async fn except_with_null_not_equal() {
     let sql = "SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
             EXCEPT SELECT * FROM (SELECT null AS id1, 2 AS id2) t2";
 
-    let expected = vec![vec!["NULL", "1"]];
+    let expected = vec![
+        "+-----+-----+",
+        "| id1 | id2 |",
+        "+-----+-----+",
+        "|     | 1   |",
+        "+-----+-----+",
+    ];
 
     let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, &sql).await;
 
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -5985,11 +6013,11 @@ async fn except_with_null_equal() {
     let sql = "SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
             EXCEPT SELECT * FROM (SELECT null AS id1, 1 AS id2) t2";
 
-    let expected: &[&[&str]] = &[];
+    let expected = vec!["++", "++"];
     let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, &sql).await;
 
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
