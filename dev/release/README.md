@@ -240,21 +240,21 @@ Tag the same release candidate commit with the final release tag
 ```
 git co apache/5.1.0-rc0
 git tag 5.1.0
-git push 5.1.0
+git push apache 5.1.0
 ```
 
 If there is a ballista release, also push the ballista tag
 
 ```
 git tag ballista-0.5.0
-git push ballista-0.5.0
+git push apache ballista-0.5.0
 ```
 
 If there is a datafusion python binding release, also push the python tag
 
 ```
 git tag python-0.3.0
-git push python-0.3.0
+git push apache python-0.3.0
 ```
 
 ### Publish on Crates.io
@@ -294,10 +294,9 @@ If there is a ballista release, run
 (cd ballista/rust/executor && cargo publish)
 (cd ballista/rust/scheduler && cargo publish)
 (cd ballista/rust/client && cargo publish)
-(cd datafusion-cli && cargo publish)
 ```
 
-### Publish on PyPI
+### Publish Python binding on PyPI
 
 Only approved releases of the source tarball and wheels should be published to
 PyPI, in order to conform to Apache Software Foundation governance standards.
@@ -305,13 +304,25 @@ PyPI, in order to conform to Apache Software Foundation governance standards.
 First, download all official python release artifacts:
 
 ```shell
-svn co https://dist.apache.org/repos/dist/release/arrow/apache-arrow-datafusion-5.1.0-rc0/python ./python-artifacts
+svn co https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-5.1.0/python ./python-artifacts
 ```
 
 Use [twine](https://pypi.org/project/twine/) to perform the upload.
 
 ```shell
-twine upload ./python-artifactl/*.{tar.gz,whl}
+twine upload ./python-artifacts/*.{tar.gz,whl}
+```
+
+### Publish datafusion-cli on Homebrew and crates.io
+
+For Homebrew, Send a simple PR to update tag and commit hash for the datafusion
+formula in homebrew-core. Here is an example PR:
+https://github.com/Homebrew/homebrew-core/pull/89562.
+
+For crates.io, run
+
+```shell
+(cd datafusion-cli && cargo publish)
 ```
 
 ### Call the vote
