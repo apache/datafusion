@@ -4527,8 +4527,6 @@ async fn group_by_timestamp_millis() -> Result<()> {
     Ok(())
 }
 
-// --- End Test Porting ---
-
 macro_rules! test_expression {
     ($SQL:expr, $EXPECTED:expr) => {
         let mut ctx = ExecutionContext::new();
@@ -5023,17 +5021,21 @@ async fn in_list_array() -> Result<()> {
             ,c1 NOT IN ('a', 'c') AS utf8_not_in_false
             ,NULL IN ('a', 'c') AS utf8_in_null
         FROM aggregate_test_100 WHERE c12 < 0.05";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["true", "false", "true", "false", "NULL"],
-        vec!["true", "false", "true", "false", "NULL"],
-        vec!["true", "false", "true", "false", "NULL"],
-        vec!["false", "false", "true", "true", "NULL"],
-        vec!["false", "false", "true", "true", "NULL"],
-        vec!["false", "false", "true", "true", "NULL"],
-        vec!["false", "false", "true", "true", "NULL"],
-    ];
-    assert_eq!(expected, actual);
+            "+--------------+---------------+------------------+-------------------+--------------+",
+            "| utf8_in_true | utf8_in_false | utf8_not_in_true | utf8_not_in_false | utf8_in_null |",
+            "+--------------+---------------+------------------+-------------------+--------------+",
+            "| true         | false         | true             | false             |              |",
+            "| true         | false         | true             | false             |              |",
+            "| true         | false         | true             | false             |              |",
+            "| false        | false         | true             | true              |              |",
+            "| false        | false         | true             | true              |              |",
+            "| false        | false         | true             | true              |              |",
+            "| false        | false         | true             | true              |              |",
+            "+--------------+---------------+------------------+-------------------+--------------+",
+        ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5055,15 +5057,19 @@ async fn inner_join_qualified_names() -> Result<()> {
     ];
 
     let expected = vec![
-        vec!["1", "10", "50", "1", "100", "500"],
-        vec!["2", "20", "60", "2", "20", "600"],
-        vec!["4", "40", "80", "4", "400", "800"],
+        "+---+----+----+---+-----+-----+",
+        "| a | b  | c  | a | b   | c   |",
+        "+---+----+----+---+-----+-----+",
+        "| 1 | 10 | 50 | 1 | 100 | 500 |",
+        "| 2 | 20 | 60 | 2 | 200 | 600 |",
+        "| 4 | 40 | 80 | 4 | 400 | 800 |",
+        "+---+----+----+---+-----+-----+",
     ];
 
     for sql in equivalent_sql.iter() {
         let mut ctx = create_join_context_qualified()?;
-        let actual = execute(&mut ctx, sql).await;
-        assert_eq!(expected, actual);
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -5073,13 +5079,13 @@ async fn inner_join_nulls() {
     let sql = "SELECT * FROM (SELECT null AS id1) t1
             INNER JOIN (SELECT null AS id2) t2 ON id1 = id2";
 
-    let expected: &[&[&str]] = &[];
+    let expected = vec!["++", "++"];
 
     let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
 
     // left and right shouldn't match anything
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -5093,8 +5099,15 @@ async fn qualified_table_references() -> Result<()> {
         "datafusion.public.aggregate_test_100",
     ] {
         let sql = format!("SELECT COUNT(*) FROM {}", table_ref);
-        let results = execute(&mut ctx, &sql).await;
-        assert_eq!(results, vec![vec!["100"]]);
+        let actual = execute_to_batches(&mut ctx, &sql).await;
+        let expected = vec![
+            "+-----------------+",
+            "| COUNT(UInt8(1)) |",
+            "+-----------------+",
+            "| 100             |",
+            "+-----------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -5343,13 +5356,17 @@ async fn test_partial_qualified_name() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql = "SELECT t1.t1_id, t1_name FROM public.t1";
     let expected = vec![
-        vec!["11", "a"],
-        vec!["22", "b"],
-        vec!["33", "c"],
-        vec!["44", "d"],
+        "+-------+---------+",
+        "| t1_id | t1_name |",
+        "+-------+---------+",
+        "| 11    | a       |",
+        "| 22    | b       |",
+        "| 33    | c       |",
+        "| 44    | d       |",
+        "+-------+---------+",
     ];
-    let actual = execute(&mut ctx, sql).await;
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5672,9 +5689,9 @@ async fn avro_explain() {
 async fn union_distinct() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql = "SELECT 1 as x UNION SELECT 1 as x";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec!["+---+", "| x |", "+---+", "| 1 |", "+---+"];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5683,9 +5700,15 @@ async fn union_all_with_aggregate() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql =
         "SELECT SUM(d) FROM (SELECT 1 as c, 2 as d UNION ALL SELECT 1 as c, 3 AS d) as a";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["5"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------+",
+        "| SUM(a.d) |",
+        "+----------+",
+        "| 5        |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5693,9 +5716,15 @@ async fn union_all_with_aggregate() -> Result<()> {
 async fn case_with_bool_type_result() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql = "select case when 'cpu' != 'cpu' then true else false end";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["false"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------------+",
+        "| Boolean(false) |",
+        "+----------------+",
+        "| false          |",
+        "+----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5747,6 +5776,8 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     Ok(())
 }
 
+// --- End Test Porting ---
+
 #[tokio::test]
 async fn query_get_indexed_field() -> Result<()> {
     let mut ctx = ExecutionContext::new();
@@ -5773,9 +5804,11 @@ async fn query_get_indexed_field() -> Result<()> {
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0"], vec!["4"], vec!["7"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+", "| i0 |", "+----+", "| 0  |", "| 4  |", "| 7  |", "+----+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5817,13 +5850,23 @@ async fn query_nested_get_indexed_field() -> Result<()> {
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["[0, 1]"], vec!["[5, 6]"], vec!["[11, 12]"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------+",
+        "| i0       |",
+        "+----------+",
+        "| [0, 1]   |",
+        "| [5, 6]   |",
+        "| [11, 12] |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     let sql = "SELECT some_list[0][0] as i0 FROM ints LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0"], vec!["5"], vec!["11"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+", "| i0 |", "+----+", "| 0  |", "| 5  |", "| 11 |", "+----+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5857,17 +5900,23 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_struct[\"bar\"] as l0 FROM structs LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        vec!["[0, 1, 2, 3]"],
-        vec!["[4, 5, 6, 7]"],
-        vec!["[8, 9, 10, 11]"],
+        "+----------------+",
+        "| l0             |",
+        "+----------------+",
+        "| [0, 1, 2, 3]   |",
+        "| [4, 5, 6, 7]   |",
+        "| [8, 9, 10, 11] |",
+        "+----------------+",
     ];
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
     let sql = "SELECT some_struct[\"bar\"][0] as i0 FROM structs LIMIT 3";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0"], vec!["4"], vec!["8"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+", "| i0 |", "+----+", "| 0  |", "| 4  |", "| 8  |", "+----+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5876,12 +5925,10 @@ async fn intersect_with_null_not_equal() {
     let sql = "SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
             INTERSECT SELECT * FROM (SELECT null AS id1, 2 AS id2) t2";
 
-    let expected: &[&[&str]] = &[];
-
+    let expected = vec!["++", "++"];
     let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute(&mut ctx, sql).await;
-
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -5889,12 +5936,18 @@ async fn intersect_with_null_equal() {
     let sql = "SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
             INTERSECT SELECT * FROM (SELECT null AS id1, 1 AS id2) t2";
 
-    let expected = vec![vec!["NULL", "1"]];
+    let expected = vec![
+        "+-----+-----+",
+        "| id1 | id2 |",
+        "+-----+-----+",
+        "|     | 1   |",
+        "+-----+-----+",
+    ];
 
     let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
 
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -5941,12 +5994,18 @@ async fn except_with_null_not_equal() {
     let sql = "SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
             EXCEPT SELECT * FROM (SELECT null AS id1, 2 AS id2) t2";
 
-    let expected = vec![vec!["NULL", "1"]];
+    let expected = vec![
+        "+-----+-----+",
+        "| id1 | id2 |",
+        "+-----+-----+",
+        "|     | 1   |",
+        "+-----+-----+",
+    ];
 
     let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
 
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
@@ -5954,11 +6013,11 @@ async fn except_with_null_equal() {
     let sql = "SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
             EXCEPT SELECT * FROM (SELECT null AS id1, 1 AS id2) t2";
 
-    let expected: &[&[&str]] = &[];
+    let expected = vec!["++", "++"];
     let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
 
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
