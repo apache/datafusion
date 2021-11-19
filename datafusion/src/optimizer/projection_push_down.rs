@@ -20,10 +20,10 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::TableScanPlan;
+use crate::logical_plan::plan::{AnalyzePlan, TableScanPlan};
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
-    LogicalPlanBuilder, ToDFSchema,
+    LogicalPlanBuilder, ToDFSchema, Union,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -355,36 +355,33 @@ fn optimize_plan(
         LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
             "Unsupported logical plan: Explain must be root of the plan".to_string(),
         )),
-        LogicalPlan::Analyze {
-            input,
-            verbose,
-            schema,
-        } => {
+        LogicalPlan::Analyze(a) => {
             // make sure we keep all the columns from the input plan
-            let required_columns = input
+            let required_columns = a
+                .input
                 .schema()
                 .fields()
                 .iter()
                 .map(|f| f.qualified_column())
                 .collect::<HashSet<Column>>();
 
-            Ok(LogicalPlan::Analyze {
+            Ok(LogicalPlan::Analyze(AnalyzePlan {
                 input: Arc::new(optimize_plan(
                     optimizer,
-                    input,
+                    &a.input,
                     &required_columns,
                     false,
                     execution_props,
                 )?),
-                verbose: *verbose,
-                schema: schema.clone(),
-            })
+                verbose: a.verbose,
+                schema: a.schema.clone(),
+            }))
         }
-        LogicalPlan::Union {
+        LogicalPlan::Union(Union {
             inputs,
             schema,
             alias,
-        } => {
+        }) => {
             // UNION inputs will reference the same column with different identifiers, so we need
             // to populate new_required_columns by unqualified column name based on required fields
             // from the resulting UNION output
@@ -422,24 +419,24 @@ fn optimize_plan(
                     .cloned()
                     .collect(),
             )?;
-            Ok(LogicalPlan::Union {
+            Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs,
                 schema: Arc::new(new_schema),
                 alias: alias.clone(),
-            })
+            }))
         }
         // all other nodes: Add any additional columns used by
         // expressions in this node to the list of required columns
         LogicalPlan::Limit(_)
         | LogicalPlan::Filter { .. }
-        | LogicalPlan::Repartition { .. }
+        | LogicalPlan::Repartition(_)
         | LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::Sort { .. }
-        | LogicalPlan::CreateExternalTable { .. }
-        | LogicalPlan::CreateMemoryTable { .. }
-        | LogicalPlan::DropTable { .. }
-        | LogicalPlan::CrossJoin { .. }
+        | LogicalPlan::CreateExternalTable(_)
+        | LogicalPlan::CreateMemoryTable(_)
+        | LogicalPlan::DropTable(_)
+        | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Extension { .. } => {
             let expr = plan.expressions();
             // collect all required columns by this plan

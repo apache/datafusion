@@ -30,11 +30,12 @@ use datafusion::datasource::TableProvider;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
+use datafusion::logical_plan::plan::EmptyRelation;
 use datafusion::logical_plan::{
     exprlist_to_fields,
-    plan::TableScanPlan,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, EmptyRelation, Expr, JoinConstraint, JoinType, Limit, LogicalPlan, Values,
+    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, JoinType, Limit,
+    LogicalPlan, Repartition, TableScanPlan, Values,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -901,10 +902,10 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Repartition {
+            LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
-            } => {
+            }) => {
                 use datafusion::logical_plan::Partitioning;
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
 
@@ -945,13 +946,13 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     },
                 )),
             }),
-            LogicalPlan::CreateExternalTable {
+            LogicalPlan::CreateExternalTable(CreateExternalTable {
                 name,
                 location,
                 file_type,
                 has_header,
                 schema: df_schema,
-            } => {
+            }) => {
                 use datafusion::sql::parser::FileType;
 
                 let pb_file_type: protobuf::FileType = match file_type {
@@ -973,31 +974,31 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )),
                 })
             }
-            LogicalPlan::Analyze { verbose, input, .. } => {
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+            LogicalPlan::Analyze(a) => {
+                let input: protobuf::LogicalPlanNode = a.input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Analyze(Box::new(
                         protobuf::AnalyzeNode {
                             input: Some(Box::new(input)),
-                            verbose: *verbose,
+                            verbose: a.verbose,
                         },
                     ))),
                 })
             }
-            LogicalPlan::Explain { verbose, plan, .. } => {
-                let input: protobuf::LogicalPlanNode = plan.as_ref().try_into()?;
+            LogicalPlan::Explain(a) => {
+                let input: protobuf::LogicalPlanNode = a.plan.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Explain(Box::new(
                         protobuf::ExplainNode {
                             input: Some(Box::new(input)),
-                            verbose: *verbose,
+                            verbose: a.verbose,
                         },
                     ))),
                 })
             }
             LogicalPlan::Extension { .. } => unimplemented!(),
-            LogicalPlan::Union { .. } => unimplemented!(),
-            LogicalPlan::CrossJoin { left, right, .. } => {
+            LogicalPlan::Union(_) => unimplemented!(),
+            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
                 let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
@@ -1009,10 +1010,10 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::CreateMemoryTable { .. } => Err(proto_error(
+            LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
                 "Error converting CreateMemoryTable. Not yet supported in Ballista",
             )),
-            LogicalPlan::DropTable { .. } => Err(proto_error(
+            LogicalPlan::DropTable(_) => Err(proto_error(
                 "Error converting DropTable. Not yet supported in Ballista",
             )),
         }

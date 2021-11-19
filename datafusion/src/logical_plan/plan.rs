@@ -74,6 +74,105 @@ pub struct TableScanPlan {
     pub limit: Option<usize>,
 }
 
+/// Apply Cross Join to two logical plans
+#[derive(Clone)]
+pub struct CrossJoin {
+    /// Left input
+    pub left: Arc<LogicalPlan>,
+    /// Right input
+    pub right: Arc<LogicalPlan>,
+    /// The output schema, containing fields from the left and right inputs
+    pub schema: DFSchemaRef,
+}
+
+/// Repartition the plan based on a partitioning scheme.
+#[derive(Clone)]
+pub struct Repartition {
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+    /// The partitioning scheme
+    pub partitioning_scheme: Partitioning,
+}
+
+/// Union multiple inputs
+#[derive(Clone)]
+pub struct Union {
+    /// Inputs to merge
+    pub inputs: Vec<LogicalPlan>,
+    /// Union schema. Should be the same for all inputs.
+    pub schema: DFSchemaRef,
+    /// Union output relation alias
+    pub alias: Option<String>,
+}
+
+/// Creates an in memory table.
+#[derive(Clone)]
+pub struct CreateMemoryTable {
+    /// The table name
+    pub name: String,
+    /// The logical plan
+    pub input: Arc<LogicalPlan>,
+}
+
+/// Creates an external table.
+#[derive(Clone)]
+pub struct CreateExternalTable {
+    /// The table schema
+    pub schema: DFSchemaRef,
+    /// The table name
+    pub name: String,
+    /// The physical location
+    pub location: String,
+    /// The file type of physical file
+    pub file_type: FileType,
+    /// Whether the CSV file contains a header
+    pub has_header: bool,
+}
+
+/// Drops a table.
+#[derive(Clone)]
+pub struct DropTable {
+    /// The table name
+    pub name: String,
+    /// If the table exists
+    pub if_exist: bool,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+/// Produces a relation with string representations of
+/// various parts of the plan
+#[derive(Clone)]
+pub struct ExplainPlan {
+    /// Should extra (detailed, intermediate plans) be included?
+    pub verbose: bool,
+    /// The logical plan that is being EXPLAIN'd
+    pub plan: Arc<LogicalPlan>,
+    /// Represent the various stages plans have gone through
+    pub stringified_plans: Vec<StringifiedPlan>,
+    /// The output schema of the explain (2 columns of text)
+    pub schema: DFSchemaRef,
+}
+
+/// Runs the actual plan, and then prints the physical plan with
+/// with execution metrics.
+#[derive(Clone)]
+pub struct AnalyzePlan {
+    /// Should extra detail be included?
+    pub verbose: bool,
+    /// The logical plan that is being EXPLAIN ANALYZE'd
+    pub input: Arc<LogicalPlan>,
+    /// The output schema of the explain (2 columns of text)
+    pub schema: DFSchemaRef,
+}
+
+/// Extension operator defined outside of DataFusion
+#[derive(Clone)]
+pub struct ExtensionPlan {
+    /// The runtime extension operator
+    pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
+}
+
 /// Produces no rows: An empty relation with an empty schema
 #[derive(Clone)]
 pub struct EmptyRelation {
@@ -185,30 +284,11 @@ pub enum LogicalPlan {
         null_equals_null: bool,
     },
     /// Apply Cross Join to two logical plans
-    CrossJoin {
-        /// Left input
-        left: Arc<LogicalPlan>,
-        /// Right input
-        right: Arc<LogicalPlan>,
-        /// The output schema, containing fields from the left and right inputs
-        schema: DFSchemaRef,
-    },
+    CrossJoin(CrossJoin),
     /// Repartition the plan based on a partitioning scheme.
-    Repartition {
-        /// The incoming logical plan
-        input: Arc<LogicalPlan>,
-        /// The partitioning scheme
-        partitioning_scheme: Partitioning,
-    },
+    Repartition(Repartition),
     /// Union multiple inputs
-    Union {
-        /// Inputs to merge
-        inputs: Vec<LogicalPlan>,
-        /// Union schema. Should be the same for all inputs.
-        schema: DFSchemaRef,
-        /// Union output relation alias
-        alias: Option<String>,
-    },
+    Union(Union),
     /// Produces rows from a table provider by reference or from the context
     TableScan(TableScanPlan),
     /// Produces no rows: An empty relation with an empty schema
@@ -216,65 +296,23 @@ pub enum LogicalPlan {
     /// Produces the first `n` tuples from its input and discards the rest.
     Limit(Limit),
     /// Creates an external table.
-    CreateExternalTable {
-        /// The table schema
-        schema: DFSchemaRef,
-        /// The table name
-        name: String,
-        /// The physical location
-        location: String,
-        /// The file type of physical file
-        file_type: FileType,
-        /// Whether the CSV file contains a header
-        has_header: bool,
-    },
+    CreateExternalTable(CreateExternalTable),
     /// Creates an in memory table.
-    CreateMemoryTable {
-        /// The table name
-        name: String,
-        /// The logical plan
-        input: Arc<LogicalPlan>,
-    },
+    CreateMemoryTable(CreateMemoryTable),
     /// Drops a table.
-    DropTable {
-        /// The table name
-        name: String,
-        /// If the table exists
-        if_exist: bool,
-        /// Dummy schema
-        schema: DFSchemaRef,
-    },
+    DropTable(DropTable),
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
     Values(Values),
     /// Produces a relation with string representations of
     /// various parts of the plan
-    Explain {
-        /// Should extra (detailed, intermediate plans) be included?
-        verbose: bool,
-        /// The logical plan that is being EXPLAIN'd
-        plan: Arc<LogicalPlan>,
-        /// Represent the various stages plans have gone through
-        stringified_plans: Vec<StringifiedPlan>,
-        /// The output schema of the explain (2 columns of text)
-        schema: DFSchemaRef,
-    },
+    Explain(ExplainPlan),
     /// Runs the actual plan, and then prints the physical plan with
     /// with execution metrics.
-    Analyze {
-        /// Should extra detail be included?
-        verbose: bool,
-        /// The logical plan that is being EXPLAIN ANALYZE'd
-        input: Arc<LogicalPlan>,
-        /// The output schema of the explain (2 columns of text)
-        schema: DFSchemaRef,
-    },
+    Analyze(AnalyzePlan),
     /// Extension operator defined outside of DataFusion
-    Extension {
-        /// The runtime extension operator
-        node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
-    },
+    Extension(ExtensionPlan),
 }
 
 impl LogicalPlan {
@@ -292,16 +330,20 @@ impl LogicalPlan {
             LogicalPlan::Aggregate { schema, .. } => schema,
             LogicalPlan::Sort { input, .. } => input.schema(),
             LogicalPlan::Join { schema, .. } => schema,
-            LogicalPlan::CrossJoin { schema, .. } => schema,
-            LogicalPlan::Repartition { input, .. } => input.schema(),
+            LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
+            LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
-            LogicalPlan::CreateExternalTable { schema, .. } => schema,
-            LogicalPlan::Explain { schema, .. } => schema,
-            LogicalPlan::Analyze { schema, .. } => schema,
-            LogicalPlan::Extension { node } => node.schema(),
-            LogicalPlan::Union { schema, .. } => schema,
-            LogicalPlan::CreateMemoryTable { input, .. } => input.schema(),
-            LogicalPlan::DropTable { schema, .. } => schema,
+            LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
+                schema
+            }
+            LogicalPlan::Explain(explain) => &explain.schema,
+            LogicalPlan::Analyze(analyze) => &analyze.schema,
+            LogicalPlan::Extension(extension) => extension.node.schema(),
+            LogicalPlan::Union(Union { schema, .. }) => schema,
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
+                input.schema()
+            }
+            LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
         }
     }
 
@@ -325,30 +367,32 @@ impl LogicalPlan {
                 schema,
                 ..
             }
-            | LogicalPlan::CrossJoin {
+            | LogicalPlan::CrossJoin(CrossJoin {
                 left,
                 right,
                 schema,
-            } => {
+            }) => {
                 let mut schemas = left.all_schemas();
                 schemas.extend(right.all_schemas());
                 schemas.insert(0, schema);
                 schemas
             }
-            LogicalPlan::Union { schema, .. } => {
+            LogicalPlan::Union(Union { schema, .. }) => {
                 vec![schema]
             }
-            LogicalPlan::Extension { node } => vec![node.schema()],
-            LogicalPlan::Explain { schema, .. }
-            | LogicalPlan::Analyze { schema, .. }
+            LogicalPlan::Extension(extension) => vec![extension.node.schema()],
+            LogicalPlan::Explain(ExplainPlan { schema, .. })
+            | LogicalPlan::Analyze(AnalyzePlan { schema, .. })
             | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
-            | LogicalPlan::CreateExternalTable { schema, .. } => vec![schema],
+            | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
+                vec![schema]
+            }
             LogicalPlan::Limit(Limit { input, .. })
-            | LogicalPlan::Repartition { input, .. }
+            | LogicalPlan::Repartition(Repartition { input, .. })
             | LogicalPlan::Sort { input, .. }
-            | LogicalPlan::CreateMemoryTable { input, .. }
+            | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::Filter { input, .. } => input.all_schemas(),
-            LogicalPlan::DropTable { .. } => vec![],
+            LogicalPlan::DropTable(_) => vec![],
         }
     }
 
@@ -370,10 +414,10 @@ impl LogicalPlan {
                 values.iter().flatten().cloned().collect()
             }
             LogicalPlan::Filter { predicate, .. } => vec![predicate.clone()],
-            LogicalPlan::Repartition {
+            LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
-            } => match partitioning_scheme {
+            }) => match partitioning_scheme {
                 Partitioning::Hash(expr, _) => expr.clone(),
                 _ => vec![],
             },
@@ -388,18 +432,18 @@ impl LogicalPlan {
                 .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
                 .collect(),
             LogicalPlan::Sort { expr, .. } => expr.clone(),
-            LogicalPlan::Extension { node } => node.expressions(),
+            LogicalPlan::Extension(extension) => extension.node.expressions(),
             // plans without expressions
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Limit(_)
-            | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::CreateMemoryTable { .. }
-            | LogicalPlan::DropTable { .. }
-            | LogicalPlan::CrossJoin { .. }
+            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
             | LogicalPlan::Explain { .. }
-            | LogicalPlan::Union { .. } => {
+            | LogicalPlan::Union(_) => {
                 vec![]
             }
         }
@@ -411,24 +455,26 @@ impl LogicalPlan {
         match self {
             LogicalPlan::Projection { input, .. } => vec![input],
             LogicalPlan::Filter { input, .. } => vec![input],
-            LogicalPlan::Repartition { input, .. } => vec![input],
+            LogicalPlan::Repartition(Repartition { input, .. }) => vec![input],
             LogicalPlan::Window { input, .. } => vec![input],
             LogicalPlan::Aggregate { input, .. } => vec![input],
             LogicalPlan::Sort { input, .. } => vec![input],
             LogicalPlan::Join { left, right, .. } => vec![left, right],
-            LogicalPlan::CrossJoin { left, right, .. } => vec![left, right],
+            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
-            LogicalPlan::Extension { node } => node.inputs(),
-            LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
-            LogicalPlan::Explain { plan, .. } => vec![plan],
-            LogicalPlan::Analyze { input: plan, .. } => vec![plan],
-            LogicalPlan::CreateMemoryTable { input, .. } => vec![input],
+            LogicalPlan::Extension(extension) => extension.node.inputs(),
+            LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
+            LogicalPlan::Explain(explain) => vec![&explain.plan],
+            LogicalPlan::Analyze(analyze) => vec![&analyze.input],
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
+                vec![input]
+            }
             // plans without inputs
             LogicalPlan::TableScan { .. }
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::DropTable { .. } => vec![],
+            | LogicalPlan::EmptyRelation { .. }
+            | LogicalPlan::Values { .. }
+            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::DropTable(_) => vec![],
         }
     }
 
@@ -544,15 +590,17 @@ impl LogicalPlan {
         let recurse = match self {
             LogicalPlan::Projection { input, .. } => input.accept(visitor)?,
             LogicalPlan::Filter { input, .. } => input.accept(visitor)?,
-            LogicalPlan::Repartition { input, .. } => input.accept(visitor)?,
+            LogicalPlan::Repartition(Repartition { input, .. }) => {
+                input.accept(visitor)?
+            }
             LogicalPlan::Window { input, .. } => input.accept(visitor)?,
             LogicalPlan::Aggregate { input, .. } => input.accept(visitor)?,
             LogicalPlan::Sort { input, .. } => input.accept(visitor)?,
             LogicalPlan::Join { left, right, .. }
-            | LogicalPlan::CrossJoin { left, right, .. } => {
+            | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 left.accept(visitor)? && right.accept(visitor)?
             }
-            LogicalPlan::Union { inputs, .. } => {
+            LogicalPlan::Union(Union { inputs, .. }) => {
                 for input in inputs {
                     if !input.accept(visitor)? {
                         return Ok(false);
@@ -561,23 +609,25 @@ impl LogicalPlan {
                 true
             }
             LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::CreateMemoryTable { input, .. } => input.accept(visitor)?,
-            LogicalPlan::Extension { node } => {
-                for input in node.inputs() {
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
+                input.accept(visitor)?
+            }
+            LogicalPlan::Extension(extension) => {
+                for input in extension.node.inputs() {
                     if !input.accept(visitor)? {
                         return Ok(false);
                     }
                 }
                 true
             }
-            LogicalPlan::Explain { plan, .. } => plan.accept(visitor)?,
-            LogicalPlan::Analyze { input: plan, .. } => plan.accept(visitor)?,
+            LogicalPlan::Explain(explain) => explain.plan.accept(visitor)?,
+            LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Values(_)
-            | LogicalPlan::CreateExternalTable { .. }
-            | LogicalPlan::DropTable { .. } => true,
+            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::DropTable(_) => true,
         };
         if !recurse {
             return Ok(false);
@@ -865,13 +915,13 @@ impl LogicalPlan {
                             }
                         }
                     }
-                    LogicalPlan::CrossJoin { .. } => {
+                    LogicalPlan::CrossJoin(_) => {
                         write!(f, "CrossJoin:")
                     }
-                    LogicalPlan::Repartition {
+                    LogicalPlan::Repartition(Repartition {
                         partitioning_scheme,
                         ..
-                    } => match partitioning_scheme {
+                    }) => match partitioning_scheme {
                         Partitioning::RoundRobinBatch(n) => write!(
                             f,
                             "Repartition: RoundRobinBatch partition_count={}",
@@ -889,21 +939,24 @@ impl LogicalPlan {
                         }
                     },
                     LogicalPlan::Limit(Limit { ref n, .. }) => write!(f, "Limit: {}", n),
-                    LogicalPlan::CreateExternalTable { ref name, .. } => {
+                    LogicalPlan::CreateExternalTable(CreateExternalTable {
+                        ref name,
+                        ..
+                    }) => {
                         write!(f, "CreateExternalTable: {:?}", name)
                     }
-                    LogicalPlan::CreateMemoryTable { ref name, .. } => {
+                    LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                        name, ..
+                    }) => {
                         write!(f, "CreateMemoryTable: {:?}", name)
                     }
-                    LogicalPlan::DropTable {
-                        ref name, if_exist, ..
-                    } => {
+                    LogicalPlan::DropTable(DropTable { name, if_exist, .. }) => {
                         write!(f, "DropTable: {:?} if not exist:={}", name, if_exist)
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
-                    LogicalPlan::Union { .. } => write!(f, "Union"),
-                    LogicalPlan::Extension { ref node } => node.fmt_for_explain(f),
+                    LogicalPlan::Union(_) => write!(f, "Union"),
+                    LogicalPlan::Extension(e) => e.node.fmt_for_explain(f),
                 }
             }
         }

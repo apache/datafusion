@@ -24,11 +24,13 @@ mod roundtrip_tests {
     use super::super::{super::error::Result, protobuf};
     use crate::error::BallistaError;
     use core::panic;
+    use datafusion::logical_plan::Repartition;
     use datafusion::{
         arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit},
         datasource::object_store::local::LocalFileSystem,
         logical_plan::{
-            col, Expr, LogicalPlan, LogicalPlanBuilder, Partitioning, ToDFSchema,
+            col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder,
+            Partitioning, ToDFSchema,
         },
         physical_plan::functions::BuiltinScalarFunction::Sqrt,
         prelude::*,
@@ -92,28 +94,28 @@ mod roundtrip_tests {
         for batch_size in test_batch_sizes.iter() {
             let rr_repartition = Partitioning::RoundRobinBatch(*batch_size);
 
-            let roundtrip_plan = LogicalPlan::Repartition {
+            let roundtrip_plan = LogicalPlan::Repartition(Repartition {
                 input: plan.clone(),
                 partitioning_scheme: rr_repartition,
-            };
+            });
 
             roundtrip_test!(roundtrip_plan);
 
             let h_repartition = Partitioning::Hash(test_expr.clone(), *batch_size);
 
-            let roundtrip_plan = LogicalPlan::Repartition {
+            let roundtrip_plan = LogicalPlan::Repartition(Repartition {
                 input: plan.clone(),
                 partitioning_scheme: h_repartition,
-            };
+            });
 
             roundtrip_test!(roundtrip_plan);
 
             let no_expr_hrepartition = Partitioning::Hash(Vec::new(), *batch_size);
 
-            let roundtrip_plan = LogicalPlan::Repartition {
+            let roundtrip_plan = LogicalPlan::Repartition(Repartition {
                 input: plan.clone(),
                 partitioning_scheme: no_expr_hrepartition,
-            };
+            });
 
             roundtrip_test!(roundtrip_plan);
         }
@@ -655,13 +657,14 @@ mod roundtrip_tests {
         ];
 
         for file in filetypes.iter() {
-            let create_table_node = LogicalPlan::CreateExternalTable {
-                schema: df_schema_ref.clone(),
-                name: String::from("TestName"),
-                location: String::from("employee.csv"),
-                file_type: *file,
-                has_header: true,
-            };
+            let create_table_node =
+                LogicalPlan::CreateExternalTable(CreateExternalTable {
+                    schema: df_schema_ref.clone(),
+                    name: String::from("TestName"),
+                    location: String::from("employee.csv"),
+                    file_type: *file,
+                    has_header: true,
+                });
 
             roundtrip_test!(create_table_node);
         }

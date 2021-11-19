@@ -51,8 +51,9 @@ pub use expr::{
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
 pub use plan::{
-    EmptyRelation, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
-    PlanVisitor, Values,
+    CreateExternalTable, CreateMemoryTable, CrossJoin, DropTable, EmptyRelation,
+    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, PlanVisitor,
+    Repartition, TableScanPlan, Union, Values,
 };
 pub(crate) use plan::{StringifiedPlan, ToStringifiedPlan};
 pub use registry::FunctionRegistry;
