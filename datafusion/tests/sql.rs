@@ -5088,8 +5088,6 @@ async fn inner_join_nulls() {
     assert_batches_eq!(expected, &actual);
 }
 
-// --- End Test Porting ---
-
 #[tokio::test]
 async fn qualified_table_references() -> Result<()> {
     let mut ctx = ExecutionContext::new();
@@ -5101,10 +5099,15 @@ async fn qualified_table_references() -> Result<()> {
         "datafusion.public.aggregate_test_100",
     ] {
         let sql = format!("SELECT COUNT(*) FROM {}", table_ref);
-        let results = execute(&mut ctx, &sql).await;
-        // let a = execute_to_batches(&mut ctx, sql).await;
-        // println!("{}", pretty_format_batches(&a).unwrap());
-        assert_eq!(results, vec![vec!["100"]]);
+        let actual = execute_to_batches(&mut ctx, &sql).await;
+        let expected = vec![
+            "+-----------------+",
+            "| COUNT(UInt8(1)) |",
+            "+-----------------+",
+            "| 100             |",
+            "+-----------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
@@ -5353,13 +5356,17 @@ async fn test_partial_qualified_name() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let sql = "SELECT t1.t1_id, t1_name FROM public.t1";
     let expected = vec![
-        vec!["11", "a"],
-        vec!["22", "b"],
-        vec!["33", "c"],
-        vec!["44", "d"],
+        "+-------+---------+",
+        "| t1_id | t1_name |",
+        "+-------+---------+",
+        "| 11    | a       |",
+        "| 22    | b       |",
+        "| 33    | c       |",
+        "| 44    | d       |",
+        "+-------+---------+",
     ];
-    let actual = execute(&mut ctx, sql).await;
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, &sql).await;
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5682,9 +5689,9 @@ async fn avro_explain() {
 async fn union_distinct() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql = "SELECT 1 as x UNION SELECT 1 as x";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["1"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, &sql).await;
+    let expected = vec!["+---+", "| x |", "+---+", "| 1 |", "+---+"];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5693,9 +5700,15 @@ async fn union_all_with_aggregate() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql =
         "SELECT SUM(d) FROM (SELECT 1 as c, 2 as d UNION ALL SELECT 1 as c, 3 AS d) as a";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["5"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, &sql).await;
+    let expected = vec![
+        "+----------+",
+        "| SUM(a.d) |",
+        "+----------+",
+        "| 5        |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -5703,11 +5716,19 @@ async fn union_all_with_aggregate() -> Result<()> {
 async fn case_with_bool_type_result() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql = "select case when 'cpu' != 'cpu' then true else false end";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["false"]];
-    assert_eq!(expected, actual);
+    let actual = execute_to_batches(&mut ctx, &sql).await;
+    let expected = vec![
+        "+----------------+",
+        "| Boolean(false) |",
+        "+----------------+",
+        "| false          |",
+        "+----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+// --- End Test Porting ---
 
 #[tokio::test]
 async fn use_between_expression_in_select_query() -> Result<()> {
