@@ -46,7 +46,6 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use datafusion::logical_plan::plan::ProjectionPlan;
-use datafusion::logical_plan::LogicalPlan::Projection;
 
 //// Custom source dataframe tests ////
 
