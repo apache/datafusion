@@ -78,48 +78,49 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
     let mut expr_set = ExprSet::new();
 
     match plan {
-        LogicalPlan::Projection(ProjectionPlan {
-            expr,
-            input,
-            schema,
-            alias,
-        }) => {
-            let arrays = to_arrays(expr, input, &mut expr_set)?;
+        LogicalPlan::Projection(projection_plan) => {
+            let arrays =
+                to_arrays(&projection_plan.expr, &projection_plan.input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
-                &[expr],
+                &[&projection_plan.expr],
                 &[&arrays],
-                input,
+                &projection_plan.input,
                 &mut expr_set,
-                schema,
+                &projection_plan.schema,
                 execution_props,
             )?;
 
             Ok(LogicalPlan::Projection(ProjectionPlan {
                 expr: new_expr.pop().unwrap(),
                 input: Arc::new(new_input),
-                schema: schema.clone(),
-                alias: alias.clone(),
+                schema: projection_plan.schema.clone(),
+                alias: projection_plan.alias.clone(),
             }))
         }
-        LogicalPlan::Filter(FilterPlan { predicate, input }) => {
+        LogicalPlan::Filter(filter_plan) => {
             let schemas = plan.all_schemas();
             let all_schema =
                 schemas.into_iter().fold(DFSchema::empty(), |mut lhs, rhs| {
                     lhs.merge(rhs);
                     lhs
                 });
-            let data_type = predicate.get_type(&all_schema)?;
+            let data_type = filter_plan.predicate.get_type(&all_schema)?;
 
             let mut id_array = vec![];
-            expr_to_identifier(predicate, &mut expr_set, &mut id_array, data_type)?;
+            expr_to_identifier(
+                &filter_plan.predicate,
+                &mut expr_set,
+                &mut id_array,
+                data_type,
+            )?;
 
             let (mut new_expr, new_input) = rewrite_expr(
-                &[&[predicate.clone()]],
+                &[&[filter_plan.predicate.clone()]],
                 &[&[id_array]],
-                input,
+                &filter_plan.input,
                 &mut expr_set,
-                input.schema(),
+                filter_plan.input.schema(),
                 execution_props,
             )?;
 
@@ -128,26 +129,23 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 input: Arc::new(new_input),
             }))
         }
-        LogicalPlan::Window(WindowPlan {
-            input,
-            window_expr,
-            schema,
-        }) => {
-            let arrays = to_arrays(window_expr, input, &mut expr_set)?;
+        LogicalPlan::Window(window_plan) => {
+            let arrays =
+                to_arrays(&window_plan.window_expr, &window_plan.input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
-                &[window_expr],
+                &[&window_plan.window_expr],
                 &[&arrays],
-                input,
+                &window_plan.input,
                 &mut expr_set,
-                schema,
+                &window_plan.schema,
                 execution_props,
             )?;
 
             Ok(LogicalPlan::Window(WindowPlan {
                 input: Arc::new(new_input),
                 window_expr: new_expr.pop().unwrap(),
-                schema: schema.clone(),
+                schema: window_plan.schema.clone(),
             }))
         }
         LogicalPlan::Aggregate {

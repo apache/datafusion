@@ -23,7 +23,9 @@ use arrow::record_batch::RecordBatch;
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
-use crate::logical_plan::plan::{AnalyzePlan, ExtensionPlan};
+use crate::logical_plan::plan::{
+    AnalyzePlan, ExtensionPlan, FilterPlan, ProjectionPlan, WindowPlan,
+};
 use crate::logical_plan::{
     build_join_schema, Column, CreateMemoryTable, DFSchema, DFSchemaRef, Expr,
     ExprRewriter, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
@@ -145,12 +147,14 @@ pub fn from_plan(
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Projection { schema, alias, .. } => Ok(LogicalPlan::Projection {
-            expr: expr.to_vec(),
-            input: Arc::new(inputs[0].clone()),
-            schema: schema.clone(),
-            alias: alias.clone(),
-        }),
+        LogicalPlan::Projection(projection_plan) => {
+            Ok(LogicalPlan::Projection(ProjectionPlan {
+                expr: expr.to_vec(),
+                input: Arc::new(inputs[0].clone()),
+                schema: projection_plan.schema.clone(),
+                alias: projection_plan.alias.clone(),
+            }))
+        }
         LogicalPlan::Values { schema, .. } => Ok(LogicalPlan::Values {
             schema: schema.clone(),
             values: expr
@@ -158,10 +162,10 @@ pub fn from_plan(
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>(),
         }),
-        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter {
+        LogicalPlan::Filter(_) => Ok(LogicalPlan::Filter(FilterPlan {
             predicate: expr[0].clone(),
             input: Arc::new(inputs[0].clone()),
-        }),
+        })),
         LogicalPlan::Repartition(Repartition {
             partitioning_scheme,
             ..
@@ -177,15 +181,11 @@ pub fn from_plan(
                 input: Arc::new(inputs[0].clone()),
             })),
         },
-        LogicalPlan::Window {
-            window_expr,
-            schema,
-            ..
-        } => Ok(LogicalPlan::Window {
+        LogicalPlan::Window(window_plan) => Ok(LogicalPlan::Window(WindowPlan {
             input: Arc::new(inputs[0].clone()),
-            window_expr: expr[0..window_expr.len()].to_vec(),
-            schema: schema.clone(),
-        }),
+            window_expr: expr[0..window_plan.window_expr.len()].to_vec(),
+            schema: window_plan.schema.clone(),
+        })),
         LogicalPlan::Aggregate {
             group_expr, schema, ..
         } => Ok(LogicalPlan::Aggregate {

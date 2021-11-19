@@ -779,43 +779,43 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )))
                 }
             }
-            LogicalPlan::Projection(ProjectionPlan {
-                expr, input, alias, ..
-            }) => Ok(protobuf::LogicalPlanNode {
+            LogicalPlan::Projection(projection_plan) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
                     protobuf::ProjectionNode {
-                        input: Some(Box::new(input.as_ref().try_into()?)),
-                        expr: expr.iter().map(|expr| expr.try_into()).collect::<Result<
-                            Vec<_>,
-                            BallistaError,
-                        >>(
-                        )?,
-                        optional_alias: alias
+                        input: Some(Box::new(projection_plan.input.as_ref().try_into()?)),
+                        expr: projection_plan
+                            .expr
+                            .iter()
+                            .map(|expr| expr.try_into())
+                            .collect::<Result<Vec<_>, BallistaError>>()?,
+                        optional_alias: projection_plan
+                            .alias
                             .clone()
                             .map(protobuf::projection_node::OptionalAlias::Alias),
                     },
                 ))),
             }),
-            LogicalPlan::Filter(FilterPlan { predicate, input }) => {
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+            LogicalPlan::Filter(filter_plan) => {
+                let input: protobuf::LogicalPlanNode =
+                    filter_plan.input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some(predicate.try_into()?),
+                            expr: Some((&filter_plan.predicate).try_into()?),
                         },
                     ))),
                 })
             }
-            LogicalPlan::Window(WindowPlan {
-                input, window_expr, ..
-            }) => {
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
+            LogicalPlan::Window(window_plan) => {
+                let input: protobuf::LogicalPlanNode =
+                    window_plan.input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Window(Box::new(
                         protobuf::WindowNode {
                             input: Some(Box::new(input)),
-                            window_expr: window_expr
+                            window_expr: window_plan
+                                .window_expr
                                 .iter()
                                 .map(|expr| expr.try_into())
                                 .collect::<Result<Vec<_>, _>>()?,

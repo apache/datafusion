@@ -20,6 +20,7 @@
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::ProjectionPlan;
 use crate::logical_plan::TableScanPlan;
 use crate::logical_plan::{LogicalPlan, Union};
 use crate::optimizer::optimizer::OptimizerRule;
@@ -76,27 +77,19 @@ fn limit_push_down(
                 .or(Some(upper_limit)),
             projected_schema: projected_schema.clone(),
         })),
-        (
-            LogicalPlan::Projection {
-                expr,
-                input,
-                schema,
-                alias,
-            },
-            upper_limit,
-        ) => {
+        (LogicalPlan::Projection(projection_plan), upper_limit) => {
             // Push down limit directly (projection doesn't change number of rows)
-            Ok(LogicalPlan::Projection {
-                expr: expr.clone(),
+            Ok(LogicalPlan::Projection(ProjectionPlan {
+                expr: projection_plan.expr.clone(),
                 input: Arc::new(limit_push_down(
                     optimizer,
                     upper_limit,
-                    input.as_ref(),
+                    projection_plan.input.as_ref(),
                     execution_props,
                 )?),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            })
+                schema: projection_plan.schema.clone(),
+                alias: projection_plan.alias.clone(),
+            }))
         }
         (
             LogicalPlan::Union(Union {
