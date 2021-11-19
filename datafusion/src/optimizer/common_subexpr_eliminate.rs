@@ -199,9 +199,9 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::Repartition(_)
         | LogicalPlan::Union(_)
         | LogicalPlan::TableScan { .. }
-        | LogicalPlan::Values { .. }
-        | LogicalPlan::EmptyRelation { .. }
-        | LogicalPlan::Limit { .. }
+        | LogicalPlan::Values(_)
+        | LogicalPlan::EmptyRelation(_)
+        | LogicalPlan::Limit(_)
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::Explain { .. }
         | LogicalPlan::Analyze { .. }
