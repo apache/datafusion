@@ -60,7 +60,7 @@ fn is_distinct_from_bool(
     left: &BooleanArray,
     right: &BooleanArray,
 ) -> Result<BooleanArray> {
-    // Different from `eq` beacause not eq_bool because null == null
+    // Different from `neq_bool` because `null is distinct from null` is false and not null
     Ok(left
         .iter()
         .zip(right.iter())
