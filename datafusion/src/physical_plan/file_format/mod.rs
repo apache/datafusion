@@ -277,8 +277,9 @@ fn create_dict_array(
 
 #[cfg(test)]
 mod tests {
-    use crate::test::{
-        aggr_test_schema, build_table_i32, columns, object_store::TestObjectStore,
+    use crate::{
+        test::{build_table_i32, columns, object_store::TestObjectStore},
+        test_util::aggr_test_schema,
     };
 
     use super::*;

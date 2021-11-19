@@ -27,7 +27,7 @@ mod display;
 mod expr;
 mod extension;
 mod operators;
-mod plan;
+pub mod plan;
 mod registry;
 pub mod window_frames;
 pub use builder::{
@@ -51,7 +51,9 @@ pub use expr::{
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
 pub use plan::{
-    JoinConstraint, JoinType, LogicalPlan, Partitioning, PlanType, PlanVisitor,
+    CreateExternalTable, CreateMemoryTable, CrossJoin, DropTable, EmptyRelation,
+    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, PlanVisitor,
+    Repartition, TableScanPlan, Union, Values,
 };
 pub(crate) use plan::{StringifiedPlan, ToStringifiedPlan};
 pub use registry::FunctionRegistry;

@@ -29,9 +29,11 @@ use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_wildcard, col, lit, normalize_col, union_with_alias, Column,
-    DFSchema, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
+    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
+    DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
     ToDFSchema, ToStringifiedPlan,
 };
+
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
@@ -65,6 +67,7 @@ use super::{
     },
 };
 use crate::logical_plan::builder::project_with_alias;
+use crate::logical_plan::plan::{AnalyzePlan, ExplainPlan};
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
@@ -157,10 +160,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             {
                 let plan = self.query_to_plan(query)?;
 
-                Ok(LogicalPlan::CreateMemoryTable {
+                Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                     name: name.to_string(),
                     input: Arc::new(plan),
-                })
+                }))
             }
             Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(
                 "Only `CREATE TABLE table_name AS SELECT ...` statement is supported"
@@ -176,11 +179,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } =>
             // We don't support cascade and purge for now.
             {
-                Ok(LogicalPlan::DropTable {
+                Ok(LogicalPlan::DropTable(DropTable {
                     name: names.get(0).unwrap().to_string(),
                     if_exist: *if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                })
+                }))
             }
 
             Statement::ShowColumns {
@@ -305,13 +308,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let schema = self.build_schema(columns)?;
 
-        Ok(LogicalPlan::CreateExternalTable {
+        Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
             schema: schema.to_dfschema_ref()?,
             name: name.clone(),
             location: location.clone(),
             file_type: *file_type,
             has_header: *has_header,
-        })
+        }))
     }
 
     /// Generate a plan for EXPLAIN ... that will print out a plan
@@ -328,20 +331,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(LogicalPlan::Analyze {
+            Ok(LogicalPlan::Analyze(AnalyzePlan {
                 verbose,
                 input: plan,
                 schema,
-            })
+            }))
         } else {
             let stringified_plans =
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
-            Ok(LogicalPlan::Explain {
+            Ok(LogicalPlan::Explain(ExplainPlan {
                 verbose,
                 plan,
                 stringified_plans,
                 schema,
-            })
+            }))
         }
     }
 

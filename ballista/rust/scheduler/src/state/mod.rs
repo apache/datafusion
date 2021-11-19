@@ -555,7 +555,7 @@ impl<T: Send + Sync> Lock for OwnedMutexGuard<T> {
     async fn unlock(&mut self) {}
 }
 
-/// Returns the the unresolved shuffles in the execution plan
+/// Returns the unresolved shuffles in the execution plan
 fn find_unresolved_shuffles(
     plan: &Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<UnresolvedShuffleExec>> {

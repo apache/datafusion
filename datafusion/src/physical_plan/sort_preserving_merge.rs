@@ -664,7 +664,6 @@ mod tests {
     use std::iter::FromIterator;
 
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
-    use crate::assert_batches_eq;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
@@ -672,6 +671,7 @@ mod tests {
     use crate::physical_plan::sort::SortExec;
     use crate::physical_plan::{collect, common};
     use crate::test::{self, assert_is_pending};
+    use crate::{assert_batches_eq, test_util};
 
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -930,7 +930,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort() {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let partitions = 4;
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
@@ -1013,7 +1013,7 @@ mod tests {
         sort: Vec<PhysicalSortExpr>,
         sizes: &[usize],
     ) -> Arc<dyn ExecutionPlan> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let partitions = 4;
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
@@ -1041,7 +1041,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input() {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let sort = vec![
             // uint8
             PhysicalSortExpr {
@@ -1080,7 +1080,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input_output() {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
 
         let sort = vec![
             // float64
@@ -1195,7 +1195,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_async() {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let sort = vec![PhysicalSortExpr {
             expr: col("c12", &schema).unwrap(),
             options: SortOptions::default(),

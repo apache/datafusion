@@ -16,7 +16,9 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::{and, replace_col, Column, LogicalPlan};
+use crate::logical_plan::{
+    and, replace_col, Column, CrossJoin, Limit, LogicalPlan, TableScanPlan,
+};
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -374,11 +376,11 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // sort is filter-commutable
             push_down(&state, plan)
         }
-        LogicalPlan::Union { .. } => {
+        LogicalPlan::Union(_) => {
             // union all is filter-commutable
             push_down(&state, plan)
         }
-        LogicalPlan::Limit { input, .. } => {
+        LogicalPlan::Limit(Limit { input, .. }) => {
             // limit is _not_ filter-commutable => collect all columns from its input
             let used_columns = input
                 .schema()
@@ -388,7 +390,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .collect::<HashSet<_>>();
             issue_filters(state, used_columns, plan)
         }
-        LogicalPlan::CrossJoin { left, right, .. } => {
+        LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
             optimize_join(state, plan, left, right)
         }
         LogicalPlan::Join {
@@ -451,14 +453,14 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             optimize_join(state, plan, left, right)
         }
-        LogicalPlan::TableScan {
+        LogicalPlan::TableScan(TableScanPlan {
             source,
             projected_schema,
             filters,
             projection,
             table_name,
             limit,
-        } => {
+        }) => {
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
 
@@ -487,14 +489,14 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             issue_filters(
                 state,
                 used_columns,
-                &LogicalPlan::TableScan {
+                &LogicalPlan::TableScan(TableScanPlan {
                     source: source.clone(),
                     projection: projection.clone(),
                     projected_schema: projected_schema.clone(),
                     table_name: table_name.clone(),
                     filters: new_filters,
                     limit: *limit,
-                },
+                }),
             )
         }
         _ => {
@@ -1174,7 +1176,7 @@ mod tests {
     ) -> Result<LogicalPlan> {
         let test_provider = PushDownProvider { filter_support };
 
-        let table_scan = LogicalPlan::TableScan {
+        let table_scan = LogicalPlan::TableScan(TableScanPlan {
             table_name: "test".to_string(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
@@ -1183,7 +1185,7 @@ mod tests {
             projection: None,
             source: Arc::new(test_provider),
             limit: None,
-        };
+        });
 
         LogicalPlanBuilder::from(table_scan)
             .filter(col("a").eq(lit(1i64)))?

@@ -18,6 +18,7 @@
 //! Command within CLI
 
 use crate::context::Context;
+use crate::functions::{display_all_functions, Function};
 use crate::print_options::PrintOptions;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -34,6 +35,8 @@ pub enum Command {
     Help,
     ListTables,
     DescribeTable(String),
+    ListFunctions,
+    SearchFunctions(String),
 }
 
 impl Command {
@@ -64,6 +67,17 @@ impl Command {
             Self::Quit => Err(DataFusionError::Execution(
                 "Unexpected quit, this should be handled outside".into(),
             )),
+            Self::ListFunctions => display_all_functions(),
+            Self::SearchFunctions(function) => {
+                if let Ok(func) = function.parse::<Function>() {
+                    let details = func.function_details()?;
+                    println!("{}", details);
+                    Ok(())
+                } else {
+                    let msg = format!("{} is not a supported function", function);
+                    Err(DataFusionError::Execution(msg))
+                }
+            }
         }
     }
 
@@ -73,15 +87,19 @@ impl Command {
             Self::ListTables => ("\\d", "list tables"),
             Self::DescribeTable(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
+            Self::ListFunctions => ("\\h", "function list"),
+            Self::SearchFunctions(_) => ("\\h function", "search function"),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 4] = [
+const ALL_COMMANDS: [Command; 6] = [
     Command::ListTables,
     Command::DescribeTable(String::new()),
     Command::Quit,
     Command::Help,
+    Command::ListFunctions,
+    Command::SearchFunctions(String::new()),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -117,6 +135,8 @@ impl FromStr for Command {
             ("d", None) => Self::ListTables,
             ("d", Some(name)) => Self::DescribeTable(name.into()),
             ("?", None) => Self::Help,
+            ("h", None) => Self::ListFunctions,
+            ("h", Some(function)) => Self::SearchFunctions(function.into()),
             _ => return Err(()),
         })
     }
