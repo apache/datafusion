@@ -264,11 +264,12 @@ mod tests {
     use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::scalar::ScalarValue;
     use crate::test::{self};
+    use crate::test_util;
     use futures::future;
 
     #[tokio::test]
     async fn project_first_column() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
         let (_, files) =

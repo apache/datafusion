@@ -43,14 +43,13 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
 use datafusion::prelude::*;
+use datafusion::test_util;
 use datafusion::{datasource::MemTable, physical_plan::collect};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::ColumnarValue,
 };
 use datafusion::{execution::context::ExecutionContext, physical_plan::displayable};
-
-mod common;
 
 #[tokio::test]
 async fn nyc() -> Result<()> {
@@ -3461,7 +3460,7 @@ async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
 
 async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
     let testdata = datafusion::test_util::arrow_test_data();
-    let schema = common::aggr_test_schema();
+    let schema = test_util::aggr_test_schema();
     ctx.register_csv(
         "aggregate_test_100",
         &format!("{}/csv/aggregate_test_100.csv", testdata),

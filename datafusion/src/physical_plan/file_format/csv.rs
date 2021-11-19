@@ -167,7 +167,7 @@ mod tests {
     use crate::{
         datasource::object_store::local::{local_unpartitioned_file, LocalFileSystem},
         scalar::ScalarValue,
-        test::aggr_test_schema,
+        test_util::aggr_test_schema,
     };
     use futures::StreamExt;
 
