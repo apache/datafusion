@@ -30,11 +30,12 @@ use datafusion::datasource::TableProvider;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
+use datafusion::logical_plan::plan::EmptyRelation;
 use datafusion::logical_plan::{
     exprlist_to_fields,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, JoinType, LogicalPlan,
-    Repartition, TableScanPlan,
+    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, JoinType, Limit,
+    LogicalPlan, Repartition, TableScanPlan, Values,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -676,7 +677,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
     fn try_into(self) -> Result<protobuf::LogicalPlanNode, Self::Error> {
         use protobuf::logical_plan_node::LogicalPlanType;
         match self {
-            LogicalPlan::Values { values, .. } => {
+            LogicalPlan::Values(Values { values, .. }) => {
                 let n_cols = if values.is_empty() {
                     0
                 } else {
@@ -875,7 +876,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Limit { input, n } => {
+            LogicalPlan::Limit(Limit { input, n }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
@@ -936,9 +937,9 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::EmptyRelation {
+            LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row, ..
-            } => Ok(protobuf::LogicalPlanNode {
+            }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::EmptyRelation(
                     protobuf::EmptyRelationNode {
                         produce_one_row: *produce_one_row,

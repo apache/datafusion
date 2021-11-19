@@ -20,7 +20,7 @@
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::TableScanPlan;
+use crate::logical_plan::{Limit, TableScanPlan};
 use crate::logical_plan::{LogicalPlan, Union};
 use crate::optimizer::optimizer::OptimizerRule;
 use std::sync::Arc;
@@ -43,9 +43,9 @@ fn limit_push_down(
     execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
     match (plan, upper_limit) {
-        (LogicalPlan::Limit { n, input }, upper_limit) => {
+        (LogicalPlan::Limit(Limit { n, input }), upper_limit) => {
             let smallest = upper_limit.map(|x| std::cmp::min(x, *n)).unwrap_or(*n);
-            Ok(LogicalPlan::Limit {
+            Ok(LogicalPlan::Limit(Limit {
                 n: smallest,
                 // push down limit to plan (minimum of upper limit and current limit)
                 input: Arc::new(limit_push_down(
@@ -54,7 +54,7 @@ fn limit_push_down(
                     input.as_ref(),
                     execution_props,
                 )?),
-            })
+            }))
         }
         (
             LogicalPlan::TableScan(TableScanPlan {
@@ -110,7 +110,7 @@ fn limit_push_down(
             let new_inputs = inputs
                 .iter()
                 .map(|x| {
-                    Ok(LogicalPlan::Limit {
+                    Ok(LogicalPlan::Limit(Limit {
                         n: upper_limit,
                         input: Arc::new(limit_push_down(
                             optimizer,
@@ -118,7 +118,7 @@ fn limit_push_down(
                             x,
                             execution_props,
                         )?),
-                    })
+                    }))
                 })
                 .collect::<Result<_>>()?;
             Ok(LogicalPlan::Union(Union {

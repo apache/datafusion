@@ -23,12 +23,13 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
-use crate::logical_plan::TableScanPlan;
+use crate::logical_plan::plan::EmptyRelation;
 use crate::logical_plan::{
     unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
     Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
     UserDefinedLogicalNode,
 };
+use crate::logical_plan::{Limit, TableScanPlan, Values};
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
@@ -347,10 +348,10 @@ impl DefaultPhysicalPlanner {
                     let filters = unnormalize_cols(filters.iter().cloned());
                     source.scan(projection, batch_size, &filters, *limit).await
                 }
-                LogicalPlan::Values {
+                LogicalPlan::Values(Values {
                     values,
                     schema,
-                } => {
+                }) => {
                     let exec_schema = schema.as_ref().to_owned().into();
                     let exprs = values.iter()
                         .map(|row| {
@@ -781,14 +782,14 @@ impl DefaultPhysicalPlanner {
                     let right = self.create_initial_plan(right, ctx_state).await?;
                     Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
                 }
-                LogicalPlan::EmptyRelation {
+                LogicalPlan::EmptyRelation(EmptyRelation {
                     produce_one_row,
                     schema,
-                } => Ok(Arc::new(EmptyExec::new(
+                }) => Ok(Arc::new(EmptyExec::new(
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
-                LogicalPlan::Limit { input, n, .. } => {
+                LogicalPlan::Limit(Limit { input, n, .. }) => {
                     let limit = *n;
                     let input = self.create_initial_plan(input, ctx_state).await?;
 

@@ -173,6 +173,35 @@ pub struct ExtensionPlan {
     pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
 }
 
+/// Produces no rows: An empty relation with an empty schema
+#[derive(Clone)]
+pub struct EmptyRelation {
+    /// Whether to produce a placeholder row
+    pub produce_one_row: bool,
+    /// The schema description of the output
+    pub schema: DFSchemaRef,
+}
+
+/// Produces the first `n` tuples from its input and discards the rest.
+#[derive(Clone)]
+pub struct Limit {
+    /// The limit
+    pub n: usize,
+    /// The logical plan
+    pub input: Arc<LogicalPlan>,
+}
+
+/// Values expression. See
+/// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
+/// documentation for more details.
+#[derive(Clone)]
+pub struct Values {
+    /// The table schema
+    pub schema: DFSchemaRef,
+    /// Values
+    pub values: Vec<Vec<Expr>>,
+}
+
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -263,19 +292,9 @@ pub enum LogicalPlan {
     /// Produces rows from a table provider by reference or from the context
     TableScan(TableScanPlan),
     /// Produces no rows: An empty relation with an empty schema
-    EmptyRelation {
-        /// Whether to produce a placeholder row
-        produce_one_row: bool,
-        /// The schema description of the output
-        schema: DFSchemaRef,
-    },
+    EmptyRelation(EmptyRelation),
     /// Produces the first `n` tuples from its input and discards the rest.
-    Limit {
-        /// The limit
-        n: usize,
-        /// The logical plan
-        input: Arc<LogicalPlan>,
-    },
+    Limit(Limit),
     /// Creates an external table.
     CreateExternalTable(CreateExternalTable),
     /// Creates an in memory table.
@@ -285,12 +304,7 @@ pub enum LogicalPlan {
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
-    Values {
-        /// The table schema
-        schema: DFSchemaRef,
-        /// Values
-        values: Vec<Vec<Expr>>,
-    },
+    Values(Values),
     /// Produces a relation with string representations of
     /// various parts of the plan
     Explain(ExplainPlan),
@@ -305,8 +319,8 @@ impl LogicalPlan {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
-            LogicalPlan::EmptyRelation { schema, .. } => schema,
-            LogicalPlan::Values { schema, .. } => schema,
+            LogicalPlan::EmptyRelation(EmptyRelation { schema, .. }) => schema,
+            LogicalPlan::Values(Values { schema, .. }) => schema,
             LogicalPlan::TableScan(TableScanPlan {
                 projected_schema, ..
             }) => projected_schema,
@@ -318,7 +332,7 @@ impl LogicalPlan {
             LogicalPlan::Join { schema, .. } => schema,
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
-            LogicalPlan::Limit { input, .. } => input.schema(),
+            LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 schema
             }
@@ -339,7 +353,7 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScanPlan {
                 projected_schema, ..
             }) => vec![projected_schema],
-            LogicalPlan::Values { schema, .. } => vec![schema],
+            LogicalPlan::Values(Values { schema, .. }) => vec![schema],
             LogicalPlan::Window { input, schema, .. }
             | LogicalPlan::Aggregate { input, schema, .. }
             | LogicalPlan::Projection { input, schema, .. } => {
@@ -369,11 +383,11 @@ impl LogicalPlan {
             LogicalPlan::Extension(extension) => vec![extension.node.schema()],
             LogicalPlan::Explain(ExplainPlan { schema, .. })
             | LogicalPlan::Analyze(AnalyzePlan { schema, .. })
-            | LogicalPlan::EmptyRelation { schema, .. }
+            | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
             | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 vec![schema]
             }
-            LogicalPlan::Limit { input, .. }
+            LogicalPlan::Limit(Limit { input, .. })
             | LogicalPlan::Repartition(Repartition { input, .. })
             | LogicalPlan::Sort { input, .. }
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
@@ -396,7 +410,7 @@ impl LogicalPlan {
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
         match self {
             LogicalPlan::Projection { expr, .. } => expr.clone(),
-            LogicalPlan::Values { values, .. } => {
+            LogicalPlan::Values(Values { values, .. }) => {
                 values.iter().flatten().cloned().collect()
             }
             LogicalPlan::Filter { predicate, .. } => vec![predicate.clone()],
@@ -421,8 +435,8 @@ impl LogicalPlan {
             LogicalPlan::Extension(extension) => extension.node.expressions(),
             // plans without expressions
             LogicalPlan::TableScan { .. }
-            | LogicalPlan::EmptyRelation { .. }
-            | LogicalPlan::Limit { .. }
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Limit(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::DropTable(_)
@@ -447,7 +461,7 @@ impl LogicalPlan {
             LogicalPlan::Sort { input, .. } => vec![input],
             LogicalPlan::Join { left, right, .. } => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
-            LogicalPlan::Limit { input, .. } => vec![input],
+            LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
             LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
             LogicalPlan::Explain(explain) => vec![&explain.plan],
@@ -594,7 +608,7 @@ impl LogicalPlan {
                 }
                 true
             }
-            LogicalPlan::Limit { input, .. } => input.accept(visitor)?,
+            LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
                 input.accept(visitor)?
             }
@@ -610,8 +624,8 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
-            | LogicalPlan::EmptyRelation { .. }
-            | LogicalPlan::Values { .. }
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Values(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::DropTable(_) => true,
         };
@@ -799,8 +813,8 @@ impl LogicalPlan {
         impl<'a> fmt::Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match &*self.0 {
-                    LogicalPlan::EmptyRelation { .. } => write!(f, "EmptyRelation"),
-                    LogicalPlan::Values { ref values, .. } => {
+                    LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
+                    LogicalPlan::Values(Values { ref values, .. }) => {
                         let str_values: Vec<_> = values
                             .iter()
                             // limit to only 5 values to avoid horrible display
@@ -924,7 +938,7 @@ impl LogicalPlan {
                             )
                         }
                     },
-                    LogicalPlan::Limit { ref n, .. } => write!(f, "Limit: {}", n),
+                    LogicalPlan::Limit(Limit { ref n, .. }) => write!(f, "Limit: {}", n),
                     LogicalPlan::CreateExternalTable(CreateExternalTable {
                         ref name,
                         ..
