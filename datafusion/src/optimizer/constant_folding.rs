@@ -92,9 +92,7 @@ impl OptimizerRule for ConstantFolding {
                     .expressions()
                     .into_iter()
                     .map(|e| {
-                        // We need to keep original expression name, if any.
-                        // Constant folding should not change expression name.
-                        let name = &e.name(plan.schema());
+                        let org_name = &e.name(plan.schema());
 
                         // TODO iterate until no changes are made
                         // during rewrite (evaluating constants can
@@ -106,28 +104,27 @@ impl OptimizerRule for ConstantFolding {
                             .rewrite(&mut const_evaluator)?
                             .rewrite(&mut simplifier)?;
 
-                        let new_name = &new_e.name(plan.schema());
-
-                        // Some plans will be candidates in projection pushdown rule to
-                        // trim expressions based on expression names. We need to keep
-                        // expression name for them.
-                        let is_plan_for_projection_pushdown = matches!(
-                            plan,
-                            LogicalPlan::Window { .. }
-                                | LogicalPlan::Aggregate { .. }
-                                | LogicalPlan::Union { .. }
-                        );
-
-                        if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
-                            if expr_name != new_expr_name
-                                && is_plan_for_projection_pushdown
-                            {
-                                Ok(new_e.alias(expr_name))
-                            } else {
-                                Ok(new_e)
+                        match plan {
+                            LogicalPlan::Projection { .. }
+                            | LogicalPlan::Window { .. }
+                            | LogicalPlan::Aggregate { .. } => {
+                                // We need to keep original expression name.
+                                // Constant folding should not change expression name.
+                                let new_name = &new_e.name(plan.schema());
+                                if let (Ok(expr_name), Ok(new_expr_name)) =
+                                    (org_name, new_name)
+                                {
+                                    if expr_name != new_expr_name {
+                                        let new_alias_expr = new_e.alias(expr_name);
+                                        Ok(new_alias_expr)
+                                    } else {
+                                        Ok(new_e)
+                                    }
+                                } else {
+                                    Ok(new_e)
+                                }
                             }
-                        } else {
-                            Ok(new_e)
+                            _ => Ok(new_e),
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
