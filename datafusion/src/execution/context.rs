@@ -78,6 +78,7 @@ use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::logical_plan::plan::ExplainPlan;
+use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
@@ -902,6 +903,7 @@ impl Default for ExecutionConfig {
                 Arc::new(FilterPushDown::new()),
                 Arc::new(SimplifyExpressions::new()),
                 Arc::new(LimitPushDown::new()),
+                Arc::new(SingleDistinctToGroupBy::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(AggregateStatistics::new()),
