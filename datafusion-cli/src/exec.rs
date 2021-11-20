@@ -93,11 +93,8 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: &PrintOptions) {
                 if let Ok(cmd) = &line[1..].parse::<Command>() {
                     match cmd {
                         Command::Quit => break,
-                        Command::QuietMode(quiet) => {
-                            print_options.quiet = *quiet;
-                        }
                         _ => {
-                            if let Err(e) = cmd.execute(ctx, &print_options).await {
+                            if let Err(e) = cmd.execute(ctx, &mut print_options).await {
                                 eprintln!("{}", e)
                             }
                         }

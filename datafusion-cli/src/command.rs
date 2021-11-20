@@ -44,7 +44,7 @@ impl Command {
     pub async fn execute(
         &self,
         ctx: &mut Context,
-        print_options: &PrintOptions,
+        print_options: &mut PrintOptions,
     ) -> Result<()> {
         let now = Instant::now();
         match self {
@@ -65,7 +65,10 @@ impl Command {
                     .print_batches(&batches, now)
                     .map_err(|e| DataFusionError::Execution(e.to_string()))
             }
-            Self::QuietMode(_) => Ok(()),
+            Self::QuietMode(quiet) => {
+                print_options.quiet = *quiet;
+                Ok(())
+            }
             Self::Quit => Err(DataFusionError::Execution(
                 "Unexpected quit, this should be handled outside".into(),
             )),
