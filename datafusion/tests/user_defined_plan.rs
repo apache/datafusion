@@ -87,7 +87,7 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 use async_trait::async_trait;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_plan::plan::ExtensionPlan;
-use datafusion::logical_plan::DFSchemaRef;
+use datafusion::logical_plan::{DFSchemaRef, Limit};
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.
@@ -288,7 +288,7 @@ impl OptimizerRule for TopKOptimizerRule {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
-        if let LogicalPlan::Limit { ref n, ref input } = plan {
+        if let LogicalPlan::Limit(Limit { ref n, ref input }) = plan {
             if let LogicalPlan::Sort {
                 ref expr,
                 ref input,

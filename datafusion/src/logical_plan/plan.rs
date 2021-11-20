@@ -57,47 +57,6 @@ pub enum JoinConstraint {
     Using,
 }
 
-/// Evaluates an arbitrary list of expressions (essentially a
-/// SELECT with an expression list) on its input.
-#[derive(Clone)]
-pub struct ProjectionPlan {
-    /// The list of expressions
-    pub expr: Vec<Expr>,
-    /// The incoming logical plan
-    pub input: Arc<LogicalPlan>,
-    /// The schema description of the output
-    pub schema: DFSchemaRef,
-    /// Projection output relation alias
-    pub alias: Option<String>,
-}
-
-/// Filters rows from its input that do not match an
-/// expression (essentially a WHERE clause with a predicate
-/// expression).
-///
-/// Semantically, `<predicate>` is evaluated for each row of the input;
-/// If the value of `<predicate>` is true, the input row is passed to
-/// the output. If the value of `<predicate>` is false, the row is
-/// discarded.
-#[derive(Clone)]
-pub struct FilterPlan {
-    /// The predicate expression, which must have Boolean type.
-    pub predicate: Expr,
-    /// The incoming logical plan
-    pub input: Arc<LogicalPlan>,
-}
-
-/// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
-#[derive(Clone)]
-pub struct WindowPlan {
-    /// The incoming logical plan
-    pub input: Arc<LogicalPlan>,
-    /// The window function expression
-    pub window_expr: Vec<Expr>,
-    /// The schema description of the window output
-    pub schema: DFSchemaRef,
-}
-
 /// Produces rows from a table provider by reference or from the context
 #[derive(Clone)]
 pub struct TableScanPlan {
@@ -214,6 +173,35 @@ pub struct ExtensionPlan {
     pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
 }
 
+/// Produces no rows: An empty relation with an empty schema
+#[derive(Clone)]
+pub struct EmptyRelation {
+    /// Whether to produce a placeholder row
+    pub produce_one_row: bool,
+    /// The schema description of the output
+    pub schema: DFSchemaRef,
+}
+
+/// Produces the first `n` tuples from its input and discards the rest.
+#[derive(Clone)]
+pub struct Limit {
+    /// The limit
+    pub n: usize,
+    /// The logical plan
+    pub input: Arc<LogicalPlan>,
+}
+
+/// Values expression. See
+/// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
+/// documentation for more details.
+#[derive(Clone)]
+pub struct Values {
+    /// The table schema
+    pub schema: DFSchemaRef,
+    /// Values
+    pub values: Vec<Vec<Expr>>,
+}
+
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -226,7 +214,16 @@ pub struct ExtensionPlan {
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
-    Projection(ProjectionPlan),
+    Projection {
+        /// The list of expressions
+        expr: Vec<Expr>,
+        /// The incoming logical plan
+        input: Arc<LogicalPlan>,
+        /// The schema description of the output
+        schema: DFSchemaRef,
+        /// Projection output relation alias
+        alias: Option<String>,
+    },
     /// Filters rows from its input that do not match an
     /// expression (essentially a WHERE clause with a predicate
     /// expression).
@@ -235,9 +232,21 @@ pub enum LogicalPlan {
     /// If the value of `<predicate>` is true, the input row is passed to
     /// the output. If the value of `<predicate>` is false, the row is
     /// discarded.
-    Filter(FilterPlan),
+    Filter {
+        /// The predicate expression, which must have Boolean type.
+        predicate: Expr,
+        /// The incoming logical plan
+        input: Arc<LogicalPlan>,
+    },
     /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
-    Window(WindowPlan),
+    Window {
+        /// The incoming logical plan
+        input: Arc<LogicalPlan>,
+        /// The window function expression
+        window_expr: Vec<Expr>,
+        /// The schema description of the window output
+        schema: DFSchemaRef,
+    },
     /// Aggregates its input based on a set of grouping and aggregate
     /// expressions (e.g. SUM).
     Aggregate {
@@ -283,19 +292,9 @@ pub enum LogicalPlan {
     /// Produces rows from a table provider by reference or from the context
     TableScan(TableScanPlan),
     /// Produces no rows: An empty relation with an empty schema
-    EmptyRelation {
-        /// Whether to produce a placeholder row
-        produce_one_row: bool,
-        /// The schema description of the output
-        schema: DFSchemaRef,
-    },
+    EmptyRelation(EmptyRelation),
     /// Produces the first `n` tuples from its input and discards the rest.
-    Limit {
-        /// The limit
-        n: usize,
-        /// The logical plan
-        input: Arc<LogicalPlan>,
-    },
+    Limit(Limit),
     /// Creates an external table.
     CreateExternalTable(CreateExternalTable),
     /// Creates an in memory table.
@@ -305,12 +304,7 @@ pub enum LogicalPlan {
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
-    Values {
-        /// The table schema
-        schema: DFSchemaRef,
-        /// Values
-        values: Vec<Vec<Expr>>,
-    },
+    Values(Values),
     /// Produces a relation with string representations of
     /// various parts of the plan
     Explain(ExplainPlan),
@@ -325,20 +319,20 @@ impl LogicalPlan {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
-            LogicalPlan::EmptyRelation { schema, .. } => schema,
-            LogicalPlan::Values { schema, .. } => schema,
+            LogicalPlan::EmptyRelation(EmptyRelation { schema, .. }) => schema,
+            LogicalPlan::Values(Values { schema, .. }) => schema,
             LogicalPlan::TableScan(TableScanPlan {
                 projected_schema, ..
             }) => projected_schema,
-            LogicalPlan::Projection(ProjectionPlan { schema, .. }) => schema,
-            LogicalPlan::Filter(FilterPlan { input, .. }) => input.schema(),
-            LogicalPlan::Window(WindowPlan { schema, .. }) => schema,
+            LogicalPlan::Projection { schema, .. } => schema,
+            LogicalPlan::Filter { input, .. } => input.schema(),
+            LogicalPlan::Window { schema, .. } => schema,
             LogicalPlan::Aggregate { schema, .. } => schema,
             LogicalPlan::Sort { input, .. } => input.schema(),
             LogicalPlan::Join { schema, .. } => schema,
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
-            LogicalPlan::Limit { input, .. } => input.schema(),
+            LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 schema
             }
@@ -359,10 +353,10 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScanPlan {
                 projected_schema, ..
             }) => vec![projected_schema],
-            LogicalPlan::Values { schema, .. } => vec![schema],
-            LogicalPlan::Window(WindowPlan { input, schema, .. })
+            LogicalPlan::Values(Values { schema, .. }) => vec![schema],
+            LogicalPlan::Window { input, schema, .. }
             | LogicalPlan::Aggregate { input, schema, .. }
-            | LogicalPlan::Projection(ProjectionPlan { input, schema, .. }) => {
+            | LogicalPlan::Projection { input, schema, .. } => {
                 let mut schemas = input.all_schemas();
                 schemas.insert(0, schema);
                 schemas
@@ -389,15 +383,15 @@ impl LogicalPlan {
             LogicalPlan::Extension(extension) => vec![extension.node.schema()],
             LogicalPlan::Explain(ExplainPlan { schema, .. })
             | LogicalPlan::Analyze(AnalyzePlan { schema, .. })
-            | LogicalPlan::EmptyRelation { schema, .. }
+            | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
             | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 vec![schema]
             }
-            LogicalPlan::Limit { input, .. }
+            LogicalPlan::Limit(Limit { input, .. })
             | LogicalPlan::Repartition(Repartition { input, .. })
             | LogicalPlan::Sort { input, .. }
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::Filter(FilterPlan { input, .. }) => input.all_schemas(),
+            | LogicalPlan::Filter { input, .. } => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
         }
     }
@@ -415,11 +409,11 @@ impl LogicalPlan {
     /// children
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
         match self {
-            LogicalPlan::Projection(ProjectionPlan { expr, .. }) => expr.clone(),
-            LogicalPlan::Values { values, .. } => {
+            LogicalPlan::Projection { expr, .. } => expr.clone(),
+            LogicalPlan::Values(Values { values, .. }) => {
                 values.iter().flatten().cloned().collect()
             }
-            LogicalPlan::Filter(FilterPlan { predicate, .. }) => vec![predicate.clone()],
+            LogicalPlan::Filter { predicate, .. } => vec![predicate.clone()],
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
@@ -427,7 +421,7 @@ impl LogicalPlan {
                 Partitioning::Hash(expr, _) => expr.clone(),
                 _ => vec![],
             },
-            LogicalPlan::Window(WindowPlan { window_expr, .. }) => window_expr.clone(),
+            LogicalPlan::Window { window_expr, .. } => window_expr.clone(),
             LogicalPlan::Aggregate {
                 group_expr,
                 aggr_expr,
@@ -441,8 +435,8 @@ impl LogicalPlan {
             LogicalPlan::Extension(extension) => extension.node.expressions(),
             // plans without expressions
             LogicalPlan::TableScan { .. }
-            | LogicalPlan::EmptyRelation { .. }
-            | LogicalPlan::Limit { .. }
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Limit(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::DropTable(_)
@@ -459,15 +453,15 @@ impl LogicalPlan {
     /// include inputs to inputs.
     pub fn inputs(self: &LogicalPlan) -> Vec<&LogicalPlan> {
         match self {
-            LogicalPlan::Projection(ProjectionPlan { input, .. }) => vec![input],
-            LogicalPlan::Filter(FilterPlan { input, .. }) => vec![input],
+            LogicalPlan::Projection { input, .. } => vec![input],
+            LogicalPlan::Filter { input, .. } => vec![input],
             LogicalPlan::Repartition(Repartition { input, .. }) => vec![input],
-            LogicalPlan::Window(WindowPlan { input, .. }) => vec![input],
+            LogicalPlan::Window { input, .. } => vec![input],
             LogicalPlan::Aggregate { input, .. } => vec![input],
             LogicalPlan::Sort { input, .. } => vec![input],
             LogicalPlan::Join { left, right, .. } => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
-            LogicalPlan::Limit { input, .. } => vec![input],
+            LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
             LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
             LogicalPlan::Explain(explain) => vec![&explain.plan],
@@ -594,14 +588,12 @@ impl LogicalPlan {
         }
 
         let recurse = match self {
-            LogicalPlan::Projection(ProjectionPlan { input, .. }) => {
-                input.accept(visitor)?
-            }
-            LogicalPlan::Filter(FilterPlan { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Projection { input, .. } => input.accept(visitor)?,
+            LogicalPlan::Filter { input, .. } => input.accept(visitor)?,
             LogicalPlan::Repartition(Repartition { input, .. }) => {
                 input.accept(visitor)?
             }
-            LogicalPlan::Window(WindowPlan { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Window { input, .. } => input.accept(visitor)?,
             LogicalPlan::Aggregate { input, .. } => input.accept(visitor)?,
             LogicalPlan::Sort { input, .. } => input.accept(visitor)?,
             LogicalPlan::Join { left, right, .. }
@@ -616,7 +608,7 @@ impl LogicalPlan {
                 }
                 true
             }
-            LogicalPlan::Limit { input, .. } => input.accept(visitor)?,
+            LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
                 input.accept(visitor)?
             }
@@ -632,8 +624,8 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
-            | LogicalPlan::EmptyRelation { .. }
-            | LogicalPlan::Values { .. }
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Values(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::DropTable(_) => true,
         };
@@ -821,8 +813,8 @@ impl LogicalPlan {
         impl<'a> fmt::Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match &*self.0 {
-                    LogicalPlan::EmptyRelation { .. } => write!(f, "EmptyRelation"),
-                    LogicalPlan::Values { ref values, .. } => {
+                    LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
+                    LogicalPlan::Values(Values { ref values, .. }) => {
                         let str_values: Vec<_> = values
                             .iter()
                             // limit to only 5 values to avoid horrible display
@@ -864,9 +856,9 @@ impl LogicalPlan {
 
                         Ok(())
                     }
-                    LogicalPlan::Projection(ProjectionPlan {
+                    LogicalPlan::Projection {
                         ref expr, alias, ..
-                    }) => {
+                    } => {
                         write!(f, "Projection: ")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {
@@ -879,13 +871,13 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
-                    LogicalPlan::Filter(FilterPlan {
+                    LogicalPlan::Filter {
                         predicate: ref expr,
                         ..
-                    }) => write!(f, "Filter: {:?}", expr),
-                    LogicalPlan::Window(WindowPlan {
+                    } => write!(f, "Filter: {:?}", expr),
+                    LogicalPlan::Window {
                         ref window_expr, ..
-                    }) => {
+                    } => {
                         write!(f, "WindowAggr: windowExpr=[{:?}]", window_expr)
                     }
                     LogicalPlan::Aggregate {
@@ -946,7 +938,7 @@ impl LogicalPlan {
                             )
                         }
                     },
-                    LogicalPlan::Limit { ref n, .. } => write!(f, "Limit: {}", n),
+                    LogicalPlan::Limit(Limit { ref n, .. }) => write!(f, "Limit: {}", n),
                     LogicalPlan::CreateExternalTable(CreateExternalTable {
                         ref name,
                         ..

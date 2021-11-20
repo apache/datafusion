@@ -26,8 +26,7 @@ use crate::datasource::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::{
-    AnalyzePlan, ExplainPlan, FilterPlan, ProjectionPlan, TableScanPlan,
-    ToStringifiedPlan, Union, WindowPlan,
+    AnalyzePlan, EmptyRelation, ExplainPlan, TableScanPlan, ToStringifiedPlan, Union,
 };
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
@@ -46,7 +45,7 @@ use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, Column, CrossJoin, DFField, DFSchema,
-    DFSchemaRef, Partitioning, Repartition,
+    DFSchemaRef, Limit, Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 
@@ -110,10 +109,10 @@ impl LogicalPlanBuilder {
     ///
     /// `produce_one_row` set to true means this empty node needs to produce a placeholder row.
     pub fn empty(produce_one_row: bool) -> Self {
-        Self::from(LogicalPlan::EmptyRelation {
+        Self::from(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
-        })
+        }))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
@@ -187,7 +186,7 @@ impl LogicalPlanBuilder {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
         let schema = DFSchemaRef::new(DFSchema::new(fields)?);
-        Ok(Self::from(LogicalPlan::Values { schema, values }))
+        Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
     /// Scan a memory data source
@@ -452,18 +451,18 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(&self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Ok(Self::from(LogicalPlan::Filter(FilterPlan {
+        Ok(Self::from(LogicalPlan::Filter {
             predicate: expr,
             input: Arc::new(self.plan.clone()),
-        })))
+        }))
     }
 
     /// Apply a limit
     pub fn limit(&self, n: usize) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Limit {
+        Ok(Self::from(LogicalPlan::Limit(Limit {
             n,
             input: Arc::new(self.plan.clone()),
-        }))
+        })))
     }
 
     /// Apply a sort
@@ -659,11 +658,11 @@ impl LogicalPlanBuilder {
         let mut window_fields: Vec<DFField> =
             exprlist_to_fields(all_expr, self.plan.schema())?;
         window_fields.extend_from_slice(self.plan.schema().fields());
-        Ok(Self::from(LogicalPlan::Window(WindowPlan {
+        Ok(Self::from(LogicalPlan::Window {
             input: Arc::new(self.plan.clone()),
             window_expr,
             schema: Arc::new(DFSchema::new(window_fields)?),
-        })))
+        }))
     }
 
     /// Apply an aggregate: grouping on the `group_expr` expressions
@@ -899,12 +898,12 @@ pub fn project_with_alias(
         Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
         None => input_schema,
     };
-    Ok(LogicalPlan::Projection(ProjectionPlan {
+    Ok(LogicalPlan::Projection {
         expr: projected_expr,
         input: Arc::new(plan.clone()),
         schema: DFSchemaRef::new(schema),
         alias,
-    }))
+    })
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.

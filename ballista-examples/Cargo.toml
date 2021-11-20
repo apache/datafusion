@@ -29,7 +29,7 @@ publish = false
 rust-version = "1.56"
 
 [dependencies]
-arrow-flight = { version = "6.1.0" }
+arrow-flight = { version = "6.2.0" }
 datafusion = { path = "../datafusion" }
 ballista = { path = "../ballista/rust/client", version = "0.6.0"}
 prost = "0.8"

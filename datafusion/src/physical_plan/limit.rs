@@ -388,11 +388,11 @@ mod tests {
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
     use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
-    use crate::test;
+    use crate::{test, test_util};
 
     #[tokio::test]
     async fn limit() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
 
         let num_partitions = 4;
         let (_, files) =

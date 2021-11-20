@@ -30,12 +30,12 @@ use datafusion::datasource::TableProvider;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
-use datafusion::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
+use datafusion::logical_plan::plan::EmptyRelation;
 use datafusion::logical_plan::{
     exprlist_to_fields,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, JoinType, LogicalPlan,
-    Repartition, TableScanPlan,
+    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, JoinType, Limit,
+    LogicalPlan, Repartition, TableScanPlan, Values,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -677,7 +677,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
     fn try_into(self) -> Result<protobuf::LogicalPlanNode, Self::Error> {
         use protobuf::logical_plan_node::LogicalPlanType;
         match self {
-            LogicalPlan::Values { values, .. } => {
+            LogicalPlan::Values(Values { values, .. }) => {
                 let n_cols = if values.is_empty() {
                     0
                 } else {
@@ -779,43 +779,43 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )))
                 }
             }
-            LogicalPlan::Projection(projection_plan) => Ok(protobuf::LogicalPlanNode {
+            LogicalPlan::Projection {
+                expr, input, alias, ..
+            } => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
                     protobuf::ProjectionNode {
-                        input: Some(Box::new(projection_plan.input.as_ref().try_into()?)),
-                        expr: projection_plan
-                            .expr
-                            .iter()
-                            .map(|expr| expr.try_into())
-                            .collect::<Result<Vec<_>, BallistaError>>()?,
-                        optional_alias: projection_plan
-                            .alias
+                        input: Some(Box::new(input.as_ref().try_into()?)),
+                        expr: expr.iter().map(|expr| expr.try_into()).collect::<Result<
+                            Vec<_>,
+                            BallistaError,
+                        >>(
+                        )?,
+                        optional_alias: alias
                             .clone()
                             .map(protobuf::projection_node::OptionalAlias::Alias),
                     },
                 ))),
             }),
-            LogicalPlan::Filter(filter_plan) => {
-                let input: protobuf::LogicalPlanNode =
-                    filter_plan.input.as_ref().try_into()?;
+            LogicalPlan::Filter { predicate, input } => {
+                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some((&filter_plan.predicate).try_into()?),
+                            expr: Some(predicate.try_into()?),
                         },
                     ))),
                 })
             }
-            LogicalPlan::Window(window_plan) => {
-                let input: protobuf::LogicalPlanNode =
-                    window_plan.input.as_ref().try_into()?;
+            LogicalPlan::Window {
+                input, window_expr, ..
+            } => {
+                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Window(Box::new(
                         protobuf::WindowNode {
                             input: Some(Box::new(input)),
-                            window_expr: window_plan
-                                .window_expr
+                            window_expr: window_expr
                                 .iter()
                                 .map(|expr| expr.try_into())
                                 .collect::<Result<Vec<_>, _>>()?,
@@ -876,7 +876,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Limit { input, n } => {
+            LogicalPlan::Limit(Limit { input, n }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
@@ -937,9 +937,9 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::EmptyRelation {
+            LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row, ..
-            } => Ok(protobuf::LogicalPlanNode {
+            }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::EmptyRelation(
                     protobuf::EmptyRelationNode {
                         produce_one_row: *produce_one_row,

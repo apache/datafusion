@@ -23,13 +23,11 @@ use arrow::record_batch::RecordBatch;
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
-use crate::logical_plan::plan::{
-    AnalyzePlan, ExtensionPlan, FilterPlan, ProjectionPlan, WindowPlan,
-};
+use crate::logical_plan::plan::{AnalyzePlan, ExtensionPlan};
 use crate::logical_plan::{
     build_join_schema, Column, CreateMemoryTable, DFSchema, DFSchemaRef, Expr,
-    ExprRewriter, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
-    Repartition, RewriteRecursion, Union,
+    ExprRewriter, Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning,
+    Recursion, Repartition, RewriteRecursion, Union, Values,
 };
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -147,25 +145,23 @@ pub fn from_plan(
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Projection(projection_plan) => {
-            Ok(LogicalPlan::Projection(ProjectionPlan {
-                expr: expr.to_vec(),
-                input: Arc::new(inputs[0].clone()),
-                schema: projection_plan.schema.clone(),
-                alias: projection_plan.alias.clone(),
-            }))
-        }
-        LogicalPlan::Values { schema, .. } => Ok(LogicalPlan::Values {
+        LogicalPlan::Projection { schema, alias, .. } => Ok(LogicalPlan::Projection {
+            expr: expr.to_vec(),
+            input: Arc::new(inputs[0].clone()),
+            schema: schema.clone(),
+            alias: alias.clone(),
+        }),
+        LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
             values: expr
                 .chunks_exact(schema.fields().len())
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>(),
-        }),
-        LogicalPlan::Filter(_) => Ok(LogicalPlan::Filter(FilterPlan {
+        })),
+        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter {
             predicate: expr[0].clone(),
             input: Arc::new(inputs[0].clone()),
-        })),
+        }),
         LogicalPlan::Repartition(Repartition {
             partitioning_scheme,
             ..
@@ -181,11 +177,15 @@ pub fn from_plan(
                 input: Arc::new(inputs[0].clone()),
             })),
         },
-        LogicalPlan::Window(window_plan) => Ok(LogicalPlan::Window(WindowPlan {
+        LogicalPlan::Window {
+            window_expr,
+            schema,
+            ..
+        } => Ok(LogicalPlan::Window {
             input: Arc::new(inputs[0].clone()),
-            window_expr: expr[0..window_plan.window_expr.len()].to_vec(),
-            schema: window_plan.schema.clone(),
-        })),
+            window_expr: expr[0..window_expr.len()].to_vec(),
+            schema: schema.clone(),
+        }),
         LogicalPlan::Aggregate {
             group_expr, schema, ..
         } => Ok(LogicalPlan::Aggregate {
@@ -222,10 +222,10 @@ pub fn from_plan(
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
-        LogicalPlan::Limit { n, .. } => Ok(LogicalPlan::Limit {
+        LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
             n: *n,
             input: Arc::new(inputs[0].clone()),
-        }),
+        })),
         LogicalPlan::CreateMemoryTable(CreateMemoryTable { name, .. }) => {
             Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 input: Arc::new(inputs[0].clone()),
@@ -265,7 +265,7 @@ pub fn from_plan(
             );
             Ok(plan.clone())
         }
-        LogicalPlan::EmptyRelation { .. }
+        LogicalPlan::EmptyRelation(_)
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::DropTable(_) => {

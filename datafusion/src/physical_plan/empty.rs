@@ -148,12 +148,11 @@ impl ExecutionPlan for EmptyExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::common;
-    use crate::test;
+    use crate::{physical_plan::common, test_util};
 
     #[tokio::test]
     async fn empty() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
 
         let empty = EmptyExec::new(false, schema.clone());
         assert_eq!(empty.schema(), schema);
@@ -168,7 +167,7 @@ mod tests {
 
     #[test]
     fn with_new_children() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let empty = EmptyExec::new(false, schema);
 
         let empty2 = empty.with_new_children(vec![])?;
@@ -184,7 +183,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_execute() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let empty = EmptyExec::new(false, schema);
 
         // ask for the wrong partition
@@ -195,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn produce_one_row() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let empty = EmptyExec::new(true, schema);
 
         let iter = empty.execute(0).await?;

@@ -23,13 +23,13 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
-use crate::logical_plan::plan::{FilterPlan, ProjectionPlan};
-use crate::logical_plan::TableScanPlan;
+use crate::logical_plan::plan::EmptyRelation;
 use crate::logical_plan::{
     unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
     Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
     UserDefinedLogicalNode,
 };
+use crate::logical_plan::{Limit, TableScanPlan, Values};
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
@@ -348,10 +348,10 @@ impl DefaultPhysicalPlanner {
                     let filters = unnormalize_cols(filters.iter().cloned());
                     source.scan(projection, batch_size, &filters, *limit).await
                 }
-                LogicalPlan::Values {
+                LogicalPlan::Values(Values {
                     values,
                     schema,
-                } => {
+                }) => {
                     let exec_schema = schema.as_ref().to_owned().into();
                     let exprs = values.iter()
                         .map(|row| {
@@ -372,18 +372,20 @@ impl DefaultPhysicalPlanner {
                     )?;
                     Ok(Arc::new(value_exec))
                 }
-                LogicalPlan::Window(window_plan) => {
-                    if window_plan.window_expr.is_empty() {
+                LogicalPlan::Window {
+                    input, window_expr, ..
+                } => {
+                    if window_expr.is_empty() {
                         return Err(DataFusionError::Internal(
                             "Impossibly got empty window expression".to_owned(),
                         ));
                     }
 
-                    let input_exec = self.create_initial_plan(&window_plan.input, ctx_state).await?;
+                    let input_exec = self.create_initial_plan(input, ctx_state).await?;
 
                     // at this moment we are guaranteed by the logical planner
                     // to have all the window_expr to have equal sort key
-                    let partition_keys = window_expr_common_partition_keys(&window_plan.window_expr)?;
+                    let partition_keys = window_expr_common_partition_keys(window_expr)?;
 
                     let can_repartition = !partition_keys.is_empty()
                         && ctx_state.config.target_partitions > 1
@@ -395,7 +397,7 @@ impl DefaultPhysicalPlanner {
                             .map(|e| {
                                 self.create_physical_expr(
                                     e,
-                                    window_plan.input.schema(),
+                                    input.schema(),
                                     &input_exec.schema(),
                                     ctx_state,
                                 )
@@ -421,17 +423,17 @@ impl DefaultPhysicalPlanner {
                         } => generate_sort_key(partition_by, order_by),
                         _ => unreachable!(),
                     };
-                    let sort_keys = get_sort_keys(&window_plan.window_expr[0]);
-                    if window_plan.window_expr.len() > 1 {
+                    let sort_keys = get_sort_keys(&window_expr[0]);
+                    if window_expr.len() > 1 {
                         debug_assert!(
-                            window_plan.window_expr[1..]
+                            window_expr[1..]
                                 .iter()
                                 .all(|expr| get_sort_keys(expr) == sort_keys),
                             "all window expressions shall have the same sort keys, as guaranteed by logical planning"
                         );
                     }
 
-                    let logical_input_schema = window_plan.input.schema();
+                    let logical_input_schema = input.schema();
 
                     let input_exec = if sort_keys.is_empty() {
                         input_exec
@@ -465,7 +467,7 @@ impl DefaultPhysicalPlanner {
                     };
 
                     let physical_input_schema = input_exec.schema();
-                    let window_expr = window_plan.window_expr
+                    let window_expr = window_expr
                         .iter()
                         .map(|e| {
                             self.create_window_expr(
@@ -576,7 +578,7 @@ impl DefaultPhysicalPlanner {
                         physical_input_schema.clone(),
                     )?) )
                 }
-                LogicalPlan::Projection(ProjectionPlan { input, expr, .. }) => {
+                LogicalPlan::Projection { input, expr, .. } => {
                     let input_exec = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = input.as_ref().schema();
 
@@ -628,9 +630,9 @@ impl DefaultPhysicalPlanner {
                         input_exec,
                     )?) )
                 }
-                LogicalPlan::Filter(FilterPlan {
+                LogicalPlan::Filter {
                     input, predicate, ..
-                }) => {
+                } => {
                     let physical_input = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = input.as_ref().schema();
@@ -780,14 +782,14 @@ impl DefaultPhysicalPlanner {
                     let right = self.create_initial_plan(right, ctx_state).await?;
                     Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
                 }
-                LogicalPlan::EmptyRelation {
+                LogicalPlan::EmptyRelation(EmptyRelation {
                     produce_one_row,
                     schema,
-                } => Ok(Arc::new(EmptyExec::new(
+                }) => Ok(Arc::new(EmptyExec::new(
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
-                LogicalPlan::Limit { input, n, .. } => {
+                LogicalPlan::Limit(Limit { input, n, .. }) => {
                     let limit = *n;
                     let input = self.create_initial_plan(input, ctx_state).await?;
 

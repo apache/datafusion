@@ -211,10 +211,11 @@ mod tests {
     use crate::physical_plan::{collect, common};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
+    use crate::test_util;
 
     #[tokio::test]
     async fn merge() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
 
         let num_partitions = 4;
         let (_, files) =
