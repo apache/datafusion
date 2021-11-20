@@ -45,7 +45,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use datafusion::logical_plan::plan::ProjectionPlan;
+use datafusion::logical_plan::plan::Projection;
 
 //// Custom source dataframe tests ////
 
@@ -217,7 +217,7 @@ async fn custom_source_dataframe() -> Result<()> {
 
     let optimized_plan = ctx.optimize(&logical_plan)?;
     match &optimized_plan {
-        LogicalPlan::Projection(ProjectionPlan { input, .. }) => match &**input {
+        LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScanPlan {
                 source,
                 projected_schema,

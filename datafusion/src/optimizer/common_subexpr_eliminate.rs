@@ -19,7 +19,7 @@
 
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{FilterPlan, ProjectionPlan, WindowPlan};
+use crate::logical_plan::plan::{Filter, Projection, Window};
 use crate::logical_plan::{
     col, DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor, LogicalPlan,
     Recursion, RewriteRecursion,
@@ -78,74 +78,76 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
     let mut expr_set = ExprSet::new();
 
     match plan {
-        LogicalPlan::Projection(projection_plan) => {
-            let arrays =
-                to_arrays(&projection_plan.expr, &projection_plan.input, &mut expr_set)?;
+        LogicalPlan::Projection(Projection {
+            expr,
+            input,
+            schema,
+            alias,
+        }) => {
+            let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
-                &[&projection_plan.expr],
+                &[expr],
                 &[&arrays],
-                &projection_plan.input,
+                input,
                 &mut expr_set,
-                &projection_plan.schema,
+                schema,
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Projection(ProjectionPlan {
+            Ok(LogicalPlan::Projection(Projection {
                 expr: new_expr.pop().unwrap(),
                 input: Arc::new(new_input),
-                schema: projection_plan.schema.clone(),
-                alias: projection_plan.alias.clone(),
+                schema: schema.clone(),
+                alias: alias.clone(),
             }))
         }
-        LogicalPlan::Filter(filter_plan) => {
+        LogicalPlan::Filter(Filter { predicate, input }) => {
             let schemas = plan.all_schemas();
             let all_schema =
                 schemas.into_iter().fold(DFSchema::empty(), |mut lhs, rhs| {
                     lhs.merge(rhs);
                     lhs
                 });
-            let data_type = filter_plan.predicate.get_type(&all_schema)?;
+            let data_type = predicate.get_type(&all_schema)?;
 
             let mut id_array = vec![];
-            expr_to_identifier(
-                &filter_plan.predicate,
-                &mut expr_set,
-                &mut id_array,
-                data_type,
-            )?;
+            expr_to_identifier(predicate, &mut expr_set, &mut id_array, data_type)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
-                &[&[filter_plan.predicate.clone()]],
+                &[&[predicate.clone()]],
                 &[&[id_array]],
-                &filter_plan.input,
+                input,
                 &mut expr_set,
-                filter_plan.input.schema(),
+                input.schema(),
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Filter(FilterPlan {
+            Ok(LogicalPlan::Filter(Filter {
                 predicate: new_expr.pop().unwrap().pop().unwrap(),
                 input: Arc::new(new_input),
             }))
         }
-        LogicalPlan::Window(window_plan) => {
-            let arrays =
-                to_arrays(&window_plan.window_expr, &window_plan.input, &mut expr_set)?;
+        LogicalPlan::Window(Window {
+            input,
+            window_expr,
+            schema,
+        }) => {
+            let arrays = to_arrays(window_expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
-                &[&window_plan.window_expr],
+                &[window_expr],
                 &[&arrays],
-                &window_plan.input,
+                input,
                 &mut expr_set,
-                &window_plan.schema,
+                schema,
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Window(WindowPlan {
+            Ok(LogicalPlan::Window(Window {
                 input: Arc::new(new_input),
                 window_expr: new_expr.pop().unwrap(),
-                schema: window_plan.schema.clone(),
+                schema: schema.clone(),
             }))
         }
         LogicalPlan::Aggregate {
@@ -264,7 +266,7 @@ fn build_project_plan(
     let mut schema = DFSchema::new(fields)?;
     schema.merge(input.schema());
 
-    Ok(LogicalPlan::Projection(ProjectionPlan {
+    Ok(LogicalPlan::Projection(Projection {
         expr: project_exprs,
         input: Arc::new(input),
         schema: Arc::new(schema),

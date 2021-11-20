@@ -1177,7 +1177,7 @@ impl FunctionRegistry for ExecutionContextState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::plan::ProjectionPlan;
+    use crate::logical_plan::plan::Projection;
     use crate::logical_plan::TableScanPlan;
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
@@ -1416,7 +1416,7 @@ mod tests {
 
         let optimized_plan = ctx.optimize(&logical_plan)?;
         match &optimized_plan {
-            LogicalPlan::Projection(ProjectionPlan { input, .. }) => match &**input {
+            LogicalPlan::Projection(Projection { input, .. }) => match &**input {
                 LogicalPlan::TableScan(TableScanPlan {
                     source,
                     projected_schema,
@@ -1489,7 +1489,7 @@ mod tests {
         let ctx = ExecutionContext::new();
         let optimized_plan = ctx.optimize(&plan)?;
         match &optimized_plan {
-            LogicalPlan::Projection(ProjectionPlan { input, .. }) => match &**input {
+            LogicalPlan::Projection(Projection { input, .. }) => match &**input {
                 LogicalPlan::TableScan(TableScanPlan {
                     source,
                     projected_schema,

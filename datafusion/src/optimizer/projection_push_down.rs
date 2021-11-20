@@ -20,7 +20,7 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{AnalyzePlan, ProjectionPlan, TableScanPlan, WindowPlan};
+use crate::logical_plan::plan::{AnalyzePlan, Projection, TableScanPlan, Window};
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
     LogicalPlanBuilder, ToDFSchema, Union,
@@ -131,7 +131,12 @@ fn optimize_plan(
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
     match plan {
-        LogicalPlan::Projection(projection_plan) => {
+        LogicalPlan::Projection(Projection {
+            input,
+            expr,
+            schema,
+            alias,
+        }) => {
             // projection:
             // * remove any expression that is not required
             // * construct the new set of required columns
@@ -140,21 +145,17 @@ fn optimize_plan(
             let mut new_fields = Vec::new();
 
             // Gather all columns needed for expressions in this Projection
-            projection_plan
-                .schema
+            schema
                 .fields()
                 .iter()
                 .enumerate()
                 .try_for_each(|(i, field)| {
                     if required_columns.contains(&field.qualified_column()) {
-                        new_expr.push(projection_plan.expr[i].clone());
+                        new_expr.push(expr[i].clone());
                         new_fields.push(field.clone());
 
                         // gather the new set of required columns
-                        utils::expr_to_columns(
-                            &projection_plan.expr[i],
-                            &mut new_required_columns,
-                        )
+                        utils::expr_to_columns(&expr[i], &mut new_required_columns)
                     } else {
                         Ok(())
                     }
@@ -162,7 +163,7 @@ fn optimize_plan(
 
             let new_input = optimize_plan(
                 optimizer,
-                &projection_plan.input,
+                input,
                 &new_required_columns,
                 true,
                 execution_props,
@@ -181,11 +182,11 @@ fn optimize_plan(
                 // no need for an expression at all
                 Ok(new_input)
             } else {
-                Ok(LogicalPlan::Projection(ProjectionPlan {
+                Ok(LogicalPlan::Projection(Projection {
                     expr: new_expr,
                     input: Arc::new(new_input),
                     schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
-                    alias: projection_plan.alias.clone(),
+                    alias: alias.clone(),
                 }))
             }
         }
@@ -235,7 +236,7 @@ fn optimize_plan(
                 null_equals_null: *null_equals_null,
             })
         }
-        LogicalPlan::Window(WindowPlan {
+        LogicalPlan::Window(Window {
             schema,
             window_expr,
             input,
@@ -744,7 +745,7 @@ mod tests {
         let expr = vec![col("a"), col("b")];
         let projected_fields = exprlist_to_fields(&expr, input_schema).unwrap();
         let projected_schema = DFSchema::new(projected_fields).unwrap();
-        let plan = LogicalPlan::Projection(ProjectionPlan {
+        let plan = LogicalPlan::Projection(Projection {
             expr,
             input: Arc::new(table_scan),
             schema: Arc::new(projected_schema),

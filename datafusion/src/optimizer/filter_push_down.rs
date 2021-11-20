@@ -16,7 +16,7 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{FilterPlan, ProjectionPlan};
+use crate::logical_plan::plan::{Filter, Projection};
 use crate::logical_plan::{
     and, replace_col, Column, CrossJoin, Limit, LogicalPlan, TableScanPlan,
 };
@@ -182,7 +182,7 @@ fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
             and(acc, (*predicate).to_owned())
         });
 
-    LogicalPlan::Filter(FilterPlan {
+    LogicalPlan::Filter(Filter {
         predicate,
         input: Arc::new(plan),
     })
@@ -288,9 +288,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             push_down(&state, plan)
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
-        LogicalPlan::Filter(filter_plan) => {
+        LogicalPlan::Filter(Filter { input, predicate }) => {
             let mut predicates = vec![];
-            split_members(&filter_plan.predicate, &mut predicates);
+            split_members(predicate, &mut predicates);
 
             // Predicates without referencing columns (WHERE FALSE, WHERE 1=1, etc.)
             let mut no_col_predicates = vec![];
@@ -312,15 +312,12 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // As those contain only literals, they could be optimized using constant folding
             // and removal of WHERE TRUE / WHERE FALSE
             if !no_col_predicates.is_empty() {
-                Ok(add_filter(
-                    optimize(&filter_plan.input, state)?,
-                    &no_col_predicates,
-                ))
+                Ok(add_filter(optimize(input, state)?, &no_col_predicates))
             } else {
-                optimize(&filter_plan.input, state)
+                optimize(input, state)
             }
         }
-        LogicalPlan::Projection(ProjectionPlan {
+        LogicalPlan::Projection(Projection {
             input,
             expr,
             schema,
