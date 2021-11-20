@@ -170,11 +170,11 @@ impl ExecutionPlan for ValuesExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test;
+    use crate::test_util;
 
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let empty = ValuesExec::try_new(schema, vec![]);
         assert!(!empty.is_ok());
         Ok(())

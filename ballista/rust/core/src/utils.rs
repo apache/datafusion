@@ -277,7 +277,7 @@ impl QueryPlanner for BallistaQueryPlanner {
         _ctx_state: &ExecutionContextState,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         match logical_plan {
-            LogicalPlan::CreateExternalTable { .. } => {
+            LogicalPlan::CreateExternalTable(_) => {
                 // table state is managed locally in the BallistaContext, not in the scheduler
                 Ok(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))))
             }

@@ -290,10 +290,11 @@ following commands
 If there is a ballista release, run
 
 ```shell
-(cd ballista/rust/client && cargo publish)
 (cd ballista/rust/core && cargo publish)
 (cd ballista/rust/executor && cargo publish)
 (cd ballista/rust/scheduler && cargo publish)
+(cd ballista/rust/client && cargo publish)
+(cd datafusion-cli && cargo publish)
 ```
 
 ### Publish on PyPI

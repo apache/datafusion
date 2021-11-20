@@ -257,11 +257,11 @@ mod tests {
 
     use super::*;
     use crate::execution::options::CsvReadOptions;
-    use crate::logical_plan::*;
+    use crate::physical_plan::functions::ScalarFunctionImplementation;
     use crate::physical_plan::functions::Volatility;
     use crate::physical_plan::{window_functions, ColumnarValue};
     use crate::{assert_batches_sorted_eq, execution::context::ExecutionContext};
-    use crate::{physical_plan::functions::ScalarFunctionImplementation, test};
+    use crate::{logical_plan::*, test_util};
     use arrow::datatypes::DataType;
 
     #[tokio::test]
@@ -510,7 +510,7 @@ mod tests {
         ctx: &mut ExecutionContext,
         table_name: &str,
     ) -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let testdata = crate::test_util::arrow_test_data();
         ctx.register_csv(
             table_name,

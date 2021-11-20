@@ -30,8 +30,7 @@ use datafusion::dataframe::DataFrame;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::dataframe_impl::DataFrameImpl;
-use datafusion::logical_plan::plan::TableScanPlan;
-use datafusion::logical_plan::LogicalPlan;
+use datafusion::logical_plan::{CreateExternalTable, LogicalPlan, TableScanPlan};
 use datafusion::prelude::{AvroReadOptions, CsvReadOptions};
 use datafusion::sql::parser::FileType;
 
@@ -270,13 +269,13 @@ impl BallistaContext {
 
         let plan = ctx.create_logical_plan(sql)?;
         match plan {
-            LogicalPlan::CreateExternalTable {
+            LogicalPlan::CreateExternalTable(CreateExternalTable {
                 ref schema,
                 ref name,
                 ref location,
                 ref file_type,
                 ref has_header,
-            } => match file_type {
+            }) => match file_type {
                 FileType::CSV => {
                     self.register_csv(
                         name,

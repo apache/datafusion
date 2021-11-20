@@ -321,13 +321,14 @@ mod tests {
     use crate::test::assert_is_pending;
     use crate::test::exec::assert_strong_count_converges_to_zero;
     use crate::test::{self, exec::BlockingExec};
+    use crate::test_util;
     use arrow::array::*;
     use arrow::datatypes::*;
     use futures::FutureExt;
 
     #[tokio::test]
     async fn test_sort() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let partitions = 4;
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
