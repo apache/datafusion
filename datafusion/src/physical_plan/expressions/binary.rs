@@ -54,7 +54,7 @@ use super::coercion::{
 };
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
-// TODO: file arrow-rs ticket to track this feature
+// See https://github.com/apache/arrow-rs/issues/960
 
 fn is_distinct_from_bool(
     left: &BooleanArray,
@@ -79,6 +79,8 @@ fn is_not_distinct_from_bool(
         .collect())
 }
 
+// TODO use arrow-rs kernels when available. See
+// https://github.com/apache/arrow-rs/issues/959
 #[allow(clippy::bool_comparison)]
 fn lt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
     Ok(left
@@ -210,11 +212,11 @@ macro_rules! compute_bool_op {
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         let rr = $RIGHT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _bool>]}(&ll, &rr)?))
     }};
     // invoke unary operator
@@ -222,7 +224,7 @@ macro_rules! compute_bool_op {
         let operand = $OPERAND
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast operant array");
         Ok(Arc::new(paste::expr! {[<$OP _bool>]}(&operand)?))
     }};
 }
