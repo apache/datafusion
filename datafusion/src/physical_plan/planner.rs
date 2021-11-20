@@ -25,7 +25,7 @@ use super::{
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::plan::TableScanPlan;
 use crate::logical_plan::{
-    unnormalize_cols, DFSchema, Expr, LogicalPlan, Operator,
+    unalias, union_with_alias, unnormalize_cols, DFSchema, Expr, LogicalPlan, Operator,
     Partitioning as LogicalPartitioning, PlanType, ToStringifiedPlan,
     UserDefinedLogicalNode,
 };
@@ -345,7 +345,8 @@ impl DefaultPhysicalPlanner {
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
-                    source.scan(projection, batch_size, &filters, *limit).await
+                    let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
+                    source.scan(projection, batch_size, &unaliased, *limit).await
                 }
                 LogicalPlan::Values {
                     values,
