@@ -14,21 +14,9 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-CREATE EXTERNAL TABLE test (
-    c1  VARCHAR NOT NULL,
-    c2  INT NOT NULL,
-    c3  SMALLINT NOT NULL,
-    c4  SMALLINT,
-    c5  INT,
-    c6  BIGINT NOT NULL,
-    c7  SMALLINT NOT NULL,
-    c8  INT NOT NULL,
-    c9  BIGINT NOT NULL,
-    c10 VARCHAR NOT NULL,
-    c11 FLOAT NOT NULL,
-    c12 DOUBLE NOT NULL,
-    c13 VARCHAR NOT NULL
-)
-STORED AS CSV
-WITH HEADER ROW
-LOCATION 'testing/data/csv/aggregate_test_100.csv';
+SELECT
+    c5,
+    c4,
+    c10
+FROM test
+ORDER BY c5 ASC, c4 DESC, c10;
