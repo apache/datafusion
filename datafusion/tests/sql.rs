@@ -2412,10 +2412,10 @@ async fn right_join() -> Result<()> {
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
         "+-------+---------+---------+",
-        "|       |         | w       |",
         "| 11    | a       | z       |",
         "| 22    | b       | y       |",
         "| 44    | d       | x       |",
+        "|       |         | w       |",
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
@@ -2436,11 +2436,11 @@ async fn full_join() -> Result<()> {
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
         "+-------+---------+---------+",
-        "|       |         | w       |",
         "| 11    | a       | z       |",
         "| 22    | b       | y       |",
         "| 33    | c       |         |",
         "| 44    | d       | x       |",
+        "|       |         | w       |",
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
@@ -3025,7 +3025,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "SortExec: [c1@0 ASC]",
+        "SortExec: [c1@0 ASC NULLS LAST]",
         "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(
@@ -6200,6 +6200,78 @@ async fn test_expect_distinct() -> Result<()> {
         "+---------+------------+",
         "| 1       | 10.1       |",
         "+---------+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_nulls_first_asc() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----+--------+",
+        "| num | letter |",
+        "+-----+--------+",
+        "| 1   | one    |",
+        "| 2   | two    |",
+        "|     | three  |",
+        "+-----+--------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_nulls_first_desc() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----+--------+",
+        "| num | letter |",
+        "+-----+--------+",
+        "|     | three  |",
+        "| 2   | two    |",
+        "| 1   | one    |",
+        "+-----+--------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_specific_nulls_last_desc() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC NULLS LAST";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----+--------+",
+        "| num | letter |",
+        "+-----+--------+",
+        "| 2   | two    |",
+        "| 1   | one    |",
+        "|     | three  |",
+        "+-----+--------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_specific_nulls_first_asc() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num ASC NULLS FIRST";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----+--------+",
+        "| num | letter |",
+        "+-----+--------+",
+        "|     | three  |",
+        "| 1   | one    |",
+        "| 2   | two    |",
+        "+-----+--------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
