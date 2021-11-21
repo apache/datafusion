@@ -119,7 +119,7 @@ where
     // first map is the iterator, second is for the `Option<_>`
     Ok(string_array
         .iter()
-        .map(|string| string.map(|string| op(string)))
+        .map(|string| string.map(|s| op(s)))
         .collect())
 }
 
