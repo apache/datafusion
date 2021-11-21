@@ -260,16 +260,9 @@ pub trait ExtensionPlanner {
 
 /// Default single node physical query planner that converts a
 /// `LogicalPlan` to an `ExecutionPlan` suitable for execution.
+#[derive(Default)]
 pub struct DefaultPhysicalPlanner {
     extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
-}
-
-impl Default for DefaultPhysicalPlanner {
-    fn default() -> Self {
-        Self {
-            extension_planners: vec![],
-        }
-    }
 }
 
 #[async_trait]
