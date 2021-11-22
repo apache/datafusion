@@ -1392,6 +1392,22 @@ async fn csv_query_approx_count() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_count_without_from() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT count(1 + 1)";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+",
+        "| COUNT(Int64(1) + Int64(1)) |",
+        "+----------------------------+",
+        "| 1                          |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_array_agg() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
@@ -1663,12 +1679,12 @@ async fn csv_query_cast_literal() -> Result<()> {
     let actual = execute_to_batches(&mut ctx, sql).await;
 
     let expected = vec![
-        "+--------------------+------------+",
-        "| c12                | Float64(1) |",
-        "+--------------------+------------+",
-        "| 0.9294097332465232 | 1          |",
-        "| 0.3114712539863804 | 1          |",
-        "+--------------------+------------+",
+        "+--------------------+---------------------------+",
+        "| c12                | CAST(Int64(1) AS Float64) |",
+        "+--------------------+---------------------------+",
+        "| 0.9294097332465232 | 1                         |",
+        "| 0.3114712539863804 | 1                         |",
+        "+--------------------+---------------------------+",
     ];
 
     assert_batches_eq!(expected, &actual);
@@ -4410,11 +4426,11 @@ async fn query_without_from() -> Result<()> {
     let sql = "SELECT 1+2, 3/4, cos(0)";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----------+----------+------------+",
-        "| Int64(3) | Int64(0) | Float64(1) |",
-        "+----------+----------+------------+",
-        "| 3        | 0        | 1          |",
-        "+----------+----------+------------+",
+        "+---------------------+---------------------+---------------+",
+        "| Int64(1) + Int64(2) | Int64(3) / Int64(4) | cos(Int64(0)) |",
+        "+---------------------+---------------------+---------------+",
+        "| 3                   | 0                   | 1             |",
+        "+---------------------+---------------------+---------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -5865,11 +5881,11 @@ async fn case_with_bool_type_result() -> Result<()> {
     let sql = "select case when 'cpu' != 'cpu' then true else false end";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----------------+",
-        "| Boolean(false) |",
-        "+----------------+",
-        "| false          |",
-        "+----------------+",
+        "+---------------------------------------------------------------------------------+",
+        "| CASE WHEN Utf8(\"cpu\") != Utf8(\"cpu\") THEN Boolean(true) ELSE Boolean(false) END |",
+        "+---------------------------------------------------------------------------------+",
+        "| false                                                                           |",
+        "+---------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -5882,11 +5898,11 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     let sql = "SELECT 1 NOT BETWEEN 3 AND 5";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+---------------+",
-        "| Boolean(true) |",
-        "+---------------+",
-        "| true          |",
-        "+---------------+",
+        "+--------------------------------------------+",
+        "| Int64(1) NOT BETWEEN Int64(3) AND Int64(5) |",
+        "+--------------------------------------------+",
+        "| true                                       |",
+        "+--------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 

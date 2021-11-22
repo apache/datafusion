@@ -92,6 +92,10 @@ impl OptimizerRule for ConstantFolding {
                     .expressions()
                     .into_iter()
                     .map(|e| {
+                        // We need to keep original expression name, if any.
+                        // Constant folding should not change expression name.
+                        let name = &e.name(plan.schema());
+
                         // TODO iterate until no changes are made
                         // during rewrite (evaluating constants can
                         // enable new simplifications and
@@ -101,7 +105,18 @@ impl OptimizerRule for ConstantFolding {
                             // fold constants and then simplify
                             .rewrite(&mut const_evaluator)?
                             .rewrite(&mut simplifier)?;
-                        Ok(new_e)
+
+                        let new_name = &new_e.name(plan.schema());
+
+                        if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
+                            if expr_name != new_expr_name {
+                                Ok(new_e.alias(expr_name))
+                            } else {
+                                Ok(new_e)
+                            }
+                        } else {
+                            Ok(new_e)
+                        }
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -626,8 +641,8 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Filter: NOT #test.c\
-        \n    Filter: #test.b\
+        \n  Filter: NOT #test.c AS test.c = Boolean(false)\
+        \n    Filter: #test.b AS test.b = Boolean(true)\
         \n      TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -647,8 +662,8 @@ mod tests {
         let expected = "\
         Projection: #test.a\
         \n  Limit: 1\
-        \n    Filter: #test.c\
-        \n      Filter: NOT #test.b\
+        \n    Filter: #test.c AS test.c != Boolean(false)\
+        \n      Filter: NOT #test.b AS test.b != Boolean(true)\
         \n        TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -665,7 +680,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Filter: NOT #test.b AND #test.c\
+        \n  Filter: NOT #test.b AND #test.c AS test.b != Boolean(true) AND test.c = Boolean(true)\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -682,7 +697,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Filter: NOT #test.b OR NOT #test.c\
+        \n  Filter: NOT #test.b OR NOT #test.c AS test.b != Boolean(true) OR test.c = Boolean(false)\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -699,7 +714,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Filter: #test.b\
+        \n  Filter: #test.b AS NOT test.b = Boolean(false)\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -714,7 +729,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Projection: #test.a, #test.d, NOT #test.b\
+        Projection: #test.a, #test.d, NOT #test.b AS test.b = Boolean(false)\
         \n  TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -733,7 +748,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b), MIN(#test.b)]]\
+        Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b) AS MAX(test.b = Boolean(true)), MIN(#test.b)]]\
         \n  Projection: #test.a, #test.c, #test.b\
         \n    TableScan: test projection=None";
 
@@ -789,7 +804,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Projection: TimestampNanosecond(1599566400000000000)\
+        let expected = "Projection: TimestampNanosecond(1599566400000000000) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test projection=None"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
@@ -824,7 +839,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Projection: Int32(0)\
+        let expected = "Projection: Int32(0) AS CAST(Utf8(\"0\") AS Int32)\
             \n  TableScan: test projection=None";
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
@@ -873,7 +888,7 @@ mod tests {
         // expect the same timestamp appears in both exprs
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected = format!(
-            "Projection: TimestampNanosecond({}), TimestampNanosecond({}) AS t2\
+            "Projection: TimestampNanosecond({}) AS now(), TimestampNanosecond({}) AS t2\
             \n  TableScan: test projection=None",
             time.timestamp_nanos(),
             time.timestamp_nanos()
@@ -897,7 +912,8 @@ mod tests {
             .unwrap();
 
         let actual = get_optimized_plan_formatted(&plan, &time);
-        let expected = "Projection: NOT #test.a\
+        let expected =
+            "Projection: NOT #test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test projection=None";
 
         assert_eq!(actual, expected);
@@ -929,7 +945,7 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = "Filter: Boolean(true)\
+        let expected = "Filter: Boolean(true) AS CAST(now() AS Int64) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Int64) + Int32(50000)\
                         \n  TableScan: test projection=None";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
