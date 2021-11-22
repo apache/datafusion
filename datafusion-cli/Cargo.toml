@@ -17,10 +17,10 @@
 
 [package]
 name = "datafusion-cli"
-version = "5.1.0-SNAPSHOT"
+version = "5.1.0"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
-keywords = [ "arrow", "datafusion", "ballista", "query", "sql", "cli", "repl" ]
+keywords = [ "arrow", "datafusion", "ballista", "query", "sql" ]
 license = "Apache-2.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
