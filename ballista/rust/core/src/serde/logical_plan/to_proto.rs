@@ -836,13 +836,11 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     logical_plan_type: Some(LogicalPlanType::Aggregate(Box::new(
                         protobuf::AggregateNode {
                             input: Some(Box::new(input)),
-                            group_expr: aggregate
-                                .group_expr
+                            group_expr: group_expr
                                 .iter()
                                 .map(|expr| expr.try_into())
                                 .collect::<Result<Vec<_>, _>>()?,
-                            aggr_expr: aggregate
-                                .aggr_expr
+                            aggr_expr: aggr_expr
                                 .iter()
                                 .map(|expr| expr.try_into())
                                 .collect::<Result<Vec<_>, _>>()?,
