@@ -304,6 +304,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_table_stats_by_default() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema = opt
+            .infer_schema(Arc::new(LocalFileSystem {}), &filename)
+            .await?;
+        let table =
+            ListingTable::new(Arc::new(LocalFileSystem {}), filename, schema, opt);
+        let exec = table.scan(&None, 1024, &[], None).await?;
+        assert_eq!(exec.statistics().num_rows, Some(8));
+        assert_eq!(exec.statistics().total_byte_size, Some(671));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn read_empty_table() -> Result<()> {
         let store = TestObjectStore::new_arc(&[("table/p1=v1/file.avro", 100)]);
 
