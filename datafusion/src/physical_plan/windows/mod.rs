@@ -181,14 +181,15 @@ mod tests {
     use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::physical_plan::{collect, Statistics};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::test::{self, aggr_test_schema, assert_is_pending};
+    use crate::test::{self, assert_is_pending};
+    use crate::test_util::{self, aggr_test_schema};
     use arrow::array::*;
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use futures::FutureExt;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
         let csv = CsvExec::new(

@@ -219,7 +219,7 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 mod tests {
     use super::*;
     use crate::datasource::object_store::{local::LocalFileSystem, ObjectStore};
-    use crate::test;
+    use crate::{test, test_util};
 
     use crate::{
         physical_plan::{
@@ -232,7 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let fs: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem {});
 
         // Create csv's with different partitioning

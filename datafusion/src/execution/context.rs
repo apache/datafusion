@@ -63,7 +63,8 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::execution::dataframe_impl::DataFrameImpl;
 use crate::logical_plan::{
-    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    CreateExternalTable, CreateMemoryTable, DropTable, FunctionRegistry, LogicalPlan,
+    LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::constant_folding::ConstantFolding;
@@ -77,6 +78,7 @@ use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::logical_plan::plan::ExplainPlan;
+use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
@@ -191,13 +193,13 @@ impl ExecutionContext {
     pub async fn sql(&mut self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let plan = self.create_logical_plan(sql)?;
         match plan {
-            LogicalPlan::CreateExternalTable {
+            LogicalPlan::CreateExternalTable(CreateExternalTable {
                 ref schema,
                 ref name,
                 ref location,
                 ref file_type,
                 ref has_header,
-            } => {
+            }) => {
                 let file_format = match file_type {
                     FileType::CSV => {
                         Ok(Arc::new(CsvFormat::default().with_has_header(*has_header))
@@ -241,7 +243,7 @@ impl ExecutionContext {
                 Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
             }
 
-            LogicalPlan::CreateMemoryTable { input, name } => {
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { name, input }) => {
                 let plan = self.optimize(&input)?;
                 let physical = Arc::new(DataFrameImpl::new(self.state.clone(), &plan));
 
@@ -256,7 +258,7 @@ impl ExecutionContext {
                 Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
             }
 
-            LogicalPlan::DropTable { name, if_exist, .. } => {
+            LogicalPlan::DropTable(DropTable { name, if_exist, .. }) => {
                 let returned = self.deregister_table(name.as_str())?;
                 if !if_exist && returned.is_none() {
                     Err(DataFusionError::Execution(format!(
@@ -901,6 +903,7 @@ impl Default for ExecutionConfig {
                 Arc::new(FilterPushDown::new()),
                 Arc::new(SimplifyExpressions::new()),
                 Arc::new(LimitPushDown::new()),
+                Arc::new(SingleDistinctToGroupBy::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(AggregateStatistics::new()),
@@ -1174,7 +1177,8 @@ impl FunctionRegistry for ExecutionContextState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::plan::TableScanPlan;
+    use crate::logical_plan::plan::Projection;
+    use crate::logical_plan::TableScanPlan;
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::physical_plan::{collect, collect_partitioned};
@@ -1412,7 +1416,7 @@ mod tests {
 
         let optimized_plan = ctx.optimize(&logical_plan)?;
         match &optimized_plan {
-            LogicalPlan::Projection { input, .. } => match &**input {
+            LogicalPlan::Projection(Projection { input, .. }) => match &**input {
                 LogicalPlan::TableScan(TableScanPlan {
                     source,
                     projected_schema,
@@ -1485,7 +1489,7 @@ mod tests {
         let ctx = ExecutionContext::new();
         let optimized_plan = ctx.optimize(&plan)?;
         match &optimized_plan {
-            LogicalPlan::Projection { input, .. } => match &**input {
+            LogicalPlan::Projection(Projection { input, .. }) => match &**input {
                 LogicalPlan::TableScan(TableScanPlan {
                     source,
                     projected_schema,

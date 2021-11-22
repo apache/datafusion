@@ -65,8 +65,7 @@ fn digest_process(
             DataType::LargeUtf8 => digest_algorithm.digest_array::<i64>(a.as_ref()),
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
-                other,
-                digest_algorithm.to_string(),
+                other, digest_algorithm,
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -75,8 +74,7 @@ fn digest_process(
             }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
-                other,
-                digest_algorithm.to_string(),
+                other, digest_algorithm,
             ))),
         },
     }
@@ -244,7 +242,7 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         return Err(DataFusionError::Internal(format!(
             "{:?} args were supplied but {} takes exactly one argument",
             args.len(),
-            DigestAlgorithm::Md5.to_string(),
+            DigestAlgorithm::Md5,
         )));
     }
     let value = digest_process(&args[0], DigestAlgorithm::Md5)?;

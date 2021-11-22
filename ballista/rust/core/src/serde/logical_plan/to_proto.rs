@@ -30,11 +30,14 @@ use datafusion::datasource::TableProvider;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
+use datafusion::logical_plan::plan::{
+    Aggregate, EmptyRelation, Filter, Projection, Window,
+};
 use datafusion::logical_plan::{
     exprlist_to_fields,
-    plan::{AggregatePlan, TableScanPlan},
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, Expr, JoinConstraint, JoinType, LogicalPlan,
+    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, JoinType, Limit,
+    LogicalPlan, Repartition, TableScanPlan, Values,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -676,7 +679,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
     fn try_into(self) -> Result<protobuf::LogicalPlanNode, Self::Error> {
         use protobuf::logical_plan_node::LogicalPlanType;
         match self {
-            LogicalPlan::Values { values, .. } => {
+            LogicalPlan::Values(Values { values, .. }) => {
                 let n_cols = if values.is_empty() {
                     0
                 } else {
@@ -778,9 +781,9 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )))
                 }
             }
-            LogicalPlan::Projection {
+            LogicalPlan::Projection(Projection {
                 expr, input, alias, ..
-            } => Ok(protobuf::LogicalPlanNode {
+            }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
                     protobuf::ProjectionNode {
                         input: Some(Box::new(input.as_ref().try_into()?)),
@@ -795,7 +798,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     },
                 ))),
             }),
-            LogicalPlan::Filter { predicate, input } => {
+            LogicalPlan::Filter(Filter { predicate, input }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
@@ -806,9 +809,9 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Window {
+            LogicalPlan::Window(Window {
                 input, window_expr, ..
-            } => {
+            }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Window(Box::new(
@@ -822,9 +825,13 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Aggregate(aggregate) => {
-                let input: protobuf::LogicalPlanNode =
-                    aggregate.input.as_ref().try_into()?;
+            LogicalPlan::Aggregate(Aggregate {
+                group_expr,
+                aggr_expr,
+                input,
+                ..
+            }) => {
+                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Aggregate(Box::new(
                         protobuf::AggregateNode {
@@ -873,7 +880,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Limit { input, n } => {
+            LogicalPlan::Limit(Limit { input, n }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
@@ -899,10 +906,10 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Repartition {
+            LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
-            } => {
+            }) => {
                 use datafusion::logical_plan::Partitioning;
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
 
@@ -934,22 +941,22 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::EmptyRelation {
+            LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row, ..
-            } => Ok(protobuf::LogicalPlanNode {
+            }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::EmptyRelation(
                     protobuf::EmptyRelationNode {
                         produce_one_row: *produce_one_row,
                     },
                 )),
             }),
-            LogicalPlan::CreateExternalTable {
+            LogicalPlan::CreateExternalTable(CreateExternalTable {
                 name,
                 location,
                 file_type,
                 has_header,
                 schema: df_schema,
-            } => {
+            }) => {
                 use datafusion::sql::parser::FileType;
 
                 let pb_file_type: protobuf::FileType = match file_type {
@@ -994,8 +1001,8 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 })
             }
             LogicalPlan::Extension { .. } => unimplemented!(),
-            LogicalPlan::Union { .. } => unimplemented!(),
-            LogicalPlan::CrossJoin { left, right, .. } => {
+            LogicalPlan::Union(_) => unimplemented!(),
+            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
                 let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
@@ -1007,10 +1014,10 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::CreateMemoryTable { .. } => Err(proto_error(
+            LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
                 "Error converting CreateMemoryTable. Not yet supported in Ballista",
             )),
-            LogicalPlan::DropTable { .. } => Err(proto_error(
+            LogicalPlan::DropTable(_) => Err(proto_error(
                 "Error converting DropTable. Not yet supported in Ballista",
             )),
         }
