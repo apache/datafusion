@@ -50,7 +50,7 @@ force_hash_collisions = []
 avro = ["avro-rs", "num-traits"]
 
 [dependencies]
-ahash = "0.7"
+ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.11", features = ["raw"] }
 arrow = { version = "6.4.0", features = ["prettyprint"] }
 parquet = { version = "6.4.0", features = ["arrow"] }
