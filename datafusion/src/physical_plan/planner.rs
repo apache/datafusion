@@ -25,7 +25,7 @@ use super::{
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::plan::{EmptyRelation, Filter, Projection, Window};
 use crate::logical_plan::{
-    unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
+    unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
     Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
     UserDefinedLogicalNode,
 };
@@ -339,7 +339,8 @@ impl DefaultPhysicalPlanner {
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
-                    source.scan(projection, batch_size, &filters, *limit).await
+                    let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
+                    source.scan(projection, batch_size, &unaliased, *limit).await
                 }
                 LogicalPlan::Values(Values {
                     values,
@@ -1340,7 +1341,7 @@ impl DefaultPhysicalPlanner {
         physical_input_schema: &Schema,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn AggregateExpr>> {
-        // unpack aliased logical expressions, e.g. "sum(col) as total"
+        // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
         let (name, e) = match e {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
             _ => (physical_name(e)?, e),
