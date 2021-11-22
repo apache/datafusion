@@ -23,7 +23,7 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
-use crate::logical_plan::plan::EmptyRelation;
+use crate::logical_plan::plan::{EmptyRelation, Filter, Projection, Window};
 use crate::logical_plan::{
     unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
     Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
@@ -365,9 +365,9 @@ impl DefaultPhysicalPlanner {
                     )?;
                     Ok(Arc::new(value_exec))
                 }
-                LogicalPlan::Window {
+                LogicalPlan::Window(Window {
                     input, window_expr, ..
-                } => {
+                }) => {
                     if window_expr.is_empty() {
                         return Err(DataFusionError::Internal(
                             "Impossibly got empty window expression".to_owned(),
@@ -571,7 +571,7 @@ impl DefaultPhysicalPlanner {
                         physical_input_schema.clone(),
                     )?) )
                 }
-                LogicalPlan::Projection { input, expr, .. } => {
+                LogicalPlan::Projection(Projection { input, expr, .. }) => {
                     let input_exec = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = input.as_ref().schema();
 
@@ -623,9 +623,9 @@ impl DefaultPhysicalPlanner {
                         input_exec,
                     )?) )
                 }
-                LogicalPlan::Filter {
+                LogicalPlan::Filter(Filter {
                     input, predicate, ..
-                } => {
+                }) => {
                     let physical_input = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = input.as_ref().schema();
