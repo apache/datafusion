@@ -30,7 +30,7 @@ use datafusion::datasource::TableProvider;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
-use datafusion::logical_plan::plan::EmptyRelation;
+use datafusion::logical_plan::plan::{EmptyRelation, Filter, Projection, Window};
 use datafusion::logical_plan::{
     exprlist_to_fields,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
@@ -779,9 +779,9 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )))
                 }
             }
-            LogicalPlan::Projection {
+            LogicalPlan::Projection(Projection {
                 expr, input, alias, ..
-            } => Ok(protobuf::LogicalPlanNode {
+            }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
                     protobuf::ProjectionNode {
                         input: Some(Box::new(input.as_ref().try_into()?)),
@@ -796,7 +796,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     },
                 ))),
             }),
-            LogicalPlan::Filter { predicate, input } => {
+            LogicalPlan::Filter(Filter { predicate, input }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
@@ -807,9 +807,9 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Window {
+            LogicalPlan::Window(Window {
                 input, window_expr, ..
-            } => {
+            }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Window(Box::new(

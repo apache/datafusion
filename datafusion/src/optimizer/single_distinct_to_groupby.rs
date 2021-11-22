@@ -19,6 +19,7 @@
 
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::Projection;
 use crate::logical_plan::{columnize_expr, DFSchema, Expr, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -124,12 +125,12 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                         ));
                     });
 
-                Ok(LogicalPlan::Projection {
+                Ok(LogicalPlan::Projection(Projection {
                     expr: alias_expr,
                     input: Arc::new(final_agg),
                     schema: schema.clone(),
                     alias: Option::None,
-                })
+                }))
             } else {
                 optimize_children(plan)
             }

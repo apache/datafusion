@@ -36,6 +36,7 @@ use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::assert_contains;
 use datafusion::assert_not_contains;
+use datafusion::logical_plan::plan::Projection;
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::logical_plan::TableScanPlan;
 use datafusion::physical_plan::functions::Volatility;
@@ -90,7 +91,7 @@ async fn nyc() -> Result<()> {
     let optimized_plan = ctx.optimize(&logical_plan)?;
 
     match &optimized_plan {
-        LogicalPlan::Projection { input, .. } => match input.as_ref() {
+        LogicalPlan::Projection(Projection { input, .. }) => match input.as_ref() {
             LogicalPlan::Aggregate { input, .. } => match input.as_ref() {
                 LogicalPlan::TableScan(TableScanPlan {
                     ref projected_schema,
