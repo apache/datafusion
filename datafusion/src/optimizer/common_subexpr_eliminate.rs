@@ -21,7 +21,7 @@ use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Filter, Projection, Window};
 use crate::logical_plan::{
-    col, plan::AggregatePlan, DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor,
+    col, plan::Aggregate, DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor,
     LogicalPlan, Recursion, RewriteRecursion,
 };
 use crate::optimizer::optimizer::OptimizerRule;
@@ -150,29 +150,32 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 schema: schema.clone(),
             }))
         }
-        LogicalPlan::Aggregate(aggregate) => {
-            let group_arrays =
-                to_arrays(&aggregate.group_expr, &aggregate.input, &mut expr_set)?;
-            let aggr_arrays =
-                to_arrays(&aggregate.aggr_expr, &aggregate.input, &mut expr_set)?;
+        LogicalPlan::Aggregate(Aggregate {
+            group_expr,
+            aggr_expr,
+            input,
+            schema,
+        }) => {
+            let group_arrays = to_arrays(group_expr, input, &mut expr_set)?;
+            let aggr_arrays = to_arrays(aggr_expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
-                &[&aggregate.group_expr, &aggregate.aggr_expr],
+                &[group_expr, aggr_expr],
                 &[&group_arrays, &aggr_arrays],
-                &aggregate.input,
+                input,
                 &mut expr_set,
-                &aggregate.schema,
+                schema,
                 execution_props,
             )?;
             // note the reversed pop order.
             let new_aggr_expr = new_expr.pop().unwrap();
             let new_group_expr = new_expr.pop().unwrap();
 
-            Ok(LogicalPlan::Aggregate(AggregatePlan {
+            Ok(LogicalPlan::Aggregate(Aggregate {
                 input: Arc::new(new_input),
                 group_expr: new_group_expr,
                 aggr_expr: new_aggr_expr,
-                schema: aggregate.schema.clone(),
+                schema: schema.clone(),
             }))
         }
         LogicalPlan::Sort { expr, input } => {
