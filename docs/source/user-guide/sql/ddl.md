@@ -54,3 +54,31 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
+
+## CREATE MEMORY TABLE
+
+Memory table can be created with query.
+
+```
+CREATE TABLE TABLE_NAME AS [SELECT | VALUES LIST]
+```
+
+```sql
+CREATE TABLE valuetable AS VALUES(1,'HELLO'),(12,'DATAFUSION');
+
+CREATE TABLE memtable as select * from valuetable;
+```
+
+## DROP TABLE
+
+The table can be deleted.
+
+```
+DROP TABLE [ IF EXISTS ] name
+```
+
+```sql
+CREATE TABLE users AS VALUES(1,2),(2,3);
+
+DROP TABLE users;
+```

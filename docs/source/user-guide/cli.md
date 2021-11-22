@@ -106,3 +106,15 @@ Available commands inside DataFusion CLI are:
 ```
 > \quiet [true|false]
 ```
+
+- list function
+
+```bash
+> \h
+```
+
+- Search and describe function
+
+```bash
+> \h function_table
+```
