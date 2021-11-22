@@ -256,6 +256,15 @@ pub struct Aggregate {
     /// The schema description of the aggregate output
     pub schema: DFSchemaRef,
 }
+
+/// Sorts its input according to a list of sort expressions.
+#[derive(Clone)]
+pub struct Sort {
+    /// The sort expressions
+    pub expr: Vec<Expr>,
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+}
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -294,12 +303,7 @@ pub enum LogicalPlan {
     // },
     Aggregate(Aggregate),
     /// Sorts its input according to a list of sort expressions.
-    Sort {
-        /// The sort expressions
-        expr: Vec<Expr>,
-        /// The incoming logical plan
-        input: Arc<LogicalPlan>,
-    },
+    Sort(Sort),
     /// Join two logical plans on one or more join columns
     Join {
         /// Left input
@@ -362,7 +366,7 @@ impl LogicalPlan {
             LogicalPlan::Filter(Filter { input, .. }) => input.schema(),
             LogicalPlan::Window(Window { schema, .. }) => schema,
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
-            LogicalPlan::Sort { input, .. } => input.schema(),
+            LogicalPlan::Sort(Sort { input, .. }) => input.schema(),
             LogicalPlan::Join { schema, .. } => schema,
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
@@ -423,7 +427,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Limit(Limit { input, .. })
             | LogicalPlan::Repartition(Repartition { input, .. })
-            | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
@@ -466,7 +470,7 @@ impl LogicalPlan {
                 .iter()
                 .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
                 .collect(),
-            LogicalPlan::Sort { expr, .. } => expr.clone(),
+            LogicalPlan::Sort(Sort { expr, .. }) => expr.clone(),
             LogicalPlan::Extension(extension) => extension.node.expressions(),
             // plans without expressions
             LogicalPlan::TableScan { .. }
@@ -493,7 +497,7 @@ impl LogicalPlan {
             LogicalPlan::Repartition(Repartition { input, .. }) => vec![input],
             LogicalPlan::Window(Window { input, .. }) => vec![input],
             LogicalPlan::Aggregate(Aggregate { input, .. }) => vec![input],
-            LogicalPlan::Sort { input, .. } => vec![input],
+            LogicalPlan::Sort(Sort { input, .. }) => vec![input],
             LogicalPlan::Join { left, right, .. } => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
@@ -630,7 +634,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Window(Window { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Aggregate(Aggregate { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Sort { input, .. } => input.accept(visitor)?,
+            LogicalPlan::Sort(Sort { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Join { left, right, .. }
             | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 left.accept(visitor)? && right.accept(visitor)?
@@ -924,7 +928,7 @@ impl LogicalPlan {
                         "Aggregate: groupBy=[{:?}], aggr=[{:?}]",
                         group_expr, aggr_expr
                     ),
-                    LogicalPlan::Sort { ref expr, .. } => {
+                    LogicalPlan::Sort(Sort { expr, .. }) => {
                         write!(f, "Sort: ")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {

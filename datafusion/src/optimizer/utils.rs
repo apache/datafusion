@@ -24,7 +24,7 @@ use arrow::record_batch::RecordBatch;
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
 use crate::logical_plan::plan::{
-    Aggregate, AnalyzePlan, ExtensionPlan, Filter, Projection, Window,
+    Aggregate, AnalyzePlan, ExtensionPlan, Filter, Projection, Sort, Window,
 };
 use crate::logical_plan::{
     build_join_schema, Column, CreateMemoryTable, DFSchema, DFSchemaRef, Expr,
@@ -198,10 +198,10 @@ pub fn from_plan(
             input: Arc::new(inputs[0].clone()),
             schema: schema.clone(),
         })),
-        LogicalPlan::Sort { .. } => Ok(LogicalPlan::Sort {
+        LogicalPlan::Sort(Sort { .. }) => Ok(LogicalPlan::Sort(Sort {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),
-        }),
+        })),
         LogicalPlan::Join {
             join_type,
             join_constraint,

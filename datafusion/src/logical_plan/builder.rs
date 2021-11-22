@@ -26,7 +26,7 @@ use crate::datasource::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::{
-    Aggregate, AnalyzePlan, EmptyRelation, ExplainPlan, Filter, Projection,
+    Aggregate, AnalyzePlan, EmptyRelation, ExplainPlan, Filter, Projection, Sort,
     TableScanPlan, ToStringifiedPlan, Union, Window,
 };
 use crate::prelude::*;
@@ -468,10 +468,10 @@ impl LogicalPlanBuilder {
 
     /// Apply a sort
     pub fn sort(&self, exprs: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Sort {
+        Ok(Self::from(LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &self.plan)?,
             input: Arc::new(self.plan.clone()),
-        }))
+        })))
     }
 
     /// Apply a union

@@ -21,8 +21,10 @@ use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Filter, Projection, Window};
 use crate::logical_plan::{
-    col, plan::Aggregate, DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor,
-    LogicalPlan, Recursion, RewriteRecursion,
+    col,
+    plan::{Aggregate, Sort},
+    DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor, LogicalPlan, Recursion,
+    RewriteRecursion,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -178,7 +180,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 schema: schema.clone(),
             }))
         }
-        LogicalPlan::Sort { expr, input } => {
+        LogicalPlan::Sort(Sort { expr, input }) => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
@@ -190,10 +192,10 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Sort {
+            Ok(LogicalPlan::Sort(Sort {
                 expr: new_expr.pop().unwrap(),
                 input: Arc::new(new_input),
-            })
+            }))
         }
         LogicalPlan::Join { .. }
         | LogicalPlan::CrossJoin(_)
