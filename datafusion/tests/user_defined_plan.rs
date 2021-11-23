@@ -86,7 +86,7 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::execution::context::ExecutionProps;
-use datafusion::logical_plan::plan::ExtensionPlan;
+use datafusion::logical_plan::plan::{ExtensionPlan, Sort};
 use datafusion::logical_plan::{DFSchemaRef, Limit};
 
 /// Execute the specified sql and return the resulting record batches
@@ -289,10 +289,10 @@ impl OptimizerRule for TopKOptimizerRule {
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
         if let LogicalPlan::Limit(Limit { ref n, ref input }) = plan {
-            if let LogicalPlan::Sort {
+            if let LogicalPlan::Sort(Sort {
                 ref expr,
                 ref input,
-            } = **input
+            }) = **input
             {
                 if expr.len() == 1 {
                     // we found a sort with a single sort expr, replace with a a TopK
