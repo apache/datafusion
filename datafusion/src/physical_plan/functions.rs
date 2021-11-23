@@ -144,6 +144,7 @@ impl Signature {
 }
 
 ///A function's volatility, which defines the functions eligibility for certain optimizations
+///Ref from postgresql https://www.postgresql.org/docs/current/xfunc-volatility.html
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum Volatility {
     /// Immutable - An immutable function will always return the same output when given the same input. An example of this is [BuiltinScalarFunction::Cos].

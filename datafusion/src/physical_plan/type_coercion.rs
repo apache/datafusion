@@ -76,6 +76,7 @@ pub fn data_types(
     if current_types.is_empty() {
         return Ok(vec![]);
     }
+
     let valid_types = get_valid_types(&signature.type_signature, current_types)?;
 
     if valid_types
@@ -103,11 +104,11 @@ fn get_valid_types(
     current_types: &[DataType],
 ) -> Result<Vec<Vec<DataType>>> {
     let valid_types = match signature {
-        TypeSignature::Variadic(valid_types, ..) => valid_types
+        TypeSignature::Variadic(valid_types) => valid_types
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
-        TypeSignature::Uniform(number, valid_types, ..) => valid_types
+        TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
@@ -118,8 +119,8 @@ fn get_valid_types(
                 .map(|_| current_types[0].clone())
                 .collect()]
         }
-        TypeSignature::Exact(valid_types, ..) => vec![valid_types.clone()],
-        TypeSignature::Any(number, ..) => {
+        TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
+        TypeSignature::Any(number) => {
             if current_types.len() != *number {
                 return Err(DataFusionError::Plan(format!(
                     "The function expected {} arguments but received {}",
@@ -129,7 +130,7 @@ fn get_valid_types(
             }
             vec![(0..*number).map(|i| current_types[i].clone()).collect()]
         }
-        TypeSignature::OneOf(types, ..) => types
+        TypeSignature::OneOf(types) => types
             .iter()
             .filter_map(|t| get_valid_types(t, current_types).ok())
             .flatten()
@@ -144,6 +145,8 @@ fn maybe_data_types(
     valid_types: &[DataType],
     current_types: &[DataType],
 ) -> Option<Vec<DataType>> {
+    // TODO liukun4515
+
     if valid_types.len() != current_types.len() {
         return None;
     }
@@ -155,7 +158,6 @@ fn maybe_data_types(
         if current_type == valid_type {
             new_type.push(current_type.clone())
         } else {
-            // attempt to coerce
             if can_coerce_from(valid_type, current_type) {
                 new_type.push(valid_type.clone())
             } else {
@@ -171,9 +173,11 @@ fn maybe_data_types(
 /// (losslessly converted) into a value of `type_to`
 ///
 /// See the module level documentation for more detail on coercion.
-pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
+fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     use self::DataType::*;
+    // TODO liukun4515
     match type_into {
+        // TODO, decimal data type, we just support the decimal
         Int8 => matches!(type_from, Int8),
         Int16 => matches!(type_from, Int8 | Int16 | UInt8),
         Int32 => matches!(type_from, Int8 | Int16 | Int32 | UInt8 | UInt16),

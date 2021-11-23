@@ -412,6 +412,98 @@ async fn csv_query_group_by_int_min_max() -> Result<()> {
 }
 
 #[tokio::test]
+async fn error_count_agg() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    // let sql = "select sum('123')";
+    let sql = "select min(1)";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_with_decimal_by_sql() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_simple_aggregate_csv_with_decimal_by_sql(&mut ctx).await;
+    let sql = "SELECT c1 from aggregate_simple";
+    // let sql = "SELECT '123'+1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------+",
+        "| c1       |",
+        "+----------+",
+        "| 0.000010 |",
+        "| 0.000020 |",
+        "| 0.000020 |",
+        "| 0.000030 |",
+        "| 0.000030 |",
+        "| 0.000030 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_with_decimal() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    // the data type of c1 is decimal(10,6)
+    register_aggregate_simple_csv_use_decimal(&mut ctx).await?;
+    // query
+    let mut sql = "SELECT c1 from aggregate_simple";
+    let mut actual = execute_to_batches(&mut ctx, sql).await;
+    let mut expected = vec![
+        "+----------+",
+        "| c1       |",
+        "+----------+",
+        "| 0.000010 |",
+        "| 0.000020 |",
+        "| 0.000020 |",
+        "| 0.000030 |",
+        "| 0.000030 |",
+        "| 0.000030 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    // aggregate: min,max,count,sum
+    sql = "SELECT MIN(c1) from aggregate_simple";
+    actual = execute_to_batches(&mut ctx, sql).await;
+    println!("{:?}", actual);
+
+    sql = "SELECT MAX(c1) from aggregate_simple";
+    actual = execute_to_batches(&mut ctx, sql).await;
+    println!("{:?}", actual);
+
+    sql = "SELECT COUNT(c1) from aggregate_simple";
+    actual = execute_to_batches(&mut ctx, sql).await;
+    println!("{:?}", actual);
+
+    sql = "SELECT SUM(c1) from aggregate_simple";
+    actual = execute_to_batches(&mut ctx, sql).await;
+    println!("{:?}", actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_group_by_float32() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_simple_csv(&mut ctx).await?;
@@ -3526,6 +3618,29 @@ async fn explain_analyze_runs_optimizers() {
     assert_contains!(actual, expected);
 }
 
+async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &mut ExecutionContext) {
+    // c1  DECIMAL(10,6) NOT NULL,
+    let df = ctx
+        .sql(&format!(
+            "CREATE EXTERNAL TABLE aggregate_simple (
+        c1  DECIMAL(10,6) NOT NULL,
+        c2  DOUBLE NOT NULL,
+        c3  BOOLEAN NOT NULL
+    )
+    STORED AS CSV
+    WITH HEADER ROW
+    LOCATION 'tests/aggregate_simple.csv'"
+        ))
+        .await
+        .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");
+
+    let results = df.collect().await.expect("Executing CREATE EXTERNAL TABLE");
+    assert!(
+        results.is_empty(),
+        "Expected no rows from executing CREATE EXTERNAL TABLE"
+    );
+}
+
 async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
 
@@ -3609,6 +3724,25 @@ async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
     ctx.register_csv(
         "aggregate_test_100",
         &format!("{}/csv/aggregate_test_100.csv", testdata),
+        CsvReadOptions::new().schema(&schema),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn register_aggregate_simple_csv_use_decimal(
+    ctx: &mut ExecutionContext,
+) -> Result<()> {
+    // It's not possible to use aggregate_test_100, not enought similar values to test grouping on floats
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Decimal(10, 6), false),
+        Field::new("c2", DataType::Float64, false),
+        Field::new("c3", DataType::Boolean, false),
+    ]));
+
+    ctx.register_csv(
+        "aggregate_simple",
+        "tests/aggregate_simple.csv",
         CsvReadOptions::new().schema(&schema),
     )
     .await?;

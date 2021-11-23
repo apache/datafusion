@@ -488,6 +488,42 @@ mod tests {
     use arrow::record_batch::RecordBatch;
 
     #[test]
+    fn min_decimal() -> Result<()> {
+        // todo!()
+        Ok(())
+    }
+
+    #[test]
+    fn max_decimal() -> Result<()> {
+        // todo!()
+        Ok(())
+    }
+
+    #[test]
+    fn min_decimal_with_nulls() -> Result<()> {
+        // todo!()
+        Ok(())
+    }
+
+    #[test]
+    fn max_decimal_with_nulls() -> Result<()> {
+        // todo!()
+        Ok(())
+    }
+
+    #[test]
+    fn min_decimal_with_all_nulls() -> Result<()> {
+        // todo!()
+        Ok(())
+    }
+
+    #[test]
+    fn max_decimal_with_all_nulls() -> Result<()> {
+        // todo!()
+        Ok(())
+    }
+
+    #[test]
     fn max_i32() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
         generic_test_op!(

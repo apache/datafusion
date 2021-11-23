@@ -86,6 +86,10 @@ impl AggregateExpr for ArrayAgg {
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr.clone()]
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Debug)]

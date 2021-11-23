@@ -63,6 +63,19 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
     }
 }
 
+pub(crate) fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
+    match arg_type {
+        // TODO: do we need to support the unsigned data type?
+        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => true,
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => true,
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
+        // TODO support the decimal data type
+        DataType::Decimal(_, _) => true,
+        // TODO support the interva
+        _ => false,
+    }
+}
+
 impl Sum {
     /// Create a new SUM aggregate function
     pub fn new(
@@ -154,7 +167,7 @@ pub(super) fn sum_batch(values: &ArrayRef) -> Result<ScalarValue> {
             return Err(DataFusionError::Internal(format!(
                 "Sum is not expected to receive the type {:?}",
                 e
-            )))
+            )));
         }
     })
 }
@@ -238,7 +251,7 @@ pub(super) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
             return Err(DataFusionError::Internal(format!(
                 "Sum is not expected to receive a scalar {:?}",
                 e
-            )))
+            )));
         }
     })
 }

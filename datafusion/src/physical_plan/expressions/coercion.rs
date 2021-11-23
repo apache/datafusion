@@ -20,7 +20,7 @@
 use arrow::datatypes::DataType;
 
 /// Determine if a DataType is signed numeric or not
-pub fn is_signed_numeric(dt: &DataType) -> bool {
+pub(crate) fn is_signed_numeric(dt: &DataType) -> bool {
     matches!(
         dt,
         DataType::Int8
@@ -29,12 +29,13 @@ pub fn is_signed_numeric(dt: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float16
             | DataType::Float32
-            | DataType::Float64
+            | DataType::Float64 // TODO liukun4515
+                                // | DataType::Decimal(_,_)
     )
 }
 
 /// Determine if a DataType is numeric or not
-pub fn is_numeric(dt: &DataType) -> bool {
+fn is_numeric(dt: &DataType) -> bool {
     is_signed_numeric(dt)
         || match dt {
             DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
@@ -125,6 +126,11 @@ pub fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         return Some(lhs_type.clone());
     }
 
+    // TODO liukun4515
+    // In the decimal data type, what to do if the metadata of decimal type is diff.
+    // add decimal data type, diff operator we should have diff rule to do coercion.
+    // first step, we can just support decimal type in case which left and right datatype are the same
+
     // these are ordered from most informative to least informative so
     // that the coercion removes the least amount of information
     match (lhs_type, rhs_type) {
@@ -170,6 +176,8 @@ pub fn order_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::datatypes::DataType::Int8;
+    use arrow::datatypes::DataType::{Float32, Float64, Int16, Int32, Int64};
 
     #[test]
     fn test_dictionary_type_coersion() {
@@ -191,5 +199,78 @@ mod tests {
         let lhs_type = Utf8;
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), Some(Utf8));
+    }
+
+    #[test]
+    fn test_is_signed_numeric() {
+        assert!(is_signed_numeric(&DataType::Int8));
+        assert!(is_signed_numeric(&DataType::Int16));
+        assert!(is_signed_numeric(&DataType::Int32));
+        assert!(is_signed_numeric(&DataType::Int64));
+        assert!(is_signed_numeric(&DataType::Float16));
+        assert!(is_signed_numeric(&DataType::Float32));
+        assert!(is_signed_numeric(&DataType::Float64));
+
+        // decimal data type
+        // TODO: add decimal test
+        // assert!(is_signed_numeric(&DataType::Decimal(12, 2)));
+        // assert!(is_signed_numeric(&DataType::Decimal(14, 10)));
+
+        // negative test
+        assert!(!is_signed_numeric(&DataType::UInt64));
+        assert!(!is_signed_numeric(&DataType::UInt16));
+    }
+
+    #[test]
+    fn test_is_numeric() {
+        assert!(is_numeric(&DataType::Int8));
+        assert!(is_numeric(&DataType::Int16));
+        assert!(is_numeric(&DataType::Int32));
+        assert!(is_numeric(&DataType::Int64));
+        assert!(is_numeric(&DataType::Float16));
+        assert!(is_numeric(&DataType::Float32));
+        assert!(is_numeric(&DataType::Float64));
+
+        // decimal data type
+        // TODO: add decimal test
+        // assert!(is_numeric(&DataType::Decimal(12, 2)));
+        // assert!(is_numeric(&DataType::Decimal(14, 10)));
+
+        // unsigned test
+        assert!(is_numeric(&DataType::UInt8));
+        assert!(is_numeric(&DataType::UInt16));
+        assert!(is_numeric(&DataType::UInt32));
+        assert!(is_numeric(&DataType::UInt64));
+
+        // negative test
+        assert!(!is_numeric(&DataType::Boolean));
+        assert!(!is_numeric(&DataType::Date32));
+    }
+
+    #[test]
+    fn test_numerical_coercion() {
+        // negative test
+        assert_eq!(
+            None,
+            numerical_coercion(&DataType::Float64, &DataType::Binary)
+        );
+        assert_eq!(
+            None,
+            numerical_coercion(&DataType::Float64, &DataType::Utf8)
+        );
+
+        // positive test
+        let test_types = vec![Int8, Int16, Int32, Int64, Float32, Float64];
+        let mut index = test_types.len();
+        while index > 0 {
+            let this_type = &test_types[index - 1];
+            for i in 0..index {
+                assert_eq!(
+                    Some(this_type.clone()),
+                    numerical_coercion(this_type, &test_types[i])
+                );
+            }
+            index -= 1;
+        }
     }
 }

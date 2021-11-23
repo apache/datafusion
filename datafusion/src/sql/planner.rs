@@ -372,13 +372,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
                 Ok(DataType::Utf8)
             }
-            SQLDataType::Decimal(_, _) => Ok(DataType::Float64),
             SQLDataType::Float(_) => Ok(DataType::Float32),
             SQLDataType::Real | SQLDataType::Double => Ok(DataType::Float64),
             SQLDataType::Boolean => Ok(DataType::Boolean),
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Millisecond)),
             SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            // TODO liukun4515
+            // from the sql statement data type to the arrow or datafusion data type
+            SQLDataType::Decimal(precision, scale) => {
+                if precision.is_none()
+                    || scale.is_none()
+                    || precision.unwrap() > 38
+                    || scale.unwrap() > precision.unwrap()
+                {
+                    // illegal arguments for decimal
+                    Err(DataFusionError::Internal(format!(
+                        "The decimal data type {:?} is error",
+                        sql_type
+                    )))
+                } else {
+                    Ok(DataType::Decimal(
+                        precision.unwrap() as usize,
+                        scale.unwrap() as usize,
+                    ))
+                }
+            }
             _ => Err(DataFusionError::NotImplemented(format!(
                 "The SQL data type {:?} is not implemented",
                 sql_type
@@ -1999,6 +2018,16 @@ pub fn convert_data_type(sql: &SQLDataType) -> Result<DataType> {
         SQLDataType::Char(_) | SQLDataType::Varchar(_) => Ok(DataType::Utf8),
         SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         SQLDataType::Date => Ok(DataType::Date32),
+        // TODO liukun4515
+        // SQLDataType::Decimal(precision,scale) => {
+        //     if precision.is_none() || scale.is_none() {
+        //         Err(DataFusionError::Internal(format!("Error DecimalType({:?},{:?})",precision,scale)))
+        //     } else if precision.unwrap() >38 || scale.unwrap()>precision.unwrap() {
+        //         Err(DataFusionError::Internal(format!("Error DecimalType({:?},{:?})",precision,scale)))
+        //     } else {
+        //         Ok(DataType::Decimal(precision.unwrap() as usize, scale.unwrap() as usize))
+        //     }
+        // }
         other => Err(DataFusionError::NotImplemented(format!(
             "Unsupported SQL type {:?}",
             other
