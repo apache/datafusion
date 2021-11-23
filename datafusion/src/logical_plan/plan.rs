@@ -310,16 +310,6 @@ pub enum LogicalPlan {
     Window(Window),
     /// Aggregates its input based on a set of grouping and aggregate
     /// expressions (e.g. SUM).
-    // Aggregate {
-    //     /// The incoming logical plan
-    //     input: Arc<LogicalPlan>,
-    //     /// Grouping expressions
-    //     group_expr: Vec<Expr>,
-    //     /// Aggregate expressions
-    //     aggr_expr: Vec<Expr>,
-    //     /// The schema description of the aggregate output
-    //     schema: DFSchemaRef,
-    // },
     Aggregate(Aggregate),
     /// Sorts its input according to a list of sort expressions.
     Sort(Sort),
@@ -464,12 +454,11 @@ impl LogicalPlan {
                 _ => vec![],
             },
             LogicalPlan::Window(Window { window_expr, .. }) => window_expr.clone(),
-            LogicalPlan::Aggregate(aggregate) => aggregate
-                .group_expr
-                .iter()
-                .chain(aggregate.aggr_expr.iter())
-                .cloned()
-                .collect(),
+            LogicalPlan::Aggregate(Aggregate {
+                group_expr,
+                aggr_expr,
+                ..
+            }) => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
             LogicalPlan::Join(Join { on, .. }) => on
                 .iter()
                 .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
