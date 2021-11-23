@@ -26,7 +26,7 @@ use crate::datasource::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::{
-    Aggregate, AnalyzePlan, EmptyRelation, ExplainPlan, Filter, Projection, Sort,
+    Aggregate, AnalyzePlan, EmptyRelation, ExplainPlan, Filter, Join, Projection, Sort,
     TableScanPlan, ToStringifiedPlan, Union, Window,
 };
 use crate::prelude::*;
@@ -587,7 +587,7 @@ impl LogicalPlanBuilder {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
-        Ok(Self::from(LogicalPlan::Join {
+        Ok(Self::from(LogicalPlan::Join(Join {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             on,
@@ -595,7 +595,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null,
-        }))
+        })))
     }
 
     /// Apply a join with using constraint, which duplicates all join columns in output schema.
@@ -619,7 +619,7 @@ impl LogicalPlanBuilder {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
-        Ok(Self::from(LogicalPlan::Join {
+        Ok(Self::from(LogicalPlan::Join(Join {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             on,
@@ -627,7 +627,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::Using,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null: false,
-        }))
+        })))
     }
 
     /// Apply a cross join

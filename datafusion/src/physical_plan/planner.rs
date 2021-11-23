@@ -24,7 +24,7 @@ use super::{
 };
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Projection, Sort, TableScanPlan, Window,
+    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, TableScanPlan, Window,
 };
 use crate::logical_plan::{
     unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
@@ -705,14 +705,14 @@ impl DefaultPhysicalPlanner {
                         .collect::<Result<Vec<_>>>()?;
                     Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?) )
                 }
-                LogicalPlan::Join {
+                LogicalPlan::Join(Join {
                     left,
                     right,
                     on: keys,
                     join_type,
                     null_equals_null,
                     ..
-                } => {
+                }) => {
                     let left_df_schema = left.schema();
                     let physical_left = self.create_initial_plan(left, ctx_state).await?;
                     let right_df_schema = right.schema();

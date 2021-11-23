@@ -265,6 +265,25 @@ pub struct Sort {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
 }
+
+/// Join two logical plans on one or more join columns
+#[derive(Clone)]
+pub struct Join {
+    /// Left input
+    pub left: Arc<LogicalPlan>,
+    /// Right input
+    pub right: Arc<LogicalPlan>,
+    /// Equijoin clause expressed as pairs of (left, right) join columns
+    pub on: Vec<(Column, Column)>,
+    /// Join type
+    pub join_type: JoinType,
+    /// Join constraint
+    pub join_constraint: JoinConstraint,
+    /// The output schema, containing fields from the left and right inputs
+    pub schema: DFSchemaRef,
+    /// If null_equals_null is true, null == null else null != null
+    pub null_equals_null: bool,
+}
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -305,22 +324,7 @@ pub enum LogicalPlan {
     /// Sorts its input according to a list of sort expressions.
     Sort(Sort),
     /// Join two logical plans on one or more join columns
-    Join {
-        /// Left input
-        left: Arc<LogicalPlan>,
-        /// Right input
-        right: Arc<LogicalPlan>,
-        /// Equijoin clause expressed as pairs of (left, right) join columns
-        on: Vec<(Column, Column)>,
-        /// Join type
-        join_type: JoinType,
-        /// Join constraint
-        join_constraint: JoinConstraint,
-        /// The output schema, containing fields from the left and right inputs
-        schema: DFSchemaRef,
-        /// If null_equals_null is true, null == null else null != null
-        null_equals_null: bool,
-    },
+    Join(Join),
     /// Apply Cross Join to two logical plans
     CrossJoin(CrossJoin),
     /// Repartition the plan based on a partitioning scheme.
@@ -367,7 +371,7 @@ impl LogicalPlan {
             LogicalPlan::Window(Window { schema, .. }) => schema,
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
             LogicalPlan::Sort(Sort { input, .. }) => input.schema(),
-            LogicalPlan::Join { schema, .. } => schema,
+            LogicalPlan::Join(Join { schema, .. }) => schema,
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
@@ -399,12 +403,12 @@ impl LogicalPlan {
                 schemas.insert(0, schema);
                 schemas
             }
-            LogicalPlan::Join {
+            LogicalPlan::Join(Join {
                 left,
                 right,
                 schema,
                 ..
-            }
+            })
             | LogicalPlan::CrossJoin(CrossJoin {
                 left,
                 right,
@@ -466,7 +470,7 @@ impl LogicalPlan {
                 .chain(aggregate.aggr_expr.iter())
                 .cloned()
                 .collect(),
-            LogicalPlan::Join { on, .. } => on
+            LogicalPlan::Join(Join { on, .. }) => on
                 .iter()
                 .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
                 .collect(),
@@ -498,7 +502,7 @@ impl LogicalPlan {
             LogicalPlan::Window(Window { input, .. }) => vec![input],
             LogicalPlan::Aggregate(Aggregate { input, .. }) => vec![input],
             LogicalPlan::Sort(Sort { input, .. }) => vec![input],
-            LogicalPlan::Join { left, right, .. } => vec![left, right],
+            LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
@@ -527,11 +531,11 @@ impl LogicalPlan {
             type Error = DataFusionError;
 
             fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
-                if let LogicalPlan::Join {
+                if let LogicalPlan::Join(Join {
                     join_constraint: JoinConstraint::Using,
                     on,
                     ..
-                } = plan
+                }) = plan
                 {
                     self.using_columns.push(
                         on.iter()
@@ -635,7 +639,7 @@ impl LogicalPlan {
             LogicalPlan::Window(Window { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Aggregate(Aggregate { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Sort(Sort { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Join { left, right, .. }
+            LogicalPlan::Join(Join { left, right, .. })
             | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 left.accept(visitor)? && right.accept(visitor)?
             }
@@ -938,11 +942,11 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
-                    LogicalPlan::Join {
+                    LogicalPlan::Join(Join {
                         on: ref keys,
                         join_constraint,
                         ..
-                    } => {
+                    }) => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
                         match join_constraint {

@@ -24,7 +24,7 @@ use arrow::record_batch::RecordBatch;
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
 use crate::logical_plan::plan::{
-    Aggregate, AnalyzePlan, ExtensionPlan, Filter, Projection, Sort, Window,
+    Aggregate, AnalyzePlan, ExtensionPlan, Filter, Join, Projection, Sort, Window,
 };
 use crate::logical_plan::{
     build_join_schema, Column, CreateMemoryTable, DFSchema, DFSchemaRef, Expr,
@@ -202,16 +202,16 @@ pub fn from_plan(
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),
         })),
-        LogicalPlan::Join {
+        LogicalPlan::Join(Join {
             join_type,
             join_constraint,
             on,
             null_equals_null,
             ..
-        } => {
+        }) => {
             let schema =
                 build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
-            Ok(LogicalPlan::Join {
+            Ok(LogicalPlan::Join(Join {
                 left: Arc::new(inputs[0].clone()),
                 right: Arc::new(inputs[1].clone()),
                 join_type: *join_type,
@@ -219,7 +219,7 @@ pub fn from_plan(
                 on: on.clone(),
                 schema: DFSchemaRef::new(schema),
                 null_equals_null: *null_equals_null,
-            })
+            }))
         }
         LogicalPlan::CrossJoin(_) => {
             let left = inputs[0].clone();

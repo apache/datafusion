@@ -21,7 +21,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, AnalyzePlan, Projection, TableScanPlan, Window,
+    Aggregate, AnalyzePlan, Join, Projection, TableScanPlan, Window,
 };
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
@@ -192,7 +192,7 @@ fn optimize_plan(
                 }))
             }
         }
-        LogicalPlan::Join {
+        LogicalPlan::Join(Join {
             left,
             right,
             on,
@@ -200,7 +200,7 @@ fn optimize_plan(
             join_constraint,
             null_equals_null,
             ..
-        } => {
+        }) => {
             for (l, r) in on {
                 new_required_columns.insert(l.clone());
                 new_required_columns.insert(r.clone());
@@ -228,7 +228,7 @@ fn optimize_plan(
                 join_type,
             )?;
 
-            Ok(LogicalPlan::Join {
+            Ok(LogicalPlan::Join(Join {
                 left: optimized_left,
                 right: optimized_right,
                 join_type: *join_type,
@@ -236,7 +236,7 @@ fn optimize_plan(
                 on: on.clone(),
                 schema: DFSchemaRef::new(schema),
                 null_equals_null: *null_equals_null,
-            })
+            }))
         }
         LogicalPlan::Window(Window {
             schema,
