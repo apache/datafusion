@@ -16,7 +16,7 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{Filter, Projection};
+use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection};
 use crate::logical_plan::{
     and, replace_col, Column, CrossJoin, Limit, LogicalPlan, TableScanPlan,
 };
@@ -354,9 +354,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             utils::from_plan(plan, expr, &[new_input])
         }
-        LogicalPlan::Aggregate {
-            input, aggr_expr, ..
-        } => {
+        LogicalPlan::Aggregate(Aggregate {
+            aggr_expr, input, ..
+        }) => {
             // An aggregate's aggreagate columns are _not_ filter-commutable => collect these:
             // * columns whose aggregation expression depends on
             // * the aggregation columns themselves
@@ -394,9 +394,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
             optimize_join(state, plan, left, right)
         }
-        LogicalPlan::Join {
+        LogicalPlan::Join(Join {
             left, right, on, ..
-        } => {
+        }) => {
             // duplicate filters for joined columns so filters can be pushed down to both sides.
             // Take the following query as an example:
             //

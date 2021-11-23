@@ -19,7 +19,7 @@
 
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::Projection;
+use crate::logical_plan::plan::{Aggregate, Projection};
 use crate::logical_plan::{columnize_expr, DFSchema, Expr, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -51,12 +51,12 @@ impl SingleDistinctToGroupBy {
 
 fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Aggregate {
+        LogicalPlan::Aggregate(Aggregate {
             input,
             aggr_expr,
             schema,
             group_expr,
-        } => {
+        }) => {
             if is_single_distinct_agg(plan) {
                 let mut group_fields_set = HashSet::new();
                 let mut all_group_args = group_expr.clone();
@@ -87,12 +87,12 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     .collect::<Vec<_>>();
 
                 let grouped_schema = DFSchema::new(all_field).unwrap();
-                let grouped_agg = LogicalPlan::Aggregate {
+                let grouped_agg = LogicalPlan::Aggregate(Aggregate {
                     input: input.clone(),
                     group_expr: all_group_args,
                     aggr_expr: Vec::new(),
                     schema: Arc::new(grouped_schema.clone()),
-                };
+                });
                 let grouped_agg = optimize_children(&grouped_agg);
                 let final_agg_schema = Arc::new(
                     DFSchema::new(
@@ -105,12 +105,12 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     .unwrap(),
                 );
 
-                let final_agg = LogicalPlan::Aggregate {
+                let final_agg = LogicalPlan::Aggregate(Aggregate {
                     input: Arc::new(grouped_agg.unwrap()),
                     group_expr: group_expr.clone(),
                     aggr_expr: new_aggr_expr,
                     schema: final_agg_schema.clone(),
-                };
+                });
 
                 //so the aggregates are displayed in the same way even after the rewrite
                 let mut alias_expr: Vec<Expr> = Vec::new();
@@ -151,9 +151,9 @@ fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
 
 fn is_single_distinct_agg(plan: &LogicalPlan) -> bool {
     match plan {
-        LogicalPlan::Aggregate {
+        LogicalPlan::Aggregate(Aggregate {
             input, aggr_expr, ..
-        } => {
+        }) => {
             let mut fields_set = HashSet::new();
             aggr_expr
                 .iter()

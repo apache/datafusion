@@ -30,7 +30,9 @@ use datafusion::datasource::TableProvider;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTable;
-use datafusion::logical_plan::plan::{EmptyRelation, Filter, Projection, Window};
+use datafusion::logical_plan::plan::{
+    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
+};
 use datafusion::logical_plan::{
     exprlist_to_fields,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
@@ -823,12 +825,12 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Aggregate {
-                input,
+            LogicalPlan::Aggregate(Aggregate {
                 group_expr,
                 aggr_expr,
+                input,
                 ..
-            } => {
+            }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Aggregate(Box::new(
@@ -846,7 +848,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Join {
+            LogicalPlan::Join(Join {
                 left,
                 right,
                 on,
@@ -854,7 +856,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                 join_constraint,
                 null_equals_null,
                 ..
-            } => {
+            }) => {
                 let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
                 let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
                 let (left_join_column, right_join_column) =
@@ -887,7 +889,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     ))),
                 })
             }
-            LogicalPlan::Sort { input, expr } => {
+            LogicalPlan::Sort(Sort { input, expr }) => {
                 let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
                 let selection_expr: Vec<protobuf::LogicalExprNode> = expr
                     .iter()

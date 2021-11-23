@@ -21,8 +21,10 @@ use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Filter, Projection, Window};
 use crate::logical_plan::{
-    col, DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor, LogicalPlan,
-    Recursion, RewriteRecursion,
+    col,
+    plan::{Aggregate, Sort},
+    DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor, LogicalPlan, Recursion,
+    RewriteRecursion,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -150,12 +152,12 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 schema: schema.clone(),
             }))
         }
-        LogicalPlan::Aggregate {
-            input,
+        LogicalPlan::Aggregate(Aggregate {
             group_expr,
             aggr_expr,
+            input,
             schema,
-        } => {
+        }) => {
             let group_arrays = to_arrays(group_expr, input, &mut expr_set)?;
             let aggr_arrays = to_arrays(aggr_expr, input, &mut expr_set)?;
 
@@ -171,14 +173,14 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             let new_aggr_expr = new_expr.pop().unwrap();
             let new_group_expr = new_expr.pop().unwrap();
 
-            Ok(LogicalPlan::Aggregate {
+            Ok(LogicalPlan::Aggregate(Aggregate {
                 input: Arc::new(new_input),
                 group_expr: new_group_expr,
                 aggr_expr: new_aggr_expr,
                 schema: schema.clone(),
-            })
+            }))
         }
-        LogicalPlan::Sort { expr, input } => {
+        LogicalPlan::Sort(Sort { expr, input }) => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
@@ -190,10 +192,10 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Sort {
+            Ok(LogicalPlan::Sort(Sort {
                 expr: new_expr.pop().unwrap(),
                 input: Arc::new(new_input),
-            })
+            }))
         }
         LogicalPlan::Join { .. }
         | LogicalPlan::CrossJoin(_)
