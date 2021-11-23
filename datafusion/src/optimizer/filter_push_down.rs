@@ -16,7 +16,7 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{Filter, Join, Projection};
+use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection};
 use crate::logical_plan::{
     and, replace_col, Column, CrossJoin, Limit, LogicalPlan, TableScanPlan,
 };
@@ -354,19 +354,20 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             utils::from_plan(plan, expr, &[new_input])
         }
-        LogicalPlan::Aggregate(aggregate) => {
+        LogicalPlan::Aggregate(Aggregate {
+            aggr_expr, input, ..
+        }) => {
             // An aggregate's aggreagate columns are _not_ filter-commutable => collect these:
             // * columns whose aggregation expression depends on
             // * the aggregation columns themselves
 
             // construct set of columns that `aggr_expr` depends on
             let mut used_columns = HashSet::new();
-            utils::exprlist_to_columns(&aggregate.aggr_expr, &mut used_columns)?;
+            utils::exprlist_to_columns(aggr_expr, &mut used_columns)?;
 
-            let agg_columns = aggregate
-                .aggr_expr
+            let agg_columns = aggr_expr
                 .iter()
-                .map(|x| Ok(Column::from_name(x.name(&aggregate.input.schema())?)))
+                .map(|x| Ok(Column::from_name(x.name(input.schema())?)))
                 .collect::<Result<HashSet<_>>>()?;
             used_columns.extend(agg_columns);
 
