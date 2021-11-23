@@ -40,7 +40,7 @@ use crate::{
 use arrow::{
     array::*,
     buffer::MutableBuffer,
-    compute,
+    compute::{cast, concat, take},
     datatypes::{DataType, Field, Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
@@ -448,11 +448,7 @@ fn group_aggregate_batch(
         .map(|array| {
             array
                 .iter()
-                .map(|array| {
-                    compute::take::take(array.as_ref(), &batch_indices)
-                        .unwrap()
-                        .into()
-                })
+                .map(|array| take::take(array.as_ref(), &batch_indices).unwrap().into())
                 .collect()
             // 2.3
         })
@@ -888,7 +884,7 @@ fn concatenate(arrays: Vec<Vec<ArrayRef>>) -> ArrowResult<Vec<ArrayRef>> {
                 .iter()
                 .map(|a| a[column].as_ref())
                 .collect::<Vec<_>>();
-            Ok(compute::concat::concatenate(&array_list)?.into())
+            Ok(concat::concatenate(&array_list)?.into())
         })
         .collect::<ArrowResult<Vec<_>>>()
 }
@@ -968,8 +964,12 @@ fn create_batch_from_map(
         .iter()
         .zip(output_schema.fields().iter())
         .map(|(col, desired_field)| {
-            arrow::compute::cast::cast(col.as_ref(), desired_field.data_type())
-                .map(Arc::from)
+            cast::cast(
+                col.as_ref(),
+                desired_field.data_type(),
+                cast::CastOptions::default(),
+            )
+            .map(Arc::from)
         })
         .collect::<ArrowResult<Vec<_>>>()?;
 

@@ -21,12 +21,13 @@ use std::sync::Arc;
 
 use arrow::array::PrimitiveArray;
 use arrow::datatypes::TimeUnit;
+use arrow::error::ArrowError;
 use arrow::{
     array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array, Utf8Array},
     datatypes::{DataType, Field, Schema},
     io::parquet::write::{
-        array_to_pages, to_parquet_schema, write_file, Compression, DynIter, Encoding,
-        Version, WriteOptions,
+        array_to_pages, to_parquet_schema, write_file, Compression, Compressor, DynIter,
+        DynStreamingIterator, Encoding, FallibleStreamingIterator, Version, WriteOptions,
     },
     record_batch::RecordBatch,
 };
@@ -641,7 +642,18 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
                     } else {
                         Encoding::Plain
                     };
-                    array_to_pages(array.clone(), type_, options, encoding)
+                    array_to_pages(array.as_ref(), type_, options, encoding).map(
+                        move |pages| {
+                            let encoded_pages = DynIter::new(pages.map(|x| Ok(x?)));
+                            let compressed_pages = Compressor::new(
+                                encoded_pages,
+                                options.compression,
+                                vec![],
+                            )
+                            .map_err(ArrowError::from);
+                            DynStreamingIterator::new(compressed_pages)
+                        },
+                    )
                 });
         let iterator = DynIter::new(iterator);
         Ok(iterator)

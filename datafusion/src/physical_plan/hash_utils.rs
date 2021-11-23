@@ -24,7 +24,7 @@ use arrow::array::{
     Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array, Utf8Array,
 };
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, IntegerType, Schema, TimeUnit};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -506,8 +506,8 @@ pub fn create_hashes<'a>(
                     multi_col
                 );
             }
-            DataType::Dictionary(index_type, _) => match **index_type {
-                DataType::Int8 => {
+            DataType::Dictionary(index_type, _) => match index_type {
+                IntegerType::Int8 => {
                     create_hashes_dictionary::<i8>(
                         col,
                         random_state,
@@ -515,7 +515,7 @@ pub fn create_hashes<'a>(
                         multi_col,
                     )?;
                 }
-                DataType::Int16 => {
+                IntegerType::Int16 => {
                     create_hashes_dictionary::<i16>(
                         col,
                         random_state,
@@ -523,7 +523,7 @@ pub fn create_hashes<'a>(
                         multi_col,
                     )?;
                 }
-                DataType::Int32 => {
+                IntegerType::Int32 => {
                     create_hashes_dictionary::<i32>(
                         col,
                         random_state,
@@ -531,7 +531,7 @@ pub fn create_hashes<'a>(
                         multi_col,
                     )?;
                 }
-                DataType::Int64 => {
+                IntegerType::Int64 => {
                     create_hashes_dictionary::<i64>(
                         col,
                         random_state,
@@ -539,7 +539,7 @@ pub fn create_hashes<'a>(
                         multi_col,
                     )?;
                 }
-                DataType::UInt8 => {
+                IntegerType::UInt8 => {
                     create_hashes_dictionary::<u8>(
                         col,
                         random_state,
@@ -547,7 +547,7 @@ pub fn create_hashes<'a>(
                         multi_col,
                     )?;
                 }
-                DataType::UInt16 => {
+                IntegerType::UInt16 => {
                     create_hashes_dictionary::<u16>(
                         col,
                         random_state,
@@ -555,7 +555,7 @@ pub fn create_hashes<'a>(
                         multi_col,
                     )?;
                 }
-                DataType::UInt32 => {
+                IntegerType::UInt32 => {
                     create_hashes_dictionary::<u32>(
                         col,
                         random_state,
@@ -563,19 +563,13 @@ pub fn create_hashes<'a>(
                         multi_col,
                     )?;
                 }
-                DataType::UInt64 => {
+                IntegerType::UInt64 => {
                     create_hashes_dictionary::<u64>(
                         col,
                         random_state,
                         hashes_buffer,
                         multi_col,
                     )?;
-                }
-                _ => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported dictionary type in hasher hashing: {}",
-                        col.data_type(),
-                    )))
                 }
             },
             _ => {

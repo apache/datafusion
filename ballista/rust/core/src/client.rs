@@ -31,9 +31,8 @@ use crate::serde::scheduler::{
     Action, ExecutePartition, ExecutePartitionResult, PartitionId, PartitionStats,
 };
 
-use arrow_flight::utils::flight_data_to_arrow_batch;
-use arrow_flight::Ticket;
-use arrow_flight::{flight_service_client::FlightServiceClient, FlightData};
+use arrow_format::flight::data::{FlightData, Ticket};
+use arrow_format::flight::service::flight_service_server::FlightServiceClient;
 use datafusion::arrow::{
     array::{StructArray, Utf8Array},
     datatypes::{Schema, SchemaRef},
@@ -157,7 +156,7 @@ impl Stream for FlightDataStream {
                 let converted_chunk = flight_data_chunk_result
                     .map_err(|e| ArrowError::from_external_error(Box::new(e)))
                     .and_then(|flight_data_chunk| {
-                        flight_data_to_arrow_batch(
+                        arrow::io::flight::serialize_batch(
                             &flight_data_chunk,
                             self.schema.clone(),
                             true,

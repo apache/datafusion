@@ -137,11 +137,7 @@ impl CaseExpr {
             let then_value = then_value.into_array(batch.num_rows());
 
             // build boolean array representing which rows match the "when" value
-            let when_match = comparison::compare(
-                when_value.as_ref(),
-                base_value.as_ref(),
-                comparison::Operator::Eq,
-            )?;
+            let when_match = comparison::eq(when_value.as_ref(), base_value.as_ref());
             let when_match = if let Some(validity) = when_match.validity() {
                 // null values are never matched and should thus be "else".
                 BooleanArray::from_data(

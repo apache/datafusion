@@ -20,10 +20,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 
-use arrow_flight::flight_descriptor;
-use arrow_flight::flight_service_client::FlightServiceClient;
-use arrow_flight::utils::flight_data_to_arrow_batch;
-use arrow_flight::{FlightDescriptor, Ticket};
+use arrow_format::flight::service::::flight_service_client::FlightServiceClient;
+use arrow_format::flight::data::{FlightDescriptor, Ticket, flight_descriptor};
 use datafusion::arrow::io::print;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
@@ -64,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut results = vec![];
     let dictionaries_by_field = vec![None; schema.fields().len()];
     while let Some(flight_data) = stream.message().await? {
-        let record_batch = flight_data_to_arrow_batch(
+        let record_batch = arrow::io::flight::deserialize_batch(
             &flight_data,
             schema.clone(),
             true,

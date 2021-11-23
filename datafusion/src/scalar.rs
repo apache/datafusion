@@ -23,7 +23,7 @@ use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
     buffer::MutableBuffer,
-    datatypes::{DataType, Field, IntervalUnit, TimeUnit},
+    datatypes::{DataType, Field, IntegerType, IntervalUnit, TimeUnit},
     scalar::{PrimitiveScalar, Scalar},
     types::{days_ms, NativeType},
 };
@@ -946,21 +946,15 @@ impl ScalarValue {
                 typed_cast!(array, index, Int64Array, TimestampNanosecond)
             }
             DataType::Dictionary(index_type, _) => {
-                let (values, values_index) = match **index_type {
-                    DataType::Int8 => get_dict_value::<i8>(array, index)?,
-                    DataType::Int16 => get_dict_value::<i16>(array, index)?,
-                    DataType::Int32 => get_dict_value::<i32>(array, index)?,
-                    DataType::Int64 => get_dict_value::<i64>(array, index)?,
-                    DataType::UInt8 => get_dict_value::<u8>(array, index)?,
-                    DataType::UInt16 => get_dict_value::<u16>(array, index)?,
-                    DataType::UInt32 => get_dict_value::<u32>(array, index)?,
-                    DataType::UInt64 => get_dict_value::<u64>(array, index)?,
-                    _ => {
-                        return Err(DataFusionError::Internal(format!(
-                            "Index type not supported while creating scalar from dictionary: {}",
-                            array.data_type(),
-                        )))
-                    }
+                let (values, values_index) = match index_type {
+                    IntegerType::Int8 => get_dict_value::<i8>(array, index)?,
+                    IntegerType::Int16 => get_dict_value::<i16>(array, index)?,
+                    IntegerType::Int32 => get_dict_value::<i32>(array, index)?,
+                    IntegerType::Int64 => get_dict_value::<i64>(array, index)?,
+                    IntegerType::UInt8 => get_dict_value::<u8>(array, index)?,
+                    IntegerType::UInt16 => get_dict_value::<u16>(array, index)?,
+                    IntegerType::UInt32 => get_dict_value::<u32>(array, index)?,
+                    IntegerType::UInt64 => get_dict_value::<u64>(array, index)?,
                 };
 
                 match values_index {
@@ -1068,18 +1062,17 @@ impl ScalarValue {
         &self,
         array: &ArrayRef,
         index: usize,
-        key_type: &DataType,
+        key_type: &IntegerType,
     ) -> bool {
         let (values, values_index) = match key_type {
-            DataType::Int8 => get_dict_value::<i8>(array, index).unwrap(),
-            DataType::Int16 => get_dict_value::<i16>(array, index).unwrap(),
-            DataType::Int32 => get_dict_value::<i32>(array, index).unwrap(),
-            DataType::Int64 => get_dict_value::<i64>(array, index).unwrap(),
-            DataType::UInt8 => get_dict_value::<u8>(array, index).unwrap(),
-            DataType::UInt16 => get_dict_value::<u16>(array, index).unwrap(),
-            DataType::UInt32 => get_dict_value::<u32>(array, index).unwrap(),
-            DataType::UInt64 => get_dict_value::<u64>(array, index).unwrap(),
-            _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+            IntegerType::Int8 => get_dict_value::<i8>(array, index).unwrap(),
+            IntegerType::Int16 => get_dict_value::<i16>(array, index).unwrap(),
+            IntegerType::Int32 => get_dict_value::<i32>(array, index).unwrap(),
+            IntegerType::Int64 => get_dict_value::<i64>(array, index).unwrap(),
+            IntegerType::UInt8 => get_dict_value::<u8>(array, index).unwrap(),
+            IntegerType::UInt16 => get_dict_value::<u16>(array, index).unwrap(),
+            IntegerType::UInt32 => get_dict_value::<u32>(array, index).unwrap(),
+            IntegerType::UInt64 => get_dict_value::<u64>(array, index).unwrap(),
         };
 
         match values_index {
@@ -1697,8 +1690,7 @@ mod tests {
 
     #[test]
     fn scalar_try_from_dict_datatype() {
-        let data_type =
-            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+        let data_type = DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Utf8));
         let data_type = &data_type;
         assert_eq!(ScalarValue::Utf8(None), data_type.try_into().unwrap())
     }

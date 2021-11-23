@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use arrow_flight::flight_service_server::FlightServiceServer;
+use arrow_format::flight::service::flight_service_server::FlightServiceServer;
 use ballista_executor::execution_loop;
 use log::info;
 use tempfile::TempDir;

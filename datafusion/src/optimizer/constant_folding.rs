@@ -255,8 +255,12 @@ impl<'a> ExprRewriter for ConstantRewriter<'a> {
             } => match inner.as_ref() {
                 Expr::Literal(val) => {
                     let scalar_array = val.to_array();
-                    let cast_array =
-                        cast::cast(scalar_array.as_ref(), &data_type)?.into();
+                    let cast_array = cast::cast(
+                        scalar_array.as_ref(),
+                        &data_type,
+                        cast::CastOptions::default(),
+                    )?
+                    .into();
                     let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
                     Expr::Literal(cast_scalar)
                 }

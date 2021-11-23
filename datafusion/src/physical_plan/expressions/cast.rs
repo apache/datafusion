@@ -82,7 +82,7 @@ impl PhysicalExpr for CastExpr {
 }
 
 fn cast_with_error(array: &dyn Array, cast_type: &DataType) -> Result<Box<dyn Array>> {
-    let result = cast::cast(array, cast_type)?;
+    let result = cast::cast(array, cast_type, cast::CastOptions::default())?;
     if result.null_count() != array.null_count() {
         let casted_valids = result.validity().unwrap();
         let failed_casts = match array.validity() {

@@ -88,18 +88,6 @@ macro_rules! boolean_op {
     }};
 }
 
-fn to_arrow_comparison(op: &Operator) -> compute::comparison::Operator {
-    match op {
-        Operator::Eq => compute::comparison::Operator::Eq,
-        Operator::NotEq => compute::comparison::Operator::Neq,
-        Operator::Lt => compute::comparison::Operator::Lt,
-        Operator::LtEq => compute::comparison::Operator::LtEq,
-        Operator::Gt => compute::comparison::Operator::Gt,
-        Operator::GtEq => compute::comparison::Operator::GtEq,
-        _ => unreachable!(),
-    }
-}
-
 fn to_arrow_arithmetics(op: &Operator) -> compute::arithmetics::Operator {
     match op {
         Operator::Plus => compute::arithmetics::Operator::Add,
@@ -144,8 +132,16 @@ fn evaluate(lhs: &dyn Array, op: &Operator, rhs: &dyn Array) -> Result<Arc<dyn A
         let op = to_arrow_arithmetics(op);
         Ok(compute::arithmetics::arithmetic(lhs, op, rhs).map(|x| x.into())?)
     } else if matches!(op, Eq | NotEq | Lt | LtEq | Gt | GtEq) {
-        let op = to_arrow_comparison(op);
-        Ok(compute::comparison::compare(lhs, rhs, op).map(Arc::new)?)
+        let arr = match op {
+            Operator::Eq => compute::comparison::eq(lhs, rhs),
+            Operator::NotEq => compute::comparison::neq(lhs, rhs),
+            Operator::Lt => compute::comparison::lt(lhs, rhs),
+            Operator::LtEq => compute::comparison::lt_eq(lhs, rhs),
+            Operator::Gt => compute::comparison::gt(lhs, rhs),
+            Operator::GtEq => compute::comparison::gt_eq(lhs, rhs),
+            _ => unreachable!(),
+        };
+        Ok(Arc::new(arr) as Arc<dyn Array>)
     } else if matches!(op, Or) {
         boolean_op!(lhs, rhs, compute::boolean_kleene::or)
     } else if matches!(op, And) {
@@ -289,11 +285,18 @@ fn evaluate_scalar(
             _ => None, // fall back to default comparison below
         })
     } else if matches!(op, Eq | NotEq | Lt | LtEq | Gt | GtEq) {
-        let op = to_arrow_comparison(op);
         let rhs: Result<Box<dyn Scalar>> = rhs.try_into();
         match rhs {
             Ok(rhs) => {
-                let arr = compute::comparison::compare_scalar(lhs, &*rhs, op)?;
+                let arr = match op {
+                    Operator::Eq => compute::comparison::eq_scalar(lhs, &*rhs),
+                    Operator::NotEq => compute::comparison::neq_scalar(lhs, &*rhs),
+                    Operator::Lt => compute::comparison::lt_scalar(lhs, &*rhs),
+                    Operator::LtEq => compute::comparison::lt_eq_scalar(lhs, &*rhs),
+                    Operator::Gt => compute::comparison::gt_scalar(lhs, &*rhs),
+                    Operator::GtEq => compute::comparison::gt_eq_scalar(lhs, &*rhs),
+                    _ => unreachable!(),
+                };
                 Ok(Some(Arc::new(arr) as Arc<dyn Array>))
             }
             Err(_) => {

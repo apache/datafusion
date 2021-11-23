@@ -138,7 +138,7 @@ mod tests {
 
     use super::*;
     use arrow::{
-        array::{Array, Float64Array, NullArray},
+        array::{Float64Array, NullArray},
         datatypes::DataType,
     };
 

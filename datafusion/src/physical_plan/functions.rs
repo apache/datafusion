@@ -365,7 +365,7 @@ pub fn return_type(
     match fun {
         BuiltinScalarFunction::Array => Ok(DataType::FixedSizeList(
             Box::new(Field::new("item", arg_types[0].clone(), true)),
-            arg_types.len() as i32,
+            arg_types.len(),
         )),
         BuiltinScalarFunction::Ascii => Ok(DataType::Int32),
         BuiltinScalarFunction::BitLength => utf8_to_int_type(&arg_types[0], "bit_length"),

@@ -42,7 +42,7 @@ tokio = "1.0"
 tonic = "0.5"
 uuid = { version = "0.8", features = ["v4"] }
 
-arrow-flight = { version = "0.1" }
+arrow-format = { version = "0.3", features = ["flight-data", "flight-service"] }
 
 datafusion = { path = "../../../datafusion", version = "5.1.0" }
 

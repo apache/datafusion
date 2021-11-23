@@ -23,7 +23,7 @@ use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
 use arrow::array::ArrayRef;
-use arrow::compute::cast::cast;
+use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use std::any::Any;
@@ -130,7 +130,7 @@ fn create_empty_array(
         .map(|scalar| scalar.to_array_of_size(size))
         .unwrap_or_else(|| ArrayRef::from(new_null_array(data_type.clone(), size)));
     if array.data_type() != data_type {
-        cast(array.borrow(), data_type)
+        cast::cast(array.borrow(), data_type, cast::CastOptions::default())
             .map_err(DataFusionError::ArrowError)
             .map(ArrayRef::from)
     } else {

@@ -25,13 +25,14 @@ use datafusion::datasource::parquet::ParquetTable;
 use datafusion::datasource::TableProvider;
 use datafusion::prelude::*;
 
-use arrow::io::ipc::write::IpcWriteOptions;
-use arrow_flight::utils::flight_data_from_arrow_schema;
-use arrow_flight::{
-    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
+use arrow_format::flight::data::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
+use arrow_format::flight::service::flight_service_server::{
+    FlightService, FlightServiceServer,
+};
+use datafusion::arrow::io::ipc::write::IpcWriteOptions;
 
 #[derive(Clone)]
 pub struct FlightServiceImpl {}
@@ -49,7 +50,7 @@ impl FlightService for FlightServiceImpl {
         Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + Sync + 'static>>;
     type DoActionStream = Pin<
         Box<
-            dyn Stream<Item = Result<arrow_flight::Result, Status>>
+            dyn Stream<Item = Result<arrow_format::flight::data::Result, Status>>
                 + Send
                 + Sync
                 + 'static,
@@ -68,11 +69,8 @@ impl FlightService for FlightServiceImpl {
 
         let table = ParquetTable::try_new(&request.path[0], num_cpus::get()).unwrap();
 
-        let options = datafusion::arrow::io::ipc::write::IpcWriteOptions::default();
-        let schema_result = arrow_flight::utils::flight_schema_from_arrow_schema(
-            table.schema().as_ref(),
-            &options,
-        );
+        let schema_result =
+            arrow::io::fligiht::serialize_schema_to_result(table.schema().as_ref());
 
         Ok(Response::new(schema_result))
     }
@@ -109,8 +107,10 @@ impl FlightService for FlightServiceImpl {
 
                 // add an initial FlightData message that sends schema
                 let options = IpcWriteOptions::default();
-                let schema_flight_data =
-                    flight_data_from_arrow_schema(&df.schema().clone().into(), &options);
+                let schema_flight_data = arrow::io::flight::serialize_schema(
+                    &df.schema().clone().into(),
+                    &options,
+                );
 
                 let mut flights: Vec<Result<FlightData, Status>> =
                     vec![Ok(schema_flight_data)];
@@ -119,9 +119,7 @@ impl FlightService for FlightServiceImpl {
                     .iter()
                     .flat_map(|batch| {
                         let (flight_dictionaries, flight_batch) =
-                            arrow_flight::utils::flight_data_from_arrow_batch(
-                                batch, &options,
-                            );
+                            arrow::io::flight::serialize_batch(batch, &options);
                         flight_dictionaries
                             .into_iter()
                             .chain(std::iter::once(flight_batch))

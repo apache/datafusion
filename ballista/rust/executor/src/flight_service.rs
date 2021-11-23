@@ -27,12 +27,11 @@ use ballista_core::serde::decode_protobuf;
 use ballista_core::serde::scheduler::Action as BallistaAction;
 
 use arrow::io::ipc::read::read_file_metadata;
-use arrow_flight::utils::flight_data_from_arrow_schema;
-use arrow_flight::{
-    flight_service_server::FlightService, Action, ActionType, Criteria, Empty,
-    FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
-    PutResult, SchemaResult, Ticket,
+use arrow_format::flight::data::{
+    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
+    HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
+use arrow_format::flight::service::flight_service_server::FlightService;
 use datafusion::arrow::{
     error::ArrowError, io::ipc::read::FileReader, io::ipc::write::IpcWriteOptions,
     record_batch::RecordBatch,
@@ -68,7 +67,7 @@ type BoxedFlightStream<T> =
 
 #[tonic::async_trait]
 impl FlightService for BallistaFlightService {
-    type DoActionStream = BoxedFlightStream<arrow_flight::Result>;
+    type DoActionStream = BoxedFlightStream<arrow_format::flight::data::Result>;
     type DoExchangeStream = BoxedFlightStream<FlightData>;
     type DoGetStream = BoxedFlightStream<FlightData>;
     type DoPutStream = BoxedFlightStream<PutResult>;
@@ -180,7 +179,7 @@ fn create_flight_iter(
     options: &IpcWriteOptions,
 ) -> Box<dyn Iterator<Item = Result<FlightData, Status>>> {
     let (flight_dictionaries, flight_batch) =
-        arrow_flight::utils::flight_data_from_arrow_batch(batch, options);
+        arrow::io::flight::serialize_batch(batch, options);
     Box::new(
         flight_dictionaries
             .into_iter()
@@ -203,7 +202,7 @@ async fn stream_flight_data(path: String, tx: FlightDataSender) -> Result<(), St
 
     let options = IpcWriteOptions::default();
     let schema_flight_data =
-        flight_data_from_arrow_schema(reader.schema().as_ref(), &options);
+        arrow::io::flight::serialize_schema(reader.schema().as_ref());
     send_response(&tx, Ok(schema_flight_data)).await?;
 
     let mut row_count = 0;

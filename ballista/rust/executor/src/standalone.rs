@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow_flight::flight_service_server::FlightServiceServer;
+use arrow_format::flight::service::flight_service_server::FlightServiceServer;
 use ballista_core::{
     error::Result,
     serde::protobuf::{scheduler_grpc_client::SchedulerGrpcClient, ExecutorRegistration},

@@ -33,6 +33,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
+    compute::cast,
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
@@ -343,7 +344,8 @@ fn build_statistics_record_batch<S: PruningStatistics>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        let array = arrow::compute::cast::cast(array.as_ref(), data_type)?.into();
+        let array =
+            cast::cast(array.as_ref(), data_type, cast::CastOptions::default())?.into();
 
         fields.push(stat_field.clone());
         arrays.push(array);

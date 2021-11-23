@@ -44,6 +44,7 @@ use tokio::task::{self, JoinHandle};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::io::csv;
 use arrow::io::parquet;
+use arrow::io::parquet::write::FallibleStreamingIterator;
 use arrow::record_batch::RecordBatch;
 
 use crate::catalog::{
@@ -618,30 +619,47 @@ impl ExecutionContext {
                     let handle: JoinHandle<Result<u64>> = task::spawn(async move {
                         let parquet_schema = parquet::write::to_parquet_schema(&schema)?;
                         let a = parquet_schema.clone();
-                        let stream = stream.map(|batch: ArrowResult<RecordBatch>| {
+
+                        let row_groups = stream.map(|batch: ArrowResult<RecordBatch>| {
+                            // map each record batch to a row group
                             batch.map(|batch| {
-                                let columns = batch.columns().to_vec();
-                                let pages = columns
-                                    .into_iter()
-                                    .zip(a.columns().to_vec().into_iter())
-                                    .map(move |(array, type_)| {
-                                        let page = parquet::write::array_to_page(
-                                            array.as_ref(),
-                                            type_,
-                                            options,
-                                            parquet::write::Encoding::Plain,
-                                        );
-                                        Ok(parquet::write::DynIter::new(std::iter::once(
-                                            page,
-                                        )))
-                                    });
+                                let batch_cols = batch.columns().to_vec();
+                                // column chunk in row group
+                                let pages =
+                                    batch_cols
+                                        .into_iter()
+                                        .zip(a.columns().to_vec().into_iter())
+                                        .map(move |(array, descriptor)| {
+                                            parquet::write::array_to_pages(
+                                                array.as_ref(),
+                                                descriptor,
+                                                options,
+                                                parquet::write::Encoding::Plain,
+                                            )
+                                            .map(move |pages| {
+                                                let encoded_pages =
+                                                    parquet::write::DynIter::new(
+                                                        pages.map(|x| Ok(x?)),
+                                                    );
+                                                let compressed_pages =
+                                                    parquet::write::Compressor::new(
+                                                        encoded_pages,
+                                                        options.compression,
+                                                        vec![],
+                                                    )
+                                                    .map_err(ArrowError::from);
+                                                parquet::write::DynStreamingIterator::new(
+                                                    compressed_pages,
+                                                )
+                                            })
+                                        });
                                 parquet::write::DynIter::new(pages)
                             })
                         });
 
                         Ok(parquet::write::stream::write_stream(
                             &mut file,
-                            stream,
+                            row_groups,
                             schema.as_ref(),
                             parquet_schema,
                             options,

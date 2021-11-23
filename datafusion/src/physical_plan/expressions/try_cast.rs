@@ -78,12 +78,21 @@ impl PhysicalExpr for TryCastExpr {
         let value = self.expr.evaluate(batch)?;
         match value {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-                cast::cast(array.as_ref(), &self.cast_type)?.into(),
+                cast::cast(
+                    array.as_ref(),
+                    &self.cast_type,
+                    cast::CastOptions::default(),
+                )?
+                .into(),
             )),
             ColumnarValue::Scalar(scalar) => {
                 let scalar_array = scalar.to_array();
-                let cast_array =
-                    cast::cast(scalar_array.as_ref(), &self.cast_type)?.into();
+                let cast_array = cast::cast(
+                    scalar_array.as_ref(),
+                    &self.cast_type,
+                    cast::CastOptions::default(),
+                )?
+                .into();
                 let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
                 Ok(ColumnarValue::Scalar(cast_scalar))
             }
