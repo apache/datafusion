@@ -77,7 +77,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
-use crate::logical_plan::plan::ExplainPlan;
+use crate::logical_plan::plan::Explain;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udf::ScalarUDF;
@@ -664,7 +664,7 @@ impl ExecutionContext {
                     stringified_plans.push(optimized_plan.to_stringified(plan_type));
                 })?;
 
-            Ok(LogicalPlan::Explain(ExplainPlan {
+            Ok(LogicalPlan::Explain(Explain {
                 verbose: e.verbose,
                 plan: Arc::new(plan),
                 stringified_plans,
@@ -1178,7 +1178,7 @@ impl FunctionRegistry for ExecutionContextState {
 mod tests {
     use super::*;
     use crate::logical_plan::plan::Projection;
-    use crate::logical_plan::TableScanPlan;
+    use crate::logical_plan::TableScan;
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::physical_plan::{collect, collect_partitioned};
@@ -1417,7 +1417,7 @@ mod tests {
         let optimized_plan = ctx.optimize(&logical_plan)?;
         match &optimized_plan {
             LogicalPlan::Projection(Projection { input, .. }) => match &**input {
-                LogicalPlan::TableScan(TableScanPlan {
+                LogicalPlan::TableScan(TableScan {
                     source,
                     projected_schema,
                     ..
@@ -1490,7 +1490,7 @@ mod tests {
         let optimized_plan = ctx.optimize(&plan)?;
         match &optimized_plan {
             LogicalPlan::Projection(Projection { input, .. }) => match &**input {
-                LogicalPlan::TableScan(TableScanPlan {
+                LogicalPlan::TableScan(TableScan {
                     source,
                     projected_schema,
                     ..

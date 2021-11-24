@@ -26,8 +26,8 @@ use crate::datasource::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::{
-    Aggregate, AnalyzePlan, EmptyRelation, ExplainPlan, Filter, Join, Projection, Sort,
-    TableScanPlan, ToStringifiedPlan, Union, Window,
+    Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
+    TableScan, ToStringifiedPlan, Union, Window,
 };
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
@@ -395,7 +395,7 @@ impl LogicalPlanBuilder {
                 DFSchema::try_from_qualified_schema(&table_name, &schema)
             })?;
 
-        let table_scan = LogicalPlan::TableScan(TableScanPlan {
+        let table_scan = LogicalPlan::TableScan(TableScan {
             table_name,
             source: provider,
             projected_schema: Arc::new(projected_schema),
@@ -699,7 +699,7 @@ impl LogicalPlanBuilder {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(Self::from(LogicalPlan::Analyze(AnalyzePlan {
+            Ok(Self::from(LogicalPlan::Analyze(Analyze {
                 verbose,
                 input: Arc::new(self.plan.clone()),
                 schema,
@@ -708,7 +708,7 @@ impl LogicalPlanBuilder {
             let stringified_plans =
                 vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
-            Ok(Self::from(LogicalPlan::Explain(ExplainPlan {
+            Ok(Self::from(LogicalPlan::Explain(Explain {
                 verbose,
                 plan: Arc::new(self.plan.clone()),
                 stringified_plans,

@@ -100,7 +100,7 @@ pub struct Window {
 
 /// Produces rows from a table provider by reference or from the context
 #[derive(Clone)]
-pub struct TableScanPlan {
+pub struct TableScan {
     /// The name of the table
     pub table_name: String,
     /// The source of the table
@@ -184,7 +184,7 @@ pub struct DropTable {
 /// Produces a relation with string representations of
 /// various parts of the plan
 #[derive(Clone)]
-pub struct ExplainPlan {
+pub struct Explain {
     /// Should extra (detailed, intermediate plans) be included?
     pub verbose: bool,
     /// The logical plan that is being EXPLAIN'd
@@ -198,7 +198,7 @@ pub struct ExplainPlan {
 /// Runs the actual plan, and then prints the physical plan with
 /// with execution metrics.
 #[derive(Clone)]
-pub struct AnalyzePlan {
+pub struct Analyze {
     /// Should extra detail be included?
     pub verbose: bool,
     /// The logical plan that is being EXPLAIN ANALYZE'd
@@ -209,7 +209,7 @@ pub struct AnalyzePlan {
 
 /// Extension operator defined outside of DataFusion
 #[derive(Clone)]
-pub struct ExtensionPlan {
+pub struct Extension {
     /// The runtime extension operator
     pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
 }
@@ -322,7 +322,7 @@ pub enum LogicalPlan {
     /// Union multiple inputs
     Union(Union),
     /// Produces rows from a table provider by reference or from the context
-    TableScan(TableScanPlan),
+    TableScan(TableScan),
     /// Produces no rows: An empty relation with an empty schema
     EmptyRelation(EmptyRelation),
     /// Produces the first `n` tuples from its input and discards the rest.
@@ -339,12 +339,12 @@ pub enum LogicalPlan {
     Values(Values),
     /// Produces a relation with string representations of
     /// various parts of the plan
-    Explain(ExplainPlan),
+    Explain(Explain),
     /// Runs the actual plan, and then prints the physical plan with
     /// with execution metrics.
-    Analyze(AnalyzePlan),
+    Analyze(Analyze),
     /// Extension operator defined outside of DataFusion
-    Extension(ExtensionPlan),
+    Extension(Extension),
 }
 
 impl LogicalPlan {
@@ -353,7 +353,7 @@ impl LogicalPlan {
         match self {
             LogicalPlan::EmptyRelation(EmptyRelation { schema, .. }) => schema,
             LogicalPlan::Values(Values { schema, .. }) => schema,
-            LogicalPlan::TableScan(TableScanPlan {
+            LogicalPlan::TableScan(TableScan {
                 projected_schema, ..
             }) => projected_schema,
             LogicalPlan::Projection(Projection { schema, .. }) => schema,
@@ -382,7 +382,7 @@ impl LogicalPlan {
     /// Get a vector of references to all schemas in every node of the logical plan
     pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
         match self {
-            LogicalPlan::TableScan(TableScanPlan {
+            LogicalPlan::TableScan(TableScan {
                 projected_schema, ..
             }) => vec![projected_schema],
             LogicalPlan::Values(Values { schema, .. }) => vec![schema],
@@ -413,8 +413,8 @@ impl LogicalPlan {
                 vec![schema]
             }
             LogicalPlan::Extension(extension) => vec![extension.node.schema()],
-            LogicalPlan::Explain(ExplainPlan { schema, .. })
-            | LogicalPlan::Analyze(AnalyzePlan { schema, .. })
+            LogicalPlan::Explain(Explain { schema, .. })
+            | LogicalPlan::Analyze(Analyze { schema, .. })
             | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
             | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 vec![schema]
@@ -865,7 +865,7 @@ impl LogicalPlan {
                         write!(f, "Values: {}{}", str_values.join(", "), elipse)
                     }
 
-                    LogicalPlan::TableScan(TableScanPlan {
+                    LogicalPlan::TableScan(TableScan {
                         ref table_name,
                         ref projection,
                         ref filters,
