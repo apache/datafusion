@@ -19,9 +19,12 @@
 
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::{Filter, Projection, Window};
 use crate::logical_plan::{
-    col, DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor, LogicalPlan,
-    Recursion, RewriteRecursion,
+    col,
+    plan::{Aggregate, Sort},
+    DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor, LogicalPlan, Recursion,
+    RewriteRecursion,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -77,12 +80,12 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
     let mut expr_set = ExprSet::new();
 
     match plan {
-        LogicalPlan::Projection {
+        LogicalPlan::Projection(Projection {
             expr,
             input,
             schema,
             alias,
-        } => {
+        }) => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
@@ -94,14 +97,14 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Projection {
+            Ok(LogicalPlan::Projection(Projection {
                 expr: new_expr.pop().unwrap(),
                 input: Arc::new(new_input),
                 schema: schema.clone(),
                 alias: alias.clone(),
-            })
+            }))
         }
-        LogicalPlan::Filter { predicate, input } => {
+        LogicalPlan::Filter(Filter { predicate, input }) => {
             let schemas = plan.all_schemas();
             let all_schema =
                 schemas.into_iter().fold(DFSchema::empty(), |mut lhs, rhs| {
@@ -122,16 +125,16 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Filter {
+            Ok(LogicalPlan::Filter(Filter {
                 predicate: new_expr.pop().unwrap().pop().unwrap(),
                 input: Arc::new(new_input),
-            })
+            }))
         }
-        LogicalPlan::Window {
+        LogicalPlan::Window(Window {
             input,
             window_expr,
             schema,
-        } => {
+        }) => {
             let arrays = to_arrays(window_expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
@@ -143,18 +146,18 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Window {
+            Ok(LogicalPlan::Window(Window {
                 input: Arc::new(new_input),
                 window_expr: new_expr.pop().unwrap(),
                 schema: schema.clone(),
-            })
+            }))
         }
-        LogicalPlan::Aggregate {
-            input,
+        LogicalPlan::Aggregate(Aggregate {
             group_expr,
             aggr_expr,
+            input,
             schema,
-        } => {
+        }) => {
             let group_arrays = to_arrays(group_expr, input, &mut expr_set)?;
             let aggr_arrays = to_arrays(aggr_expr, input, &mut expr_set)?;
 
@@ -170,14 +173,14 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             let new_aggr_expr = new_expr.pop().unwrap();
             let new_group_expr = new_expr.pop().unwrap();
 
-            Ok(LogicalPlan::Aggregate {
+            Ok(LogicalPlan::Aggregate(Aggregate {
                 input: Arc::new(new_input),
                 group_expr: new_group_expr,
                 aggr_expr: new_aggr_expr,
                 schema: schema.clone(),
-            })
+            }))
         }
-        LogicalPlan::Sort { expr, input } => {
+        LogicalPlan::Sort(Sort { expr, input }) => {
             let arrays = to_arrays(expr, input, &mut expr_set)?;
 
             let (mut new_expr, new_input) = rewrite_expr(
@@ -189,10 +192,10 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 execution_props,
             )?;
 
-            Ok(LogicalPlan::Sort {
+            Ok(LogicalPlan::Sort(Sort {
                 expr: new_expr.pop().unwrap(),
                 input: Arc::new(new_input),
-            })
+            }))
         }
         LogicalPlan::Join { .. }
         | LogicalPlan::CrossJoin(_)
@@ -224,13 +227,13 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
 fn to_arrays(
     expr: &[Expr],
     input: &LogicalPlan,
-    mut expr_set: &mut ExprSet,
+    expr_set: &mut ExprSet,
 ) -> Result<Vec<Vec<(usize, String)>>> {
     expr.iter()
         .map(|e| {
             let data_type = e.get_type(input.schema())?;
             let mut id_array = vec![];
-            expr_to_identifier(e, &mut expr_set, &mut id_array, data_type)?;
+            expr_to_identifier(e, expr_set, &mut id_array, data_type)?;
 
             Ok(id_array)
         })
@@ -265,12 +268,12 @@ fn build_project_plan(
     let mut schema = DFSchema::new(fields)?;
     schema.merge(input.schema());
 
-    Ok(LogicalPlan::Projection {
+    Ok(LogicalPlan::Projection(Projection {
         expr: project_exprs,
         input: Arc::new(input),
         schema: Arc::new(schema),
         alias: None,
-    })
+    }))
 }
 
 #[inline]

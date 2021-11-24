@@ -20,7 +20,9 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{AnalyzePlan, TableScanPlan};
+use crate::logical_plan::plan::{
+    Aggregate, AnalyzePlan, Join, Projection, TableScanPlan, Window,
+};
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
     LogicalPlanBuilder, ToDFSchema, Union,
@@ -131,12 +133,12 @@ fn optimize_plan(
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
     match plan {
-        LogicalPlan::Projection {
+        LogicalPlan::Projection(Projection {
             input,
             expr,
             schema,
             alias,
-        } => {
+        }) => {
             // projection:
             // * remove any expression that is not required
             // * construct the new set of required columns
@@ -182,15 +184,15 @@ fn optimize_plan(
                 // no need for an expression at all
                 Ok(new_input)
             } else {
-                Ok(LogicalPlan::Projection {
+                Ok(LogicalPlan::Projection(Projection {
                     expr: new_expr,
                     input: Arc::new(new_input),
                     schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
                     alias: alias.clone(),
-                })
+                }))
             }
         }
-        LogicalPlan::Join {
+        LogicalPlan::Join(Join {
             left,
             right,
             on,
@@ -198,7 +200,7 @@ fn optimize_plan(
             join_constraint,
             null_equals_null,
             ..
-        } => {
+        }) => {
             for (l, r) in on {
                 new_required_columns.insert(l.clone());
                 new_required_columns.insert(r.clone());
@@ -226,7 +228,7 @@ fn optimize_plan(
                 join_type,
             )?;
 
-            Ok(LogicalPlan::Join {
+            Ok(LogicalPlan::Join(Join {
                 left: optimized_left,
                 right: optimized_right,
                 join_type: *join_type,
@@ -234,14 +236,14 @@ fn optimize_plan(
                 on: on.clone(),
                 schema: DFSchemaRef::new(schema),
                 null_equals_null: *null_equals_null,
-            })
+            }))
         }
-        LogicalPlan::Window {
+        LogicalPlan::Window(Window {
             schema,
             window_expr,
             input,
             ..
-        } => {
+        }) => {
             // Gather all columns needed for expressions in this Window
             let mut new_window_expr = Vec::new();
             {
@@ -275,13 +277,12 @@ fn optimize_plan(
             .window(new_window_expr)?
             .build()
         }
-        LogicalPlan::Aggregate {
-            schema,
-            input,
+        LogicalPlan::Aggregate(Aggregate {
             group_expr,
             aggr_expr,
-            ..
-        } => {
+            schema,
+            input,
+        }) => {
             // aggregate:
             // * remove any aggregate expression that is not required
             // * construct the new set of required columns
@@ -314,7 +315,7 @@ fn optimize_plan(
                     .collect(),
             )?;
 
-            Ok(LogicalPlan::Aggregate {
+            Ok(LogicalPlan::Aggregate(Aggregate {
                 group_expr: group_expr.clone(),
                 aggr_expr: new_aggr_expr,
                 input: Arc::new(optimize_plan(
@@ -325,7 +326,7 @@ fn optimize_plan(
                     execution_props,
                 )?),
                 schema: DFSchemaRef::new(new_schema),
-            })
+            }))
         }
         // scans:
         // * remove un-used columns from the scan projection
@@ -745,12 +746,12 @@ mod tests {
         let expr = vec![col("a"), col("b")];
         let projected_fields = exprlist_to_fields(&expr, input_schema).unwrap();
         let projected_schema = DFSchema::new(projected_fields).unwrap();
-        let plan = LogicalPlan::Projection {
+        let plan = LogicalPlan::Projection(Projection {
             expr,
             input: Arc::new(table_scan),
             schema: Arc::new(projected_schema),
             alias: None,
-        };
+        });
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 

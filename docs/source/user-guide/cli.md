@@ -72,3 +72,49 @@ The DataFusion CLI can also connect to a Ballista scheduler for query execution.
 ```bash
 datafusion-cli --host localhost --port 50050
 ```
+
+## Cli commands
+
+Available commands inside DataFusion CLI are:
+
+- Quit
+
+```bash
+> \q
+```
+
+- Help
+
+```bash
+> \?
+```
+
+- ListTables
+
+```bash
+> \d
+```
+
+- DescribeTable
+
+```bash
+> \d table_name
+```
+
+- QuietMode
+
+```
+> \quiet [true|false]
+```
+
+- list function
+
+```bash
+> \h
+```
+
+- Search and describe function
+
+```bash
+> \h function_table
+```

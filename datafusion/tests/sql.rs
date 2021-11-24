@@ -36,6 +36,7 @@ use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::assert_contains;
 use datafusion::assert_not_contains;
+use datafusion::logical_plan::plan::{Aggregate, Projection};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::logical_plan::TableScanPlan;
 use datafusion::physical_plan::functions::Volatility;
@@ -90,8 +91,8 @@ async fn nyc() -> Result<()> {
     let optimized_plan = ctx.optimize(&logical_plan)?;
 
     match &optimized_plan {
-        LogicalPlan::Projection { input, .. } => match input.as_ref() {
-            LogicalPlan::Aggregate { input, .. } => match input.as_ref() {
+        LogicalPlan::Projection(Projection { input, .. }) => match input.as_ref() {
+            LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
                 LogicalPlan::TableScan(TableScanPlan {
                     ref projected_schema,
                     ..
@@ -1052,6 +1053,115 @@ async fn csv_query_having_without_group_by() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_boolean_eq_neq() {
+    let mut ctx = ExecutionContext::new();
+    register_boolean(&mut ctx).await.unwrap();
+    // verify the plumbing is all hooked up for eq and neq
+    let sql = "SELECT a, b, a = b as eq, b = true as eq_scalar, a != b as neq, a != true as neq_scalar FROM t1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    let expected = vec![
+        "+-------+-------+-------+-----------+-------+------------+",
+        "| a     | b     | eq    | eq_scalar | neq   | neq_scalar |",
+        "+-------+-------+-------+-----------+-------+------------+",
+        "| true  | true  | true  | true      | false | false      |",
+        "| true  |       |       |           |       | false      |",
+        "| true  | false | false | false     | true  | false      |",
+        "|       | true  |       | true      |       |            |",
+        "|       |       |       |           |       |            |",
+        "|       | false |       | false     |       |            |",
+        "| false | true  | false | true      | true  | true       |",
+        "| false |       |       |           |       | true       |",
+        "| false | false | true  | false     | false | true       |",
+        "+-------+-------+-------+-----------+-------+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+async fn csv_query_boolean_lt_lt_eq() {
+    let mut ctx = ExecutionContext::new();
+    register_boolean(&mut ctx).await.unwrap();
+    // verify the plumbing is all hooked up for < and <=
+    let sql = "SELECT a, b, a < b as lt, b = true as lt_scalar, a <= b as lt_eq, a <= true as lt_eq_scalar FROM t1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    let expected = vec![
+        "+-------+-------+-------+-----------+-------+--------------+",
+        "| a     | b     | lt    | lt_scalar | lt_eq | lt_eq_scalar |",
+        "+-------+-------+-------+-----------+-------+--------------+",
+        "| true  | true  | false | true      | true  | true         |",
+        "| true  |       |       |           |       | true         |",
+        "| true  | false | false | false     | false | true         |",
+        "|       | true  |       | true      |       |              |",
+        "|       |       |       |           |       |              |",
+        "|       | false |       | false     |       |              |",
+        "| false | true  | true  | true      | true  | true         |",
+        "| false |       |       |           |       | true         |",
+        "| false | false | false | false     | true  | true         |",
+        "+-------+-------+-------+-----------+-------+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+async fn csv_query_boolean_gt_gt_eq() {
+    let mut ctx = ExecutionContext::new();
+    register_boolean(&mut ctx).await.unwrap();
+    // verify the plumbing is all hooked up for > and >=
+    let sql = "SELECT a, b, a > b as gt, b = true as gt_scalar, a >= b as gt_eq, a >= true as gt_eq_scalar FROM t1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    let expected = vec![
+        "+-------+-------+-------+-----------+-------+--------------+",
+        "| a     | b     | gt    | gt_scalar | gt_eq | gt_eq_scalar |",
+        "+-------+-------+-------+-----------+-------+--------------+",
+        "| true  | true  | false | true      | true  | true         |",
+        "| true  |       |       |           |       | true         |",
+        "| true  | false | true  | false     | true  | true         |",
+        "|       | true  |       | true      |       |              |",
+        "|       |       |       |           |       |              |",
+        "|       | false |       | false     |       |              |",
+        "| false | true  | false | true      | false | false        |",
+        "| false |       |       |           |       | false        |",
+        "| false | false | false | false     | true  | false        |",
+        "+-------+-------+-------+-----------+-------+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+async fn csv_query_boolean_distinct_from() {
+    let mut ctx = ExecutionContext::new();
+    register_boolean(&mut ctx).await.unwrap();
+    // verify the plumbing is all hooked up for is distinct from and is not distinct from
+    let sql = "SELECT a, b, \
+               a is distinct from b as df, \
+               b is distinct from true as df_scalar, \
+               a is not distinct from b as ndf, \
+               a is not distinct from true as ndf_scalar \
+               FROM t1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    let expected = vec![
+        "+-------+-------+-------+-----------+-------+------------+",
+        "| a     | b     | df    | df_scalar | ndf   | ndf_scalar |",
+        "+-------+-------+-------+-----------+-------+------------+",
+        "| true  | true  | false | false     | true  | true       |",
+        "| true  |       | true  | true      | false | true       |",
+        "| true  | false | true  | true      | false | true       |",
+        "|       | true  | true  | false     | false | false      |",
+        "|       |       | false | true      | true  | false      |",
+        "|       | false | true  | true      | false | false      |",
+        "| false | true  | true  | false     | false | false      |",
+        "| false |       | true  | true      | false | false      |",
+        "| false | false | false | true      | true  | false      |",
+        "+-------+-------+-------+-----------+-------+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
 async fn csv_query_avg_sqrt() -> Result<()> {
     let mut ctx = create_ctx()?;
     register_aggregate_csv(&mut ctx).await?;
@@ -1276,6 +1386,22 @@ async fn csv_query_approx_count() -> Result<()> {
         "+----------+--------------+",
         "| 100      | 99           |",
         "+----------+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_count_without_from() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT count(1 + 1)";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+",
+        "| COUNT(Int64(1) + Int64(1)) |",
+        "+----------------------------+",
+        "| 1                          |",
+        "+----------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1553,12 +1679,12 @@ async fn csv_query_cast_literal() -> Result<()> {
     let actual = execute_to_batches(&mut ctx, sql).await;
 
     let expected = vec![
-        "+--------------------+------------+",
-        "| c12                | Float64(1) |",
-        "+--------------------+------------+",
-        "| 0.9294097332465232 | 1          |",
-        "| 0.3114712539863804 | 1          |",
-        "+--------------------+------------+",
+        "+--------------------+---------------------------+",
+        "| c12                | CAST(Int64(1) AS Float64) |",
+        "+--------------------+---------------------------+",
+        "| 0.9294097332465232 | 1                         |",
+        "| 0.3114712539863804 | 1                         |",
+        "+--------------------+---------------------------+",
     ];
 
     assert_batches_eq!(expected, &actual);
@@ -2303,10 +2429,10 @@ async fn right_join() -> Result<()> {
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
         "+-------+---------+---------+",
-        "|       |         | w       |",
         "| 11    | a       | z       |",
         "| 22    | b       | y       |",
         "| 44    | d       | x       |",
+        "|       |         | w       |",
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
@@ -2327,11 +2453,11 @@ async fn full_join() -> Result<()> {
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
         "+-------+---------+---------+",
-        "|       |         | w       |",
         "| 11    | a       | z       |",
         "| 22    | b       | y       |",
         "| 33    | c       |         |",
         "| 44    | d       | x       |",
+        "|       |         | w       |",
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
@@ -2916,7 +3042,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "SortExec: [c1@0 ASC]",
+        "SortExec: [c1@0 ASC NULLS LAST]",
         "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(
@@ -3456,6 +3582,42 @@ async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
         results.is_empty(),
         "Expected no rows from executing CREATE EXTERNAL TABLE"
     );
+}
+
+/// Create table "t1" with two boolean columns "a" and "b"
+async fn register_boolean(ctx: &mut ExecutionContext) -> Result<()> {
+    let a: BooleanArray = [
+        Some(true),
+        Some(true),
+        Some(true),
+        None,
+        None,
+        None,
+        Some(false),
+        Some(false),
+        Some(false),
+    ]
+    .iter()
+    .collect();
+    let b: BooleanArray = [
+        Some(true),
+        None,
+        Some(false),
+        Some(true),
+        None,
+        Some(false),
+        Some(true),
+        None,
+        Some(false),
+    ]
+    .iter()
+    .collect();
+
+    let data =
+        RecordBatch::try_from_iter([("a", Arc::new(a) as _), ("b", Arc::new(b) as _)])?;
+    let table = MemTable::try_new(data.schema(), vec![vec![data]])?;
+    ctx.register_table("t1", Arc::new(table))?;
+    Ok(())
 }
 
 async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
@@ -4264,11 +4426,11 @@ async fn query_without_from() -> Result<()> {
     let sql = "SELECT 1+2, 3/4, cos(0)";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----------+----------+------------+",
-        "| Int64(3) | Int64(0) | Float64(1) |",
-        "+----------+----------+------------+",
-        "| 3        | 0        | 1          |",
-        "+----------+----------+------------+",
+        "+---------------------+---------------------+---------------+",
+        "| Int64(1) + Int64(2) | Int64(3) / Int64(4) | cos(Int64(0)) |",
+        "+---------------------+---------------------+---------------+",
+        "| 3                   | 0                   | 1             |",
+        "+---------------------+---------------------+---------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -4539,6 +4701,8 @@ macro_rules! test_expression {
 async fn test_boolean_expressions() -> Result<()> {
     test_expression!("true", "true");
     test_expression!("false", "false");
+    test_expression!("false = false", "true");
+    test_expression!("true = false", "false");
     Ok(())
 }
 
@@ -5717,11 +5881,11 @@ async fn case_with_bool_type_result() -> Result<()> {
     let sql = "select case when 'cpu' != 'cpu' then true else false end";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----------------+",
-        "| Boolean(false) |",
-        "+----------------+",
-        "| false          |",
-        "+----------------+",
+        "+---------------------------------------------------------------------------------+",
+        "| CASE WHEN Utf8(\"cpu\") != Utf8(\"cpu\") THEN Boolean(true) ELSE Boolean(false) END |",
+        "+---------------------------------------------------------------------------------+",
+        "| false                                                                           |",
+        "+---------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -5734,11 +5898,11 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     let sql = "SELECT 1 NOT BETWEEN 3 AND 5";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+---------------+",
-        "| Boolean(true) |",
-        "+---------------+",
-        "| true          |",
-        "+---------------+",
+        "+--------------------------------------------+",
+        "| Int64(1) NOT BETWEEN Int64(3) AND Int64(5) |",
+        "+--------------------------------------------+",
+        "| true                                       |",
+        "+--------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -6053,6 +6217,78 @@ async fn test_expect_distinct() -> Result<()> {
         "+---------+------------+",
         "| 1       | 10.1       |",
         "+---------+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_nulls_first_asc() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----+--------+",
+        "| num | letter |",
+        "+-----+--------+",
+        "| 1   | one    |",
+        "| 2   | two    |",
+        "|     | three  |",
+        "+-----+--------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_nulls_first_desc() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----+--------+",
+        "| num | letter |",
+        "+-----+--------+",
+        "|     | three  |",
+        "| 2   | two    |",
+        "| 1   | one    |",
+        "+-----+--------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_specific_nulls_last_desc() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC NULLS LAST";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----+--------+",
+        "| num | letter |",
+        "+-----+--------+",
+        "| 2   | two    |",
+        "| 1   | one    |",
+        "|     | three  |",
+        "+-----+--------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_specific_nulls_first_asc() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num ASC NULLS FIRST";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----+--------+",
+        "| num | letter |",
+        "+-----+--------+",
+        "|     | three  |",
+        "| 1   | one    |",
+        "| 2   | two    |",
+        "+-----+--------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

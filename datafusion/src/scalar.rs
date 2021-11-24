@@ -788,7 +788,7 @@ impl ScalarValue {
                     (0..fields.len()).map(|_| Vec::new()).collect();
 
                 // Iterate over scalars to populate the column scalars for each row
-                for scalar in scalars.into_iter() {
+                for scalar in scalars {
                     if let ScalarValue::Struct(values, fields) = scalar {
                         match values {
                             Some(values) => {

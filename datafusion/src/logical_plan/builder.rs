@@ -26,7 +26,8 @@ use crate::datasource::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::{
-    AnalyzePlan, EmptyRelation, ExplainPlan, TableScanPlan, ToStringifiedPlan, Union,
+    Aggregate, AnalyzePlan, EmptyRelation, ExplainPlan, Filter, Join, Projection, Sort,
+    TableScanPlan, ToStringifiedPlan, Union, Window,
 };
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
@@ -451,10 +452,10 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(&self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Ok(Self::from(LogicalPlan::Filter {
+        Ok(Self::from(LogicalPlan::Filter(Filter {
             predicate: expr,
             input: Arc::new(self.plan.clone()),
-        }))
+        })))
     }
 
     /// Apply a limit
@@ -467,10 +468,10 @@ impl LogicalPlanBuilder {
 
     /// Apply a sort
     pub fn sort(&self, exprs: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Sort {
+        Ok(Self::from(LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &self.plan)?,
             input: Arc::new(self.plan.clone()),
-        }))
+        })))
     }
 
     /// Apply a union
@@ -586,7 +587,7 @@ impl LogicalPlanBuilder {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
-        Ok(Self::from(LogicalPlan::Join {
+        Ok(Self::from(LogicalPlan::Join(Join {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             on,
@@ -594,7 +595,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null,
-        }))
+        })))
     }
 
     /// Apply a join with using constraint, which duplicates all join columns in output schema.
@@ -618,7 +619,7 @@ impl LogicalPlanBuilder {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
-        Ok(Self::from(LogicalPlan::Join {
+        Ok(Self::from(LogicalPlan::Join(Join {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             on,
@@ -626,7 +627,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::Using,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null: false,
-        }))
+        })))
     }
 
     /// Apply a cross join
@@ -658,11 +659,11 @@ impl LogicalPlanBuilder {
         let mut window_fields: Vec<DFField> =
             exprlist_to_fields(all_expr, self.plan.schema())?;
         window_fields.extend_from_slice(self.plan.schema().fields());
-        Ok(Self::from(LogicalPlan::Window {
+        Ok(Self::from(LogicalPlan::Window(Window {
             input: Arc::new(self.plan.clone()),
             window_expr,
             schema: Arc::new(DFSchema::new(window_fields)?),
-        }))
+        })))
     }
 
     /// Apply an aggregate: grouping on the `group_expr` expressions
@@ -679,12 +680,12 @@ impl LogicalPlanBuilder {
         validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
         let aggr_schema =
             DFSchema::new(exprlist_to_fields(all_expr, self.plan.schema())?)?;
-        Ok(Self::from(LogicalPlan::Aggregate {
+        Ok(Self::from(LogicalPlan::Aggregate(Aggregate {
             input: Arc::new(self.plan.clone()),
             group_expr,
             aggr_expr,
             schema: DFSchemaRef::new(aggr_schema),
-        }))
+        })))
     }
 
     /// Create an expression to represent the explanation of the plan
@@ -898,12 +899,12 @@ pub fn project_with_alias(
         Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
         None => input_schema,
     };
-    Ok(LogicalPlan::Projection {
+    Ok(LogicalPlan::Projection(Projection {
         expr: projected_expr,
         input: Arc::new(plan.clone()),
         schema: DFSchemaRef::new(schema),
         alias,
-    })
+    }))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.

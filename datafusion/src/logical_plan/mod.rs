@@ -44,7 +44,7 @@ pub use expr::{
     max, md5, min, normalize_col, normalize_cols, now, octet_length, or, random,
     regexp_match, regexp_replace, repeat, replace, replace_col, reverse, right, round,
     rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, split_part, sqrt,
-    starts_with, strpos, substr, sum, tan, to_hex, translate, trim, trunc,
+    starts_with, strpos, substr, sum, tan, to_hex, translate, trim, trunc, unalias,
     unnormalize_col, unnormalize_cols, upper, when, Column, Expr, ExprRewriter,
     ExpressionVisitor, Literal, Recursion, RewriteRecursion,
 };

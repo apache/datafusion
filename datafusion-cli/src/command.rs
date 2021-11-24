@@ -37,13 +37,14 @@ pub enum Command {
     DescribeTable(String),
     ListFunctions,
     SearchFunctions(String),
+    QuietMode(Option<bool>),
 }
 
 impl Command {
     pub async fn execute(
         &self,
         ctx: &mut Context,
-        print_options: &PrintOptions,
+        print_options: &mut PrintOptions,
     ) -> Result<()> {
         let now = Instant::now();
         match self {
@@ -63,6 +64,21 @@ impl Command {
                 print_options
                     .print_batches(&batches, now)
                     .map_err(|e| DataFusionError::Execution(e.to_string()))
+            }
+            Self::QuietMode(quiet) => {
+                if let Some(quiet) = quiet {
+                    print_options.quiet = *quiet;
+                    println!(
+                        "Quiet mode set to {}",
+                        if print_options.quiet { "true" } else { "false" }
+                    );
+                } else {
+                    println!(
+                        "Quiet mode is {}",
+                        if print_options.quiet { "true" } else { "false" }
+                    );
+                }
+                Ok(())
             }
             Self::Quit => Err(DataFusionError::Execution(
                 "Unexpected quit, this should be handled outside".into(),
@@ -89,17 +105,19 @@ impl Command {
             Self::Help => ("\\?", "help"),
             Self::ListFunctions => ("\\h", "function list"),
             Self::SearchFunctions(_) => ("\\h function", "search function"),
+            Self::QuietMode(_) => ("\\quiet (true|false)?", "print or set quiet mode"),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 6] = [
+const ALL_COMMANDS: [Command; 7] = [
     Command::ListTables,
     Command::DescribeTable(String::new()),
     Command::Quit,
     Command::Help,
     Command::ListFunctions,
     Command::SearchFunctions(String::new()),
+    Command::QuietMode(None),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -137,6 +155,13 @@ impl FromStr for Command {
             ("?", None) => Self::Help,
             ("h", None) => Self::ListFunctions,
             ("h", Some(function)) => Self::SearchFunctions(function.into()),
+            ("quiet", Some("true" | "t" | "yes" | "y" | "on")) => {
+                Self::QuietMode(Some(true))
+            }
+            ("quiet", Some("false" | "f" | "no" | "n" | "off")) => {
+                Self::QuietMode(Some(false))
+            }
+            ("quiet", None) => Self::QuietMode(None),
             _ => return Err(()),
         })
     }

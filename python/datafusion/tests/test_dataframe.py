@@ -18,6 +18,7 @@
 import pyarrow as pa
 import pytest
 
+from datafusion import functions as f
 from datafusion import DataFrame, ExecutionContext, column, literal, udf
 
 
@@ -114,6 +115,23 @@ def test_join():
     table = pa.Table.from_batches(df.collect())
 
     expected = {"a": [1, 2], "c": [8, 10], "b": [4, 5]}
+    assert table.to_pydict() == expected
+
+
+def test_window_lead(df):
+    df = df.select(
+        column("a"),
+        f.alias(
+            f.window(
+                "lead", [column("b")], order_by=[f.order_by(column("b"))]
+            ),
+            "a_next",
+        ),
+    )
+
+    table = pa.Table.from_batches(df.collect())
+
+    expected = {"a": [1, 2, 3], "a_next": [5, 6, None]}
     assert table.to_pydict() == expected
 
 

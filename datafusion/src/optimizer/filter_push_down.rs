@@ -16,6 +16,7 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection};
 use crate::logical_plan::{
     and, replace_col, Column, CrossJoin, Limit, LogicalPlan, TableScanPlan,
 };
@@ -181,10 +182,10 @@ fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
             and(acc, (*predicate).to_owned())
         });
 
-    LogicalPlan::Filter {
+    LogicalPlan::Filter(Filter {
         predicate,
         input: Arc::new(plan),
-    }
+    })
 }
 
 // remove all filters from `filters` that are in `predicate_columns`
@@ -287,7 +288,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             push_down(&state, plan)
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
-        LogicalPlan::Filter { input, predicate } => {
+        LogicalPlan::Filter(Filter { input, predicate }) => {
             let mut predicates = vec![];
             split_members(predicate, &mut predicates);
 
@@ -316,12 +317,12 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 optimize(input, state)
             }
         }
-        LogicalPlan::Projection {
+        LogicalPlan::Projection(Projection {
             input,
             expr,
             schema,
             alias: _,
-        } => {
+        }) => {
             // A projection is filter-commutable, but re-writes all predicate expressions
             // collect projection.
             let projection = schema
@@ -353,9 +354,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             utils::from_plan(plan, expr, &[new_input])
         }
-        LogicalPlan::Aggregate {
-            input, aggr_expr, ..
-        } => {
+        LogicalPlan::Aggregate(Aggregate {
+            aggr_expr, input, ..
+        }) => {
             // An aggregate's aggreagate columns are _not_ filter-commutable => collect these:
             // * columns whose aggregation expression depends on
             // * the aggregation columns themselves
@@ -393,9 +394,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
             optimize_join(state, plan, left, right)
         }
-        LogicalPlan::Join {
+        LogicalPlan::Join(Join {
             left, right, on, ..
-        } => {
+        }) => {
             // duplicate filters for joined columns so filters can be pushed down to both sides.
             // Take the following query as an example:
             //

@@ -57,6 +57,47 @@ pub enum JoinConstraint {
     Using,
 }
 
+/// Evaluates an arbitrary list of expressions (essentially a
+/// SELECT with an expression list) on its input.
+#[derive(Clone)]
+pub struct Projection {
+    /// The list of expressions
+    pub expr: Vec<Expr>,
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+    /// The schema description of the output
+    pub schema: DFSchemaRef,
+    /// Projection output relation alias
+    pub alias: Option<String>,
+}
+
+/// Filters rows from its input that do not match an
+/// expression (essentially a WHERE clause with a predicate
+/// expression).
+///
+/// Semantically, `<predicate>` is evaluated for each row of the input;
+/// If the value of `<predicate>` is true, the input row is passed to
+/// the output. If the value of `<predicate>` is false, the row is
+/// discarded.
+#[derive(Clone)]
+pub struct Filter {
+    /// The predicate expression, which must have Boolean type.
+    pub predicate: Expr,
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+}
+
+/// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
+#[derive(Clone)]
+pub struct Window {
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+    /// The window function expression
+    pub window_expr: Vec<Expr>,
+    /// The schema description of the window output
+    pub schema: DFSchemaRef,
+}
+
 /// Produces rows from a table provider by reference or from the context
 #[derive(Clone)]
 pub struct TableScanPlan {
@@ -202,6 +243,47 @@ pub struct Values {
     pub values: Vec<Vec<Expr>>,
 }
 
+/// Aggregates its input based on a set of grouping and aggregate
+/// expressions (e.g. SUM).
+#[derive(Clone)]
+pub struct Aggregate {
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+    /// Grouping expressions
+    pub group_expr: Vec<Expr>,
+    /// Aggregate expressions
+    pub aggr_expr: Vec<Expr>,
+    /// The schema description of the aggregate output
+    pub schema: DFSchemaRef,
+}
+
+/// Sorts its input according to a list of sort expressions.
+#[derive(Clone)]
+pub struct Sort {
+    /// The sort expressions
+    pub expr: Vec<Expr>,
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+}
+
+/// Join two logical plans on one or more join columns
+#[derive(Clone)]
+pub struct Join {
+    /// Left input
+    pub left: Arc<LogicalPlan>,
+    /// Right input
+    pub right: Arc<LogicalPlan>,
+    /// Equijoin clause expressed as pairs of (left, right) join columns
+    pub on: Vec<(Column, Column)>,
+    /// Join type
+    pub join_type: JoinType,
+    /// Join constraint
+    pub join_constraint: JoinConstraint,
+    /// The output schema, containing fields from the left and right inputs
+    pub schema: DFSchemaRef,
+    /// If null_equals_null is true, null == null else null != null
+    pub null_equals_null: bool,
+}
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -214,16 +296,7 @@ pub struct Values {
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
-    Projection {
-        /// The list of expressions
-        expr: Vec<Expr>,
-        /// The incoming logical plan
-        input: Arc<LogicalPlan>,
-        /// The schema description of the output
-        schema: DFSchemaRef,
-        /// Projection output relation alias
-        alias: Option<String>,
-    },
+    Projection(Projection),
     /// Filters rows from its input that do not match an
     /// expression (essentially a WHERE clause with a predicate
     /// expression).
@@ -232,57 +305,16 @@ pub enum LogicalPlan {
     /// If the value of `<predicate>` is true, the input row is passed to
     /// the output. If the value of `<predicate>` is false, the row is
     /// discarded.
-    Filter {
-        /// The predicate expression, which must have Boolean type.
-        predicate: Expr,
-        /// The incoming logical plan
-        input: Arc<LogicalPlan>,
-    },
+    Filter(Filter),
     /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
-    Window {
-        /// The incoming logical plan
-        input: Arc<LogicalPlan>,
-        /// The window function expression
-        window_expr: Vec<Expr>,
-        /// The schema description of the window output
-        schema: DFSchemaRef,
-    },
+    Window(Window),
     /// Aggregates its input based on a set of grouping and aggregate
     /// expressions (e.g. SUM).
-    Aggregate {
-        /// The incoming logical plan
-        input: Arc<LogicalPlan>,
-        /// Grouping expressions
-        group_expr: Vec<Expr>,
-        /// Aggregate expressions
-        aggr_expr: Vec<Expr>,
-        /// The schema description of the aggregate output
-        schema: DFSchemaRef,
-    },
+    Aggregate(Aggregate),
     /// Sorts its input according to a list of sort expressions.
-    Sort {
-        /// The sort expressions
-        expr: Vec<Expr>,
-        /// The incoming logical plan
-        input: Arc<LogicalPlan>,
-    },
+    Sort(Sort),
     /// Join two logical plans on one or more join columns
-    Join {
-        /// Left input
-        left: Arc<LogicalPlan>,
-        /// Right input
-        right: Arc<LogicalPlan>,
-        /// Equijoin clause expressed as pairs of (left, right) join columns
-        on: Vec<(Column, Column)>,
-        /// Join type
-        join_type: JoinType,
-        /// Join constraint
-        join_constraint: JoinConstraint,
-        /// The output schema, containing fields from the left and right inputs
-        schema: DFSchemaRef,
-        /// If null_equals_null is true, null == null else null != null
-        null_equals_null: bool,
-    },
+    Join(Join),
     /// Apply Cross Join to two logical plans
     CrossJoin(CrossJoin),
     /// Repartition the plan based on a partitioning scheme.
@@ -324,12 +356,12 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScanPlan {
                 projected_schema, ..
             }) => projected_schema,
-            LogicalPlan::Projection { schema, .. } => schema,
-            LogicalPlan::Filter { input, .. } => input.schema(),
-            LogicalPlan::Window { schema, .. } => schema,
-            LogicalPlan::Aggregate { schema, .. } => schema,
-            LogicalPlan::Sort { input, .. } => input.schema(),
-            LogicalPlan::Join { schema, .. } => schema,
+            LogicalPlan::Projection(Projection { schema, .. }) => schema,
+            LogicalPlan::Filter(Filter { input, .. }) => input.schema(),
+            LogicalPlan::Window(Window { schema, .. }) => schema,
+            LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
+            LogicalPlan::Sort(Sort { input, .. }) => input.schema(),
+            LogicalPlan::Join(Join { schema, .. }) => schema,
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
@@ -354,19 +386,19 @@ impl LogicalPlan {
                 projected_schema, ..
             }) => vec![projected_schema],
             LogicalPlan::Values(Values { schema, .. }) => vec![schema],
-            LogicalPlan::Window { input, schema, .. }
-            | LogicalPlan::Aggregate { input, schema, .. }
-            | LogicalPlan::Projection { input, schema, .. } => {
+            LogicalPlan::Window(Window { input, schema, .. })
+            | LogicalPlan::Projection(Projection { input, schema, .. })
+            | LogicalPlan::Aggregate(Aggregate { input, schema, .. }) => {
                 let mut schemas = input.all_schemas();
                 schemas.insert(0, schema);
                 schemas
             }
-            LogicalPlan::Join {
+            LogicalPlan::Join(Join {
                 left,
                 right,
                 schema,
                 ..
-            }
+            })
             | LogicalPlan::CrossJoin(CrossJoin {
                 left,
                 right,
@@ -389,9 +421,9 @@ impl LogicalPlan {
             }
             LogicalPlan::Limit(Limit { input, .. })
             | LogicalPlan::Repartition(Repartition { input, .. })
-            | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::Filter { input, .. } => input.all_schemas(),
+            | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
         }
     }
@@ -409,11 +441,11 @@ impl LogicalPlan {
     /// children
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
         match self {
-            LogicalPlan::Projection { expr, .. } => expr.clone(),
+            LogicalPlan::Projection(Projection { expr, .. }) => expr.clone(),
             LogicalPlan::Values(Values { values, .. }) => {
                 values.iter().flatten().cloned().collect()
             }
-            LogicalPlan::Filter { predicate, .. } => vec![predicate.clone()],
+            LogicalPlan::Filter(Filter { predicate, .. }) => vec![predicate.clone()],
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
@@ -421,17 +453,17 @@ impl LogicalPlan {
                 Partitioning::Hash(expr, _) => expr.clone(),
                 _ => vec![],
             },
-            LogicalPlan::Window { window_expr, .. } => window_expr.clone(),
-            LogicalPlan::Aggregate {
+            LogicalPlan::Window(Window { window_expr, .. }) => window_expr.clone(),
+            LogicalPlan::Aggregate(Aggregate {
                 group_expr,
                 aggr_expr,
                 ..
-            } => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
-            LogicalPlan::Join { on, .. } => on
+            }) => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
+            LogicalPlan::Join(Join { on, .. }) => on
                 .iter()
                 .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
                 .collect(),
-            LogicalPlan::Sort { expr, .. } => expr.clone(),
+            LogicalPlan::Sort(Sort { expr, .. }) => expr.clone(),
             LogicalPlan::Extension(extension) => extension.node.expressions(),
             // plans without expressions
             LogicalPlan::TableScan { .. }
@@ -453,13 +485,13 @@ impl LogicalPlan {
     /// include inputs to inputs.
     pub fn inputs(self: &LogicalPlan) -> Vec<&LogicalPlan> {
         match self {
-            LogicalPlan::Projection { input, .. } => vec![input],
-            LogicalPlan::Filter { input, .. } => vec![input],
+            LogicalPlan::Projection(Projection { input, .. }) => vec![input],
+            LogicalPlan::Filter(Filter { input, .. }) => vec![input],
             LogicalPlan::Repartition(Repartition { input, .. }) => vec![input],
-            LogicalPlan::Window { input, .. } => vec![input],
-            LogicalPlan::Aggregate { input, .. } => vec![input],
-            LogicalPlan::Sort { input, .. } => vec![input],
-            LogicalPlan::Join { left, right, .. } => vec![left, right],
+            LogicalPlan::Window(Window { input, .. }) => vec![input],
+            LogicalPlan::Aggregate(Aggregate { input, .. }) => vec![input],
+            LogicalPlan::Sort(Sort { input, .. }) => vec![input],
+            LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
@@ -488,11 +520,11 @@ impl LogicalPlan {
             type Error = DataFusionError;
 
             fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
-                if let LogicalPlan::Join {
+                if let LogicalPlan::Join(Join {
                     join_constraint: JoinConstraint::Using,
                     on,
                     ..
-                } = plan
+                }) = plan
                 {
                     self.using_columns.push(
                         on.iter()
@@ -588,15 +620,15 @@ impl LogicalPlan {
         }
 
         let recurse = match self {
-            LogicalPlan::Projection { input, .. } => input.accept(visitor)?,
-            LogicalPlan::Filter { input, .. } => input.accept(visitor)?,
+            LogicalPlan::Projection(Projection { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Filter(Filter { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Repartition(Repartition { input, .. }) => {
                 input.accept(visitor)?
             }
-            LogicalPlan::Window { input, .. } => input.accept(visitor)?,
-            LogicalPlan::Aggregate { input, .. } => input.accept(visitor)?,
-            LogicalPlan::Sort { input, .. } => input.accept(visitor)?,
-            LogicalPlan::Join { left, right, .. }
+            LogicalPlan::Window(Window { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Aggregate(Aggregate { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Sort(Sort { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Join(Join { left, right, .. })
             | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 left.accept(visitor)? && right.accept(visitor)?
             }
@@ -856,9 +888,9 @@ impl LogicalPlan {
 
                         Ok(())
                     }
-                    LogicalPlan::Projection {
+                    LogicalPlan::Projection(Projection {
                         ref expr, alias, ..
-                    } => {
+                    }) => {
                         write!(f, "Projection: ")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {
@@ -871,25 +903,25 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
-                    LogicalPlan::Filter {
+                    LogicalPlan::Filter(Filter {
                         predicate: ref expr,
                         ..
-                    } => write!(f, "Filter: {:?}", expr),
-                    LogicalPlan::Window {
+                    }) => write!(f, "Filter: {:?}", expr),
+                    LogicalPlan::Window(Window {
                         ref window_expr, ..
-                    } => {
+                    }) => {
                         write!(f, "WindowAggr: windowExpr=[{:?}]", window_expr)
                     }
-                    LogicalPlan::Aggregate {
+                    LogicalPlan::Aggregate(Aggregate {
                         ref group_expr,
                         ref aggr_expr,
                         ..
-                    } => write!(
+                    }) => write!(
                         f,
                         "Aggregate: groupBy=[{:?}], aggr=[{:?}]",
                         group_expr, aggr_expr
                     ),
-                    LogicalPlan::Sort { ref expr, .. } => {
+                    LogicalPlan::Sort(Sort { expr, .. }) => {
                         write!(f, "Sort: ")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {
@@ -899,11 +931,11 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
-                    LogicalPlan::Join {
+                    LogicalPlan::Join(Join {
                         on: ref keys,
                         join_constraint,
                         ..
-                    } => {
+                    }) => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
                         match join_constraint {
