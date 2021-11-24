@@ -38,7 +38,7 @@ use datafusion::assert_contains;
 use datafusion::assert_not_contains;
 use datafusion::logical_plan::plan::{Aggregate, Projection};
 use datafusion::logical_plan::LogicalPlan;
-use datafusion::logical_plan::TableScanPlan;
+use datafusion::logical_plan::TableScan;
 use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
@@ -93,7 +93,7 @@ async fn nyc() -> Result<()> {
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match input.as_ref() {
             LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
-                LogicalPlan::TableScan(TableScanPlan {
+                LogicalPlan::TableScan(TableScan {
                     ref projected_schema,
                     ..
                 }) => {

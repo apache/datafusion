@@ -24,7 +24,7 @@ use super::{
 };
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, TableScanPlan, Window,
+    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, TableScan, Window,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
@@ -330,7 +330,7 @@ impl DefaultPhysicalPlanner {
             let batch_size = ctx_state.config.batch_size;
 
             let exec_plan: Result<Arc<dyn ExecutionPlan>> = match logical_plan {
-                LogicalPlan::TableScan (TableScanPlan {
+                LogicalPlan::TableScan (TableScan {
                     source,
                     projection,
                     filters,
@@ -1460,7 +1460,7 @@ mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::execution::options::CsvReadOptions;
-    use crate::logical_plan::plan::ExtensionPlan;
+    use crate::logical_plan::plan::Extension;
     use crate::logical_plan::{DFField, DFSchema, DFSchemaRef};
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
@@ -1611,7 +1611,7 @@ mod tests {
     async fn default_extension_planner() {
         let ctx_state = make_ctx_state();
         let planner = DefaultPhysicalPlanner::default();
-        let logical_plan = LogicalPlan::Extension(ExtensionPlan {
+        let logical_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoOpExtensionNode::default()),
         });
         let plan = planner
@@ -1640,7 +1640,7 @@ mod tests {
             BadExtensionPlanner {},
         )]);
 
-        let logical_plan = LogicalPlan::Extension(ExtensionPlan {
+        let logical_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoOpExtensionNode::default()),
         });
         let plan = planner

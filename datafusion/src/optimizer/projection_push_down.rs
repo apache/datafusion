@@ -21,7 +21,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, AnalyzePlan, Join, Projection, TableScanPlan, Window,
+    Aggregate, Analyze, Join, Projection, TableScan, Window,
 };
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
@@ -330,7 +330,7 @@ fn optimize_plan(
         }
         // scans:
         // * remove un-used columns from the scan projection
-        LogicalPlan::TableScan(TableScanPlan {
+        LogicalPlan::TableScan(TableScan {
             table_name,
             source,
             filters,
@@ -344,7 +344,7 @@ fn optimize_plan(
                 has_projection,
             )?;
             // return the table scan with projection
-            Ok(LogicalPlan::TableScan(TableScanPlan {
+            Ok(LogicalPlan::TableScan(TableScan {
                 table_name: table_name.clone(),
                 source: source.clone(),
                 projection: Some(projection),
@@ -366,7 +366,7 @@ fn optimize_plan(
                 .map(|f| f.qualified_column())
                 .collect::<HashSet<Column>>();
 
-            Ok(LogicalPlan::Analyze(AnalyzePlan {
+            Ok(LogicalPlan::Analyze(Analyze {
                 input: Arc::new(optimize_plan(
                     optimizer,
                     &a.input,

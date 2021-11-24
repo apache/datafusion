@@ -53,7 +53,7 @@ pub use operators::Operator;
 pub use plan::{
     CreateExternalTable, CreateMemoryTable, CrossJoin, DropTable, EmptyRelation,
     JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, PlanVisitor,
-    Repartition, TableScanPlan, Union, Values,
+    Repartition, TableScan, Union, Values,
 };
 pub(crate) use plan::{StringifiedPlan, ToStringifiedPlan};
 pub use registry::FunctionRegistry;

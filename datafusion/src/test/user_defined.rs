@@ -23,13 +23,13 @@ use std::{
     sync::Arc,
 };
 
-use crate::logical_plan::plan::ExtensionPlan;
+use crate::logical_plan::plan::Extension;
 use crate::logical_plan::{DFSchemaRef, Expr, LogicalPlan, UserDefinedLogicalNode};
 
 /// Create a new user defined plan node, for testing
 pub fn new(input: LogicalPlan) -> LogicalPlan {
     let node = Arc::new(TestUserDefinedPlanNode { input });
-    LogicalPlan::Extension(ExtensionPlan { node })
+    LogicalPlan::Extension(Extension { node })
 }
 
 struct TestUserDefinedPlanNode {

@@ -18,7 +18,7 @@ use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection};
 use crate::logical_plan::{
-    and, replace_col, Column, CrossJoin, Limit, LogicalPlan, TableScanPlan,
+    and, replace_col, Column, CrossJoin, Limit, LogicalPlan, TableScan,
 };
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
@@ -454,7 +454,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             optimize_join(state, plan, left, right)
         }
-        LogicalPlan::TableScan(TableScanPlan {
+        LogicalPlan::TableScan(TableScan {
             source,
             projected_schema,
             filters,
@@ -490,7 +490,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             issue_filters(
                 state,
                 used_columns,
-                &LogicalPlan::TableScan(TableScanPlan {
+                &LogicalPlan::TableScan(TableScan {
                     source: source.clone(),
                     projection: projection.clone(),
                     projected_schema: projected_schema.clone(),
@@ -1177,7 +1177,7 @@ mod tests {
     ) -> Result<LogicalPlan> {
         let test_provider = PushDownProvider { filter_support };
 
-        let table_scan = LogicalPlan::TableScan(TableScanPlan {
+        let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".to_string(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
