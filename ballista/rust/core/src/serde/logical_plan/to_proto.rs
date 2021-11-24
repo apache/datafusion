@@ -37,7 +37,7 @@ use datafusion::logical_plan::{
     exprlist_to_fields,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
     Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, JoinType, Limit,
-    LogicalPlan, Repartition, TableScanPlan, Values,
+    LogicalPlan, Repartition, TableScan, Values,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
@@ -699,7 +699,7 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                     )),
                 })
             }
-            LogicalPlan::TableScan(TableScanPlan {
+            LogicalPlan::TableScan(TableScan {
                 table_name,
                 source,
                 filters,
