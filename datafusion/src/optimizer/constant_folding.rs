@@ -756,6 +756,28 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn optimize_plan_support_values() -> Result<()> {
+        let expr1 = Expr::BinaryExpr {
+            left: Box::new(lit(1)),
+            op: Operator::Plus,
+            right: Box::new(lit(2)),
+        };
+        let expr2 = Expr::BinaryExpr {
+            left: Box::new(lit(2)),
+            op: Operator::Minus,
+            right: Box::new(lit(1)),
+        };
+        let values = vec![vec![expr1, expr2]];
+        let plan = LogicalPlanBuilder::values(values)?.build()?;
+
+        let expected = "\
+        Values: (Int32(3) AS Int32(1) + Int32(2), Int32(1) AS Int32(2) - Int32(1))";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
     // expect optimizing will result in an error, returning the error string
     fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
         let rule = ConstantFolding::new();
