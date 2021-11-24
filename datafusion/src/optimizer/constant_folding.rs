@@ -772,7 +772,7 @@ mod tests {
         let plan = LogicalPlanBuilder::values(values)?.build()?;
 
         let expected = "\
-        Values: (Int32(3), Int32(1))";
+        Values: (Int32(3) AS Int32(1) + Int32(2), Int32(1) AS Int32(2) - Int32(1))";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
