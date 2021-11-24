@@ -6293,3 +6293,86 @@ async fn test_specific_nulls_first_asc() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_predicate_push_down_with_unsafe_null() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let create_table1_sql =
+        "create table table1 as SELECT * FROM (VALUES (1), (2), (null)) as t";
+    ctx.sql(create_table1_sql).await.unwrap();
+    let create_table2_sql =
+        "create table table2 as SELECT * FROM (VALUES (1), (3), (null)) as t";
+    ctx.sql(create_table2_sql).await.unwrap();
+    // left join with is_not_null filter
+    let sql = "SELECT * FROM table1 LEFT JOIN table2 ON table1.column1 = table2.column1 WHERE table2.column1 IS NOT NULL";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------+---------+",
+        "| column1 | column1 |",
+        "+---------+---------+",
+        "| 1       | 1       |",
+        "+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    // left join with is_null filter
+    let sql = "SELECT * FROM table1 LEFT JOIN table2 ON table1.column1 = table2.column1 WHERE table2.column1 IS NULL ORDER BY table1.column1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------+---------+",
+        "| column1 | column1 |",
+        "+---------+---------+",
+        "| 2       |         |",
+        "|         |         |",
+        "+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    // right join with is_null filter
+    let sql = "SELECT * FROM table2 RIGHT JOIN table1 ON table1.column1 = table2.column1 WHERE table2.column1 IS NULL ORDER BY table1.column1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------+---------+",
+        "| column1 | column1 |",
+        "+---------+---------+",
+        "|         | 2       |",
+        "|         |         |",
+        "+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    // right join with is_not_null filter
+    let sql = "SELECT * FROM table2 RIGHT JOIN table1 ON table1.column1 = table2.column1 WHERE table2.column1 IS NOT NULL";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------+---------+",
+        "| column1 | column1 |",
+        "+---------+---------+",
+        "| 1       | 1       |",
+        "+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    // full join with is_null filter
+    let sql = "SELECT * FROM table1 FULL JOIN table2 ON table1.column1 = table2.column1 WHERE table2.column1 IS NULL ORDER BY table1.column1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------+---------+",
+        "| column1 | column1 |",
+        "+---------+---------+",
+        "| 2       |         |",
+        "|         |         |",
+        "|         |         |",
+        "+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    // full join with is_not_null filter
+    let sql = "SELECT * FROM table1 FULL JOIN table2 ON table1.column1 = table2.column1 WHERE table2.column1 IS NOT NULL ORDER BY table1.column1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------+---------+",
+        "| column1 | column1 |",
+        "+---------+---------+",
+        "| 1       | 1       |",
+        "|         | 3       |",
+        "+---------+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}

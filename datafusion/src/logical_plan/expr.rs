@@ -508,6 +508,56 @@ impl Expr {
         }
     }
 
+    /// Return if Expr contains Expr::IsNull or Expr::IsNotNull
+    pub fn has_null_expr(&self) -> Result<bool> {
+        match self {
+            Expr::Alias(expr, _) => expr.has_null_expr(),
+            Expr::Column(_) => Ok(false),
+            Expr::Literal(_) => Ok(false),
+            Expr::ScalarVariable(_) => Ok(false),
+            Expr::Case {
+                when_then_expr,
+                else_expr,
+                ..
+            } => {
+                let has_null_exprs = when_then_expr
+                    .iter()
+                    .map(|(_, t)| t.has_null_expr())
+                    .collect::<Result<Vec<_>>>()?;
+                if has_null_exprs.contains(&true) {
+                    Ok(true)
+                } else if let Some(e) = else_expr {
+                    e.has_null_expr()
+                } else {
+                    Ok(false)
+                }
+            }
+            Expr::Cast { expr, .. } => expr.has_null_expr(),
+            Expr::TryCast { expr, .. } => expr.has_null_expr(),
+            Expr::ScalarFunction { .. } => Ok(false),
+            Expr::ScalarUDF { .. } => Ok(false),
+            Expr::WindowFunction { .. } => Ok(false),
+            Expr::AggregateFunction { .. } => Ok(false),
+            Expr::AggregateUDF { .. } => Ok(false),
+            Expr::Not(expr) => expr.has_null_expr(),
+            Expr::Negative(expr) => expr.has_null_expr(),
+            Expr::IsNull(_) => Ok(true),
+            Expr::IsNotNull(_) => Ok(true),
+            Expr::BinaryExpr {
+                ref left,
+                ref right,
+                ..
+            } => Ok(left.has_null_expr()? || right.has_null_expr()?),
+            Expr::Sort { ref expr, .. } => expr.has_null_expr(),
+            Expr::Between { ref expr, .. } => expr.has_null_expr(),
+            Expr::InList { ref expr, .. } => expr.has_null_expr(),
+            Expr::Wildcard => Err(DataFusionError::Internal(
+                "Wildcard expressions are not valid in a logical query plan".to_owned(),
+            )),
+            Expr::GetIndexedField { ref expr, .. } => expr.has_null_expr(),
+        }
+    }
+
     /// Returns the name of this expression based on [crate::logical_plan::DFSchema].
     ///
     /// This represents how a column with this expression is named when no alias is chosen

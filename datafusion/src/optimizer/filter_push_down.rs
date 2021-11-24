@@ -18,7 +18,7 @@ use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection};
 use crate::logical_plan::{
-    and, replace_col, Column, CrossJoin, Limit, LogicalPlan, TableScan,
+    and, replace_col, Column, CrossJoin, JoinType, Limit, LogicalPlan, TableScan,
 };
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
@@ -281,6 +281,13 @@ fn optimize_join(
     }
 }
 
+fn is_null_safe(join_type: &JoinType) -> bool {
+    match join_type {
+        JoinType::Left | JoinType::Right | JoinType::Full => false,
+        JoinType::Inner | JoinType::Anti | JoinType::Semi => true,
+    }
+}
+
 fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Explain { .. } => {
@@ -395,7 +402,11 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             optimize_join(state, plan, left, right)
         }
         LogicalPlan::Join(Join {
-            left, right, on, ..
+            left,
+            right,
+            on,
+            join_type,
+            ..
         }) => {
             // duplicate filters for joined columns so filters can be pushed down to both sides.
             // Take the following query as an example:
@@ -409,10 +420,15 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             //
             // Join clauses with `Using` constraints also take advantage of this logic to make sure
             // predicates reference the shared join columns are pushed to both sides.
+            let mut null_unsafe_predicates = vec![];
             let join_side_filters = state
                 .filters
                 .iter()
                 .filter_map(|(predicate, columns)| {
+                    if !is_null_safe(join_type) && predicate.has_null_expr().ok()? {
+                        null_unsafe_predicates.push(predicate.clone());
+                        return None;
+                    }
                     let mut join_cols_to_replace = HashMap::new();
                     for col in columns.iter() {
                         for (l, r) in on {
@@ -425,11 +441,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                             }
                         }
                     }
-
                     if join_cols_to_replace.is_empty() {
                         return None;
                     }
-
                     let join_side_predicate =
                         match replace_col(predicate.clone(), &join_cols_to_replace) {
                             Ok(p) => p,
@@ -437,7 +451,6 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                                 return Some(Err(e));
                             }
                         };
-
                     let join_side_columns = columns
                         .clone()
                         .into_iter()
@@ -446,13 +459,21 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                         .filter(|c| !join_cols_to_replace.contains_key(c))
                         .chain(join_cols_to_replace.iter().map(|(_, v)| (*v).clone()))
                         .collect();
-
                     Some(Ok((join_side_predicate, join_side_columns)))
                 })
                 .collect::<Result<Vec<_>>>()?;
+            state
+                .filters
+                .retain(|f| !null_unsafe_predicates.contains(&f.0));
             state.filters.extend(join_side_filters);
-
-            optimize_join(state, plan, left, right)
+            if null_unsafe_predicates.is_empty() {
+                optimize_join(state, plan, left, right)
+            } else {
+                Ok(add_filter(
+                    optimize_join(state, plan, left, right)?,
+                    null_unsafe_predicates.iter().collect::<Vec<_>>().as_slice(),
+                ))
+            }
         }
         LogicalPlan::TableScan(TableScan {
             source,
