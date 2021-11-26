@@ -242,7 +242,7 @@ fn summarize_min_max(
     }
 }
 
-/// Read and parse the metadata of the Parquet file at location `path`
+/// Read and parse the schema of the Parquet file at location `path`
 fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
     let obj_reader = ChunkObjectReader(object_reader);
     let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
@@ -252,7 +252,7 @@ fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
     Ok(schema)
 }
 
-/// Read and parse the metadata of the Parquet file at location `path`
+/// Read and parse the statistics of the Parquet file at location `path`
 fn fetch_statistics(object_reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
     let obj_reader = ChunkObjectReader(object_reader);
     let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
