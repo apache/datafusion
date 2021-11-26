@@ -33,7 +33,7 @@ use arrow::{
 };
 use futures::Stream;
 use std::{
-    io::{BufRead, Read},
+    io::BufRead,
     iter,
     pin::Pin,
     sync::Arc,

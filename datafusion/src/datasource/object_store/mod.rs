@@ -21,7 +21,7 @@ pub mod local;
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
-use std::io::{BufRead, Read};
+use std::io::BufRead;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
