@@ -87,9 +87,9 @@ impl ObjectReader for LocalFileReader {
         // This okay because chunks are usually fairly large.
         let mut file = File::open(&self.file.path)?;
         file.seek(SeekFrom::Start(start))?;
-        
+
         let file = BufReader::new(file.take(length as u64));
-        
+
         Ok(Box::new(file))
     }
 
