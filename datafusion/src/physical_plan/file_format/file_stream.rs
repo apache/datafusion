@@ -32,13 +32,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use futures::Stream;
-use std::{
-    io::Read,
-    iter,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::{io::{BufRead, Read}, iter, pin::Pin, sync::Arc, task::{Context, Poll}};
 
 use super::PartitionColumnProjector;
 
@@ -48,12 +42,12 @@ pub type BatchIter = Box<dyn Iterator<Item = ArrowResult<RecordBatch>> + Send + 
 /// A closure that creates a file format reader (iterator over `RecordBatch`) from a `Read` object
 /// and an optional number of required records.
 pub trait FormatReaderOpener:
-    FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter + Send + Unpin + 'static
+    FnMut(Box<dyn BufRead + Send + Sync>, &Option<usize>) -> BatchIter + Send + Unpin + 'static
 {
 }
 
 impl<T> FormatReaderOpener for T where
-    T: FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter
+    T: FnMut(Box<dyn BufRead + Send + Sync>, &Option<usize>) -> BatchIter
         + Send
         + Unpin
         + 'static

@@ -76,7 +76,7 @@ impl ListingOptions {
             file_extension: String::new(),
             format,
             table_partition_cols: vec![],
-            collect_stat: true,
+            collect_stat: false,
             target_partitions: 1,
         }
     }

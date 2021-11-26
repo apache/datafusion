@@ -278,7 +278,7 @@ impl LogicalPlanBuilder {
 
         let listing_options = ListingOptions {
             format: Arc::new(file_format),
-            collect_stat: true,
+            collect_stat: false,
             file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
             target_partitions,
             table_partition_cols: vec![],

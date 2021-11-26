@@ -18,6 +18,7 @@
 //! Parquet format abstractions
 
 use std::any::Any;
+use std::io::BufRead;
 use std::io::Read;
 use std::sync::Arc;
 
@@ -311,7 +312,7 @@ impl Length for ChunkObjectReader {
 }
 
 impl ChunkReader for ChunkObjectReader {
-    type T = Box<dyn Read + Send + Sync>;
+    type T = Box<dyn BufRead + Send + Sync>;
 
     fn get_read(&self, start: u64, length: usize) -> ParquetResult<Self::T> {
         self.0
