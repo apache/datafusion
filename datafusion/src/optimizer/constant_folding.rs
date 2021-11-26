@@ -106,16 +106,23 @@ impl OptimizerRule for ConstantFolding {
                             .rewrite(&mut const_evaluator)?
                             .rewrite(&mut simplifier)?;
 
-                        let new_name = &new_e.name(plan.schema());
+                        match plan {
+                            LogicalPlan::Filter { .. } => Ok(new_e),
+                            _ => {
+                                let new_name = &new_e.name(plan.schema());
 
-                        if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
-                            if expr_name != new_expr_name {
-                                Ok(new_e.alias(expr_name))
-                            } else {
-                                Ok(new_e)
+                                if let (Ok(expr_name), Ok(new_expr_name)) =
+                                    (name, new_name)
+                                {
+                                    if expr_name != new_expr_name {
+                                        Ok(new_e.alias(expr_name))
+                                    } else {
+                                        Ok(new_e)
+                                    }
+                                } else {
+                                    Ok(new_e)
+                                }
                             }
-                        } else {
-                            Ok(new_e)
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -641,8 +648,8 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Filter: NOT #test.c AS test.c = Boolean(false)\
-        \n    Filter: #test.b AS test.b = Boolean(true)\
+        \n  Filter: NOT #test.c\
+        \n    Filter: #test.b\
         \n      TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -662,8 +669,8 @@ mod tests {
         let expected = "\
         Projection: #test.a\
         \n  Limit: 1\
-        \n    Filter: #test.c AS test.c != Boolean(false)\
-        \n      Filter: NOT #test.b AS test.b != Boolean(true)\
+        \n    Filter: #test.c\
+        \n      Filter: NOT #test.b\
         \n        TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -680,7 +687,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Filter: NOT #test.b AND #test.c AS test.b != Boolean(true) AND test.c = Boolean(true)\
+        \n  Filter: NOT #test.b AND #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -697,7 +704,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Filter: NOT #test.b OR NOT #test.c AS test.b != Boolean(true) OR test.c = Boolean(false)\
+        \n  Filter: NOT #test.b OR NOT #test.c\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -714,7 +721,7 @@ mod tests {
 
         let expected = "\
         Projection: #test.a\
-        \n  Filter: #test.b AS NOT test.b = Boolean(false)\
+        \n  Filter: #test.b\
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -967,7 +974,7 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = "Filter: Boolean(true) AS CAST(now() AS Int64) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Int64) + Int32(50000)\
+        let expected = "Filter: Boolean(true)\
                         \n  TableScan: test projection=None";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
