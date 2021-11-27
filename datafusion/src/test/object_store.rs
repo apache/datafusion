@@ -18,7 +18,7 @@
 
 use std::{
     io,
-    io::{BufRead, Cursor},
+    io::{Cursor, Read},
     sync::Arc,
 };
 
@@ -111,7 +111,7 @@ impl ObjectReader for EmptyObjectReader {
         &self,
         _start: u64,
         _length: usize,
-    ) -> Result<Box<dyn BufRead + Send + Sync>> {
+    ) -> Result<Box<dyn Read + Send + Sync>> {
         Ok(Box::new(Cursor::new(vec![0; self.0 as usize])))
     }
 
