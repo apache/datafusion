@@ -245,6 +245,9 @@ fn split_members<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>) {
             split_members(left, predicates);
             split_members(right, predicates);
         }
+        Expr::Alias(expr, _) => {
+            split_members(expr, predicates);
+        }
         other => predicates.push(other),
     }
 }
@@ -308,6 +311,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     }
                     Ok(())
                 })?;
+
             // Predicates without columns will not be pushed down.
             // As those contain only literals, they could be optimized using constant folding
             // and removal of WHERE TRUE / WHERE FALSE
