@@ -24,7 +24,7 @@ use arrow::{
 };
 
 use datafusion::error::Result;
-use datafusion::{datasource::MemTable, prelude::JoinType};
+use datafusion::{datasource::MemTable, prelude::JoinType, prelude::col, prelude::lit, prelude::starts_with};
 
 use datafusion::execution::context::ExecutionContext;
 
@@ -75,5 +75,39 @@ async fn join() -> Result<()> {
 
     assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 4);
 
+    Ok(())
+}
+
+
+#[tokio::test]
+async fn test_starts_with() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec!["abcdef", "abc123", "ab_def", "a_bcdef"])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+        ],
+    )?;
+
+    let mut ctx = ExecutionContext::new();
+
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+
+    ctx.register_table("aa", Arc::new(table))?;
+
+    let df = ctx.table("aa")?;
+
+    let df = df.filter( starts_with(col("a"), lit("abc")))?;
+
+    let batches = df.collect().await?;
+
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+ 
     Ok(())
 }

@@ -1636,7 +1636,7 @@ unary_scalar_expr!(SHA256, sha256);
 unary_scalar_expr!(SHA384, sha384);
 unary_scalar_expr!(SHA512, sha512);
 unary_scalar_expr!(SplitPart, split_part);
-unary_scalar_expr!(StartsWith, starts_with);
+binary_scalar_expr!(StartsWith, starts_with);
 unary_scalar_expr!(Strpos, strpos);
 unary_scalar_expr!(Substr, substr);
 unary_scalar_expr!(ToHex, to_hex);
@@ -2217,6 +2217,18 @@ mod tests {
         }};
     }
 
+    macro_rules! test_binary_scalar_expr {
+        ($ENUM:ident, $FUNC:ident) => {{
+            if let Expr::ScalarFunction { fun, args } = $FUNC(col("tableA.a"), lit("s")) {
+                let name = functions::BuiltinScalarFunction::$ENUM;
+                assert_eq!(name, fun);
+                assert_eq!(2, args.len());
+            } else {
+                assert!(false, "unexpected");
+            }
+        }};
+    }
+
     #[test]
     fn digest_function_definitions() {
         if let Expr::ScalarFunction { fun, args } = digest(col("tableA.a"), lit("md5")) {
@@ -2274,13 +2286,15 @@ mod tests {
         test_unary_scalar_expr!(SHA384, sha384);
         test_unary_scalar_expr!(SHA512, sha512);
         test_unary_scalar_expr!(SplitPart, split_part);
-        test_unary_scalar_expr!(StartsWith, starts_with);
+        // test_unary_scalar_expr!(StartsWith, starts_with);
         test_unary_scalar_expr!(Strpos, strpos);
         test_unary_scalar_expr!(Substr, substr);
         test_unary_scalar_expr!(ToHex, to_hex);
         test_unary_scalar_expr!(Translate, translate);
         test_unary_scalar_expr!(Trim, trim);
         test_unary_scalar_expr!(Upper, upper);
+
+        test_binary_scalar_expr!(StartsWith, starts_with);
     }
 
     #[test]
