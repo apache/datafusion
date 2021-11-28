@@ -3544,13 +3544,13 @@ async fn explain_analyze_runs_optimizers() {
 }
 
 #[tokio::test]
-async fn tpch_explain_q10() {
+async fn tpch_explain_q10() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 
-    register_tpch_csv(&mut ctx, "customer").await;
-    register_tpch_csv(&mut ctx, "orders").await;
-    register_tpch_csv(&mut ctx, "lineitem").await;
-    register_tpch_csv(&mut ctx, "nation").await;
+    register_tpch_csv(&mut ctx, "customer").await?;
+    register_tpch_csv(&mut ctx, "orders").await?;
+    register_tpch_csv(&mut ctx, "lineitem").await?;
+    register_tpch_csv(&mut ctx, "nation").await?;
 
     let sql = "select
     c_custkey,
@@ -3601,6 +3601,8 @@ order by
     \n            TableScan: lineitem projection=Some([0, 5, 6, 8]), filters=[#lineitem.l_returnflag = Utf8(\"R\")]\
     \n        TableScan: nation projection=Some([0, 1])";
     assert_eq!(format!("{:?}", plan.unwrap()), expected);
+
+    Ok(())
 }
 
 fn get_tpch_table_schema(table: &str) -> Schema {
