@@ -18,6 +18,7 @@
 //! Utility functions to make testing DataFusion based crates easier
 
 use std::{env, error::Error, path::PathBuf, sync::Arc};
+use std::collections::BTreeMap;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
@@ -229,8 +230,10 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
 
 /// Get the schema for the aggregate_test_* csv files
 pub fn aggr_test_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Utf8, false),
+    let mut f1 = Field::new("c1", DataType::Utf8, false);
+    f1.set_metadata(Some(BTreeMap::from_iter(vec![("testing".into(), "test".into())].into_iter())));
+    let schema = Schema::new(vec![
+        f1,
         Field::new("c2", DataType::UInt32, false),
         Field::new("c3", DataType::Int8, false),
         Field::new("c4", DataType::Int16, false),
@@ -243,7 +246,9 @@ pub fn aggr_test_schema() -> SchemaRef {
         Field::new("c11", DataType::Float32, false),
         Field::new("c12", DataType::Float64, false),
         Field::new("c13", DataType::Utf8, false),
-    ]))
+    ]);
+
+    Arc::new(schema)
 }
 
 #[cfg(test)]
