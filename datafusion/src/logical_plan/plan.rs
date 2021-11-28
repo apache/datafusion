@@ -20,20 +20,28 @@
 use super::display::{GraphvizVisitor, IndentVisitor};
 use super::expr::{Column, Expr};
 use super::extension::UserDefinedLogicalNode;
+use crate::datasource::empty::EmptyTable;
 use crate::datasource::TableProvider;
-use crate::error::DataFusionError;
+use crate::error::{DataFusionError, Result};
+use crate::from_slice::FromSlice;
+use crate::logical_plan::builder::project_with_alias;
 use crate::logical_plan::dfschema::DFSchemaRef;
+use crate::logical_plan::LogicalPlanBuilder;
 use crate::sql::parser::FileType;
+use arrow::array::Int8Array;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use std::fmt::Formatter;
+use std::hash::{Hash, Hasher};
 use std::{
     collections::HashSet,
     fmt::{self, Display},
     sync::Arc,
 };
+use uuid::Uuid;
 
 /// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JoinType {
     /// Inner Join
     Inner,
@@ -64,7 +72,7 @@ impl Display for JoinType {
 }
 
 /// Join constraint
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum JoinConstraint {
     /// Join ON
     On,
@@ -74,7 +82,7 @@ pub enum JoinConstraint {
 
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Projection {
     /// The list of expressions
     pub expr: Vec<Expr>,
@@ -94,7 +102,7 @@ pub struct Projection {
 /// If the value of `<predicate>` is true, the input row is passed to
 /// the output. If the value of `<predicate>` is false, the row is
 /// discarded.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
     pub predicate: Expr,
@@ -103,7 +111,7 @@ pub struct Filter {
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Window {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -130,8 +138,20 @@ pub struct TableScan {
     pub limit: Option<usize>,
 }
 
+impl PartialEq for TableScan {
+    fn eq(&self, other: &Self) -> bool {
+        self.table_name == other.table_name
+    }
+}
+
+impl Hash for TableScan {
+    fn hash<H: Hasher>(&self, _state: &mut H) {
+        todo!()
+    }
+}
+
 /// Apply Cross Join to two logical plans
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct CrossJoin {
     /// Left input
     pub left: Arc<LogicalPlan>,
@@ -142,7 +162,7 @@ pub struct CrossJoin {
 }
 
 /// Repartition the plan based on a partitioning scheme.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Repartition {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -151,7 +171,7 @@ pub struct Repartition {
 }
 
 /// Union multiple inputs
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Union {
     /// Inputs to merge
     pub inputs: Vec<LogicalPlan>,
@@ -162,7 +182,7 @@ pub struct Union {
 }
 
 /// Creates an in memory table.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct CreateMemoryTable {
     /// The table name
     pub name: String,
@@ -171,7 +191,7 @@ pub struct CreateMemoryTable {
 }
 
 /// Creates an external table.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct CreateExternalTable {
     /// The table schema
     pub schema: DFSchemaRef,
@@ -186,7 +206,7 @@ pub struct CreateExternalTable {
 }
 
 /// Drops a table.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct DropTable {
     /// The table name
     pub name: String,
@@ -198,7 +218,7 @@ pub struct DropTable {
 
 /// Produces a relation with string representations of
 /// various parts of the plan
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Explain {
     /// Should extra (detailed, intermediate plans) be included?
     pub verbose: bool,
@@ -212,7 +232,7 @@ pub struct Explain {
 
 /// Runs the actual plan, and then prints the physical plan with
 /// with execution metrics.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Analyze {
     /// Should extra detail be included?
     pub verbose: bool,
@@ -229,8 +249,20 @@ pub struct Extension {
     pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
 }
 
+impl PartialEq for Extension {
+    fn eq(&self, _other: &Self) -> bool {
+        todo!()
+    }
+}
+
+impl Hash for Extension {
+    fn hash<H: Hasher>(&self, _state: &mut H) {
+        todo!()
+    }
+}
+
 /// Produces no rows: An empty relation with an empty schema
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct EmptyRelation {
     /// Whether to produce a placeholder row
     pub produce_one_row: bool,
@@ -239,7 +271,7 @@ pub struct EmptyRelation {
 }
 
 /// Produces the first `n` tuples from its input and discards the rest.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Limit {
     /// The limit
     pub n: usize,
@@ -250,7 +282,7 @@ pub struct Limit {
 /// Values expression. See
 /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
 /// documentation for more details.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Values {
     /// The table schema
     pub schema: DFSchemaRef,
@@ -260,7 +292,7 @@ pub struct Values {
 
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Aggregate {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -273,7 +305,7 @@ pub struct Aggregate {
 }
 
 /// Sorts its input according to a list of sort expressions.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Sort {
     /// The sort expressions
     pub expr: Vec<Expr>,
@@ -282,7 +314,7 @@ pub struct Sort {
 }
 
 /// Join two logical plans on one or more join columns
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Join {
     /// Left input
     pub left: Arc<LogicalPlan>,
@@ -299,6 +331,14 @@ pub struct Join {
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
 }
+
+#[derive(Clone, PartialEq, Hash)]
+pub struct Map {
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+    /// Columns that append to table
+    pub columns: Vec<(Expr, DataType)>,
+}
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -307,7 +347,7 @@ pub struct Join {
 /// an output relation (table) with a (potentially) different
 /// schema. A plan represents a dataflow tree where data flows
 /// from leaves up to the root to produce the query result.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
@@ -526,7 +566,7 @@ impl LogicalPlan {
     }
 
     /// returns all `Using` join columns in a logical plan
-    pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
+    pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>> {
         struct UsingJoinColumnVisitor {
             using_columns: Vec<HashSet<Column>>,
         }
@@ -534,7 +574,7 @@ impl LogicalPlan {
         impl PlanVisitor for UsingJoinColumnVisitor {
             type Error = DataFusionError;
 
-            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool> {
                 if let LogicalPlan::Join(Join {
                     join_constraint: JoinConstraint::Using,
                     on,
@@ -559,10 +599,134 @@ impl LogicalPlan {
         self.accept(&mut visitor)?;
         Ok(visitor.using_columns)
     }
+
+    pub fn rewrite_to(self, outer: LogicalPlan) -> Result<Self> {
+        if let LogicalPlan::TableScan(TableScan { .. }) = &outer {
+        } else {
+            return Err(DataFusionError::Plan(format!(
+                "outer_table must be a TableScan, but found: {:?}",
+                outer
+            )));
+        }
+        match self {
+            LogicalPlan::Projection(Projection {
+                expr,
+                input,
+                schema,
+                alias,
+            }) => {
+                let input = input.rewrite_to(outer.clone()).unwrap();
+                project_with_alias(input, expr, alias)
+            }
+            LogicalPlan::Filter(Filter { predicate, input }) => {
+                let mut input = input.rewrite_to(outer.clone()).unwrap();
+                // `predicate` may contain subqueries, so need rewrite to process subqueries
+                let new_predicate = predicate
+                    .rewrite_to(outer.schema().fields().len(), &mut input)
+                    .unwrap();
+                // use `new_predicate` instead of `predicate
+                // todo: delete the columns that are used to process subqueries
+                Ok(LogicalPlanBuilder::from(input)
+                    .filter(new_predicate)
+                    .unwrap()
+                    .build()
+                    .unwrap())
+            }
+            LogicalPlan::Window(Window { .. }) => todo!(),
+            LogicalPlan::Aggregate(Aggregate { .. }) => todo!(),
+            LogicalPlan::Sort(Sort { .. }) => todo!(),
+            LogicalPlan::Join(Join { .. }) => todo!(),
+            LogicalPlan::CrossJoin(CrossJoin { .. }) => todo!(),
+            LogicalPlan::Repartition(Repartition { .. }) => todo!(),
+            LogicalPlan::Union(Union { .. }) => todo!(),
+            LogicalPlan::TableScan(TableScan {
+                table_name,
+                source,
+                projection,
+                projected_schema,
+                filters,
+                limit,
+            }) => LogicalPlanBuilder::from(outer)
+                .cross_join(&LogicalPlan::TableScan(TableScan {
+                    table_name,
+                    source,
+                    projection,
+                    projected_schema,
+                    filters,
+                    limit,
+                }))?
+                .build(),
+            LogicalPlan::EmptyRelation(EmptyRelation { .. }) => todo!(),
+            LogicalPlan::Limit(Limit { .. }) => todo!(),
+            LogicalPlan::CreateExternalTable(CreateExternalTable { .. }) => todo!(),
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable { .. }) => todo!(),
+            LogicalPlan::DropTable(DropTable { .. }) => todo!(),
+            LogicalPlan::Values(Values { .. }) => todo!(),
+            LogicalPlan::Explain(Explain { .. }) => todo!(),
+            LogicalPlan::Analyze(Analyze { .. }) => todo!(),
+            LogicalPlan::Extension(Extension { .. }) => todo!(),
+        }
+    }
+    // Get TableScan from Logical Plan
+    fn get_table_scan(&self) -> Result<LogicalPlan> {
+        Ok(if let LogicalPlan::TableScan(TableScan { .. }) = self {
+            self.clone()
+        } else {
+            let name = Uuid::new_v4().to_string();
+            let schema = SchemaRef::new(Schema::new(
+                self.schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.field().clone())
+                    .collect(),
+            ));
+            let fields_size = self.schema().fields().len();
+            LogicalPlanBuilder::scan(
+                name,
+                Arc::new(EmptyTable::new(schema)),
+                Option::from((0..fields_size).collect()),
+            )?
+            .build()
+            .unwrap()
+        })
+    }
+    // process subqueries
+    pub fn process_subquery(self, expr: &LogicalPlan) -> Result<LogicalPlan> {
+        let outer_table = self.get_table_scan().unwrap();
+        let distinct_outer_table = LogicalPlanBuilder::from(outer_table)
+            .distinct()?
+            .build()
+            .unwrap();
+        let result_plan = distinct_outer_table.compute(expr).unwrap();
+        // join with outer_table
+        todo!()
+    }
+    // compute every row in outer_table for subquery
+    fn compute(self, expr: &LogicalPlan) -> Result<LogicalPlan> {
+        let compute_result = LogicalPlanBuilder::from(expr.rewrite_to(self).unwrap())
+            .distinct()?
+            .build()
+            .unwrap();
+        // Add a column contains true to compute_result
+        // 1. create a table contains one col on row, data type: bool, value: true
+        // 2. cross join with `compute_result`
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "exists_subquery_col",
+            DataType::Int8,
+            false,
+        )]));
+        let partitions = vec![vec![RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int8Array::from_slice(&[1]))],
+        )?]];
+        let plan_builder =
+            LogicalPlanBuilder::scan_memory(partitions, schema, None).unwrap();
+        plan_builder.cross_join(&compute_result).unwrap().build()
+    }
 }
 
 /// Logical partitioning schemes supported by the repartition operator.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
@@ -1025,7 +1189,7 @@ impl fmt::Debug for LogicalPlan {
 
 /// Represents which type of plan, when storing multiple
 /// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
@@ -1065,7 +1229,7 @@ impl fmt::Display for PlanType {
 }
 
 /// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 #[allow(clippy::rc_buffer)]
 pub struct StringifiedPlan {
     /// An identifier of what type of plan this string represents

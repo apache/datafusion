@@ -374,6 +374,9 @@ where
                 expr: Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
                 key: key.clone(),
             }),
+            Expr::Exists(logical_plan) => {
+                Ok(Expr::Exists(Box::from(*logical_plan.clone())))
+            }
         },
     }
 }

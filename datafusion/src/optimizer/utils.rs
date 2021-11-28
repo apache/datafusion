@@ -82,7 +82,8 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::AggregateUDF { .. }
             | Expr::InList { .. }
             | Expr::Wildcard
-            | Expr::GetIndexedField { .. } => {}
+            | Expr::GetIndexedField { .. }
+            | Expr::Exists(_) => {}
         }
         Ok(Recursion::Continue(self))
     }
@@ -347,6 +348,7 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         Expr::Wildcard { .. } => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
         )),
+        Expr::Exists(_) => Ok(vec![]),
     }
 }
 
@@ -474,7 +476,8 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
         Expr::Column(_)
         | Expr::Literal(_)
         | Expr::InList { .. }
-        | Expr::ScalarVariable(_) => Ok(expr.clone()),
+        | Expr::ScalarVariable(_)
+        | Expr::Exists(_) => Ok(expr.clone()),
         Expr::Sort {
             asc, nulls_first, ..
         } => Ok(Expr::Sort {

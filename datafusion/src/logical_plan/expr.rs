@@ -373,6 +373,8 @@ pub enum Expr {
     },
     /// Represents a reference to all fields in a schema.
     Wildcard,
+    /// Exists subquery
+    Exists(Box<LogicalPlan>),
 }
 
 /// Fixed seed for the hashing so that Ords are consistent across runs
@@ -508,12 +510,62 @@ impl Expr {
 
                 get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
             }
+            Expr::Exists(logical_plan) => {
+                let df_fields = logical_plan.schema().fields();
+                let mut fields = Vec::with_capacity(df_fields.len());
+                let _ = df_fields
+                    .iter()
+                    .map(|df_field| fields.push(df_field.field().clone()));
+                match fields.len() {
+                    1 => Ok(fields[0].data_type().clone()),
+                    _ => Ok(DataType::Struct(fields)),
+                }
+            }
         }
     }
 
+<<<<<<< HEAD
     /// Returns the nullability of the expression based on [ExprSchema].
     ///
     /// Note: [DFSchema] implements [ExprSchema].
+=======
+    pub fn rewrite_to(self, out_arity: usize, outer: &mut LogicalPlan) -> Result<Expr> {
+        Ok(match self {
+            Expr::Alias(_, _) => todo!(),
+            Expr::Column(_) => todo!(),
+            Expr::ScalarVariable(_) => todo!(),
+            Expr::Literal(_) => todo!(),
+            Expr::BinaryExpr { .. } => todo!(),
+            Expr::Not(_) => todo!(),
+            Expr::IsNotNull(_) => todo!(),
+            Expr::IsNull(_) => todo!(),
+            Expr::Negative(_) => todo!(),
+            Expr::GetIndexedField { .. } => todo!(),
+            Expr::Between { .. } => todo!(),
+            Expr::Case { .. } => todo!(),
+            Expr::Cast { .. } => todo!(),
+            Expr::TryCast { .. } => todo!(),
+            Expr::Sort { .. } => todo!(),
+            Expr::ScalarFunction { .. } => todo!(),
+            Expr::ScalarUDF { .. } => todo!(),
+            Expr::AggregateFunction { .. } => todo!(),
+            Expr::WindowFunction { .. } => todo!(),
+            Expr::AggregateUDF { .. } => todo!(),
+            Expr::InList { .. } => todo!(),
+            Expr::Wildcard => todo!(),
+            Expr::Exists(logicalPlan) => {
+                *outer = outer.process_subquery(logicalPlan.as_ref()).unwrap();
+                // finally, return the column contains `bool`
+                Expr::Column(Column {
+                    relation: None,
+                    name: "".to_string(),
+                })
+            }
+        })
+    }
+
+    /// Returns the nullability of the expression based on [arrow::datatypes::Schema].
+>>>>>>> 956d7f1d (fix build)
     ///
     /// # Errors
     ///
@@ -568,6 +620,14 @@ impl Expr {
             Expr::GetIndexedField { ref expr, key } => {
                 let data_type = expr.get_type(input_schema)?;
                 get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+            }
+            Expr::Exists(logical_plan) => {
+                for df_field in logical_plan.schema().fields() {
+                    if !df_field.is_nullable() {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
             }
         }
     }
@@ -752,7 +812,7 @@ impl Expr {
     /// pre_visit(Column("foo"))
     /// pre_visit(Column("bar"))
     /// post_visit(Column("bar"))
-    /// post_visit(Column("bar"))
+    /// post_visit(Column("foo"))
     /// post_visit(BinaryExpr(GT))
     /// ```
     ///
@@ -846,6 +906,8 @@ impl Expr {
                 list.iter()
                     .try_fold(visitor, |visitor, arg| arg.accept(visitor))
             }
+            Expr::Wildcard | Expr::Exists(_) => Ok(visitor),
+            Expr::GetIndexedField { ref expr, .. } => expr.accept(visitor),
         }?;
 
         visitor.post_visit(self)
@@ -872,7 +934,7 @@ impl Expr {
     /// ```text
     /// pre_visit(BinaryExpr(GT))
     /// pre_visit(Column("foo"))
-    /// mutatate(Column("foo"))
+    /// mutate(Column("foo"))
     /// pre_visit(Column("bar"))
     /// mutate(Column("bar"))
     /// mutate(BinaryExpr(GT))
@@ -1010,6 +1072,7 @@ impl Expr {
                 expr: rewrite_boxed(expr, rewriter)?,
                 key,
             },
+            Expr::Exists(logical_plan) => Expr::Exists(logical_plan),
         };
 
         // now rewrite this expression itself
@@ -2063,6 +2126,9 @@ impl fmt::Debug for Expr {
             Expr::GetIndexedField { ref expr, key } => {
                 write!(f, "({:?})[{}]", expr, key)
             }
+            Expr::Exists(logical_plan) => {
+                write!(f, "exists subquery: {:?}", logical_plan)
+            }
         }
     }
 }
@@ -2224,6 +2290,9 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::Wildcard => Err(DataFusionError::Internal(
             "Create name does not support wildcard".to_string(),
         )),
+        Expr::Exists(logical_plan) => {
+            Ok(format!("Exists subquery {}", logical_plan.display()))
+        }
     }
 }
 

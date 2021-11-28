@@ -32,7 +32,7 @@ use std::fmt::{Display, Formatter};
 pub type DFSchemaRef = Arc<DFSchema>;
 
 /// DFSchema wraps an Arrow schema and adds relation names
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DFSchema {
     /// Fields
     fields: Vec<DFField>,
@@ -403,7 +403,7 @@ impl Display for DFSchema {
 }
 
 /// DFField wraps an Arrow field and adds an optional qualifier
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DFField {
     /// Optional qualifier (usually a table or relation name)
     qualifier: Option<String>,

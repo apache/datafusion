@@ -457,6 +457,9 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("GetIndexedField-");
                 desc.push_str(&key.to_string());
             }
+            Expr::Exists(_) => {
+                desc.push_str("Exists-subquery");
+            }
         }
 
         desc
