@@ -106,23 +106,16 @@ impl OptimizerRule for ConstantFolding {
                             .rewrite(&mut const_evaluator)?
                             .rewrite(&mut simplifier)?;
 
-                        match plan {
-                            LogicalPlan::Filter { .. } => Ok(new_e),
-                            _ => {
-                                let new_name = &new_e.name(plan.schema());
+                        let new_name = &new_e.name(plan.schema());
 
-                                if let (Ok(expr_name), Ok(new_expr_name)) =
-                                    (name, new_name)
-                                {
-                                    if expr_name != new_expr_name {
-                                        Ok(new_e.alias(expr_name))
-                                    } else {
-                                        Ok(new_e)
-                                    }
-                                } else {
-                                    Ok(new_e)
-                                }
+                        if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
+                            if expr_name != new_expr_name {
+                                Ok(new_e.alias(expr_name))
+                            } else {
+                                Ok(new_e)
                             }
+                        } else {
+                            Ok(new_e)
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
