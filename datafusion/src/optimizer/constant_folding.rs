@@ -60,7 +60,8 @@ impl OptimizerRule for ConstantFolding {
             schemas: plan.all_schemas(),
         };
 
-        let mut const_evaluator = utils::ConstEvaluator::new(execution_props);
+        let mut const_evaluator =
+            super::simplify_expressions::ConstEvaluator::new(execution_props);
 
         match plan {
             // Recurse into plan, apply optimization where possible
