@@ -26,13 +26,8 @@ use crate::optimizer::utils;
 /// Simplifies plans by rewriting [`Expr`]`s evaluating constants
 /// and applying algebraic simplifications
 ///
-/// Example transformations that are applied:
-/// * `expr = true` and `expr != false` to `expr` when `expr` is of boolean type
-/// * `expr = false` and `expr != true` to `!expr` when `expr` is of boolean type
-/// * `true = true` and `false = false` to `true`
-/// * `false = true` and `true = false` to `false`
-/// * `!!expr` to `expr`
-/// * `expr = null` and `expr != null` to `null`
+/// For example
+/// `true && col` --> `col` where `col` is a boolean types
 pub struct ConstantFolding {}
 
 impl ConstantFolding {

@@ -299,11 +299,11 @@ impl SimplifyExpressions {
 
 /// Partially evaluate `Expr`s so constant subtrees are evaluated at plan time.
 ///
-/// Note it does not handle other algebriac rewrites such as `(a and false)` --> `a`
+/// Note it does not handle algebriac rewrites such as `(a and false)` --> `a`
 ///
 /// ```
 /// # use datafusion::prelude::*;
-/// # use datafusion::optimizer::utils::ConstEvaluator;
+/// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
 /// # use datafusion::execution::context::ExecutionProps;
 ///
 /// let execution_props = ExecutionProps::new();
@@ -483,8 +483,13 @@ impl ConstEvaluator {
 
 /// Simplifies [`Expr`]s by applying algebraic transformation rules
 ///
-/// For example
-/// `true && col` --> `col` where `col` is a boolean types
+/// Example transformations that are applied:
+/// * `expr = true` and `expr != false` to `expr` when `expr` is of boolean type
+/// * `expr = false` and `expr != true` to `!expr` when `expr` is of boolean type
+/// * `true = true` and `false = false` to `true`
+/// * `false = true` and `true = false` to `false`
+/// * `!!expr` to `expr`
+/// * `expr = null` and `expr != null` to `null`
 pub(crate) struct Simplifier<'a> {
     /// input schemas
     schemas: Vec<&'a DFSchemaRef>,
@@ -1193,7 +1198,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_expr_not_not() -> Result<()> {
+    fn simplify_expr_not_not() -> Result<()> {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
@@ -1208,7 +1213,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_expr_null_comparison() -> Result<()> {
+    fn simplify_expr_null_comparison() -> Result<()> {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
@@ -1243,7 +1248,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_expr_eq() -> Result<()> {
+    fn simplify_expr_eq() -> Result<()> {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
@@ -1273,7 +1278,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_expr_eq_skip_nonboolean_type() -> Result<()> {
+    fn simplify_expr_eq_skip_nonboolean_type() -> Result<()> {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
@@ -1312,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_expr_not_eq() -> Result<()> {
+    fn simplify_expr_not_eq() -> Result<()> {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
@@ -1347,7 +1352,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_expr_not_eq_skip_nonboolean_type() -> Result<()> {
+    fn simplify_expr_not_eq_skip_nonboolean_type() -> Result<()> {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
@@ -1382,7 +1387,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_expr_case_when_then_else() -> Result<()> {
+    fn simplify_expr_case_when_then_else() -> Result<()> {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
@@ -1412,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_expr_bool_or() -> Result<()> {
+    fn simplify_expr_bool_or() -> Result<()> {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
@@ -1481,7 +1486,7 @@ mod tests {
     }
 
     #[test]
-    fn optimize_expr_bool_and() -> Result<()> {
+    fn simplify_expr_bool_and() -> Result<()> {
         let schema = expr_test_schema();
         let mut rewriter = Simplifier {
             schemas: vec![&schema],
