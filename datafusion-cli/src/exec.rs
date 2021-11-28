@@ -103,7 +103,10 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: &mut PrintOptions)
                                         eprintln!("{}", e)
                                     }
                                 } else {
-                                    eprintln!("'\\{}' is not a valid command", &line[1..]);
+                                    eprintln!(
+                                        "'\\{}' is not a valid command",
+                                        &line[1..]
+                                    );
                                 }
                             } else {
                                 println!("Output format is {}.", print_options.format);
