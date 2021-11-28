@@ -96,12 +96,14 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: &mut PrintOptions)
                         Command::Quit => break,
                         Command::OutputFormat(subcommand) => {
                             if let Some(subcommand) = subcommand {
-                                if let Ok(command) = OutputFormat::from_str(subcommand) {
+                                if let Ok(command) = subcommand.parse::<OutputFormat>() {
                                     if let Err(e) =
                                         command.execute(&mut print_options).await
                                     {
                                         eprintln!("{}", e)
                                     }
+                                } else {
+                                    eprintln!("'\\{}' is not a valid command", &line[1..]);
                                 }
                             } else {
                                 println!("Output format is {}.", print_options.format);

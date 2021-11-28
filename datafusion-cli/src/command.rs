@@ -204,7 +204,7 @@ impl OutputFormat {
     pub async fn execute(&self, print_options: &mut PrintOptions) -> Result<()> {
         match self {
             Self::ChangeFormat(format) => {
-                if let Ok(format) = PrintFormat::from_str(format) {
+                if let Ok(format) = format.parse::<PrintFormat>() {
                     print_options.format = format;
                     println!("Output format is {}.", print_options.format);
                     Ok(())
