@@ -451,6 +451,10 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("GetIndexedField-");
                 desc.push_str(&key.to_string());
             }
+            Expr::Select { name, .. } => {
+                desc.push_str("Select-");
+                desc.push_str(name);
+            }
         }
 
         desc

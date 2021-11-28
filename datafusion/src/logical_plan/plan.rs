@@ -25,6 +25,7 @@ use crate::error::DataFusionError;
 use crate::logical_plan::dfschema::DFSchemaRef;
 use crate::sql::parser::FileType;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use std::cmp::Ordering;
 use std::{
     collections::HashSet,
     fmt::{self, Display},
@@ -32,7 +33,7 @@ use std::{
 };
 
 /// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
 pub enum JoinType {
     /// Inner Join
     Inner,
@@ -49,7 +50,7 @@ pub enum JoinType {
 }
 
 /// Join constraint
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum JoinConstraint {
     /// Join ON
     On,
@@ -59,7 +60,7 @@ pub enum JoinConstraint {
 
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Projection {
     /// The list of expressions
     pub expr: Vec<Expr>,
@@ -79,7 +80,7 @@ pub struct Projection {
 /// If the value of `<predicate>` is true, the input row is passed to
 /// the output. If the value of `<predicate>` is false, the row is
 /// discarded.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
     pub predicate: Expr,
@@ -88,7 +89,7 @@ pub struct Filter {
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Window {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -115,8 +116,20 @@ pub struct TableScan {
     pub limit: Option<usize>,
 }
 
+impl PartialEq for TableScan {
+    fn eq(&self, other: &Self) -> bool {
+        todo!()
+    }
+}
+
+impl PartialOrd for TableScan {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        todo!()
+    }
+}
+
 /// Apply Cross Join to two logical plans
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct CrossJoin {
     /// Left input
     pub left: Arc<LogicalPlan>,
@@ -127,7 +140,7 @@ pub struct CrossJoin {
 }
 
 /// Repartition the plan based on a partitioning scheme.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Repartition {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -136,7 +149,7 @@ pub struct Repartition {
 }
 
 /// Union multiple inputs
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Union {
     /// Inputs to merge
     pub inputs: Vec<LogicalPlan>,
@@ -147,7 +160,7 @@ pub struct Union {
 }
 
 /// Creates an in memory table.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct CreateMemoryTable {
     /// The table name
     pub name: String,
@@ -156,7 +169,7 @@ pub struct CreateMemoryTable {
 }
 
 /// Creates an external table.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct CreateExternalTable {
     /// The table schema
     pub schema: DFSchemaRef,
@@ -171,7 +184,7 @@ pub struct CreateExternalTable {
 }
 
 /// Drops a table.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct DropTable {
     /// The table name
     pub name: String,
@@ -183,7 +196,7 @@ pub struct DropTable {
 
 /// Produces a relation with string representations of
 /// various parts of the plan
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Explain {
     /// Should extra (detailed, intermediate plans) be included?
     pub verbose: bool,
@@ -197,7 +210,7 @@ pub struct Explain {
 
 /// Runs the actual plan, and then prints the physical plan with
 /// with execution metrics.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Analyze {
     /// Should extra detail be included?
     pub verbose: bool,
@@ -214,8 +227,19 @@ pub struct Extension {
     pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
 }
 
+impl PartialEq for Extension {
+    fn eq(&self, other: &Self) -> bool {
+        todo!()
+    }
+}
+
+impl PartialOrd for Extension {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        todo!()
+    }
+}
 /// Produces no rows: An empty relation with an empty schema
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct EmptyRelation {
     /// Whether to produce a placeholder row
     pub produce_one_row: bool,
@@ -224,7 +248,7 @@ pub struct EmptyRelation {
 }
 
 /// Produces the first `n` tuples from its input and discards the rest.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Limit {
     /// The limit
     pub n: usize,
@@ -235,7 +259,7 @@ pub struct Limit {
 /// Values expression. See
 /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
 /// documentation for more details.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Values {
     /// The table schema
     pub schema: DFSchemaRef,
@@ -245,7 +269,7 @@ pub struct Values {
 
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Aggregate {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -258,7 +282,7 @@ pub struct Aggregate {
 }
 
 /// Sorts its input according to a list of sort expressions.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Sort {
     /// The sort expressions
     pub expr: Vec<Expr>,
@@ -267,7 +291,7 @@ pub struct Sort {
 }
 
 /// Join two logical plans on one or more join columns
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub struct Join {
     /// Left input
     pub left: Arc<LogicalPlan>,
@@ -292,7 +316,7 @@ pub struct Join {
 /// an output relation (table) with a (potentially) different
 /// schema. A plan represents a dataflow tree where data flows
 /// from leaves up to the root to produce the query result.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, PartialOrd)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
@@ -547,7 +571,7 @@ impl LogicalPlan {
 }
 
 /// Logical partitioning schemes supported by the repartition operator.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
@@ -1004,7 +1028,7 @@ impl fmt::Debug for LogicalPlan {
 
 /// Represents which type of plan, when storing multiple
 /// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
@@ -1044,7 +1068,7 @@ impl fmt::Display for PlanType {
 }
 
 /// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 #[allow(clippy::rc_buffer)]
 pub struct StringifiedPlan {
     /// An identifier of what type of plan this string represents

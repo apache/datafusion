@@ -83,6 +83,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             Expr::InList { .. } => {}
             Expr::Wildcard => {}
             Expr::GetIndexedField { .. } => {}
+            Expr::Select { .. } => {}
         }
         Ok(Recursion::Continue(self))
     }
@@ -349,6 +350,7 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
         )),
         Expr::GetIndexedField { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
+        Expr::Select { .. } => Ok(vec![]),
     }
 }
 
@@ -473,9 +475,10 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
         }
         Expr::Not(_) => Ok(Expr::Not(Box::new(expressions[0].clone()))),
         Expr::Negative(_) => Ok(Expr::Negative(Box::new(expressions[0].clone()))),
-        Expr::Column(_) => Ok(expr.clone()),
-        Expr::Literal(_) => Ok(expr.clone()),
-        Expr::ScalarVariable(_) => Ok(expr.clone()),
+        Expr::Column(_)
+        | Expr::Literal(_)
+        | Expr::ScalarVariable(_)
+        | Expr::Select { .. } => Ok(expr.clone()),
         Expr::Sort {
             asc, nulls_first, ..
         } => Ok(Expr::Sort {

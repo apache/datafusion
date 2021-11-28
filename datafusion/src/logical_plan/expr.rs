@@ -368,6 +368,19 @@ pub enum Expr {
     },
     /// Represents a reference to all fields in a schema.
     Wildcard,
+    /// Scalar subquery: If the subquery returns no rows, the value is NULL;
+    /// if it returns more than one row, it is an error.
+    ScalarSubquery {
+        logical_plan: Box<LogicalPlan>,
+    },
+    /// Exist subquery
+    Exist {
+        logical_plan: Box<LogicalPlan>,
+    },
+    /// In subquery
+    InSubquery {
+        logical_plan: Box<LogicalPlan>,
+    }
 }
 
 impl Expr {
@@ -446,6 +459,17 @@ impl Expr {
 
                 get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
             }
+            Expr::Select { logical_plan, .. } => {
+                let df_fields = logical_plan.schema().fields();
+                let mut fields = Vec::with_capacity(df_fields.len());
+                df_fields
+                    .iter()
+                    .map(|df_field| fields.push(df_field.field().clone()));
+                match fields.len() {
+                    1 => Ok(fields[0].data_type().clone()),
+                    _ => Ok(DataType::Struct(fields)),
+                }
+            }
         }
     }
 
@@ -504,6 +528,14 @@ impl Expr {
             Expr::GetIndexedField { ref expr, key } => {
                 let data_type = expr.get_type(input_schema)?;
                 get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+            }
+            Expr::Select { logical_plan, .. } => {
+                for df_field in logical_plan.schema().fields() {
+                    if !df_field.is_nullable() {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
             }
         }
     }
@@ -684,7 +716,7 @@ impl Expr {
     /// pre_visit(Column("foo"))
     /// pre_visit(Column("bar"))
     /// post_visit(Column("bar"))
-    /// post_visit(Column("bar"))
+    /// post_visit(Column("foo"))
     /// post_visit(BinaryExpr(GT))
     /// ```
     ///
@@ -784,6 +816,7 @@ impl Expr {
             }
             Expr::Wildcard => Ok(visitor),
             Expr::GetIndexedField { ref expr, .. } => expr.accept(visitor),
+            Expr::Select { .. } => Ok(visitor),
         }?;
 
         visitor.post_visit(self)
@@ -948,6 +981,7 @@ impl Expr {
                 expr: rewrite_boxed(expr, rewriter)?,
                 key,
             },
+            Expr::Select { logical_plan, name } => Expr::Select { name, logical_plan },
         };
 
         // now rewrite this expression itself
@@ -1852,6 +1886,7 @@ impl fmt::Debug for Expr {
             Expr::GetIndexedField { ref expr, key } => {
                 write!(f, "({:?})[{}]", expr, key)
             }
+            Expr::Select { name, .. } => write!(f, "subquery({})", name),
         }
     }
 }
@@ -2013,6 +2048,9 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::Wildcard => Err(DataFusionError::Internal(
             "Create name does not support wildcard".to_string(),
         )),
+        Expr::Select { logical_plan, .. } => {
+            Ok(format!("subquery {} in Select", logical_plan.display()))
+        }
     }
 }
 

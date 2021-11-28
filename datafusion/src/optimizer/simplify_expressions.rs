@@ -480,6 +480,7 @@ impl ConstEvaluator {
             Expr::WindowFunction { .. } => false,
             Expr::Sort { .. } => false,
             Expr::Wildcard => false,
+            Expr::Select { .. } => false,
 
             Expr::Literal(_) => true,
             Expr::BinaryExpr { .. } => true,

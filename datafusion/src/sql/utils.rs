@@ -374,6 +374,10 @@ where
                 expr: Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
                 key: key.clone(),
             }),
+            Expr::Select { logical_plan, name } => Ok(Expr::Select {
+                name: name.clone(),
+                logical_plan: logical_plan.clone(),
+            }),
         },
     }
 }
