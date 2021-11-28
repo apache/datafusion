@@ -1587,7 +1587,7 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-	        Filter: #test.b > Int32(1)\
+	        Filter: #test.b > Int32(1) AS test.b > Int32(1) AND test.b > Int32(1)\
             \n  Projection: #test.a\
             \n    TableScan: test projection=None",
         );
@@ -1609,7 +1609,7 @@ mod tests {
         assert_optimized_plan_eq(
             &plan,
             "\
-            Filter: #test.a > Int32(5) AND #test.b < Int32(6)\
+            Filter: #test.a > Int32(5) AND #test.b < Int32(6) AS test.a > Int32(5) AND test.b < Int32(6) AND test.a > Int32(5)\
             \n  Projection: #test.a\
 	        \n    TableScan: test projection=None",
         );
