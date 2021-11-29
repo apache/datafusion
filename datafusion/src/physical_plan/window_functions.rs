@@ -149,11 +149,16 @@ impl FromStr for BuiltInWindowFunction {
 }
 
 /// Returns the datatype of the window function
-pub fn return_type(fun: &WindowFunction, arg_types: &[DataType]) -> Result<DataType> {
+pub fn return_type(
+    fun: &WindowFunction,
+    input_expr_types: &[DataType],
+) -> Result<DataType> {
     match fun {
-        WindowFunction::AggregateFunction(fun) => aggregates::return_type(fun, arg_types),
+        WindowFunction::AggregateFunction(fun) => {
+            aggregates::return_type(fun, input_expr_types)
+        }
         WindowFunction::BuiltInWindowFunction(fun) => {
-            return_type_for_built_in(fun, arg_types)
+            return_type_for_built_in(fun, input_expr_types)
         }
     }
 }
@@ -161,13 +166,13 @@ pub fn return_type(fun: &WindowFunction, arg_types: &[DataType]) -> Result<DataT
 /// Returns the datatype of the built-in window function
 pub(super) fn return_type_for_built_in(
     fun: &BuiltInWindowFunction,
-    arg_types: &[DataType],
+    input_expr_types: &[DataType],
 ) -> Result<DataType> {
     // Note that this function *must* return the same type that the respective physical expression returns
     // or the execution panics.
 
     // verify that this is a valid set of data types for this function
-    data_types(arg_types, &signature_for_built_in(fun))?;
+    data_types(input_expr_types, &signature_for_built_in(fun))?;
 
     match fun {
         BuiltInWindowFunction::RowNumber
@@ -181,7 +186,7 @@ pub(super) fn return_type_for_built_in(
         | BuiltInWindowFunction::Lead
         | BuiltInWindowFunction::FirstValue
         | BuiltInWindowFunction::LastValue
-        | BuiltInWindowFunction::NthValue => Ok(arg_types[0].clone()),
+        | BuiltInWindowFunction::NthValue => Ok(input_expr_types[0].clone()),
     }
 }
 

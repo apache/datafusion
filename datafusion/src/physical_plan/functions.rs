@@ -501,12 +501,12 @@ make_utf8_to_return_type!(utf8_to_binary_type, DataType::Binary, DataType::Binar
 /// Returns the datatype of the scalar function
 pub fn return_type(
     fun: &BuiltinScalarFunction,
-    arg_types: &[DataType],
+    input_expr_types: &[DataType],
 ) -> Result<DataType> {
     // Note that this function *must* return the same type that the respective physical expression returns
     // or the execution panics.
 
-    if arg_types.is_empty() && !fun.supports_zero_argument() {
+    if input_expr_types.is_empty() && !fun.supports_zero_argument() {
         return Err(DataFusionError::Internal(format!(
             "Builtin scalar function {} does not support empty arguments",
             fun
@@ -514,20 +514,22 @@ pub fn return_type(
     }
 
     // verify that this is a valid set of data types for this function
-    data_types(arg_types, &signature(fun))?;
+    data_types(input_expr_types, &signature(fun))?;
 
     // the return type of the built in function.
     // Some built-in functions' return type depends on the incoming type.
     match fun {
         BuiltinScalarFunction::Array => Ok(DataType::FixedSizeList(
-            Box::new(Field::new("item", arg_types[0].clone(), true)),
-            arg_types.len() as i32,
+            Box::new(Field::new("item", input_expr_types[0].clone(), true)),
+            input_expr_types.len() as i32,
         )),
         BuiltinScalarFunction::Ascii => Ok(DataType::Int32),
-        BuiltinScalarFunction::BitLength => utf8_to_int_type(&arg_types[0], "bit_length"),
-        BuiltinScalarFunction::Btrim => utf8_to_str_type(&arg_types[0], "btrim"),
+        BuiltinScalarFunction::BitLength => {
+            utf8_to_int_type(&input_expr_types[0], "bit_length")
+        }
+        BuiltinScalarFunction::Btrim => utf8_to_str_type(&input_expr_types[0], "btrim"),
         BuiltinScalarFunction::CharacterLength => {
-            utf8_to_int_type(&arg_types[0], "character_length")
+            utf8_to_int_type(&input_expr_types[0], "character_length")
         }
         BuiltinScalarFunction::Chr => Ok(DataType::Utf8),
         BuiltinScalarFunction::Concat => Ok(DataType::Utf8),
@@ -536,40 +538,58 @@ pub fn return_type(
         BuiltinScalarFunction::DateTrunc => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
-        BuiltinScalarFunction::InitCap => utf8_to_str_type(&arg_types[0], "initcap"),
-        BuiltinScalarFunction::Left => utf8_to_str_type(&arg_types[0], "left"),
-        BuiltinScalarFunction::Lower => utf8_to_str_type(&arg_types[0], "lower"),
-        BuiltinScalarFunction::Lpad => utf8_to_str_type(&arg_types[0], "lpad"),
-        BuiltinScalarFunction::Ltrim => utf8_to_str_type(&arg_types[0], "ltrim"),
-        BuiltinScalarFunction::MD5 => utf8_to_str_type(&arg_types[0], "md5"),
+        BuiltinScalarFunction::InitCap => {
+            utf8_to_str_type(&input_expr_types[0], "initcap")
+        }
+        BuiltinScalarFunction::Left => utf8_to_str_type(&input_expr_types[0], "left"),
+        BuiltinScalarFunction::Lower => utf8_to_str_type(&input_expr_types[0], "lower"),
+        BuiltinScalarFunction::Lpad => utf8_to_str_type(&input_expr_types[0], "lpad"),
+        BuiltinScalarFunction::Ltrim => utf8_to_str_type(&input_expr_types[0], "ltrim"),
+        BuiltinScalarFunction::MD5 => utf8_to_str_type(&input_expr_types[0], "md5"),
         BuiltinScalarFunction::NullIf => {
             // NULLIF has two args and they might get coerced, get a preview of this
-            let coerced_types = data_types(arg_types, &signature(fun));
+            let coerced_types = data_types(input_expr_types, &signature(fun));
             coerced_types.map(|typs| typs[0].clone())
         }
         BuiltinScalarFunction::OctetLength => {
-            utf8_to_int_type(&arg_types[0], "octet_length")
+            utf8_to_int_type(&input_expr_types[0], "octet_length")
         }
         BuiltinScalarFunction::Random => Ok(DataType::Float64),
         BuiltinScalarFunction::RegexpReplace => {
-            utf8_to_str_type(&arg_types[0], "regex_replace")
+            utf8_to_str_type(&input_expr_types[0], "regex_replace")
         }
-        BuiltinScalarFunction::Repeat => utf8_to_str_type(&arg_types[0], "repeat"),
-        BuiltinScalarFunction::Replace => utf8_to_str_type(&arg_types[0], "replace"),
-        BuiltinScalarFunction::Reverse => utf8_to_str_type(&arg_types[0], "reverse"),
-        BuiltinScalarFunction::Right => utf8_to_str_type(&arg_types[0], "right"),
-        BuiltinScalarFunction::Rpad => utf8_to_str_type(&arg_types[0], "rpad"),
-        BuiltinScalarFunction::Rtrim => utf8_to_str_type(&arg_types[0], "rtrimp"),
-        BuiltinScalarFunction::SHA224 => utf8_to_binary_type(&arg_types[0], "sha224"),
-        BuiltinScalarFunction::SHA256 => utf8_to_binary_type(&arg_types[0], "sha256"),
-        BuiltinScalarFunction::SHA384 => utf8_to_binary_type(&arg_types[0], "sha384"),
-        BuiltinScalarFunction::SHA512 => utf8_to_binary_type(&arg_types[0], "sha512"),
-        BuiltinScalarFunction::Digest => utf8_to_binary_type(&arg_types[0], "digest"),
-        BuiltinScalarFunction::SplitPart => utf8_to_str_type(&arg_types[0], "split_part"),
+        BuiltinScalarFunction::Repeat => utf8_to_str_type(&input_expr_types[0], "repeat"),
+        BuiltinScalarFunction::Replace => {
+            utf8_to_str_type(&input_expr_types[0], "replace")
+        }
+        BuiltinScalarFunction::Reverse => {
+            utf8_to_str_type(&input_expr_types[0], "reverse")
+        }
+        BuiltinScalarFunction::Right => utf8_to_str_type(&input_expr_types[0], "right"),
+        BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
+        BuiltinScalarFunction::Rtrim => utf8_to_str_type(&input_expr_types[0], "rtrimp"),
+        BuiltinScalarFunction::SHA224 => {
+            utf8_to_binary_type(&input_expr_types[0], "sha224")
+        }
+        BuiltinScalarFunction::SHA256 => {
+            utf8_to_binary_type(&input_expr_types[0], "sha256")
+        }
+        BuiltinScalarFunction::SHA384 => {
+            utf8_to_binary_type(&input_expr_types[0], "sha384")
+        }
+        BuiltinScalarFunction::SHA512 => {
+            utf8_to_binary_type(&input_expr_types[0], "sha512")
+        }
+        BuiltinScalarFunction::Digest => {
+            utf8_to_binary_type(&input_expr_types[0], "digest")
+        }
+        BuiltinScalarFunction::SplitPart => {
+            utf8_to_str_type(&input_expr_types[0], "split_part")
+        }
         BuiltinScalarFunction::StartsWith => Ok(DataType::Boolean),
-        BuiltinScalarFunction::Strpos => utf8_to_int_type(&arg_types[0], "strpos"),
-        BuiltinScalarFunction::Substr => utf8_to_str_type(&arg_types[0], "substr"),
-        BuiltinScalarFunction::ToHex => Ok(match arg_types[0] {
+        BuiltinScalarFunction::Strpos => utf8_to_int_type(&input_expr_types[0], "strpos"),
+        BuiltinScalarFunction::Substr => utf8_to_str_type(&input_expr_types[0], "substr"),
+        BuiltinScalarFunction::ToHex => Ok(match input_expr_types[0] {
             DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
                 DataType::Utf8
             }
@@ -593,10 +613,12 @@ pub fn return_type(
             Ok(DataType::Timestamp(TimeUnit::Second, None))
         }
         BuiltinScalarFunction::Now => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-        BuiltinScalarFunction::Translate => utf8_to_str_type(&arg_types[0], "translate"),
-        BuiltinScalarFunction::Trim => utf8_to_str_type(&arg_types[0], "trim"),
-        BuiltinScalarFunction::Upper => utf8_to_str_type(&arg_types[0], "upper"),
-        BuiltinScalarFunction::RegexpMatch => Ok(match arg_types[0] {
+        BuiltinScalarFunction::Translate => {
+            utf8_to_str_type(&input_expr_types[0], "translate")
+        }
+        BuiltinScalarFunction::Trim => utf8_to_str_type(&input_expr_types[0], "trim"),
+        BuiltinScalarFunction::Upper => utf8_to_str_type(&input_expr_types[0], "upper"),
+        BuiltinScalarFunction::RegexpMatch => Ok(match input_expr_types[0] {
             DataType::LargeUtf8 => {
                 DataType::List(Box::new(Field::new("item", DataType::LargeUtf8, true)))
             }
@@ -628,7 +650,7 @@ pub fn return_type(
         | BuiltinScalarFunction::Sin
         | BuiltinScalarFunction::Sqrt
         | BuiltinScalarFunction::Tan
-        | BuiltinScalarFunction::Trunc => match arg_types[0] {
+        | BuiltinScalarFunction::Trunc => match input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
             _ => Ok(DataType::Float64),
         },
@@ -1130,18 +1152,18 @@ pub fn create_physical_fun(
 /// This function errors when `args`' can't be coerced to a valid argument type of the function.
 pub fn create_physical_expr(
     fun: &BuiltinScalarFunction,
-    args: &[Arc<dyn PhysicalExpr>],
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     ctx_state: &ExecutionContextState,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let args = coerce(args, input_schema, &signature(fun))?;
+    let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &signature(fun))?;
 
-    let arg_types = args
+    let coerced_expr_types = coerced_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let data_type = return_type(fun, &arg_types)?;
+    let data_type = return_type(fun, &coerced_expr_types)?;
 
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation
@@ -1149,7 +1171,7 @@ pub fn create_physical_expr(
         // here we return either a cast fn or string timestamp translation based on the expression data type
         // so we don't have to pay a per-array/batch cost.
         BuiltinScalarFunction::ToTimestamp => {
-            Arc::new(match args[0].data_type(input_schema) {
+            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
                 Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
                     |col_values: &[ColumnarValue]| {
                         cast_column(
@@ -1169,7 +1191,7 @@ pub fn create_physical_expr(
             })
         }
         BuiltinScalarFunction::ToTimestampMillis => {
-            Arc::new(match args[0].data_type(input_schema) {
+            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
                 Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
                     |col_values: &[ColumnarValue]| {
                         cast_column(
@@ -1189,7 +1211,7 @@ pub fn create_physical_expr(
             })
         }
         BuiltinScalarFunction::ToTimestampMicros => {
-            Arc::new(match args[0].data_type(input_schema) {
+            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
                 Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
                     |col_values: &[ColumnarValue]| {
                         cast_column(
@@ -1209,7 +1231,7 @@ pub fn create_physical_expr(
             })
         }
         BuiltinScalarFunction::ToTimestampSeconds => Arc::new({
-            match args[0].data_type(input_schema) {
+            match coerced_phy_exprs[0].data_type(input_schema) {
                 Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
                     |col_values: &[ColumnarValue]| {
                         cast_column(
@@ -1235,7 +1257,7 @@ pub fn create_physical_expr(
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{}", fun),
         fun_expr,
-        args,
+        coerced_phy_exprs,
         &data_type,
     )))
 }

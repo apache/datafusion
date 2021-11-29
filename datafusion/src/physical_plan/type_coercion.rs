@@ -103,11 +103,11 @@ fn get_valid_types(
     current_types: &[DataType],
 ) -> Result<Vec<Vec<DataType>>> {
     let valid_types = match signature {
-        TypeSignature::Variadic(valid_types, ..) => valid_types
+        TypeSignature::Variadic(valid_types) => valid_types
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
-        TypeSignature::Uniform(number, valid_types, ..) => valid_types
+        TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
@@ -118,8 +118,8 @@ fn get_valid_types(
                 .map(|_| current_types[0].clone())
                 .collect()]
         }
-        TypeSignature::Exact(valid_types, ..) => vec![valid_types.clone()],
-        TypeSignature::Any(number, ..) => {
+        TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
+        TypeSignature::Any(number) => {
             if current_types.len() != *number {
                 return Err(DataFusionError::Plan(format!(
                     "The function expected {} arguments but received {}",
@@ -129,7 +129,7 @@ fn get_valid_types(
             }
             vec![(0..*number).map(|i| current_types[i].clone()).collect()]
         }
-        TypeSignature::OneOf(types, ..) => types
+        TypeSignature::OneOf(types) => types
             .iter()
             .filter_map(|t| get_valid_types(t, current_types).ok())
             .flatten()
