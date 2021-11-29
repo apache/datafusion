@@ -138,18 +138,23 @@ pub fn create_aggregate_expr(
             name,
         )));
     }
-    let first_coerced_phy_expr = coerced_phy_exprs[0].clone();
 
     let coerced_exprs_types = coerced_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let return_type = return_type(fun, &coerced_exprs_types)?;
+    let input_exprs_types = input_phy_exprs
+        .iter()
+        .map(|e| e.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    // In order to get the result data type, we must use the original input data type to calculate the result type.
+    let return_type = return_type(fun, &input_exprs_types)?;
 
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(expressions::Count::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),
@@ -162,7 +167,7 @@ pub fn create_aggregate_expr(
             ))
         }
         (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),
@@ -173,28 +178,28 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::ApproxDistinct, _) => {
             Arc::new(expressions::ApproxDistinct::new(
-                first_coerced_phy_expr,
+                coerced_phy_exprs[0].clone(),
                 name,
                 coerced_exprs_types[0].clone(),
             ))
         }
         (AggregateFunction::ArrayAgg, _) => Arc::new(expressions::ArrayAgg::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             coerced_exprs_types[0].clone(),
         )),
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),
         (AggregateFunction::Max, _) => Arc::new(expressions::Max::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),
         (AggregateFunction::Avg, false) => Arc::new(expressions::Avg::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),

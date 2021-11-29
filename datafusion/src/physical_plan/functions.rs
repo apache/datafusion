@@ -1158,12 +1158,12 @@ pub fn create_physical_expr(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &signature(fun))?;
 
-    let coerced_exprs_types = coerced_phy_exprs
+    let coerced_expr_types = coerced_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let data_type = return_type(fun, &coerced_exprs_types)?;
+    let data_type = return_type(fun, &coerced_expr_types)?;
 
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation
