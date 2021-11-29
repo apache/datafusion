@@ -203,6 +203,10 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .and_then(|d| d.with_day0(0)),
+        "quarter" => value
+            .and_then(|d| d.with_second(0))
+            .and_then(|d| d.with_minute(0))
+            .and_then(|d| d.with_hour(0)),
         "year" => value
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
