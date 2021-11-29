@@ -438,6 +438,11 @@ mod tests {
                 "week",
                 "2019-12-30T00:00:00.000000Z",
             ),
+            (
+                "2020-01-01T13:42:29.190855Z",
+                "quarter",
+                "2020-01-01T00:00:00.000000Z",
+            ),
         ];
 
         cases.iter().for_each(|(original, granularity, expected)| {
