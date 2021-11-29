@@ -93,90 +93,116 @@ impl FromStr for AggregateFunction {
     }
 }
 
-/// Returns the datatype of the scalar function
-pub fn return_type(fun: &AggregateFunction, arg_types: &[DataType]) -> Result<DataType> {
+/// Returns the datatype of the aggregation function
+pub fn return_type(
+    fun: &AggregateFunction,
+    input_expr_types: &[DataType],
+) -> Result<DataType> {
     // Note that this function *must* return the same type that the respective physical expression returns
     // or the execution panics.
 
     // verify that this is a valid set of data types for this function
-    data_types(arg_types, &signature(fun))?;
+    data_types(input_expr_types, &signature(fun))?;
 
     match fun {
         AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
             Ok(DataType::UInt64)
         }
-        AggregateFunction::Max | AggregateFunction::Min => Ok(arg_types[0].clone()),
-        AggregateFunction::Sum => sum_return_type(&arg_types[0]),
-        AggregateFunction::Avg => avg_return_type(&arg_types[0]),
+        AggregateFunction::Max | AggregateFunction::Min => {
+            Ok(input_expr_types[0].clone())
+        }
+        AggregateFunction::Sum => sum_return_type(&input_expr_types[0]),
+        AggregateFunction::Avg => avg_return_type(&input_expr_types[0]),
         AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(
             "item",
-            arg_types[0].clone(),
+            input_expr_types[0].clone(),
             true,
         )))),
     }
 }
 
-/// Create a physical (function) expression.
-/// This function errors when `args`' can't be coerced to a valid argument type of the function.
+/// Create a physical aggregation expression.
+/// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
 pub fn create_aggregate_expr(
     fun: &AggregateFunction,
     distinct: bool,
-    args: &[Arc<dyn PhysicalExpr>],
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let name = name.into();
-    let arg = coerce(args, input_schema, &signature(fun))?;
-    if arg.is_empty() {
+    let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &signature(fun))?;
+    if coerced_phy_exprs.is_empty() {
         return Err(DataFusionError::Plan(format!(
             "Invalid or wrong number of arguments passed to aggregate: '{}'",
             name,
         )));
     }
-    let arg = arg[0].clone();
 
-    let arg_types = args
+    let coerced_exprs_types = coerced_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let return_type = return_type(fun, &arg_types)?;
+    let input_exprs_types = input_phy_exprs
+        .iter()
+        .map(|e| e.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    // In order to get the result data type, we must use the original input data type to calculate the result type.
+    let return_type = return_type(fun, &input_exprs_types)?;
 
     Ok(match (fun, distinct) {
-        (AggregateFunction::Count, false) => {
-            Arc::new(expressions::Count::new(arg, name, return_type))
-        }
+        (AggregateFunction::Count, false) => Arc::new(expressions::Count::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
         (AggregateFunction::Count, true) => {
             Arc::new(distinct_expressions::DistinctCount::new(
-                arg_types,
-                args.to_vec(),
+                coerced_exprs_types,
+                coerced_phy_exprs.to_vec(),
                 name,
                 return_type,
             ))
         }
-        (AggregateFunction::Sum, false) => {
-            Arc::new(expressions::Sum::new(arg, name, return_type))
-        }
+        (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
         (AggregateFunction::Sum, true) => {
             return Err(DataFusionError::NotImplemented(
                 "SUM(DISTINCT) aggregations are not available".to_string(),
             ));
         }
-        (AggregateFunction::ApproxDistinct, _) => Arc::new(
-            expressions::ApproxDistinct::new(arg, name, arg_types[0].clone()),
-        ),
-        (AggregateFunction::ArrayAgg, _) => {
-            Arc::new(expressions::ArrayAgg::new(arg, name, arg_types[0].clone()))
+        (AggregateFunction::ApproxDistinct, _) => {
+            Arc::new(expressions::ApproxDistinct::new(
+                coerced_phy_exprs[0].clone(),
+                name,
+                coerced_exprs_types[0].clone(),
+            ))
         }
-        (AggregateFunction::Min, _) => {
-            Arc::new(expressions::Min::new(arg, name, return_type))
-        }
-        (AggregateFunction::Max, _) => {
-            Arc::new(expressions::Max::new(arg, name, return_type))
-        }
-        (AggregateFunction::Avg, false) => {
-            Arc::new(expressions::Avg::new(arg, name, return_type))
-        }
+        (AggregateFunction::ArrayAgg, _) => Arc::new(expressions::ArrayAgg::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            coerced_exprs_types[0].clone(),
+        )),
+        (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
+        (AggregateFunction::Max, _) => Arc::new(expressions::Max::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
+        (AggregateFunction::Avg, false) => Arc::new(expressions::Avg::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
         (AggregateFunction::Avg, true) => {
             return Err(DataFusionError::NotImplemented(
                 "AVG(DISTINCT) aggregations are not available".to_string(),
