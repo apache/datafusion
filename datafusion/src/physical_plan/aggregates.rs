@@ -96,11 +96,14 @@ impl FromStr for AggregateFunction {
 
 /// Returns the datatype of the aggregate function.
 /// This is used to get the returned data type for aggregate expr.
-pub fn return_type(fun: &AggregateFunction, arg_types: &[DataType]) -> Result<DataType> {
+pub fn return_type(
+    fun: &AggregateFunction,
+    input_expr_types: &[DataType],
+) -> Result<DataType> {
     // Note that this function *must* return the same type that the respective physical expression returns
     // or the execution panics.
 
-    let coerced_data_types = coerce_types(fun, arg_types, &signature(fun))?;
+    let coerced_data_types = coerce_types(fun, input_expr_types, &signature(fun))?;
 
     match fun {
         // TODO If the datafusion is compatible with PostgreSQL, the returned data type should be INT64.
@@ -122,8 +125,8 @@ pub fn return_type(fun: &AggregateFunction, arg_types: &[DataType]) -> Result<Da
     }
 }
 
-/// Create a physical (aggregate) expression.
-/// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregate function.
+/// Create a physical aggregation expression.
+/// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
 pub fn create_aggregate_expr(
     fun: &AggregateFunction,
     distinct: bool,
@@ -145,7 +148,6 @@ pub fn create_aggregate_expr(
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
-    let first_coerced_phy_expr = coerced_phy_exprs[0].clone();
 
     // get the result data type for this aggregate function
     let input_phy_types = input_phy_exprs
@@ -156,7 +158,7 @@ pub fn create_aggregate_expr(
 
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(expressions::Count::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),
@@ -169,7 +171,7 @@ pub fn create_aggregate_expr(
             ))
         }
         (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),
@@ -180,28 +182,28 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::ApproxDistinct, _) => {
             Arc::new(expressions::ApproxDistinct::new(
-                first_coerced_phy_expr,
+                coerced_phy_exprs[0].clone(),
                 name,
                 coerced_types[0].clone(),
             ))
         }
         (AggregateFunction::ArrayAgg, _) => Arc::new(expressions::ArrayAgg::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             coerced_types[0].clone(),
         )),
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),
         (AggregateFunction::Max, _) => Arc::new(expressions::Max::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),
         (AggregateFunction::Avg, false) => Arc::new(expressions::Avg::new(
-            first_coerced_phy_expr,
+            coerced_phy_exprs[0].clone(),
             name,
             return_type,
         )),

@@ -23,7 +23,9 @@ use arrow::record_batch::RecordBatch;
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
-use crate::logical_plan::plan::{AnalyzePlan, ExtensionPlan};
+use crate::logical_plan::plan::{
+    Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, Window,
+};
 use crate::logical_plan::{
     build_join_schema, Column, CreateMemoryTable, DFSchema, DFSchemaRef, Expr,
     ExprRewriter, Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning,
@@ -145,12 +147,14 @@ pub fn from_plan(
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Projection { schema, alias, .. } => Ok(LogicalPlan::Projection {
-            expr: expr.to_vec(),
-            input: Arc::new(inputs[0].clone()),
-            schema: schema.clone(),
-            alias: alias.clone(),
-        }),
+        LogicalPlan::Projection(Projection { schema, alias, .. }) => {
+            Ok(LogicalPlan::Projection(Projection {
+                expr: expr.to_vec(),
+                input: Arc::new(inputs[0].clone()),
+                schema: schema.clone(),
+                alias: alias.clone(),
+            }))
+        }
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
             values: expr
@@ -158,10 +162,10 @@ pub fn from_plan(
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>(),
         })),
-        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter {
+        LogicalPlan::Filter { .. } => Ok(LogicalPlan::Filter(Filter {
             predicate: expr[0].clone(),
             input: Arc::new(inputs[0].clone()),
-        }),
+        })),
         LogicalPlan::Repartition(Repartition {
             partitioning_scheme,
             ..
@@ -177,37 +181,37 @@ pub fn from_plan(
                 input: Arc::new(inputs[0].clone()),
             })),
         },
-        LogicalPlan::Window {
+        LogicalPlan::Window(Window {
             window_expr,
             schema,
             ..
-        } => Ok(LogicalPlan::Window {
+        }) => Ok(LogicalPlan::Window(Window {
             input: Arc::new(inputs[0].clone()),
             window_expr: expr[0..window_expr.len()].to_vec(),
             schema: schema.clone(),
-        }),
-        LogicalPlan::Aggregate {
+        })),
+        LogicalPlan::Aggregate(Aggregate {
             group_expr, schema, ..
-        } => Ok(LogicalPlan::Aggregate {
+        }) => Ok(LogicalPlan::Aggregate(Aggregate {
             group_expr: expr[0..group_expr.len()].to_vec(),
             aggr_expr: expr[group_expr.len()..].to_vec(),
             input: Arc::new(inputs[0].clone()),
             schema: schema.clone(),
-        }),
-        LogicalPlan::Sort { .. } => Ok(LogicalPlan::Sort {
+        })),
+        LogicalPlan::Sort(Sort { .. }) => Ok(LogicalPlan::Sort(Sort {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),
-        }),
-        LogicalPlan::Join {
+        })),
+        LogicalPlan::Join(Join {
             join_type,
             join_constraint,
             on,
             null_equals_null,
             ..
-        } => {
+        }) => {
             let schema =
                 build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
-            Ok(LogicalPlan::Join {
+            Ok(LogicalPlan::Join(Join {
                 left: Arc::new(inputs[0].clone()),
                 right: Arc::new(inputs[1].clone()),
                 join_type: *join_type,
@@ -215,7 +219,7 @@ pub fn from_plan(
                 on: on.clone(),
                 schema: DFSchemaRef::new(schema),
                 null_equals_null: *null_equals_null,
-            })
+            }))
         }
         LogicalPlan::CrossJoin(_) => {
             let left = inputs[0].clone();
@@ -232,7 +236,7 @@ pub fn from_plan(
                 name: name.clone(),
             }))
         }
-        LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(ExtensionPlan {
+        LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
         LogicalPlan::Union(Union { schema, alias, .. }) => {
@@ -245,7 +249,7 @@ pub fn from_plan(
         LogicalPlan::Analyze(a) => {
             assert!(expr.is_empty());
             assert_eq!(inputs.len(), 1);
-            Ok(LogicalPlan::Analyze(AnalyzePlan {
+            Ok(LogicalPlan::Analyze(Analyze {
                 verbose: a.verbose,
                 schema: a.schema.clone(),
                 input: Arc::new(inputs[0].clone()),

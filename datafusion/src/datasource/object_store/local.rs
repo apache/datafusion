@@ -18,7 +18,7 @@
 //! Object store that represents the Local File System.
 
 use std::fs::{self, File, Metadata};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -87,7 +87,10 @@ impl ObjectReader for LocalFileReader {
         // This okay because chunks are usually fairly large.
         let mut file = File::open(&self.file.path)?;
         file.seek(SeekFrom::Start(start))?;
-        Ok(Box::new(file.take(length as u64)))
+
+        let file = BufReader::new(file.take(length as u64));
+
+        Ok(Box::new(file))
     }
 
     fn length(&self) -> u64 {

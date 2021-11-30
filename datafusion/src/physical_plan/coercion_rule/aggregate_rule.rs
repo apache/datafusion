@@ -58,7 +58,7 @@ pub fn coerce_types(
             // smallint, int, bigint, real, double precision, decimal, or interval.
             if !is_sum_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
-                    "The function {:?} do not support the {:?}",
+                    "The function {:?} do not support the {:?}.",
                     agg_fun, input_types[0]
                 )));
             }
@@ -69,7 +69,7 @@ pub fn coerce_types(
             // smallint, int, bigint, real, double precision, decimal, or interval
             if !is_avg_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
-                    "The function {:?} do not support the {:?}",
+                    "The function {:?} do not support the {:?}.",
                     agg_fun, input_types[0]
                 )));
             }
@@ -125,14 +125,14 @@ mod tests {
         let signature = aggregates::signature(&fun);
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!(
-            "Error during planning: The function Sum do not support the Utf8",
+            "Error during planning: The function Sum do not support the Utf8.",
             result.unwrap_err().to_string()
         );
         let fun = AggregateFunction::Avg;
         let signature = aggregates::signature(&fun);
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!(
-            "Error during planning: The function Avg do not support the Utf8",
+            "Error during planning: The function Avg do not support the Utf8.",
             result.unwrap_err().to_string()
         );
 

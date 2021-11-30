@@ -67,7 +67,7 @@ use super::{
     },
 };
 use crate::logical_plan::builder::project_with_alias;
-use crate::logical_plan::plan::{AnalyzePlan, ExplainPlan};
+use crate::logical_plan::plan::{Analyze, Explain};
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
@@ -331,7 +331,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(LogicalPlan::Analyze(AnalyzePlan {
+            Ok(LogicalPlan::Analyze(Analyze {
                 verbose,
                 input: plan,
                 schema,
@@ -339,7 +339,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let stringified_plans =
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
-            Ok(LogicalPlan::Explain(ExplainPlan {
+            Ok(LogicalPlan::Explain(Explain {
                 verbose,
                 plan,
                 stringified_plans,
@@ -1085,8 +1085,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map_err(|_: DataFusionError| {
                     DataFusionError::Plan(format!(
                         "Invalid identifier '{}' for schema {}",
-                        col,
-                        schema.to_string()
+                        col, schema
                     ))
                 }),
                 _ => Err(DataFusionError::Internal("Not a column".to_string())),
@@ -1871,9 +1870,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .rev()
             .zip(columns)
-            .map(|(ident, column_name)| {
-                format!(r#"{} = '{}'"#, column_name, ident.to_string())
-            })
+            .map(|(ident, column_name)| format!(r#"{} = '{}'"#, column_name, ident))
             .collect::<Vec<_>>()
             .join(" AND ");
 

@@ -20,7 +20,8 @@
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::{Limit, TableScanPlan};
+use crate::logical_plan::plan::Projection;
+use crate::logical_plan::{Limit, TableScan};
 use crate::logical_plan::{LogicalPlan, Union};
 use crate::optimizer::optimizer::OptimizerRule;
 use std::sync::Arc;
@@ -57,7 +58,7 @@ fn limit_push_down(
             }))
         }
         (
-            LogicalPlan::TableScan(TableScanPlan {
+            LogicalPlan::TableScan(TableScan {
                 table_name,
                 source,
                 projection,
@@ -66,7 +67,7 @@ fn limit_push_down(
                 projected_schema,
             }),
             Some(upper_limit),
-        ) => Ok(LogicalPlan::TableScan(TableScanPlan {
+        ) => Ok(LogicalPlan::TableScan(TableScan {
             table_name: table_name.clone(),
             source: source.clone(),
             projection: projection.clone(),
@@ -77,16 +78,16 @@ fn limit_push_down(
             projected_schema: projected_schema.clone(),
         })),
         (
-            LogicalPlan::Projection {
+            LogicalPlan::Projection(Projection {
                 expr,
                 input,
                 schema,
                 alias,
-            },
+            }),
             upper_limit,
         ) => {
             // Push down limit directly (projection doesn't change number of rows)
-            Ok(LogicalPlan::Projection {
+            Ok(LogicalPlan::Projection(Projection {
                 expr: expr.clone(),
                 input: Arc::new(limit_push_down(
                     optimizer,
@@ -96,7 +97,7 @@ fn limit_push_down(
                 )?),
                 schema: schema.clone(),
                 alias: alias.clone(),
-            })
+            }))
         }
         (
             LogicalPlan::Union(Union {

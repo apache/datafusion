@@ -36,8 +36,9 @@ use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::assert_contains;
 use datafusion::assert_not_contains;
+use datafusion::logical_plan::plan::{Aggregate, Projection};
 use datafusion::logical_plan::LogicalPlan;
-use datafusion::logical_plan::TableScanPlan;
+use datafusion::logical_plan::TableScan;
 use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
@@ -90,9 +91,9 @@ async fn nyc() -> Result<()> {
     let optimized_plan = ctx.optimize(&logical_plan)?;
 
     match &optimized_plan {
-        LogicalPlan::Projection { input, .. } => match input.as_ref() {
-            LogicalPlan::Aggregate { input, .. } => match input.as_ref() {
-                LogicalPlan::TableScan(TableScanPlan {
+        LogicalPlan::Projection(Projection { input, .. }) => match input.as_ref() {
+            LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
+                LogicalPlan::TableScan(TableScan {
                     ref projected_schema,
                     ..
                 }) => {
@@ -1483,6 +1484,22 @@ async fn csv_query_approx_count() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_count_without_from() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT count(1 + 1)";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------------------------+",
+        "| COUNT(Int64(1) + Int64(1)) |",
+        "+----------------------------+",
+        "| 1                          |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_array_agg() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
@@ -1754,12 +1771,12 @@ async fn csv_query_cast_literal() -> Result<()> {
     let actual = execute_to_batches(&mut ctx, sql).await;
 
     let expected = vec![
-        "+--------------------+------------+",
-        "| c12                | Float64(1) |",
-        "+--------------------+------------+",
-        "| 0.9294097332465232 | 1          |",
-        "| 0.3114712539863804 | 1          |",
-        "+--------------------+------------+",
+        "+--------------------+---------------------------+",
+        "| c12                | CAST(Int64(1) AS Float64) |",
+        "+--------------------+---------------------------+",
+        "| 0.9294097332465232 | 1                         |",
+        "| 0.3114712539863804 | 1                         |",
+        "+--------------------+---------------------------+",
     ];
 
     assert_batches_eq!(expected, &actual);
@@ -3618,27 +3635,133 @@ async fn explain_analyze_runs_optimizers() {
     assert_contains!(actual, expected);
 }
 
-async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &mut ExecutionContext) {
-    // c1  DECIMAL(10,6) NOT NULL,
-    let df = ctx
-        .sql(&format!(
-            "CREATE EXTERNAL TABLE aggregate_simple (
-        c1  DECIMAL(10,6) NOT NULL,
-        c2  DOUBLE NOT NULL,
-        c3  BOOLEAN NOT NULL
-    )
-    STORED AS CSV
-    WITH HEADER ROW
-    LOCATION 'tests/aggregate_simple.csv'"
-        ))
-        .await
-        .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");
+#[tokio::test]
+async fn tpch_explain_q10() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
 
-    let results = df.collect().await.expect("Executing CREATE EXTERNAL TABLE");
-    assert!(
-        results.is_empty(),
-        "Expected no rows from executing CREATE EXTERNAL TABLE"
-    );
+    register_tpch_csv(&mut ctx, "customer").await?;
+    register_tpch_csv(&mut ctx, "orders").await?;
+    register_tpch_csv(&mut ctx, "lineitem").await?;
+    register_tpch_csv(&mut ctx, "nation").await?;
+
+    let sql = "select
+    c_custkey,
+    c_name,
+    sum(l_extendedprice * (1 - l_discount)) as revenue,
+    c_acctbal,
+    n_name,
+    c_address,
+    c_phone,
+    c_comment
+from
+    customer,
+    orders,
+    lineitem,
+    nation
+where
+        c_custkey = o_custkey
+  and l_orderkey = o_orderkey
+  and o_orderdate >= date '1993-10-01'
+  and o_orderdate < date '1994-01-01'
+  and l_returnflag = 'R'
+  and c_nationkey = n_nationkey
+group by
+    c_custkey,
+    c_name,
+    c_acctbal,
+    c_phone,
+    n_name,
+    c_address,
+    c_comment
+order by
+    revenue desc;";
+
+    let mut plan = ctx.create_logical_plan(sql);
+    plan = ctx.optimize(&plan.unwrap());
+
+    let expected = "\
+    Sort: #revenue DESC NULLS FIRST\
+    \n  Projection: #customer.c_custkey, #customer.c_name, #SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue, #customer.c_acctbal, #nation.n_name, #customer.c_address, #customer.c_phone, #customer.c_comment\
+    \n    Aggregate: groupBy=[[#customer.c_custkey, #customer.c_name, #customer.c_acctbal, #customer.c_phone, #nation.n_name, #customer.c_address, #customer.c_comment]], aggr=[[SUM(#lineitem.l_extendedprice * Int64(1) - #lineitem.l_discount)]]\
+    \n      Join: #customer.c_nationkey = #nation.n_nationkey\
+    \n        Join: #orders.o_orderkey = #lineitem.l_orderkey\
+    \n          Join: #customer.c_custkey = #orders.o_custkey\
+    \n            TableScan: customer projection=Some([0, 1, 2, 3, 4, 5, 7])\
+    \n            Filter: #orders.o_orderdate >= Date32(\"8674\") AND #orders.o_orderdate < Date32(\"8766\")\
+    \n              TableScan: orders projection=Some([0, 1, 4]), filters=[#orders.o_orderdate >= Date32(\"8674\"), #orders.o_orderdate < Date32(\"8766\")]\
+    \n          Filter: #lineitem.l_returnflag = Utf8(\"R\")\
+    \n            TableScan: lineitem projection=Some([0, 5, 6, 8]), filters=[#lineitem.l_returnflag = Utf8(\"R\")]\
+    \n        TableScan: nation projection=Some([0, 1])";
+    assert_eq!(format!("{:?}", plan.unwrap()), expected);
+
+    Ok(())
+}
+
+fn get_tpch_table_schema(table: &str) -> Schema {
+    match table {
+        "customer" => Schema::new(vec![
+            Field::new("c_custkey", DataType::Int64, false),
+            Field::new("c_name", DataType::Utf8, false),
+            Field::new("c_address", DataType::Utf8, false),
+            Field::new("c_nationkey", DataType::Int64, false),
+            Field::new("c_phone", DataType::Utf8, false),
+            Field::new("c_acctbal", DataType::Float64, false),
+            Field::new("c_mktsegment", DataType::Utf8, false),
+            Field::new("c_comment", DataType::Utf8, false),
+        ]),
+
+        "orders" => Schema::new(vec![
+            Field::new("o_orderkey", DataType::Int64, false),
+            Field::new("o_custkey", DataType::Int64, false),
+            Field::new("o_orderstatus", DataType::Utf8, false),
+            Field::new("o_totalprice", DataType::Float64, false),
+            Field::new("o_orderdate", DataType::Date32, false),
+            Field::new("o_orderpriority", DataType::Utf8, false),
+            Field::new("o_clerk", DataType::Utf8, false),
+            Field::new("o_shippriority", DataType::Int32, false),
+            Field::new("o_comment", DataType::Utf8, false),
+        ]),
+
+        "lineitem" => Schema::new(vec![
+            Field::new("l_orderkey", DataType::Int64, false),
+            Field::new("l_partkey", DataType::Int64, false),
+            Field::new("l_suppkey", DataType::Int64, false),
+            Field::new("l_linenumber", DataType::Int32, false),
+            Field::new("l_quantity", DataType::Float64, false),
+            Field::new("l_extendedprice", DataType::Float64, false),
+            Field::new("l_discount", DataType::Float64, false),
+            Field::new("l_tax", DataType::Float64, false),
+            Field::new("l_returnflag", DataType::Utf8, false),
+            Field::new("l_linestatus", DataType::Utf8, false),
+            Field::new("l_shipdate", DataType::Date32, false),
+            Field::new("l_commitdate", DataType::Date32, false),
+            Field::new("l_receiptdate", DataType::Date32, false),
+            Field::new("l_shipinstruct", DataType::Utf8, false),
+            Field::new("l_shipmode", DataType::Utf8, false),
+            Field::new("l_comment", DataType::Utf8, false),
+        ]),
+
+        "nation" => Schema::new(vec![
+            Field::new("n_nationkey", DataType::Int64, false),
+            Field::new("n_name", DataType::Utf8, false),
+            Field::new("n_regionkey", DataType::Int64, false),
+            Field::new("n_comment", DataType::Utf8, false),
+        ]),
+
+        _ => unimplemented!(),
+    }
+}
+
+async fn register_tpch_csv(ctx: &mut ExecutionContext, table: &str) -> Result<()> {
+    let schema = get_tpch_table_schema(table);
+
+    ctx.register_csv(
+        table,
+        format!("tests/tpch-csv/{}.csv", table).as_str(),
+        CsvReadOptions::new().schema(&schema),
+    )
+    .await?;
+    Ok(())
 }
 
 async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
@@ -3728,6 +3851,28 @@ async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &mut ExecutionContext) {
+    let df = ctx
+        .sql(&format!(
+            "CREATE EXTERNAL TABLE aggregate_simple (
+        c1  DECIMAL(10,6) NOT NULL,
+        c2  DOUBLE NOT NULL,
+        c3  BOOLEAN NOT NULL
+    )
+    STORED AS CSV
+    WITH HEADER ROW
+    LOCATION 'tests/aggregate_simple.csv'"
+        ))
+        .await
+        .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");
+
+    let results = df.collect().await.expect("Executing CREATE EXTERNAL TABLE");
+    assert!(
+        results.is_empty(),
+        "Expected no rows from executing CREATE EXTERNAL TABLE"
+    );
 }
 
 async fn register_aggregate_simple_csv_use_decimal(
@@ -4543,11 +4688,11 @@ async fn query_without_from() -> Result<()> {
     let sql = "SELECT 1+2, 3/4, cos(0)";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----------+----------+------------+",
-        "| Int64(3) | Int64(0) | Float64(1) |",
-        "+----------+----------+------------+",
-        "| 3        | 0        | 1          |",
-        "+----------+----------+------------+",
+        "+---------------------+---------------------+---------------+",
+        "| Int64(1) + Int64(2) | Int64(3) / Int64(4) | cos(Int64(0)) |",
+        "+---------------------+---------------------+---------------+",
+        "| 3                   | 0                   | 1             |",
+        "+---------------------+---------------------+---------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -5998,11 +6143,11 @@ async fn case_with_bool_type_result() -> Result<()> {
     let sql = "select case when 'cpu' != 'cpu' then true else false end";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+----------------+",
-        "| Boolean(false) |",
-        "+----------------+",
-        "| false          |",
-        "+----------------+",
+        "+---------------------------------------------------------------------------------+",
+        "| CASE WHEN Utf8(\"cpu\") != Utf8(\"cpu\") THEN Boolean(true) ELSE Boolean(false) END |",
+        "+---------------------------------------------------------------------------------+",
+        "| false                                                                           |",
+        "+---------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -6015,11 +6160,11 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     let sql = "SELECT 1 NOT BETWEEN 3 AND 5";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
-        "+---------------+",
-        "| Boolean(true) |",
-        "+---------------+",
-        "| true          |",
-        "+---------------+",
+        "+--------------------------------------------+",
+        "| Int64(1) NOT BETWEEN Int64(3) AND Int64(5) |",
+        "+--------------------------------------------+",
+        "| true                                       |",
+        "+--------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 

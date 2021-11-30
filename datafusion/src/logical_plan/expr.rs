@@ -1349,6 +1349,15 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()
 }
 
+/// Recursively un-alias an expressions
+#[inline]
+pub fn unalias(expr: Expr) -> Expr {
+    match expr {
+        Expr::Alias(sub_expr, _) => unalias(*sub_expr),
+        _ => expr,
+    }
+}
+
 /// Create an expression to represent the min() aggregate function
 pub fn min(expr: Expr) -> Expr {
     Expr::AggregateFunction {
