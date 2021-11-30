@@ -895,11 +895,13 @@ impl Default for ExecutionConfig {
             target_partitions: num_cpus::get(),
             batch_size: 8192,
             optimizers: vec![
+                // Simplify expressions first to maximize the chance
+                // of applying other optimizations
+                Arc::new(SimplifyExpressions::new()),
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
-                Arc::new(SimplifyExpressions::new()),
                 Arc::new(LimitPushDown::new()),
                 Arc::new(SingleDistinctToGroupBy::new()),
             ],
