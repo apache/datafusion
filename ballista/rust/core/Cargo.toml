@@ -43,7 +43,7 @@ tonic = "0.5"
 uuid = { version = "0.8", features = ["v4"] }
 chrono = "0.4"
 
-arrow-flight = { version = "6.2.0"  }
+arrow-flight = { version = "6.3.0"  }
 
 datafusion = { path = "../../../datafusion", version = "6.0.0" }
 
