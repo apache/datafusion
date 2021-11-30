@@ -30,6 +30,7 @@ use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
+use arrow::io::ipc::write::WriteOptions;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
@@ -83,7 +84,11 @@ pub async fn write_stream_to_disk(
     let mut num_rows = 0;
     let mut num_batches = 0;
     let mut num_bytes = 0;
-    let mut writer = FileWriter::try_new(&mut file, stream.schema().as_ref())?;
+    let mut writer = FileWriter::try_new(
+        &mut file,
+        stream.schema().as_ref(),
+        WriteOptions::default(),
+    )?;
 
     while let Some(result) = stream.next().await {
         let batch = result?;

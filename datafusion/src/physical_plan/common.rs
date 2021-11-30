@@ -21,7 +21,7 @@ use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::compute::aggregate::estimated_bytes_size;
-use arrow::compute::concat;
+use arrow::compute::concatenate;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
@@ -96,7 +96,7 @@ pub(crate) fn combine_batches(
             .iter()
             .enumerate()
             .map(|(i, _)| {
-                concat::concatenate(
+                concatenate::concatenate(
                     &batches
                         .iter()
                         .map(|batch| batch.column(i).as_ref())

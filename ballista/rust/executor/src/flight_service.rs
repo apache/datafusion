@@ -33,7 +33,7 @@ use arrow_format::flight::data::{
 };
 use arrow_format::flight::service::flight_service_server::FlightService;
 use datafusion::arrow::{
-    error::ArrowError, io::ipc::read::FileReader, io::ipc::write::IpcWriteOptions,
+    error::ArrowError, io::ipc::read::FileReader, io::ipc::write::WriteOptions,
     record_batch::RecordBatch,
 };
 use futures::{Stream, StreamExt};
@@ -176,7 +176,7 @@ impl FlightService for BallistaFlightService {
 /// dictionaries and batches)
 fn create_flight_iter(
     batch: &RecordBatch,
-    options: &IpcWriteOptions,
+    options: &WriteOptions,
 ) -> Box<dyn Iterator<Item = Result<FlightData, Status>>> {
     let (flight_dictionaries, flight_batch) =
         arrow::io::flight::serialize_batch(batch, options);
@@ -200,7 +200,7 @@ async fn stream_flight_data(path: String, tx: FlightDataSender) -> Result<(), St
     let file_meta = read_file_metadata(&mut file).map_err(|e| from_arrow_err(&e))?;
     let reader = FileReader::new(&mut file, file_meta, None);
 
-    let options = IpcWriteOptions::default();
+    let options = WriteOptions::default();
     let schema_flight_data =
         arrow::io::flight::serialize_schema(reader.schema().as_ref());
     send_response(&tx, Ok(schema_flight_data)).await?;

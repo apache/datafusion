@@ -40,7 +40,7 @@ use crate::{
 use arrow::{
     array::*,
     buffer::MutableBuffer,
-    compute::{cast, concat, take},
+    compute::{cast, concatenate, take},
     datatypes::{DataType, Field, Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
@@ -884,7 +884,7 @@ fn concatenate(arrays: Vec<Vec<ArrayRef>>) -> ArrowResult<Vec<ArrayRef>> {
                 .iter()
                 .map(|a| a[column].as_ref())
                 .collect::<Vec<_>>();
-            Ok(concat::concatenate(&array_list)?.into())
+            Ok(concatenate::concatenate(&array_list)?.into())
         })
         .collect::<ArrowResult<Vec<_>>>()
 }

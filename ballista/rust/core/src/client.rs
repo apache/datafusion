@@ -17,7 +17,7 @@
 
 //! Client API for sending requests to executors.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, pin::Pin};
 use std::{
     convert::{TryFrom, TryInto},
@@ -32,7 +32,7 @@ use crate::serde::scheduler::{
 };
 
 use arrow_format::flight::data::{FlightData, Ticket};
-use arrow_format::flight::service::flight_service_server::FlightServiceClient;
+use arrow_format::flight::service::flight_service_client::FlightServiceClient;
 use datafusion::arrow::{
     array::{StructArray, Utf8Array},
     datatypes::{Schema, SchemaRef},
@@ -134,13 +134,16 @@ impl BallistaClient {
 }
 
 struct FlightDataStream {
-    stream: Streaming<FlightData>,
+    stream: Mutex<Streaming<FlightData>>,
     schema: SchemaRef,
 }
 
 impl FlightDataStream {
     pub fn new(stream: Streaming<FlightData>, schema: SchemaRef) -> Self {
-        Self { stream, schema }
+        Self {
+            stream: Mutex::new(stream),
+            schema,
+        }
     }
 }
 
@@ -148,19 +151,21 @@ impl Stream for FlightDataStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.stream.poll_next_unpin(cx).map(|x| match x {
+        let mut stream = self.stream.lock().unwrap();
+        stream.poll_next_unpin(cx).map(|x| match x {
             Some(flight_data_chunk_result) => {
                 let converted_chunk = flight_data_chunk_result
                     .map_err(|e| ArrowError::from_external_error(Box::new(e)))
                     .and_then(|flight_data_chunk| {
-                        arrow::io::flight::serialize_batch(
+                        let hm = HashMap::new();
+                        arrow::io::flight::deserialize_batch(
                             &flight_data_chunk,
                             self.schema.clone(),
                             true,
-                            &[],
+                            &hm,
                         )
                     });
                 Some(converted_chunk)

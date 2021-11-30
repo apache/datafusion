@@ -24,7 +24,7 @@ use crate::physical_plan::{
     window_functions::{BuiltInWindowFunction, BuiltInWindowFunctionExpr},
     PhysicalExpr, WindowExpr,
 };
-use arrow::compute::concat;
+use arrow::compute::concatenate;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use std::any::Any;
@@ -98,7 +98,7 @@ impl WindowExpr for BuiltInWindowExpr {
             evaluator.evaluate(partition_points)?
         };
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat::concatenate(&results)
+        concatenate::concatenate(&results)
             .map(ArrayRef::from)
             .map_err(DataFusionError::ArrowError)
     }

@@ -26,6 +26,7 @@ use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
+use arrow::datatypes::{IntegerType, UnionMode};
 use prost::Message;
 
 // include the generated protobuf source as a submodule
@@ -171,7 +172,7 @@ impl TryInto<datafusion::arrow::datatypes::DataType>
             arrow_type::ArrowTypeEnum::LargeUtf8(_) => DataType::LargeUtf8,
             arrow_type::ArrowTypeEnum::Binary(_) => DataType::Binary,
             arrow_type::ArrowTypeEnum::FixedSizeBinary(size) => {
-                DataType::FixedSizeBinary(*size)
+                DataType::FixedSizeBinary(*size as usize)
             }
             arrow_type::ArrowTypeEnum::LargeBinary(_) => DataType::LargeBinary,
             arrow_type::ArrowTypeEnum::Date32(_) => DataType::Date32,
@@ -228,7 +229,10 @@ impl TryInto<datafusion::arrow::datatypes::DataType>
                     .ok_or_else(|| proto_error("Protobuf deserialization error: List message missing required field 'field_type'"))?
                     .as_ref();
                 let list_size = list.list_size;
-                DataType::FixedSizeList(Box::new(list_type.try_into()?), list_size)
+                DataType::FixedSizeList(
+                    Box::new(list_type.try_into()?),
+                    list_size as usize,
+                )
             }
             arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
                 strct
@@ -244,7 +248,7 @@ impl TryInto<datafusion::arrow::datatypes::DataType>
                     .map(|field| field.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
                 None,
-                false,
+                UnionMode::Dense,
             ),
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
                 let pb_key_datatype = dict
@@ -257,9 +261,9 @@ impl TryInto<datafusion::arrow::datatypes::DataType>
                     .value
                     .as_ref()
                     .ok_or_else(|| proto_error("Protobuf deserialization error: Dictionary message missing required field 'key'"))?;
-                let key_datatype: DataType = pb_key_datatype.as_ref().try_into()?;
+                let key_datatype: IntegerType = pb_key_datatype.try_into()?;
                 let value_datatype: DataType = pb_value_datatype.as_ref().try_into()?;
-                DataType::Dictionary(Box::new(key_datatype), Box::new(value_datatype))
+                DataType::Dictionary(key_datatype, Box::new(value_datatype))
             }
         })
     }

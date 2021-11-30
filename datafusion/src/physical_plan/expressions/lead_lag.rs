@@ -144,7 +144,7 @@ fn shift_with_default_value(
     offset: i64,
     value: &Option<ScalarValue>,
 ) -> Result<ArrayRef> {
-    use arrow::compute::concat;
+    use arrow::compute::concatenate;
 
     let value_len = array.len() as i64;
     if offset == 0 {
@@ -161,11 +161,11 @@ fn shift_with_default_value(
         let default_values = create_empty_array(value, slice.data_type(), nulls)?;
         // Concatenate both arrays, add nulls after if shift > 0 else before
         if offset > 0 {
-            concat::concatenate(&[default_values.as_ref(), slice.as_ref()])
+            concatenate::concatenate(&[default_values.as_ref(), slice.as_ref()])
                 .map_err(DataFusionError::ArrowError)
                 .map(ArrayRef::from)
         } else {
-            concat::concatenate(&[slice.as_ref(), default_values.as_ref()])
+            concatenate::concatenate(&[slice.as_ref(), default_values.as_ref()])
                 .map_err(DataFusionError::ArrowError)
                 .map(ArrayRef::from)
         }

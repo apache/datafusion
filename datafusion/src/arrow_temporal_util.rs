@@ -126,7 +126,7 @@ pub(crate) fn string_to_timestamp_nanos(s: &str) -> Result<i64> {
     // strings and we don't know which the user was trying to
     // match. Ths any of the specific error messages is likely to be
     // be more confusing than helpful
-    Err(ArrowError::Other(format!(
+    Err(ArrowError::OutOfSpec(format!(
         "Error parsing '{}' as timestamp",
         s
     )))
@@ -138,7 +138,7 @@ fn naive_datetime_to_timestamp(s: &str, datetime: NaiveDateTime) -> Result<i64> 
     let l = Local {};
 
     match l.from_local_datetime(&datetime) {
-        LocalResult::None => Err(ArrowError::Other(format!(
+        LocalResult::None => Err(ArrowError::OutOfSpec(format!(
             "Error parsing '{}' as timestamp: local time representation is invalid",
             s
         ))),

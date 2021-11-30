@@ -25,6 +25,7 @@ use datafusion::datasource::parquet::ParquetTable;
 use datafusion::datasource::TableProvider;
 use datafusion::prelude::*;
 
+use arrow::io::ipc::write::WriteOptions;
 use arrow_format::flight::data::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
@@ -32,7 +33,6 @@ use arrow_format::flight::data::{
 use arrow_format::flight::service::flight_service_server::{
     FlightService, FlightServiceServer,
 };
-use datafusion::arrow::io::ipc::write::IpcWriteOptions;
 
 #[derive(Clone)]
 pub struct FlightServiceImpl {}
@@ -70,7 +70,7 @@ impl FlightService for FlightServiceImpl {
         let table = ParquetTable::try_new(&request.path[0], num_cpus::get()).unwrap();
 
         let schema_result =
-            arrow::io::fligiht::serialize_schema_to_result(table.schema().as_ref());
+            arrow::io::flight::serialize_schema_to_result(table.schema().as_ref());
 
         Ok(Response::new(schema_result))
     }
@@ -106,11 +106,9 @@ impl FlightService for FlightServiceImpl {
                 }
 
                 // add an initial FlightData message that sends schema
-                let options = IpcWriteOptions::default();
-                let schema_flight_data = arrow::io::flight::serialize_schema(
-                    &df.schema().clone().into(),
-                    &options,
-                );
+                let options = WriteOptions::default();
+                let schema_flight_data =
+                    arrow::io::flight::serialize_schema(&df.schema().clone().into());
 
                 let mut flights: Vec<Result<FlightData, Status>> =
                     vec![Ok(schema_flight_data)];

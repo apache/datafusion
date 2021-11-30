@@ -23,7 +23,7 @@ use crate::physical_plan::windows::find_ranges_in_range;
 use crate::physical_plan::{
     expressions::PhysicalSortExpr, Accumulator, AggregateExpr, PhysicalExpr, WindowExpr,
 };
-use arrow::compute::concat;
+use arrow::compute::concatenate;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use std::any::Any;
@@ -94,7 +94,7 @@ impl AggregateWindowExpr {
             .flatten()
             .collect::<Vec<ArrayRef>>();
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat::concatenate(&results)
+        concatenate::concatenate(&results)
             .map(ArrayRef::from)
             .map_err(DataFusionError::ArrowError)
     }

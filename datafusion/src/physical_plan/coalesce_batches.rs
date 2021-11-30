@@ -29,7 +29,7 @@ use crate::physical_plan::{
     SendableRecordBatchStream,
 };
 
-use arrow::compute::concat::concatenate;
+use arrow::compute::concatenate::concatenate;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;

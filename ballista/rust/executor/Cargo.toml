@@ -30,7 +30,7 @@ snmalloc = ["snmalloc-rs"]
 
 [dependencies]
 arrow-format = { version = "0.3", features = ["flight-data", "flight-service"] }
-arrow = { package = "arrow2", version="0.7", features = ["io_ipc"] }
+arrow = { package = "arrow2", version="0.8", features = ["io_ipc"] }
 anyhow = "1"
 async-trait = "0.1.36"
 ballista-core = { path = "../core", version = "0.6.0" }
@@ -43,7 +43,7 @@ snmalloc-rs = {version = "0.2", features= ["cache-friendly"], optional = true}
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
 tokio-stream = { version = "0.1", features = ["net"] }
-tonic = "0.5"
+tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]

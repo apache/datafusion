@@ -20,9 +20,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 
-use arrow_format::flight::service::::flight_service_client::FlightServiceClient;
-use arrow_format::flight::data::{FlightDescriptor, Ticket, flight_descriptor};
+use arrow_format::flight::data::{flight_descriptor, FlightDescriptor, Ticket};
+use arrow_format::flight::service::flight_service_client::FlightServiceClient;
 use datafusion::arrow::io::print;
+use std::collections::HashMap;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
 /// Parquet files and executing SQL queries against them on a remote server.
@@ -60,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // all the remaining stream messages should be dictionary and record batches
     let mut results = vec![];
-    let dictionaries_by_field = vec![None; schema.fields().len()];
+    let dictionaries_by_field = HashMap::new();
     while let Some(flight_data) = stream.message().await? {
         let record_batch = arrow::io::flight::deserialize_batch(
             &flight_data,

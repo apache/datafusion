@@ -2944,7 +2944,7 @@ mod tests {
                 .as_any()
                 .downcast_ref::<Int32Array>()
                 .expect("cast failed");
-            Ok(Arc::new(add(l, r)?) as ArrayRef)
+            Ok(Arc::new(add(l, r)) as ArrayRef)
         };
         let myfunc = make_scalar_function(myfunc);
 

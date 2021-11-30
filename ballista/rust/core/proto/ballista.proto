@@ -1018,11 +1018,11 @@ message List{
 
 message FixedSizeList{
     Field field_type = 1;
-    int32 list_size = 2;
+    uint32 list_size = 2;
 }
 
 message Dictionary{
-    ArrowType key = 1;
+    IntegerType key = 1;
     ArrowType value = 2;
 }
 
@@ -1125,7 +1125,7 @@ message ArrowType{
         EmptyMessage UTF8 =14 ;
         EmptyMessage LARGE_UTF8 = 32;
         EmptyMessage BINARY =15 ;
-        int32 FIXED_SIZE_BINARY =16 ;
+        uint32 FIXED_SIZE_BINARY =16 ;
         EmptyMessage LARGE_BINARY = 31;
         EmptyMessage DATE32 =17 ;
         EmptyMessage DATE64 =18 ;
@@ -1142,6 +1142,23 @@ message ArrowType{
         Union UNION =29;
         Dictionary DICTIONARY =30;
     }
+}
+
+// Broke out into multiple message types so that type
+// metadata did not need to be in separate message
+//All types that are of the empty message types contain no additional metadata
+// about the type
+message IntegerType{
+  oneof integer_type_enum{
+    EmptyMessage INT8 = 1;
+    EmptyMessage INT16 = 2;
+    EmptyMessage INT32 = 3;
+    EmptyMessage INT64 = 4;
+    EmptyMessage UINT8  = 5;
+    EmptyMessage UINT16 = 6;
+    EmptyMessage UINT32 = 7;
+    EmptyMessage UINT64 = 8;
+  }
 }
 
 

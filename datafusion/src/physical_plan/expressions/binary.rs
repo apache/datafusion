@@ -88,17 +88,6 @@ macro_rules! boolean_op {
     }};
 }
 
-fn to_arrow_arithmetics(op: &Operator) -> compute::arithmetics::Operator {
-    match op {
-        Operator::Plus => compute::arithmetics::Operator::Add,
-        Operator::Minus => compute::arithmetics::Operator::Subtract,
-        Operator::Multiply => compute::arithmetics::Operator::Multiply,
-        Operator::Divide => compute::arithmetics::Operator::Divide,
-        Operator::Modulo => compute::arithmetics::Operator::Remainder,
-        _ => unreachable!(),
-    }
-}
-
 #[inline]
 fn evaluate_regex<O: Offset>(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
     Ok(compute::regex_match::regex_match::<O>(
@@ -129,8 +118,15 @@ fn evaluate_regex_case_insensitive<O: Offset>(
 fn evaluate(lhs: &dyn Array, op: &Operator, rhs: &dyn Array) -> Result<Arc<dyn Array>> {
     use Operator::*;
     if matches!(op, Plus | Minus | Divide | Multiply | Modulo) {
-        let op = to_arrow_arithmetics(op);
-        Ok(compute::arithmetics::arithmetic(lhs, op, rhs).map(|x| x.into())?)
+        let arr = match op {
+            Operator::Plus => compute::arithmetics::add(lhs, rhs),
+            Operator::Minus => compute::arithmetics::sub(lhs, rhs),
+            Operator::Divide => compute::arithmetics::div(lhs, rhs),
+            Operator::Multiply => compute::arithmetics::mul(lhs, rhs),
+            Operator::Modulo => compute::arithmetics::rem(lhs, rhs),
+            _ => unreachable!(),
+        };
+        Ok(Arc::<dyn Array>::from(arr))
     } else if matches!(op, Eq | NotEq | Lt | LtEq | Gt | GtEq) {
         let arr = match op {
             Operator::Eq => compute::comparison::eq(lhs, rhs),
@@ -213,12 +209,11 @@ fn evaluate(lhs: &dyn Array, op: &Operator, rhs: &dyn Array) -> Result<Arc<dyn A
 }
 
 macro_rules! dyn_compute_scalar {
-    ($lhs:expr, $op:expr, $rhs:expr, $ty:ty) => {{
-        Arc::new(compute::arithmetics::arithmetic_primitive_scalar::<$ty>(
+    ($lhs:expr, $op:ident, $rhs:expr, $ty:ty) => {{
+        Arc::new(compute::arithmetics::basic::$op::<$ty>(
             $lhs.as_any().downcast_ref().unwrap(),
-            $op,
             &$rhs.clone().try_into().unwrap(),
-        )?)
+        ))
     }};
 }
 
@@ -263,6 +258,25 @@ fn evaluate_regex_scalar_case_insensitive<O: Offset>(
     )?)
 }
 
+macro_rules! with_match_primitive_type {(
+    $key_type:expr, | $_:tt $T:ident | $($body:tt)*
+) => ({
+    macro_rules! __with_ty__ {( $_ $T:ident ) => ( $($body)* )}
+    match $key_type {
+        DataType::Int8 => Some(__with_ty__! { i8 }),
+        DataType::Int16 => Some(__with_ty__! { i16 }),
+        DataType::Int32 => Some(__with_ty__! { i32 }),
+        DataType::Int64 => Some(__with_ty__! { i64 }),
+        DataType::UInt8 => Some(__with_ty__! { u8 }),
+        DataType::UInt16 => Some(__with_ty__! { u16 }),
+        DataType::UInt32 => Some(__with_ty__! { u32 }),
+        DataType::UInt64 => Some(__with_ty__! { u64 }),
+        DataType::Float32 => Some(__with_ty__! { f32 }),
+        DataType::Float64 => Some(__with_ty__! { f64 }),
+        _ => None,
+    }
+})}
+
 fn evaluate_scalar(
     lhs: &dyn Array,
     op: &Operator,
@@ -270,18 +284,32 @@ fn evaluate_scalar(
 ) -> Result<Option<Arc<dyn Array>>> {
     use Operator::*;
     if matches!(op, Plus | Minus | Divide | Multiply | Modulo) {
-        let op = to_arrow_arithmetics(op);
-        Ok(match lhs.data_type() {
-            DataType::Int8 => Some(dyn_compute_scalar!(lhs, op, rhs, i8)),
-            DataType::Int16 => Some(dyn_compute_scalar!(lhs, op, rhs, i16)),
-            DataType::Int32 => Some(dyn_compute_scalar!(lhs, op, rhs, i32)),
-            DataType::Int64 => Some(dyn_compute_scalar!(lhs, op, rhs, i64)),
-            DataType::UInt8 => Some(dyn_compute_scalar!(lhs, op, rhs, u8)),
-            DataType::UInt16 => Some(dyn_compute_scalar!(lhs, op, rhs, u16)),
-            DataType::UInt32 => Some(dyn_compute_scalar!(lhs, op, rhs, u32)),
-            DataType::UInt64 => Some(dyn_compute_scalar!(lhs, op, rhs, u64)),
-            DataType::Float32 => Some(dyn_compute_scalar!(lhs, op, rhs, f32)),
-            DataType::Float64 => Some(dyn_compute_scalar!(lhs, op, rhs, f64)),
+        Ok(match op {
+            Plus => {
+                with_match_primitive_type!(lhs.data_type(), |$T| {
+                    dyn_compute_scalar!(lhs, add_scalar, rhs, $T)
+                })
+            }
+            Minus => {
+                with_match_primitive_type!(lhs.data_type(), |$T| {
+                    dyn_compute_scalar!(lhs, sub_scalar, rhs, $T)
+                })
+            }
+            Divide => {
+                with_match_primitive_type!(lhs.data_type(), |$T| {
+                    dyn_compute_scalar!(lhs, div_scalar, rhs, $T)
+                })
+            }
+            Multiply => {
+                with_match_primitive_type!(lhs.data_type(), |$T| {
+                    dyn_compute_scalar!(lhs, mul_scalar, rhs, $T)
+                })
+            }
+            Modulo => {
+                with_match_primitive_type!(lhs.data_type(), |$T| {
+                    dyn_compute_scalar!(lhs, rem_scalar, rhs, $T)
+                })
+            }
             _ => None, // fall back to default comparison below
         })
     } else if matches!(op, Eq | NotEq | Lt | LtEq | Gt | GtEq) {

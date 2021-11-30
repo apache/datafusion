@@ -50,8 +50,7 @@ avro = ["avro-rs", "num-traits"]
 [dependencies]
 ahash = "0.7"
 hashbrown = { version = "0.11", features = ["raw"] }
-arrow = { package = "arrow2", version="0.7", features = ["io_csv", "io_json", "io_parquet", "io_parquet_compression", "io_ipc", "io_print", "ahash", "merge_sort", "compute", "regex"] }
-parquet = { package = "parquet2", version = "0.7", default_features = false, features = ["stream"] }
+parquet = { package = "parquet2", version = "0.8", default_features = false, features = ["stream"] }
 sqlparser = "0.10"
 paste = "^1.0"
 num_cpus = "1.13.0"
@@ -72,6 +71,15 @@ smallvec = { version = "1.6", features = ["union"] }
 rand = "0.8"
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 num-traits = { version = "0.2", optional = true }
+
+[dependencies.arrow]
+package = "arrow2"
+version="0.8"
+features = ["io_csv", "io_json", "io_parquet", "io_parquet_compression", "io_ipc", "io_print", "ahash",
+    "compute_merge_sort", "compute_concatenate", "compute_regex_match", "compute_arithmetics",
+    "compute_cast", "compute_partition", "compute_temporal", "compute_take", "compute_aggregate",
+    "compute_comparison", "compute_if_then_else", "compute_nullif", "compute_boolean", "compute_length",
+    "compute_limit", "compute_boolean_kleene", "compute_like", "compute_filter", "compute_window",]
 
 [dev-dependencies]
 criterion = "0.3"

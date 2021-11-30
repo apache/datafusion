@@ -33,6 +33,7 @@ use crate::utils;
 
 use crate::serde::protobuf::ShuffleWritePartition;
 use crate::serde::scheduler::{PartitionLocation, PartitionStats};
+use arrow::io::ipc::write::WriteOptions;
 use async_trait::async_trait;
 use datafusion::arrow::array::*;
 use datafusion::arrow::compute::aggregate::estimated_bytes_size;
@@ -457,7 +458,7 @@ impl ShuffleWriter {
             num_rows: 0,
             num_bytes: 0,
             path: path.to_owned(),
-            writer: FileWriter::try_new(buffer_writer, schema)?,
+            writer: FileWriter::try_new(buffer_writer, schema, WriteOptions::default())?,
         })
     }
 

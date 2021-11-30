@@ -21,7 +21,9 @@
 
 use super::super::proto_error;
 use crate::datasource::DfTableAdapter;
+use crate::serde::protobuf::integer_type::IntegerTypeEnum;
 use crate::serde::{protobuf, BallistaError};
+use arrow::datatypes::{IntegerType, UnionMode};
 use datafusion::arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit,
 };
@@ -139,6 +141,35 @@ impl From<&DataType> for protobuf::ArrowType {
     }
 }
 
+impl From<&IntegerType> for protobuf::IntegerType {
+    fn from(val: &IntegerType) -> protobuf::IntegerType {
+        protobuf::IntegerType {
+            integer_type_enum: Some(val.into()),
+        }
+    }
+}
+
+impl TryInto<IntegerType> for &protobuf::IntegerType {
+    type Error = BallistaError;
+    fn try_into(self) -> Result<IntegerType, Self::Error> {
+        let pb_integer_type = self.integer_type_enum.as_ref().ok_or_else(|| {
+            proto_error(
+                "Protobuf deserialization error: ArrowType missing required field 'data_type'",
+            )
+        })?;
+        Ok(match pb_integer_type {
+            protobuf::integer_type::IntegerTypeEnum::Int8(_) => IntegerType::Int8,
+            protobuf::integer_type::IntegerTypeEnum::Int16(_) => IntegerType::Int16,
+            protobuf::integer_type::IntegerTypeEnum::Int32(_) => IntegerType::Int32,
+            protobuf::integer_type::IntegerTypeEnum::Int64(_) => IntegerType::Int64,
+            protobuf::integer_type::IntegerTypeEnum::Uint8(_) => IntegerType::UInt8,
+            protobuf::integer_type::IntegerTypeEnum::Uint16(_) => IntegerType::UInt16,
+            protobuf::integer_type::IntegerTypeEnum::Uint32(_) => IntegerType::UInt32,
+            protobuf::integer_type::IntegerTypeEnum::Uint64(_) => IntegerType::UInt64,
+        })
+    }
+}
+
 impl TryInto<DataType> for &protobuf::ArrowType {
     type Error = BallistaError;
     fn try_into(self) -> Result<DataType, Self::Error> {
@@ -165,7 +196,7 @@ impl TryInto<DataType> for &protobuf::ArrowType {
             protobuf::arrow_type::ArrowTypeEnum::LargeUtf8(_) => DataType::LargeUtf8,
             protobuf::arrow_type::ArrowTypeEnum::Binary(_) => DataType::Binary,
             protobuf::arrow_type::ArrowTypeEnum::FixedSizeBinary(size) => {
-                DataType::FixedSizeBinary(*size)
+                DataType::FixedSizeBinary(*size as usize)
             }
             protobuf::arrow_type::ArrowTypeEnum::LargeBinary(_) => DataType::LargeBinary,
             protobuf::arrow_type::ArrowTypeEnum::Date32(_) => DataType::Date32,
@@ -221,7 +252,7 @@ impl TryInto<DataType> for &protobuf::ArrowType {
                     .ok_or_else(|| proto_error("Protobuf deserialization error: FixedSizeList message was missing required field 'field_type'"))?;
                 DataType::FixedSizeList(
                     Box::new(pb_fieldtype.as_ref().try_into()?),
-                    fsl_ref.list_size,
+                    fsl_ref.list_size as usize,
                 )
             }
             protobuf::arrow_type::ArrowTypeEnum::Struct(struct_type) => {
@@ -238,7 +269,7 @@ impl TryInto<DataType> for &protobuf::ArrowType {
                     .iter()
                     .map(|field| field.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                DataType::Union(union_types, None, false)
+                DataType::Union(union_types, None, UnionMode::Dense)
             }
             protobuf::arrow_type::ArrowTypeEnum::Dictionary(boxed_dict) => {
                 let dict_ref = boxed_dict.as_ref();
@@ -251,7 +282,7 @@ impl TryInto<DataType> for &protobuf::ArrowType {
                     .as_ref()
                     .ok_or_else(|| proto_error("Protobuf deserialization error: Dictionary message was missing required field 'value'"))?;
                 DataType::Dictionary(
-                    Box::new(pb_key.as_ref().try_into()?),
+                    pb_key.try_into()?,
                     Box::new(pb_value.as_ref().try_into()?),
                 )
             }
@@ -329,6 +360,23 @@ impl TryInto<DataType> for &Box<protobuf::List> {
     }
 }
 
+impl From<&IntegerType> for protobuf::integer_type::IntegerTypeEnum {
+    fn from(val: &IntegerType) -> protobuf::integer_type::IntegerTypeEnum {
+        use protobuf::integer_type::IntegerTypeEnum;
+        use protobuf::EmptyMessage;
+        match val {
+            IntegerType::Int8 => IntegerTypeEnum::Int8(EmptyMessage {}),
+            IntegerType::Int16 => IntegerTypeEnum::Int16(EmptyMessage {}),
+            IntegerType::Int32 => IntegerTypeEnum::Int32(EmptyMessage {}),
+            IntegerType::Int64 => IntegerTypeEnum::Int64(EmptyMessage {}),
+            IntegerType::UInt8 => IntegerTypeEnum::Uint8(EmptyMessage {}),
+            IntegerType::UInt16 => IntegerTypeEnum::Uint16(EmptyMessage {}),
+            IntegerType::UInt32 => IntegerTypeEnum::Uint32(EmptyMessage {}),
+            IntegerType::UInt64 => IntegerTypeEnum::Uint64(EmptyMessage {}),
+        }
+    }
+}
+
 impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
     fn from(val: &DataType) -> protobuf::arrow_type::ArrowTypeEnum {
         use protobuf::arrow_type::ArrowTypeEnum;
@@ -369,7 +417,9 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 protobuf::IntervalUnit::from_arrow_interval_unit(interval_unit) as i32,
             ),
             DataType::Binary => ArrowTypeEnum::Binary(EmptyMessage {}),
-            DataType::FixedSizeBinary(size) => ArrowTypeEnum::FixedSizeBinary(*size),
+            DataType::FixedSizeBinary(size) => {
+                ArrowTypeEnum::FixedSizeBinary(*size as u32)
+            }
             DataType::LargeBinary => ArrowTypeEnum::LargeBinary(EmptyMessage {}),
             DataType::Utf8 => ArrowTypeEnum::Utf8(EmptyMessage {}),
             DataType::LargeUtf8 => ArrowTypeEnum::LargeUtf8(EmptyMessage {}),
@@ -379,7 +429,7 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::FixedSizeList(item_type, size) => {
                 ArrowTypeEnum::FixedSizeList(Box::new(protobuf::FixedSizeList {
                     field_type: Some(Box::new(item_type.as_ref().into())),
-                    list_size: *size,
+                    list_size: *size as u32,
                 }))
             }
             DataType::LargeList(item_type) => {
@@ -401,7 +451,7 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             }),
             DataType::Dictionary(key_type, value_type) => {
                 ArrowTypeEnum::Dictionary(Box::new(protobuf::Dictionary {
-                    key: Some(Box::new(key_type.as_ref().into())),
+                    key: Some(key_type.into()),
                     value: Some(Box::new(value_type.as_ref().into())),
                 }))
             }
@@ -413,6 +463,9 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             }
             DataType::Extension(_, _, _) => {
                 panic!("DataType::Extension is not supported")
+            }
+            DataType::Map(_, _) => {
+                panic!("DataType::Map is not supported")
             }
         }
     }
@@ -551,7 +604,9 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
                 )))
             }
             DataType::Extension(_, _, _) =>
-                panic!("DataType::Extension is not supported")
+                panic!("DataType::Extension is not supported"),
+            DataType::Map(_, _) =>
+                panic!("DataType::Map is not supported"),
         };
         Ok(scalar_value)
     }

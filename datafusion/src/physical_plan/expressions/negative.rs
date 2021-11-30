@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use arrow::{
     array::*,
-    compute::arithmetics::negate,
+    compute::arithmetics::basic::negate,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
