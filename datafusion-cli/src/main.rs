@@ -137,7 +137,7 @@ pub async fn main() -> Result<()> {
         .parse::<PrintFormat>()
         .expect("Invalid format");
 
-    let print_options = PrintOptions { format, quiet };
+    let mut print_options = PrintOptions { format, quiet };
 
     if let Some(file_paths) = matches.values_of("file") {
         let files = file_paths
@@ -148,7 +148,7 @@ pub async fn main() -> Result<()> {
             exec::exec_from_lines(&mut ctx, &mut reader, &print_options).await;
         }
     } else {
-        exec::exec_from_repl(&mut ctx, &print_options).await;
+        exec::exec_from_repl(&mut ctx, &mut print_options).await;
     }
 
     Ok(())
