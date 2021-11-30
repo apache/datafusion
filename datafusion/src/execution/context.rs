@@ -3914,10 +3914,13 @@ mod tests {
         .await?;
 
         // decimal query
-        let result = plan_and_collect(&mut ctx, "select min(c1) from aggregate_simple")
-            .await
-            .unwrap();
-        println!("{:?}", result);
+
+        // let result = plan_and_collect(&mut ctx, "select min(c1) from aggregate_simple")
+        //     .await
+        //     .unwrap();
+        //
+        // println!("{:?}", result);
+
         Ok(())
     }
 

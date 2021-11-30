@@ -145,8 +145,6 @@ fn maybe_data_types(
     valid_types: &[DataType],
     current_types: &[DataType],
 ) -> Option<Vec<DataType>> {
-    // TODO liukun4515
-
     if valid_types.len() != current_types.len() {
         return None;
     }
@@ -157,13 +155,10 @@ fn maybe_data_types(
 
         if current_type == valid_type {
             new_type.push(current_type.clone())
+        } else if can_coerce_from(valid_type, current_type) {
+            new_type.push(valid_type.clone())
         } else {
-            if can_coerce_from(valid_type, current_type) {
-                new_type.push(valid_type.clone())
-            } else {
-                // not possible
-                return None;
-            }
+            return None;
         }
     }
     Some(new_type)
@@ -173,9 +168,8 @@ fn maybe_data_types(
 /// (losslessly converted) into a value of `type_to`
 ///
 /// See the module level documentation for more detail on coercion.
-fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
+pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     use self::DataType::*;
-    // TODO liukun4515
     match type_into {
         // TODO, decimal data type, we just support the decimal
         Int8 => matches!(type_from, Int8),

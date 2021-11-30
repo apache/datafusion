@@ -20,7 +20,7 @@
 use arrow::datatypes::DataType;
 
 /// Determine if a DataType is signed numeric or not
-pub(crate) fn is_signed_numeric(dt: &DataType) -> bool {
+pub fn is_signed_numeric(dt: &DataType) -> bool {
     matches!(
         dt,
         DataType::Int8
@@ -35,7 +35,7 @@ pub(crate) fn is_signed_numeric(dt: &DataType) -> bool {
 }
 
 /// Determine if a DataType is numeric or not
-fn is_numeric(dt: &DataType) -> bool {
+pub fn is_numeric(dt: &DataType) -> bool {
     is_signed_numeric(dt)
         || match dt {
             DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
@@ -127,7 +127,7 @@ pub fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
     }
 
     // TODO liukun4515
-    // In the decimal data type, what to do if the metadata of decimal type is diff.
+    // In the decimal data type, if the left and right has diff decimal parameter
     // add decimal data type, diff operator we should have diff rule to do coercion.
     // first step, we can just support decimal type in case which left and right datatype are the same
 
@@ -264,10 +264,10 @@ mod tests {
         let mut index = test_types.len();
         while index > 0 {
             let this_type = &test_types[index - 1];
-            for i in 0..index {
+            for that_type in test_types.iter().take(index) {
                 assert_eq!(
                     Some(this_type.clone()),
-                    numerical_coercion(this_type, &test_types[i])
+                    numerical_coercion(this_type, that_type)
                 );
             }
             index -= 1;

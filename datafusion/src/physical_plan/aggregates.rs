@@ -135,7 +135,7 @@ pub fn create_aggregate_expr(
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let name = name.into();
-    // get the coerced phy exprs if some expr need try cast
+    // get the coerced phy exprs if some expr need to be wrapped with the try cast.
     let coerced_phy_exprs =
         coerce_exprs(fun, input_phy_exprs, input_schema, &signature(fun))?;
     if coerced_phy_exprs.is_empty() {
@@ -144,7 +144,7 @@ pub fn create_aggregate_expr(
             name,
         )));
     }
-    let coerced_types = coerced_phy_exprs
+    let coerced_exprs_types = coerced_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
@@ -164,7 +164,7 @@ pub fn create_aggregate_expr(
         )),
         (AggregateFunction::Count, true) => {
             Arc::new(distinct_expressions::DistinctCount::new(
-                coerced_types,
+                coerced_exprs_types,
                 coerced_phy_exprs,
                 name,
                 return_type,
@@ -184,13 +184,13 @@ pub fn create_aggregate_expr(
             Arc::new(expressions::ApproxDistinct::new(
                 coerced_phy_exprs[0].clone(),
                 name,
-                coerced_types[0].clone(),
+                coerced_exprs_types[0].clone(),
             ))
         }
         (AggregateFunction::ArrayAgg, _) => Arc::new(expressions::ArrayAgg::new(
             coerced_phy_exprs[0].clone(),
             name,
-            coerced_types[0].clone(),
+            coerced_exprs_types[0].clone(),
         )),
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             coerced_phy_exprs[0].clone(),

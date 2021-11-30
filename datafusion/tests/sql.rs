@@ -414,11 +414,11 @@ async fn csv_query_group_by_int_min_max() -> Result<()> {
 
 #[tokio::test]
 async fn error_count_agg() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    // let mut ctx = ExecutionContext::new();
 
     // let sql = "select sum('123')";
-    let sql = "select min(1)";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    // let sql = "select min(1)";
+    // let actual = execute_to_batches(&mut ctx, sql).await;
     Ok(())
 }
 
@@ -460,9 +460,9 @@ async fn csv_query_with_decimal() -> Result<()> {
     // the data type of c1 is decimal(10,6)
     register_aggregate_simple_csv_use_decimal(&mut ctx).await?;
     // query
-    let mut sql = "SELECT c1 from aggregate_simple";
-    let mut actual = execute_to_batches(&mut ctx, sql).await;
-    let mut expected = vec![
+    let sql = "SELECT c1 from aggregate_simple";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
         "+----------+",
         "| c1       |",
         "+----------+",
@@ -484,22 +484,23 @@ async fn csv_query_with_decimal() -> Result<()> {
         "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
+
     // aggregate: min,max,count,sum
-    sql = "SELECT MIN(c1) from aggregate_simple";
-    actual = execute_to_batches(&mut ctx, sql).await;
-    println!("{:?}", actual);
-
-    sql = "SELECT MAX(c1) from aggregate_simple";
-    actual = execute_to_batches(&mut ctx, sql).await;
-    println!("{:?}", actual);
-
-    sql = "SELECT COUNT(c1) from aggregate_simple";
-    actual = execute_to_batches(&mut ctx, sql).await;
-    println!("{:?}", actual);
-
-    sql = "SELECT SUM(c1) from aggregate_simple";
-    actual = execute_to_batches(&mut ctx, sql).await;
-    println!("{:?}", actual);
+    // sql = "SELECT MIN(c1) from aggregate_simple";
+    // actual = execute_to_batches(&mut ctx, sql).await;
+    // println!("{:?}", actual);
+    //
+    // sql = "SELECT MAX(c1) from aggregate_simple";
+    // actual = execute_to_batches(&mut ctx, sql).await;
+    // println!("{:?}", actual);
+    //
+    // sql = "SELECT COUNT(c1) from aggregate_simple";
+    // actual = execute_to_batches(&mut ctx, sql).await;
+    // println!("{:?}", actual);
+    //
+    // sql = "SELECT SUM(c1) from aggregate_simple";
+    // actual = execute_to_batches(&mut ctx, sql).await;
+    // println!("{:?}", actual);
 
     Ok(())
 }
@@ -5748,7 +5749,7 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let logical_plan = ctx.create_logical_plan(sql)?;
     let physical_plan = ctx.create_physical_plan(&logical_plan).await;
     let err = physical_plan.unwrap_err();
-    assert_eq!(err.to_string(), "Error during planning: Invalid or wrong number of arguments passed to aggregate: 'COUNT(DISTINCT )'");
+    assert_eq!(err.to_string(), "The function Count expect argument number is 1, but the input argument number is 0");
     Ok(())
 }
 
