@@ -62,6 +62,25 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
     }
 }
 
+pub(crate) fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
+    // TODO support the interval
+    // TODO: do we need to support the unsigned data type?
+    matches!(
+        arg_type,
+        DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64
+            // | DataType::Decimal(_, _)
+    )
+}
+
 impl Avg {
     /// Create a new AVG aggregate function
     pub fn new(
