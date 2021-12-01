@@ -26,6 +26,7 @@ use crate::physical_plan::expressions::{
 use crate::physical_plan::functions::{Signature, TypeSignature};
 use crate::physical_plan::PhysicalExpr;
 use arrow::datatypes::DataType;
+use std::ops::Deref;
 use std::sync::Arc;
 
 pub fn coerce_types(
@@ -52,7 +53,11 @@ pub fn coerce_types(
             Ok(input_types.to_vec())
         }
         AggregateFunction::ArrayAgg => Ok(input_types.to_vec()),
-        AggregateFunction::Min | AggregateFunction::Max => Ok(input_types.to_vec()),
+        AggregateFunction::Min | AggregateFunction::Max => {
+            // min and max support the dictionary data type
+            // unpack the dictionary to get the value
+            get_min_max_result_type(input_types)
+        }
         AggregateFunction::Sum => {
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval.
@@ -75,6 +80,20 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
+    }
+}
+
+fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
+    // min and max support the dictionary data type
+    // unpack the dictionary to get the value
+    match &input_types[0] {
+        DataType::Dictionary(_, dict_value_type) => {
+            // TODO add checker, if the value type is complex data type
+            Ok(vec![dict_value_type.deref().clone()])
+        }
+        // TODO add checker for datatype which min and max supported
+        // For example, the `Struct` and `Map` type are not supported in the MIN and MAX function
+        _ => Ok(input_types.to_vec()),
     }
 }
 

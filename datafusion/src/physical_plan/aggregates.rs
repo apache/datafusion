@@ -40,12 +40,12 @@ use std::{fmt, str::FromStr, sync::Arc};
 
 /// the implementation of an aggregate function
 pub type AccumulatorFunctionImplementation =
-Arc<dyn Fn() -> Result<Box<dyn Accumulator>> + Send + Sync>;
+    Arc<dyn Fn() -> Result<Box<dyn Accumulator>> + Send + Sync>;
 
 /// This signature corresponds to which types an aggregator serializes
 /// its state, given its return datatype.
 pub type StateTypeFunction =
-Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
+    Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
 
 /// Enum of all built-in aggregate functions
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]

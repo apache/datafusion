@@ -4400,7 +4400,7 @@ async fn query_group_on_null_multi_col() -> Result<()> {
     Ok(())
 }
 
-// #[tokio::test]
+#[tokio::test]
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
@@ -5607,17 +5607,16 @@ async fn test_physical_plan_display_indent_multi_children() {
     );
 }
 
-// #[tokio::test]
-// async fn test_aggregation_with_bad_arguments() -> Result<()> {
-//     let mut ctx = ExecutionContext::new();
-//     register_aggregate_csv(&mut ctx).await?;
-//     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
-//     let logical_plan = ctx.create_logical_plan(sql)?;
-//     let physical_plan = ctx.create_physical_plan(&logical_plan).await;
-//     let err = physical_plan.unwrap_err();
-//     assert_eq!(err.to_string(), DataFusionError::Plan("The function Count expect argument number is 1, but the input argument number is 0".to_string()).to_string());
-//     Ok(())
-// }
+#[tokio::test]
+async fn test_aggregation_with_bad_arguments() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
+    let logical_plan = ctx.create_logical_plan(sql);
+    let err = logical_plan.unwrap_err();
+    assert_eq!(err.to_string(), DataFusionError::Plan("The function Count expect argument number is 1, but the input argument number is 0".to_string()).to_string());
+    Ok(())
+}
 
 // Normalizes parts of an explain plan that vary from run to run (such as path)
 fn normalize_for_explain(s: &str) -> String {
