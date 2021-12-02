@@ -37,6 +37,7 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 use super::FileFormat;
 use super::PhysicalPlanConfig;
 use crate::arrow::datatypes::{DataType, Field};
+use crate::datasource::flatten_schema;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
@@ -123,7 +124,7 @@ impl FileFormat for ParquetFormat {
 fn summarize_min_max(
     max_values: &mut Vec<Option<MaxAccumulator>>,
     min_values: &mut Vec<Option<MinAccumulator>>,
-    fields: &[Field],
+    fields: &Vec<&Field>,
     i: usize,
     stat: &ParquetStatistics,
 ) {
@@ -258,8 +259,9 @@ fn fetch_statistics(object_reader: Arc<dyn ObjectReader>) -> Result<Statistics> 
     let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
     let schema = arrow_reader.get_schema()?;
-    let num_fields = schema.fields().len();
-    let fields = schema.fields().to_vec();
+    let flat_schema = flatten_schema(&schema);
+    let num_fields = flat_schema.len();
+    let fields = flat_schema.clone();
     let meta_data = arrow_reader.get_metadata();
 
     let mut num_rows = 0;
@@ -277,6 +279,9 @@ fn fetch_statistics(object_reader: Arc<dyn ObjectReader>) -> Result<Statistics> 
             .columns()
             .iter()
             .flat_map(|c| c.statistics().map(|stats| stats.null_count()));
+
+        let cols_vec: Vec<u64> = columns_null_counts.clone().collect();
+        let cols_vec_num = cols_vec.len();
 
         for (i, cnt) in columns_null_counts.enumerate() {
             null_counts[i] += cnt as usize

@@ -24,6 +24,7 @@ pub mod listing;
 pub mod memory;
 pub mod object_store;
 
+use arrow::datatypes::{DataType, Field};
 use futures::Stream;
 
 pub use self::datasource::{TableProvider, TableType};
@@ -48,8 +49,9 @@ pub async fn get_statistics_with_limit(
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
 
+    let flat_schema = flatten_schema(&file_schema);
     let mut total_byte_size = 0;
-    let mut null_counts = vec![0; file_schema.fields().len()];
+    let mut null_counts = vec![0; flat_schema.len()];
     let mut has_statistics = false;
     let (mut max_values, mut min_values) = create_max_min_accs(&file_schema);
 
@@ -160,13 +162,12 @@ impl std::fmt::Display for PartitionedFile {
 fn create_max_min_accs(
     schema: &Schema,
 ) -> (Vec<Option<MaxAccumulator>>, Vec<Option<MinAccumulator>>) {
-    let max_values: Vec<Option<MaxAccumulator>> = schema
-        .fields()
+    let flat_schema = flatten_schema(schema);
+    let max_values: Vec<Option<MaxAccumulator>> = flat_schema
         .iter()
         .map(|field| MaxAccumulator::try_new(field.data_type()).ok())
         .collect::<Vec<_>>();
-    let min_values: Vec<Option<MinAccumulator>> = schema
-        .fields()
+    let min_values: Vec<Option<MinAccumulator>> = flat_schema
         .iter()
         .map(|field| MinAccumulator::try_new(field.data_type()).ok())
         .collect::<Vec<_>>();
@@ -179,7 +180,8 @@ fn get_col_stats(
     max_values: &mut Vec<Option<MaxAccumulator>>,
     min_values: &mut Vec<Option<MinAccumulator>>,
 ) -> Vec<ColumnStatistics> {
-    (0..schema.fields().len())
+    let flat_schema = flatten_schema(schema);
+    (0..flat_schema.len())
         .map(|i| {
             let max_value = match &max_values[i] {
                 Some(max_value) => max_value.evaluate().ok(),
@@ -197,4 +199,28 @@ fn get_col_stats(
             }
         })
         .collect()
+}
+
+fn flatten_schema(schema: &Schema) -> Vec<&Field> {
+    fn fetch_children(field: &Field) -> Vec<&Field> {
+        let mut collected_fields: Vec<&Field> = vec![];
+        let data_type = field.data_type();
+        match data_type {
+            DataType::Struct(fields) | DataType::Union(fields) => collected_fields
+                .extend(fields.iter().map(|f| fetch_children(f)).flatten()),
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::FixedSizeList(f, _)
+            | DataType::Map(f, _) => collected_fields.extend(fetch_children(f)),
+            _ => collected_fields.push(field),
+        }
+        collected_fields
+    }
+    let top_level_fields = schema.fields();
+    let flatten = top_level_fields
+        .iter()
+        .map(|f| fetch_children(f))
+        .flatten()
+        .collect();
+    flatten
 }
