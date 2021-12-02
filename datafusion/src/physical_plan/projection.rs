@@ -63,19 +63,20 @@ impl ProjectionExec {
 
         let fields: Vec<Field> = expr
             .iter()
-            .map(|(e, name)| {
-                match input_schema.field_with_name(&name) {
-                    Ok(f) => f.clone(),
-                    Err(_) => Field::new(
-                        name,
-                        e.data_type(&input_schema).unwrap(),
-                        e.nullable(&input_schema).unwrap_or(true),
-                    )
-                }
+            .map(|(e, name)| match input_schema.field_with_name(&name) {
+                Ok(f) => f.clone(),
+                Err(_) => Field::new(
+                    name,
+                    e.data_type(&input_schema).unwrap(),
+                    e.nullable(&input_schema).unwrap_or(true),
+                ),
             })
             .collect();
 
-        let schema = Arc::new(Schema::new(fields));
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            input_schema.metadata().clone(),
+        ));
 
         Ok(Self {
             expr,
@@ -180,7 +181,7 @@ impl ExecutionPlan for ProjectionExec {
 
 fn stats_projection(
     stats: Statistics,
-    exprs: impl Iterator<Item=Arc<dyn PhysicalExpr>>,
+    exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
 ) -> Statistics {
     let column_statistics = stats.column_statistics.map(|input_col_stats| {
         exprs
