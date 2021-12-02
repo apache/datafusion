@@ -1915,6 +1915,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_min_decimal() -> Result<()> {
+        let mut ctx = ExecutionContext::new();
+        // schema with data
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Decimal(10, 6), false),
+            Field::new("c2", DataType::Float64, false),
+            Field::new("c3", DataType::Boolean, false),
+        ]));
+
+        ctx.register_csv(
+            "aggregate_simple",
+            "tests/aggregate_simple.csv",
+            CsvReadOptions::new().schema(&schema),
+        )
+        .await?;
+
+        // decimal query
+        let result = plan_and_collect(&mut ctx, "select min(c1) from aggregate_simple")
+            .await
+            .unwrap();
+
+        println!("{:?}", result);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn aggregate_min() -> Result<()> {
         let results = execute("SELECT MIN(c1), MIN(c2) FROM test", 4).await?;
         assert_eq!(results.len(), 1);
