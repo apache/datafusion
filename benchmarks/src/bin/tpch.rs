@@ -75,10 +75,9 @@ struct BallistaBenchmarkOpt {
     #[structopt(short = "i", long = "iterations", default_value = "3")]
     iterations: usize,
 
-    /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
-    batch_size: usize,
-
+    // /// Batch size when reading CSV or Parquet files
+    // #[structopt(short = "s", long = "batch-size", default_value = "8192")]
+    // batch_size: usize,
     /// Path to data files
     #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
     path: PathBuf,
@@ -87,10 +86,9 @@ struct BallistaBenchmarkOpt {
     #[structopt(short = "f", long = "format", default_value = "csv")]
     file_format: String,
 
-    /// Load the data into a MemTable before executing the query
-    #[structopt(short = "m", long = "mem-table")]
-    mem_table: bool,
-
+    // /// Load the data into a MemTable before executing the query
+    // #[structopt(short = "m", long = "mem-table")]
+    // mem_table: bool,
     /// Number of partitions to process in parallel
     #[structopt(short = "p", long = "partitions", default_value = "2")]
     partitions: usize,
