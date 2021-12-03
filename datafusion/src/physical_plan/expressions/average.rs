@@ -37,8 +37,8 @@ use super::{format_state_name, sum};
 #[derive(Debug)]
 pub struct Avg {
     name: String,
+    #[allow(dead_code)]
     data_type: DataType,
-    nullable: bool,
     expr: Arc<dyn PhysicalExpr>,
 }
 
@@ -73,7 +73,6 @@ impl Avg {
             name: name.into(),
             expr,
             data_type,
-            nullable: true,
         }
     }
 }
