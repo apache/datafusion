@@ -49,9 +49,9 @@ pub async fn get_statistics_with_limit(
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
 
-    let flat_schema = flatten_schema(&file_schema);
+    let total_num_fields = total_number_of_fields(&file_schema);
     let mut total_byte_size = 0;
-    let mut null_counts = vec![0; flat_schema.len()];
+    let mut null_counts = vec![0; total_num_fields];
     let mut has_statistics = false;
     let (mut max_values, mut min_values) = create_max_min_accs(&file_schema);
 
@@ -180,8 +180,8 @@ fn get_col_stats(
     max_values: &mut Vec<Option<MaxAccumulator>>,
     min_values: &mut Vec<Option<MinAccumulator>>,
 ) -> Vec<ColumnStatistics> {
-    let flat_schema = flatten_schema(schema);
-    (0..flat_schema.len())
+    let total_num_fields = total_number_of_fields(schema);
+    (0..total_num_fields)
         .map(|i| {
             let max_value = match &max_values[i] {
                 Some(max_value) => max_value.evaluate().ok(),
@@ -201,17 +201,50 @@ fn get_col_stats(
         .collect()
 }
 
-fn flatten_schema(schema: &Schema) -> Vec<&Field> {
-    fn fetch_children(field: &Field) -> Vec<&Field> {
-        let mut collected_fields: Vec<&Field> = vec![];
-        let data_type = field.data_type();
-        match data_type {
-            DataType::Struct(fields) | DataType::Union(fields) => collected_fields
-                .extend(fields.iter().map(|f| fetch_children(f)).flatten()),
+fn total_number_of_fields(schema: &Schema) -> usize {
+    fn count_children(field: &Field) -> usize {
+        let mut num_children: usize = 0;
+        match field.data_type() {
+            DataType::Struct(fields) | DataType::Union(fields) => {
+                let counts_arr = fields.iter().map(|f| count_children(f)).collect::<Vec<usize>>();
+                let c: usize = counts_arr.iter().sum();
+                num_children += c
+            },
             DataType::List(f)
             | DataType::LargeList(f)
             | DataType::FixedSizeList(f, _)
-            | DataType::Map(f, _) => collected_fields.extend(fetch_children(f)),
+            | DataType::Map(f, _) => {
+                let c: usize = count_children(f);
+                num_children += c
+            },
+            _ => num_children += 1,
+        }
+        num_children
+    }
+    let top_level_fields = schema.fields();
+    let top_level_counts = top_level_fields.iter().map(|i| count_children(i)).collect::<Vec<usize>>();
+    top_level_counts.iter().sum()
+}
+
+fn flatten_schema(schema: &Schema) -> Vec<Field> {
+    fn fetch_children(field: Field) -> Vec<Field> {
+        let mut collected_fields: Vec<Field> = vec![];
+        let data_type = field.data_type();
+        match data_type {
+            DataType::Struct(fields) | DataType::Union(fields) => collected_fields
+                .extend(fields.iter().map(|f| {
+                    let full_name = format!("{}.{}", field.name(), f.name());
+                    let f_new = Field::new(&full_name, f.data_type().clone(), f.is_nullable());
+                    fetch_children(f_new)
+                }).flatten()),
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::FixedSizeList(f, _)
+            | DataType::Map(f, _) => {
+                let full_name = format!("{}.{}", field.name(), f.name());
+                let f_new = Field::new(&full_name, f.data_type().clone(), f.is_nullable());
+                collected_fields.extend(fetch_children(f_new))
+            },
             _ => collected_fields.push(field),
         }
         collected_fields
@@ -219,8 +252,101 @@ fn flatten_schema(schema: &Schema) -> Vec<&Field> {
     let top_level_fields = schema.fields();
     let flatten = top_level_fields
         .iter()
-        .map(|f| fetch_children(f))
+        .map(|f| fetch_children(f.clone()))
         .flatten()
         .collect();
     flatten
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::TimeUnit;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_total_number_of_fields() -> Result<()> {
+        let fields: Vec<Field> = vec![
+            Field::new("id", DataType::Int16, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("nested1", DataType::Struct(vec![
+                Field::new("str1", DataType::Utf8, false),
+                Field::new("ts", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+            ]), false),
+            Field::new("nested2", DataType::Struct(vec![
+                Field::new("nested_a", DataType::Struct(vec![
+                    Field::new("another_nested", DataType::Struct(vec![
+                        Field::new("idx", DataType::UInt8, false),
+                        Field::new("no", DataType::UInt8, false),
+                    ]), false),
+                    Field::new("id2", DataType::UInt16, false),
+                ]), false),
+                Field::new("nested_b", DataType::Struct(vec![
+                    Field::new("nested_x", DataType::Struct(vec![
+                        Field::new("nested_y", DataType::Struct(vec![
+                            Field::new("desc", DataType::Utf8, false),
+                        ]), false),
+                    ]), false),
+                ]), false),
+            ]), false),
+        ];
+
+        assert_eq!(8, total_number_of_fields(&Schema::new(fields)));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_total_number_of_fields_empty_struct() -> Result<()> {
+
+        let fields = vec![
+            Field::new("empty_nested", DataType::Struct(vec![]), false),
+        ];
+
+        assert_eq!(0, total_number_of_fields(&Schema::new(fields)));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_flatten_schema() -> Result<()> {
+        let fields: Vec<Field> = vec![
+            Field::new("id", DataType::Int16, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("nested1", DataType::Struct(vec![
+                Field::new("str1", DataType::Utf8, false),
+                Field::new("ts", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+            ]), false),
+            Field::new("nested2", DataType::Struct(vec![
+                Field::new("nested_a", DataType::Struct(vec![
+                    Field::new("another_nested", DataType::Struct(vec![
+                        Field::new("idx", DataType::UInt8, false),
+                        Field::new("no", DataType::UInt8, false),
+                    ]), false),
+                    Field::new("id2", DataType::UInt16, false),
+                ]), false),
+                Field::new("nested_b", DataType::Struct(vec![
+                    Field::new("nested_x", DataType::Struct(vec![
+                        Field::new("nested_y", DataType::Struct(vec![
+                            Field::new("desc", DataType::Utf8, false),
+                        ]), false),
+                    ]), false),
+                ]), false),
+            ]), false),
+        ];
+
+        let flat_schema = flatten_schema(&Schema::new(fields));
+        assert_eq!(8, flat_schema.len());
+        assert_eq!(Field::new("id", DataType::Int16, false), flat_schema[0]);
+        assert_eq!(Field::new("name", DataType::Utf8, false), flat_schema[1]);
+        assert_eq!(Field::new("nested1.str1", DataType::Utf8, false), flat_schema[2]);
+        assert_eq!(Field::new("nested1.ts", DataType::Timestamp(TimeUnit::Millisecond, None), false), flat_schema[3]);
+        assert_eq!(Field::new("nested2.nested_a.another_nested.idx", DataType::UInt8, false), flat_schema[4]);
+        assert_eq!(Field::new("nested2.nested_a.another_nested.no", DataType::UInt8, false), flat_schema[5]);
+        assert_eq!(Field::new("nested2.nested_a.id2", DataType::UInt16, false), flat_schema[6]);
+        assert_eq!(Field::new("nested2.nested_b.nested_x.nested_y.desc", DataType::Utf8, false), flat_schema[7]);
+
+        Ok(())
+    }
+    
 }
