@@ -567,7 +567,7 @@ fn find_unresolved_shuffles(
         Ok(plan
             .children()
             .iter()
-            .map(|child| find_unresolved_shuffles(child))
+            .map(find_unresolved_shuffles)
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()

@@ -68,7 +68,7 @@ pub enum ScalarValue {
     /// large binary
     LargeBinary(Option<Vec<u8>>),
     /// list of nested ScalarValue (boxed to reduce size_of(ScalarValue))
-    #[allow(clippy::box_vec)]
+    #[allow(clippy::box_collection)]
     List(Option<Box<Vec<ScalarValue>>>, Box<DataType>),
     /// Date stored as a signed 32bit int
     Date32(Option<i32>),
@@ -87,7 +87,7 @@ pub enum ScalarValue {
     /// Interval with DayTime unit
     IntervalDayTime(Option<i64>),
     /// struct of nested ScalarValue (boxed to reduce size_of(ScalarValue))
-    #[allow(clippy::box_vec)]
+    #[allow(clippy::box_collection)]
     Struct(Option<Box<Vec<ScalarValue>>>, Box<Vec<Field>>),
 }
 
