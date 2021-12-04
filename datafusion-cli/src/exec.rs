@@ -91,7 +91,8 @@ pub async fn exec_from_repl(ctx: &mut Context, print_options: &mut PrintOptions)
         match rl.readline("❯ ") {
             Ok(line) if line.starts_with('\\') => {
                 rl.add_history_entry(line.trim_end());
-                if let Ok(cmd) = &line[1..].parse::<Command>() {
+                let command = line.split_whitespace().collect::<Vec<_>>().join(" ");
+                if let Ok(cmd) = &command[1..].parse::<Command>() {
                     match cmd {
                         Command::Quit => break,
                         Command::OutputFormat(subcommand) => {

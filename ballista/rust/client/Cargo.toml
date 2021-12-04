@@ -24,7 +24,7 @@ homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
-rust-version = "1.56"
+rust-version = "1.57"
 
 [dependencies]
 ballista-core = { path = "../core", version = "0.6.0" }

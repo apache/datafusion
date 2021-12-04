@@ -346,7 +346,7 @@ struct SortPreservingMergeStream {
     receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
 
     /// Drop helper for tasks feeding the [`receivers`](Self::receivers)
-    drop_helper: AbortOnDropMany<()>,
+    _drop_helper: AbortOnDropMany<()>,
 
     /// For each input stream maintain a dequeue of SortKeyCursor
     ///
@@ -379,7 +379,7 @@ struct SortPreservingMergeStream {
 impl SortPreservingMergeStream {
     fn new(
         receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
-        drop_helper: AbortOnDropMany<()>,
+        _drop_helper: AbortOnDropMany<()>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
         target_batch_size: usize,
@@ -394,7 +394,7 @@ impl SortPreservingMergeStream {
             schema,
             cursors,
             receivers,
-            drop_helper,
+            _drop_helper,
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             sort_options: expressions.iter().map(|x| x.options).collect(),
             target_batch_size,

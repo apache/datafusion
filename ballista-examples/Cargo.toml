@@ -26,7 +26,7 @@ license = "Apache-2.0"
 keywords = [ "arrow", "distributed", "query", "sql" ]
 edition = "2021"
 publish = false
-rust-version = "1.56"
+rust-version = "1.57"
 
 [dependencies]
 datafusion = { path = "../datafusion" }
