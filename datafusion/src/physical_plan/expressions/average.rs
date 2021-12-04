@@ -37,8 +37,6 @@ use super::{format_state_name, sum};
 #[derive(Debug)]
 pub struct Avg {
     name: String,
-    data_type: DataType,
-    nullable: bool,
     expr: Arc<dyn PhysicalExpr>,
 }
 
@@ -69,11 +67,14 @@ impl Avg {
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
+        // Average is always Float64, but Avg::new() has a data_type
+        // parameter to keep a consistent signature with the other
+        // Aggregate expressions.
+        assert_eq!(data_type, DataType::Float64);
+
         Self {
             name: name.into(),
             expr,
-            data_type,
-            nullable: true,
         }
     }
 }

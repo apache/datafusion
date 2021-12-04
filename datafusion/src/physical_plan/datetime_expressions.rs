@@ -42,6 +42,7 @@ use arrow::{
 };
 use chrono::prelude::*;
 use chrono::Duration;
+use std::borrow::Borrow;
 
 /// given a function `op` that maps a `&str` to a Result of an arrow native type,
 /// returns a `PrimitiveArray` after the application
@@ -77,7 +78,10 @@ where
         })?;
 
     // first map is the iterator, second is for the `Option<_>`
-    array.iter().map(|x| x.map(|x| op(x)).transpose()).collect()
+    array
+        .iter()
+        .map(|x| x.map(op.borrow()).transpose())
+        .collect()
 }
 
 // given an function that maps a `&str` to a arrow native type,

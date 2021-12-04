@@ -549,7 +549,7 @@ impl ExecutionPlan for BlockingExec {
     async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(BlockingStream {
             schema: Arc::clone(&self.schema),
-            refs: Arc::clone(&self.refs),
+            _refs: Arc::clone(&self.refs),
         }))
     }
 
@@ -577,7 +577,7 @@ pub struct BlockingStream {
     schema: SchemaRef,
 
     /// Ref-counting helper to check if the stream are still in memory.
-    refs: Arc<()>,
+    _refs: Arc<()>,
 }
 
 impl Stream for BlockingStream {

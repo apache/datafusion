@@ -117,10 +117,7 @@ where
     let string_array = downcast_string_arg!(args[0], "string", T);
 
     // first map is the iterator, second is for the `Option<_>`
-    Ok(string_array
-        .iter()
-        .map(|string| string.map(|s| op(s)))
-        .collect())
+    Ok(string_array.iter().map(|string| string.map(&op)).collect())
 }
 
 fn handle<'a, F, R>(args: &'a [ColumnarValue], op: F, name: &str) -> Result<ColumnarValue>
