@@ -25,7 +25,7 @@ description = "Build and run queries against data"
 readme = "README.md"
 license = "Apache-2.0"
 edition = "2021"
-rust-version = "1.56"
+rust-version = "1.57"
 
 [dependencies]
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }

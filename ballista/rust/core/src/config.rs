@@ -31,22 +31,22 @@ pub const BALLISTA_DEFAULT_SHUFFLE_PARTITIONS: &str = "ballista.shuffle.partitio
 #[derive(Debug, Clone)]
 pub struct ConfigEntry {
     name: String,
-    description: String,
-    data_type: DataType,
+    _description: String,
+    _data_type: DataType,
     default_value: Option<String>,
 }
 
 impl ConfigEntry {
     fn new(
         name: String,
-        description: String,
-        data_type: DataType,
+        _description: String,
+        _data_type: DataType,
         default_value: Option<String>,
     ) -> Self {
         Self {
             name,
-            description,
-            data_type,
+            _description,
+            _data_type,
             default_value,
         }
     }

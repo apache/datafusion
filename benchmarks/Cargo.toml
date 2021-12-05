@@ -25,7 +25,7 @@ homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 license = "Apache-2.0"
 publish = false
-rust-version = "1.56"
+rust-version = "1.57"
 
 [features]
 simd = ["datafusion/simd"]

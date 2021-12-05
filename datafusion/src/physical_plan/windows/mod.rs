@@ -64,11 +64,9 @@ pub fn create_window_expr(
             window_frame,
         )),
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
-            fun.clone(),
             create_built_in_window_expr(fun, args, input_schema, name)?,
             partition_by,
             order_by,
-            window_frame,
         )),
     })
 }
