@@ -38,7 +38,7 @@ pub enum JoinType {
     Inner,
     /// Left Join
     Left,
-    /// Right Join
+    /// Right Join: will be transferred to Left Join
     Right,
     /// Full Join
     Full,

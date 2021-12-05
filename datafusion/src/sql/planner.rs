@@ -430,7 +430,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_join(left, right, constraint, JoinType::Left)
             }
             JoinOperator::RightOuter(constraint) => {
-                self.parse_join(left, right, constraint, JoinType::Right)
+                self.parse_join(right, left, constraint, JoinType::Left)
             }
             JoinOperator::Inner(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Inner)
@@ -533,31 +533,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             join_type,
                             (left_keys, right_keys),
                         )?
-                        .build()
-                }
-                // Right join with all non-equijoin expressions from the left
-                // l right join r
-                // on l1=r1 and l2 > [..]
-                else if join_type == JoinType::Right
-                    && cols.iter().all(
-                        |Column {
-                             relation: qualifier,
-                             name,
-                         }| {
-                            left.schema()
-                                .field_with_name(qualifier.as_deref(), name)
-                                .is_ok()
-                        },
-                    )
-                {
-                    LogicalPlanBuilder::from(left)
-                        .filter(
-                            filter
-                                .iter()
-                                .skip(1)
-                                .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
-                        )?
-                        .join(&right, join_type, (left_keys, right_keys))?
                         .build()
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
@@ -3134,10 +3109,10 @@ mod tests {
             RIGHT JOIN orders \
             ON id = customer_id AND id > 1";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Join: #orders.customer_id = #person.id\
+        \n    TableScan: orders projection=None\
         \n    Filter: #person.id > Int64(1)\
-        \n      TableScan: person projection=None\
-        \n    TableScan: orders projection=None";
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
