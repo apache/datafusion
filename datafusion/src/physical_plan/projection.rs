@@ -61,21 +61,21 @@ impl ProjectionExec {
     ) -> Result<Self> {
         let input_schema = input.schema();
 
-        let fields: Vec<Field> = expr
+        let fields: Result<Vec<Field>> = expr
             .iter()
             .map(|(e, name)| {
                 match input_schema.field_with_name(&name) {
-                    Ok(f) => f.clone(),
-                    Err(_) => Field::new(
-                        name,
-                        e.data_type(&input_schema).unwrap(),
-                        e.nullable(&input_schema).unwrap_or(true),
-                    )
+                    Ok(f) => Ok(f.clone()),
+                    Err(_) => {
+                        let dt = e.data_type(&input_schema)?;
+                        let nullable = e.nullable(&input_schema)?;
+                        Ok(Field::new(name, dt, nullable))
+                    }
                 }
             })
             .collect();
 
-        let schema = Arc::new(Schema::new(fields));
+        let schema = Arc::new(Schema::new(fields?));
 
         Ok(Self {
             expr,
