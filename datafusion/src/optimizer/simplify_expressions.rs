@@ -342,7 +342,7 @@ impl SimplifyExpressions {
 
 /// Partially evaluate `Expr`s so constant subtrees are evaluated at plan time.
 ///
-/// Note it does not handle algebriac rewrites such as `(a and false)`
+/// Note it does not handle algebraic rewrites such as `(a or false)`
 /// --> `a`, which is handled by [`Simplifier`]
 ///
 /// ```
