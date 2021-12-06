@@ -917,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_and_and_false() {
+    fn test_simplify_null_and_false() {
         let expr = binary_expr(lit_null(), Operator::And, lit(false));
         let expr_eq = lit(false);
 
