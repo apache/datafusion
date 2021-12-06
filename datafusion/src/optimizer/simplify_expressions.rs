@@ -1354,14 +1354,6 @@ mod tests {
         );
     }
 
-    fn lit_true() -> Expr {
-        Expr::Literal(ScalarValue::Boolean(Some(true)))
-    }
-
-    fn lit_false() -> Expr {
-        Expr::Literal(ScalarValue::Boolean(Some(false)))
-    }
-
     /// Boolean null
     fn lit_null() -> Expr {
         Expr::Literal(ScalarValue::Boolean(None))
@@ -1370,22 +1362,22 @@ mod tests {
     #[test]
     fn simplify_expr_bool_or() {
         // col || true is always true
-        assert_eq!(do_simplify(col("c2").or(lit_true())), lit_true(),);
+        assert_eq!(do_simplify(col("c2").or(lit(true))), lit(true),);
 
         // col || false is always col
-        assert_eq!(do_simplify(col("c2").or(lit_false())), col("c2"),);
+        assert_eq!(do_simplify(col("c2").or(lit(false))), col("c2"),);
 
         // true || null is always true
-        assert_eq!(do_simplify(lit_true().or(lit_null())), lit_true(),);
+        assert_eq!(do_simplify(lit(true).or(lit_null())), lit(true),);
 
         // null || true is always true
-        assert_eq!(do_simplify(lit_null().or(lit_true())), lit_true(),);
+        assert_eq!(do_simplify(lit_null().or(lit(true))), lit(true),);
 
         // false || null is always null
-        assert_eq!(do_simplify(lit_false().or(lit_null())), lit_null(),);
+        assert_eq!(do_simplify(lit(false).or(lit_null())), lit_null(),);
 
         // null || false is always null
-        assert_eq!(do_simplify(lit_null().or(lit_false())), lit_null(),);
+        assert_eq!(do_simplify(lit_null().or(lit(false))), lit_null(),);
 
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
@@ -1404,21 +1396,21 @@ mod tests {
     #[test]
     fn simplify_expr_bool_and() {
         // col & true is always col
-        assert_eq!(do_simplify(col("c2").and(lit_true())), col("c2"),);
+        assert_eq!(do_simplify(col("c2").and(lit(true))), col("c2"),);
         // col & false is always false
-        assert_eq!(do_simplify(col("c2").and(lit_false())), lit_false(),);
+        assert_eq!(do_simplify(col("c2").and(lit(false))), lit(false),);
 
         // true && null is always null
-        assert_eq!(do_simplify(lit_true().and(lit_null())), lit_null(),);
+        assert_eq!(do_simplify(lit(true).and(lit_null())), lit_null(),);
 
         // null && true is always null
-        assert_eq!(do_simplify(lit_null().and(lit_true())), lit_null(),);
+        assert_eq!(do_simplify(lit_null().and(lit(true))), lit_null(),);
 
         // false && null is always false
-        assert_eq!(do_simplify(lit_false().and(lit_null())), lit_false(),);
+        assert_eq!(do_simplify(lit(false).and(lit_null())), lit(false),);
 
         // null && false is always false
-        assert_eq!(do_simplify(lit_null().and(lit_false())), lit_false(),);
+        assert_eq!(do_simplify(lit_null().and(lit(false))), lit(false),);
 
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10`
