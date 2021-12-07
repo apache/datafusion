@@ -63,14 +63,12 @@ impl ProjectionExec {
 
         let fields: Result<Vec<Field>> = expr
             .iter()
-            .map(|(e, name)| {
-                match input_schema.field_with_name(&name) {
-                    Ok(f) => Ok(f.clone()),
-                    Err(_) => {
-                        let dt = e.data_type(&input_schema)?;
-                        let nullable = e.nullable(&input_schema)?;
-                        Ok(Field::new(name, dt, nullable))
-                    }
+            .map(|(e, name)| match input_schema.field_with_name(name) {
+                Ok(f) => Ok(f.clone()),
+                Err(_) => {
+                    let dt = e.data_type(&input_schema)?;
+                    let nullable = e.nullable(&input_schema)?;
+                    Ok(Field::new(name, dt, nullable))
                 }
             })
             .collect();
@@ -183,7 +181,7 @@ impl ExecutionPlan for ProjectionExec {
 
 fn stats_projection(
     stats: Statistics,
-    exprs: impl Iterator<Item=Arc<dyn PhysicalExpr>>,
+    exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
 ) -> Statistics {
     let column_statistics = stats.column_statistics.map(|input_col_stats| {
         exprs
