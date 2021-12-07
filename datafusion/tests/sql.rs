@@ -5614,7 +5614,13 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
     let logical_plan = ctx.create_logical_plan(sql);
     let err = logical_plan.unwrap_err();
-    assert_eq!(err.to_string(), DataFusionError::Plan("The function Count expect argument number is 1, but the input argument number is 0".to_string()).to_string());
+    assert_eq!(
+        err.to_string(),
+        DataFusionError::Plan(
+            "The function Count expects 1 arguments, but 0 were provided".to_string()
+        )
+        .to_string()
+    );
     Ok(())
 }
 

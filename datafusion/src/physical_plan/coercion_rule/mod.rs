@@ -15,5 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! define the coercion rule for different Expr type
+//! Define coercion rules for different Expr type.
+//!
+//! Aggregate function rule
+
 pub(crate) mod aggregate_rule;

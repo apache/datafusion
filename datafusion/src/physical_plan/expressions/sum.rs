@@ -64,8 +64,6 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
 }
 
 pub(crate) fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
-    // TODO support the interval
-    // TODO: do we need to support the unsigned data type?
     matches!(
         arg_type,
         DataType::UInt8

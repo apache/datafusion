@@ -61,8 +61,6 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
 }
 
 pub(crate) fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
-    // TODO support the interval
-    // TODO: do we need to support the unsigned data type?
     matches!(
         arg_type,
         DataType::UInt8

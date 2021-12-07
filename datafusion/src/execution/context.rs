@@ -2058,7 +2058,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert_eq!(results.to_string(), "Error during planning: The function Sum do not support the Timestamp(Nanosecond, None).");
+        assert_eq!(results.to_string(), "Error during planning: The function Sum does not support inputs of type Timestamp(Nanosecond, None).");
 
         Ok(())
     }
@@ -2155,7 +2155,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert_eq!(results.to_string(), "Error during planning: The function Avg do not support the Timestamp(Nanosecond, None).");
+        assert_eq!(results.to_string(), "Error during planning: The function Avg does not support inputs of type Timestamp(Nanosecond, None).");
         Ok(())
     }
 

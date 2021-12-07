@@ -266,7 +266,9 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
 mod tests {
     use super::*;
     use crate::error::Result;
-    use crate::physical_plan::expressions::{ApproxDistinct, ArrayAgg, Count, Max, Min};
+    use crate::physical_plan::expressions::{
+        ApproxDistinct, ArrayAgg, Avg, Count, Max, Min, Sum,
+    };
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {
@@ -388,7 +390,73 @@ mod tests {
 
     #[test]
     fn test_sum_avg_expr() -> Result<()> {
-        // TODO
+        let funcs = vec![AggregateFunction::Sum, AggregateFunction::Avg];
+        let data_types = vec![
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::Float32,
+            DataType::Float64,
+        ];
+        for fun in funcs {
+            for data_type in &data_types {
+                let input_schema =
+                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
+                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
+                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
+                )];
+                let result_agg_phy_exprs = create_aggregate_expr(
+                    &fun,
+                    false,
+                    &input_phy_exprs[0..1],
+                    &input_schema,
+                    "c1",
+                )?;
+                match fun {
+                    AggregateFunction::Sum => {
+                        assert!(result_agg_phy_exprs.as_any().is::<Sum>());
+                        assert_eq!("c1", result_agg_phy_exprs.name());
+                        let mut expect_type = data_type.clone();
+                        if matches!(
+                            data_type,
+                            DataType::UInt8
+                                | DataType::UInt16
+                                | DataType::UInt32
+                                | DataType::UInt64
+                        ) {
+                            expect_type = DataType::UInt64;
+                        } else if matches!(
+                            data_type,
+                            DataType::Int8
+                                | DataType::Int16
+                                | DataType::Int32
+                                | DataType::Int64
+                        ) {
+                            expect_type = DataType::Int64;
+                        } else if matches!(
+                            data_type,
+                            DataType::Float32 | DataType::Float64
+                        ) {
+                            expect_type = data_type.clone();
+                        }
+                        assert_eq!(
+                            Field::new("c1", expect_type.clone(), true),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
+                    AggregateFunction::Avg => {
+                        assert!(result_agg_phy_exprs.as_any().is::<Avg>());
+                        assert_eq!("c1", result_agg_phy_exprs.name());
+                        assert_eq!(
+                            Field::new("c1", DataType::Float64, true),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
+                    _ => {}
+                };
+            }
+        }
         Ok(())
     }
 

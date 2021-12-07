@@ -29,7 +29,9 @@ use arrow::datatypes::DataType;
 use std::ops::Deref;
 use std::sync::Arc;
 
-pub fn coerce_types(
+/// Returns the coerced data type for each `input_types`.
+/// Different aggregate function with different input data type will get corresponding coerced data type.
+pub(crate) fn coerce_types(
     agg_fun: &AggregateFunction,
     input_types: &[DataType],
     signature: &Signature,
@@ -37,13 +39,17 @@ pub fn coerce_types(
     match signature.type_signature {
         TypeSignature::Uniform(agg_count, _) | TypeSignature::Any(agg_count) => {
             if input_types.len() != agg_count {
-                return Err(DataFusionError::Plan(format!("The function {:?} expect argument number is {:?}, but the input argument number is {:?}",
-                                                         agg_fun, agg_count, input_types.len())));
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} expects {:?} arguments, but {:?} were provided",
+                    agg_fun,
+                    agg_count,
+                    input_types.len()
+                )));
             }
         }
         _ => {
-            return Err(DataFusionError::Plan(format!(
-                "The aggregate coercion rule don't support this {:?}",
+            return Err(DataFusionError::Internal(format!(
+                "Aggregate functions do not support this {:?}",
                 signature
             )));
         }
@@ -63,7 +69,7 @@ pub fn coerce_types(
             // smallint, int, bigint, real, double precision, decimal, or interval.
             if !is_sum_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
-                    "The function {:?} do not support the {:?}.",
+                    "The function {:?} does not support inputs of type {:?}.",
                     agg_fun, input_types[0]
                 )));
             }
@@ -74,7 +80,7 @@ pub fn coerce_types(
             // smallint, int, bigint, real, double precision, decimal, or interval
             if !is_avg_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
-                    "The function {:?} do not support the {:?}.",
+                    "The function {:?} does not support inputs of type {:?}.",
                     agg_fun, input_types[0]
                 )));
             }
@@ -84,6 +90,8 @@ pub fn coerce_types(
 }
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
+    // make sure that the input types only has one element.
+    assert_eq!(input_types.len(), 1);
     // min and max support the dictionary data type
     // unpack the dictionary to get the value
     match &input_types[0] {
@@ -97,7 +105,10 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     }
 }
 
-pub fn coerce_exprs(
+/// Returns the coerced exprs for each `input_exprs`.
+/// Get the coerced data type from `aggregate_rule::coerce_types` and add `try_cast` if the
+/// data type of `input_exprs` need to be coerced.
+pub(crate) fn coerce_exprs(
     agg_fun: &AggregateFunction,
     input_exprs: &[Arc<dyn PhysicalExpr>],
     schema: &Schema,
@@ -117,15 +128,15 @@ pub fn coerce_exprs(
     // try cast if need
     input_exprs
         .iter()
-        .enumerate()
-        .map(|(i, expr)| try_cast(expr.clone(), schema, coerced_types[i].clone()))
+        .zip(coerced_types.into_iter())
+        .map(|(expr, coerced_type)| try_cast(expr.clone(), schema, coerced_type))
         .collect::<Result<Vec<_>>>()
 }
 
 #[cfg(test)]
 mod tests {
     use crate::physical_plan::aggregates;
-    use crate::physical_plan::aggregates::{signature, AggregateFunction};
+    use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::coercion_rule::aggregate_rule::coerce_types;
     use arrow::datatypes::DataType;
 
@@ -134,9 +145,9 @@ mod tests {
         // test input args with error number input types
         let fun = AggregateFunction::Min;
         let input_types = vec![DataType::Int64, DataType::Int32];
-        let signature = signature(&fun);
+        let signature = aggregates::signature(&fun);
         let result = coerce_types(&fun, &input_types, &signature);
-        assert_eq!("Error during planning: The function Min expect argument number is 1, but the input argument number is 2", result.unwrap_err().to_string());
+        assert_eq!("Error during planning: The function Min expects 1 arguments, but 2 were provided", result.unwrap_err().to_string());
 
         // test input args is invalid data type for sum or avg
         let fun = AggregateFunction::Sum;
@@ -144,14 +155,14 @@ mod tests {
         let signature = aggregates::signature(&fun);
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!(
-            "Error during planning: The function Sum do not support the Utf8.",
+            "Error during planning: The function Sum does not support inputs of type Utf8.",
             result.unwrap_err().to_string()
         );
         let fun = AggregateFunction::Avg;
         let signature = aggregates::signature(&fun);
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!(
-            "Error during planning: The function Avg do not support the Utf8.",
+            "Error during planning: The function Avg does not support inputs of type Utf8.",
             result.unwrap_err().to_string()
         );
 
@@ -166,6 +177,7 @@ mod tests {
         ];
         let input_types = vec![
             vec![DataType::Int32],
+            // support the decimal data type for min/max agg
             // vec![DataType::Decimal(10, 2)],
             vec![DataType::Utf8],
         ];
@@ -181,6 +193,7 @@ mod tests {
         let input_types = vec![
             vec![DataType::Int32],
             vec![DataType::Float32],
+            // support the decimal data type
             // vec![DataType::Decimal(20, 3)],
         ];
         for fun in funs {
