@@ -5612,10 +5612,15 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
-    let logical_plan = ctx.create_logical_plan(sql)?;
-    let physical_plan = ctx.create_physical_plan(&logical_plan).await;
-    let err = physical_plan.unwrap_err();
-    assert_eq!(err.to_string(), "Error during planning: Invalid or wrong number of arguments passed to aggregate: 'COUNT(DISTINCT )'");
+    let logical_plan = ctx.create_logical_plan(sql);
+    let err = logical_plan.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        DataFusionError::Plan(
+            "The function Count expects 1 arguments, but 0 were provided".to_string()
+        )
+        .to_string()
+    );
     Ok(())
 }
 
