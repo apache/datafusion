@@ -35,6 +35,8 @@ use arrow::{
 };
 
 use super::format_state_name;
+use crate::arrow::array::Array;
+use arrow::array::DecimalArray;
 
 /// SUM aggregate expression
 #[derive(Debug)]
@@ -56,6 +58,7 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
         }
         DataType::Float32 => Ok(DataType::Float32),
         DataType::Float64 => Ok(DataType::Float64),
+        DataType::Decimal(precision, scale) => Ok(DataType::Decimal(*precision, *scale)),
         other => Err(DataFusionError::Plan(format!(
             "SUM does not support type \"{:?}\"",
             other
@@ -93,6 +96,10 @@ impl AggregateExpr for Sum {
         ))
     }
 
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SumAccumulator::try_new(&self.data_type)?))
+    }
+
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             &format_state_name(&self.name, "sum"),
@@ -103,10 +110,6 @@ impl AggregateExpr for Sum {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr.clone()]
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SumAccumulator::try_new(&self.data_type)?))
     }
 
     fn name(&self) -> &str {
@@ -137,9 +140,33 @@ macro_rules! typed_sum_delta_batch {
     }};
 }
 
+fn sum_decimal_batch(
+    values: &ArrayRef,
+    precision: &usize,
+    scale: &usize,
+) -> Result<ScalarValue> {
+    // TODO, if the values is empty, what should we return?
+    // None or 0
+    let array = values.as_any().downcast_ref::<DecimalArray>().unwrap();
+    let mut result = 0_i128;
+    for i in 0..array.len() {
+        if array.is_valid(i) {
+            result += array.value(i);
+        }
+    }
+    if array.null_count() == array.len() {
+        return Ok(ScalarValue::Decimal128(None, *precision, *scale));
+    }
+    Ok(ScalarValue::Decimal128(Some(result), *precision, *scale))
+}
+
 // sums the array and returns a ScalarValue of its corresponding type.
 pub(super) fn sum_batch(values: &ArrayRef) -> Result<ScalarValue> {
     Ok(match values.data_type() {
+        DataType::Decimal(precision, scale) => {
+            // TODO the result data type should use the new precision and scale
+            sum_decimal_batch(values, precision, scale)?
+        }
         DataType::Float64 => typed_sum_delta_batch!(values, Float64Array, Float64),
         DataType::Float32 => typed_sum_delta_batch!(values, Float32Array, Float32),
         DataType::Int64 => typed_sum_delta_batch!(values, Int64Array, Int64),
@@ -154,7 +181,7 @@ pub(super) fn sum_batch(values: &ArrayRef) -> Result<ScalarValue> {
             return Err(DataFusionError::Internal(format!(
                 "Sum is not expected to receive the type {:?}",
                 e
-            )))
+            )));
         }
     })
 }
@@ -171,8 +198,35 @@ macro_rules! typed_sum {
     }};
 }
 
+fn sum_decimal(
+    lhs: &Option<i128>,
+    rhs: &Option<i128>,
+    precision: &usize,
+    scale: &usize,
+) -> ScalarValue {
+    match (lhs, rhs) {
+        (None, None) => ScalarValue::Decimal128(None, *precision, *scale),
+        (None, rhs) => ScalarValue::Decimal128(*rhs, *precision, *scale),
+        (lhs, None) => ScalarValue::Decimal128(*lhs, *precision, *scale),
+        (lhs, rhs) => {
+            ScalarValue::Decimal128(Some(lhs.unwrap() + rhs.unwrap()), *precision, *scale)
+        }
+    }
+}
+
 pub(super) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     Ok(match (lhs, rhs) {
+        (ScalarValue::Decimal128(v1, p1, s1), ScalarValue::Decimal128(v2, p2, s2)) => {
+            if p1.eq(p2) && s1.eq(s2) {
+                // TODO the result data type should use the new precision and scale
+                sum_decimal(v1, v2, p1, s1)
+            } else {
+                return Err(DataFusionError::Internal(format!(
+                    "Sum is not expected to receive lhs {:?}, rhs {:?}",
+                    lhs, rhs
+                )));
+            }
+        }
         // float64 coerces everything to f64
         (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
             typed_sum!(lhs, rhs, Float64, f64)
@@ -238,21 +292,25 @@ pub(super) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
             return Err(DataFusionError::Internal(format!(
                 "Sum is not expected to receive a scalar {:?}",
                 e
-            )))
+            )));
         }
     })
 }
 
 impl Accumulator for SumAccumulator {
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        self.sum = sum(&self.sum, &sum_batch(values)?)?;
-        Ok(())
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.sum.clone()])
     }
 
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         // sum(v1, v2, v3) = v1 + v2 + v3
         self.sum = sum(&self.sum, &values[0])?;
+        Ok(())
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = &values[0];
+        self.sum = sum(&self.sum, &sum_batch(values)?)?;
         Ok(())
     }
 
@@ -266,10 +324,6 @@ impl Accumulator for SumAccumulator {
         self.update_batch(states)
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.sum.clone()])
-    }
-
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(self.sum.clone())
     }
@@ -278,10 +332,128 @@ impl Accumulator for SumAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::array::DecimalBuilder;
     use crate::physical_plan::expressions::col;
     use crate::{error::Result, generic_test_op};
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
+
+    #[test]
+    fn sum_decimal() -> Result<()> {
+        // test sum
+        let left = ScalarValue::Decimal128(Some(123), 10, 2);
+        let right = ScalarValue::Decimal128(Some(124), 10, 2);
+        let result = sum(&left, &right)?;
+        assert_eq!(ScalarValue::Decimal128(Some(123 + 124), 10, 2), result);
+        // negative test
+        let left = ScalarValue::Decimal128(Some(123), 10, 2);
+        let right = ScalarValue::Decimal128(Some(124), 11, 2);
+        let result = sum(&left, &right);
+        assert_eq!(
+            DataFusionError::Internal(format!(
+                "Sum is not expected to receive lhs {:?}, rhs {:?}",
+                left, right
+            ))
+            .to_string(),
+            result.unwrap_err().to_string()
+        );
+
+        // test sum batch
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for i in 1..6 {
+            decimal_builder.append_value(i as i128)?;
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let result = sum_batch(&array)?;
+        assert_eq!(ScalarValue::Decimal128(Some(15), 10, 0), result);
+
+        // test agg
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for i in 1..6 {
+            decimal_builder.append_value(i as i128)?;
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+
+        generic_test_op!(
+            array,
+            DataType::Decimal(10, 0),
+            Sum,
+            ScalarValue::Decimal128(Some(15), 10, 0),
+            DataType::Decimal(10, 0)
+        )
+    }
+
+    #[test]
+    fn sum_decimal_with_nulls() -> Result<()> {
+        // test sum
+        let left = ScalarValue::Decimal128(None, 10, 2);
+        let right = ScalarValue::Decimal128(Some(123), 10, 2);
+        let result = sum(&left, &right)?;
+        assert_eq!(ScalarValue::Decimal128(Some(123), 10, 2), result);
+
+        // test with batch
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for i in 1..6 {
+            if i == 2 {
+                decimal_builder.append_null()?;
+            } else {
+                decimal_builder.append_value(i)?;
+            }
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let result = sum_batch(&array)?;
+        assert_eq!(ScalarValue::Decimal128(Some(13), 10, 0), result);
+
+        // test agg
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for i in 1..6 {
+            if i == 2 {
+                decimal_builder.append_null()?;
+            } else {
+                decimal_builder.append_value(i)?;
+            }
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        generic_test_op!(
+            array,
+            DataType::Decimal(10, 0),
+            Sum,
+            ScalarValue::Decimal128(Some(13), 10, 0),
+            DataType::Decimal(10, 0)
+        )
+    }
+
+    #[test]
+    fn sum_decimal_all_nulls() -> Result<()> {
+        // test sum
+        let left = ScalarValue::Decimal128(None, 10, 2);
+        let right = ScalarValue::Decimal128(None, 10, 2);
+        let result = sum(&left, &right)?;
+        assert_eq!(ScalarValue::Decimal128(None, 10, 2), result);
+
+        // test with batch
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for _i in 1..6 {
+            decimal_builder.append_null()?;
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let result = sum_batch(&array)?;
+        assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
+
+        // test agg
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for _i in 1..6 {
+            decimal_builder.append_null()?;
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        generic_test_op!(
+            array,
+            DataType::Decimal(10, 0),
+            Sum,
+            ScalarValue::Decimal128(None, 10, 0),
+            DataType::Decimal(10, 0)
+        )
+    }
 
     #[test]
     fn sum_i32() -> Result<()> {

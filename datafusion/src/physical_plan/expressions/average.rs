@@ -43,6 +43,7 @@ pub struct Avg {
 /// function return type of an average
 pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
+        // TODO decimal type
         DataType::Int8
         | DataType::Int16
         | DataType::Int32
@@ -89,6 +90,13 @@ impl AggregateExpr for Avg {
         Ok(Field::new(&self.name, DataType::Float64, true))
     }
 
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(AvgAccumulator::try_new(
+            // avg is f64
+            &DataType::Float64,
+        )?))
+    }
+
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
@@ -102,13 +110,6 @@ impl AggregateExpr for Avg {
                 true,
             ),
         ])
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(AvgAccumulator::try_new(
-            // avg is f64
-            &DataType::Float64,
-        )?))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -203,6 +204,24 @@ mod tests {
     use crate::{error::Result, generic_test_op};
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
+
+    #[test]
+    fn avg_decimal() -> Result<()> {
+        // TODO
+        Ok(())
+    }
+
+    #[test]
+    fn avg_decimal_with_nulls() -> Result<()> {
+        // TODO
+        Ok(())
+    }
+
+    #[test]
+    fn avg_decimal_all_nulls() -> Result<()> {
+        // TODO
+        Ok(())
+    }
 
     #[test]
     fn avg_i32() -> Result<()> {
