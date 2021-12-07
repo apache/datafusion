@@ -18,10 +18,8 @@
 //! Physical exec for built-in window function expressions.
 
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::window_frames::WindowFrame;
 use crate::physical_plan::{
-    expressions::PhysicalSortExpr,
-    window_functions::{BuiltInWindowFunction, BuiltInWindowFunctionExpr},
+    expressions::PhysicalSortExpr, window_functions::BuiltInWindowFunctionExpr,
     PhysicalExpr, WindowExpr,
 };
 use arrow::compute::concat;
@@ -33,28 +31,22 @@ use std::sync::Arc;
 /// A window expr that takes the form of a built in window function
 #[derive(Debug)]
 pub struct BuiltInWindowExpr {
-    fun: BuiltInWindowFunction,
     expr: Arc<dyn BuiltInWindowFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
-    window_frame: Option<WindowFrame>,
 }
 
 impl BuiltInWindowExpr {
     /// create a new built-in window function expression
     pub(super) fn new(
-        fun: BuiltInWindowFunction,
         expr: Arc<dyn BuiltInWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
-        window_frame: Option<WindowFrame>,
     ) -> Self {
         Self {
-            fun,
             expr,
             partition_by: partition_by.to_vec(),
             order_by: order_by.to_vec(),
-            window_frame,
         }
     }
 }

@@ -67,7 +67,6 @@ use crate::logical_plan::{
     LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
-use crate::optimizer::constant_folding::ConstantFolding;
 use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
 use crate::optimizer::optimizer::OptimizerRule;
@@ -896,12 +895,13 @@ impl Default for ExecutionConfig {
             target_partitions: num_cpus::get(),
             batch_size: 8192,
             optimizers: vec![
-                Arc::new(ConstantFolding::new()),
+                // Simplify expressions first to maximize the chance
+                // of applying other optimizations
+                Arc::new(SimplifyExpressions::new()),
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
-                Arc::new(SimplifyExpressions::new()),
                 Arc::new(LimitPushDown::new()),
                 Arc::new(SingleDistinctToGroupBy::new()),
             ],
