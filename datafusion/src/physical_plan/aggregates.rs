@@ -417,29 +417,19 @@ mod tests {
                     AggregateFunction::Sum => {
                         assert!(result_agg_phy_exprs.as_any().is::<Sum>());
                         assert_eq!("c1", result_agg_phy_exprs.name());
-                        let mut expect_type = data_type.clone();
-                        if matches!(
-                            data_type,
+                        let expect_type = match data_type {
                             DataType::UInt8
-                                | DataType::UInt16
-                                | DataType::UInt32
-                                | DataType::UInt64
-                        ) {
-                            expect_type = DataType::UInt64;
-                        } else if matches!(
-                            data_type,
+                            | DataType::UInt16
+                            | DataType::UInt32
+                            | DataType::UInt64 => DataType::UInt64,
                             DataType::Int8
-                                | DataType::Int16
-                                | DataType::Int32
-                                | DataType::Int64
-                        ) {
-                            expect_type = DataType::Int64;
-                        } else if matches!(
-                            data_type,
-                            DataType::Float32 | DataType::Float64
-                        ) {
-                            expect_type = data_type.clone();
-                        }
+                            | DataType::Int16
+                            | DataType::Int32
+                            | DataType::Int64 => DataType::Int64,
+                            DataType::Float32 | DataType::Float64 => data_type.clone(),
+                            _ => data_type.clone(),
+                        };
+
                         assert_eq!(
                             Field::new("c1", expect_type.clone(), true),
                             result_agg_phy_exprs.field().unwrap()
