@@ -475,6 +475,10 @@ impl AggregateExpr for Min {
         ))
     }
 
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(MinAccumulator::try_new(&self.data_type)?))
+    }
+
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             &format_state_name(&self.name, "min"),
@@ -485,10 +489,6 @@ impl AggregateExpr for Min {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr.clone()]
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MinAccumulator::try_new(&self.data_type)?))
     }
 
     fn name(&self) -> &str {
@@ -516,16 +516,16 @@ impl Accumulator for MinAccumulator {
         Ok(vec![self.min.clone()])
     }
 
+    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
+        let value = &values[0];
+        self.min = min(&self.min, value)?;
+        Ok(())
+    }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &min_batch(values)?;
         self.min = min(&self.min, delta)?;
-        Ok(())
-    }
-
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let value = &values[0];
-        self.min = min(&self.min, value)?;
         Ok(())
     }
 
@@ -598,6 +598,44 @@ mod tests {
     }
 
     #[test]
+    fn min_decimal_all_nulls() -> Result<()> {
+        // min batch all nulls
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for _i in 1..6 {
+            decimal_builder.append_null()?;
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        generic_test_op!(
+            array,
+            DataType::Decimal(10, 0),
+            Min,
+            ScalarValue::Decimal128(None, 10, 0),
+            DataType::Decimal(10, 0)
+        )
+    }
+
+    #[test]
+    fn min_decimal_with_nulls() -> Result<()> {
+        // min batch with nulls
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for i in 1..6 {
+            if i == 2 {
+                decimal_builder.append_null()?;
+            } else {
+                decimal_builder.append_value(i as i128)?;
+            }
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        generic_test_op!(
+            array,
+            DataType::Decimal(10, 0),
+            Min,
+            ScalarValue::Decimal128(Some(1), 10, 0),
+            DataType::Decimal(10, 0)
+        )
+    }
+
+    #[test]
     fn max_decimal() -> Result<()> {
         // max
         let left = ScalarValue::Decimal128(Some(123), 10, 2);
@@ -643,6 +681,42 @@ mod tests {
             DataType::Decimal(10, 0),
             Max,
             ScalarValue::Decimal128(Some(5), 10, 0),
+            DataType::Decimal(10, 0)
+        )
+    }
+
+    #[test]
+    fn max_decimal_with_nulls() -> Result<()> {
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for i in 1..6 {
+            if i == 2 {
+                decimal_builder.append_null()?;
+            } else {
+                decimal_builder.append_value(i as i128)?;
+            }
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        generic_test_op!(
+            array,
+            DataType::Decimal(10, 0),
+            Max,
+            ScalarValue::Decimal128(Some(5), 10, 0),
+            DataType::Decimal(10, 0)
+        )
+    }
+
+    #[test]
+    fn max_decimal_all_nulls() -> Result<()> {
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for _i in 1..6 {
+            decimal_builder.append_null()?;
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        generic_test_op!(
+            array,
+            DataType::Decimal(10, 0),
+            Min,
+            ScalarValue::Decimal128(None, 10, 0),
             DataType::Decimal(10, 0)
         )
     }
