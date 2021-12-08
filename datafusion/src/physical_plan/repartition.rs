@@ -364,7 +364,7 @@ impl RepartitionExec {
                             RecordBatch::try_new(input_batch.schema(), columns);
                         timer.done();
 
-                        let timer = r_metrics.repart_time.timer();
+                        let timer = r_metrics.send_time.timer();
                         // if there is still a receiver, send to it
                         if let Some(tx) = txs.get_mut(&num_output_partition) {
                             if tx.send(Some(output_batch)).is_err() {
