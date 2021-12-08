@@ -1038,9 +1038,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map_err(|err| DataFusionError::Plan(err.to_string()))?;
 
                 if field_index == 0 {
-                    return Err(DataFusionError::Plan(format!(
-                        "Order by index starts at 1 for column indexes"
-                    )));
+                    return Err(DataFusionError::Plan(
+                        "Order by index starts at 1 for column indexes".to_string(),
+                    ));
                 } else if schema.fields().len() < field_index {
                     return Err(DataFusionError::Plan(format!(
                         "Order by column out of bounds, specified: {}, max: {}",
