@@ -342,7 +342,8 @@ impl SimplifyExpressions {
 
 /// Partially evaluate `Expr`s so constant subtrees are evaluated at plan time.
 ///
-/// Note it does not handle algebriac rewrites such as `(a and false)` --> `a`
+/// Note it does not handle algebraic rewrites such as `(a or false)`
+/// --> `a`, which is handled by [`Simplifier`]
 ///
 /// ```
 /// # use datafusion::prelude::*;
@@ -785,179 +786,165 @@ mod tests {
     use crate::physical_plan::udf::ScalarUDF;
 
     #[test]
-    fn test_simplify_or_true() -> Result<()> {
-        let expr_a = col("c").or(lit(true));
-        let expr_b = lit(true).or(col("c"));
+    fn test_simplify_or_true() {
+        let expr_a = col("c2").or(lit(true));
+        let expr_b = lit(true).or(col("c2"));
         let expected = lit(true);
 
         assert_eq!(simplify(&expr_a), expected);
         assert_eq!(simplify(&expr_b), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_or_false() -> Result<()> {
-        let expr_a = lit(false).or(col("c"));
-        let expr_b = col("c").or(lit(false));
-        let expected = col("c");
+    fn test_simplify_or_false() {
+        let expr_a = lit(false).or(col("c2"));
+        let expr_b = col("c2").or(lit(false));
+        let expected = col("c2");
 
         assert_eq!(simplify(&expr_a), expected);
         assert_eq!(simplify(&expr_b), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_or_same() -> Result<()> {
-        let expr = col("c").or(col("c"));
-        let expected = col("c");
+    fn test_simplify_or_same() {
+        let expr = col("c2").or(col("c2"));
+        let expected = col("c2");
 
         assert_eq!(simplify(&expr), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_and_false() -> Result<()> {
-        let expr_a = lit(false).and(col("c"));
-        let expr_b = col("c").and(lit(false));
+    fn test_simplify_and_false() {
+        let expr_a = lit(false).and(col("c2"));
+        let expr_b = col("c2").and(lit(false));
         let expected = lit(false);
 
         assert_eq!(simplify(&expr_a), expected);
         assert_eq!(simplify(&expr_b), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_and_same() -> Result<()> {
-        let expr = col("c").and(col("c"));
-        let expected = col("c");
+    fn test_simplify_and_same() {
+        let expr = col("c2").and(col("c2"));
+        let expected = col("c2");
 
         assert_eq!(simplify(&expr), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_and_true() -> Result<()> {
-        let expr_a = lit(true).and(col("c"));
-        let expr_b = col("c").and(lit(true));
-        let expected = col("c");
+    fn test_simplify_and_true() {
+        let expr_a = lit(true).and(col("c2"));
+        let expr_b = col("c2").and(lit(true));
+        let expected = col("c2");
 
         assert_eq!(simplify(&expr_a), expected);
         assert_eq!(simplify(&expr_b), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_multiply_by_one() -> Result<()> {
-        let expr_a = binary_expr(col("c"), Operator::Multiply, lit(1));
-        let expr_b = binary_expr(lit(1), Operator::Multiply, col("c"));
-        let expected = col("c");
+    fn test_simplify_multiply_by_one() {
+        let expr_a = binary_expr(col("c2"), Operator::Multiply, lit(1));
+        let expr_b = binary_expr(lit(1), Operator::Multiply, col("c2"));
+        let expected = col("c2");
 
         assert_eq!(simplify(&expr_a), expected);
         assert_eq!(simplify(&expr_b), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_divide_by_one() -> Result<()> {
-        let expr = binary_expr(col("c"), Operator::Divide, lit(1));
-        let expected = col("c");
+    fn test_simplify_divide_by_one() {
+        let expr = binary_expr(col("c2"), Operator::Divide, lit(1));
+        let expected = col("c2");
 
         assert_eq!(simplify(&expr), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_divide_by_same() -> Result<()> {
-        let expr = binary_expr(col("c"), Operator::Divide, col("c"));
+    fn test_simplify_divide_by_same() {
+        let expr = binary_expr(col("c2"), Operator::Divide, col("c2"));
         let expected = lit(1);
 
         assert_eq!(simplify(&expr), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_simple_and() -> Result<()> {
+    fn test_simplify_simple_and() {
         // (c > 5) AND (c > 5)
-        let expr = (col("c").gt(lit(5))).and(col("c").gt(lit(5)));
-        let expected = col("c").gt(lit(5));
+        let expr = (col("c2").gt(lit(5))).and(col("c2").gt(lit(5)));
+        let expected = col("c2").gt(lit(5));
 
         assert_eq!(simplify(&expr), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_composed_and() -> Result<()> {
+    fn test_simplify_composed_and() {
         // ((c > 5) AND (d < 6)) AND (c > 5)
         let expr = binary_expr(
-            binary_expr(col("c").gt(lit(5)), Operator::And, col("d").lt(lit(6))),
+            binary_expr(col("c2").gt(lit(5)), Operator::And, col("d").lt(lit(6))),
             Operator::And,
-            col("c").gt(lit(5)),
+            col("c2").gt(lit(5)),
         );
         let expected =
-            binary_expr(col("c").gt(lit(5)), Operator::And, col("d").lt(lit(6)));
+            binary_expr(col("c2").gt(lit(5)), Operator::And, col("d").lt(lit(6)));
 
         assert_eq!(simplify(&expr), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_negated_and() -> Result<()> {
+    fn test_simplify_negated_and() {
         // (c > 5) AND !(c > 5) -- can't remove
         let expr = binary_expr(
-            col("c").gt(lit(5)),
+            col("c2").gt(lit(5)),
             Operator::And,
-            Expr::not(col("c").gt(lit(5))),
+            Expr::not(col("c2").gt(lit(5))),
         );
         let expected = expr.clone();
 
         assert_eq!(simplify(&expr), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_or_and() -> Result<()> {
+    fn test_simplify_or_and() {
         // (c > 5) OR ((d < 6) AND (c > 5) -- can remove
         let expr = binary_expr(
-            col("c").gt(lit(5)),
+            col("c2").gt(lit(5)),
             Operator::Or,
-            binary_expr(col("d").lt(lit(6)), Operator::And, col("c").gt(lit(5))),
+            binary_expr(col("d").lt(lit(6)), Operator::And, col("c2").gt(lit(5))),
         );
-        let expected = col("c").gt(lit(5));
+        let expected = col("c2").gt(lit(5));
 
         assert_eq!(simplify(&expr), expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_and_and_false() -> Result<()> {
-        let expr =
-            binary_expr(lit(ScalarValue::Boolean(None)), Operator::And, lit(false));
+    fn test_simplify_null_and_false() {
+        let expr = binary_expr(lit_null(), Operator::And, lit(false));
         let expr_eq = lit(false);
 
         assert_eq!(simplify(&expr), expr_eq);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_divide_null_by_null() -> Result<()> {
+    fn test_simplify_divide_null_by_null() {
         let null = Expr::Literal(ScalarValue::Int32(None));
         let expr_plus = binary_expr(null.clone(), Operator::Divide, null.clone());
         let expr_eq = null;
 
         assert_eq!(simplify(&expr_plus), expr_eq);
-        Ok(())
     }
 
     #[test]
-    fn test_simplify_do_not_simplify_arithmetic_expr() -> Result<()> {
+    fn test_simplify_do_not_simplify_arithmetic_expr() {
         let expr_plus = binary_expr(lit(1), Operator::Plus, lit(1));
         let expr_eq = binary_expr(lit(1), Operator::Eq, lit(1));
 
         assert_eq!(simplify(&expr_plus), expr_plus);
         assert_eq!(simplify(&expr_eq), expr_eq);
-
-        Ok(())
     }
+
+    // ------------------------------
+    // --- ConstEvaluator tests -----
+    // ------------------------------
 
     #[test]
     fn test_const_evaluator() {
@@ -1191,360 +1178,15 @@ mod tests {
         test_evaluate_with_start_time(input_expr, expected_expr, &Utc::now())
     }
 
-    #[test]
-    fn simplify_expr_not_not() -> Result<()> {
+    // ------------------------------
+    // ----- Simplifier tests -------
+    // ------------------------------
+
+    // TODO rename to simplify
+    fn do_simplify(expr: Expr) -> Expr {
         let schema = expr_test_schema();
-        let mut rewriter = Simplifier {
-            schemas: vec![&schema],
-        };
-
-        assert_eq!(
-            (col("c2").not().not().not()).rewrite(&mut rewriter)?,
-            col("c2").not(),
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn simplify_expr_null_comparison() -> Result<()> {
-        let schema = expr_test_schema();
-        let mut rewriter = Simplifier {
-            schemas: vec![&schema],
-        };
-
-        // x = null is always null
-        assert_eq!(
-            (lit(true).eq(lit(ScalarValue::Boolean(None)))).rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
-        );
-
-        // null != null is always null
-        assert_eq!(
-            (lit(ScalarValue::Boolean(None)).not_eq(lit(ScalarValue::Boolean(None))))
-                .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
-        );
-
-        // x != null is always null
-        assert_eq!(
-            (col("c2").not_eq(lit(ScalarValue::Boolean(None)))).rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
-        );
-
-        // null = x is always null
-        assert_eq!(
-            (lit(ScalarValue::Boolean(None)).eq(col("c2"))).rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn simplify_expr_eq() -> Result<()> {
-        let schema = expr_test_schema();
-        let mut rewriter = Simplifier {
-            schemas: vec![&schema],
-        };
-
-        assert_eq!(col("c2").get_type(&schema)?, DataType::Boolean);
-
-        // true = ture -> true
-        assert_eq!((lit(true).eq(lit(true))).rewrite(&mut rewriter)?, lit(true),);
-
-        // true = false -> false
-        assert_eq!(
-            (lit(true).eq(lit(false))).rewrite(&mut rewriter)?,
-            lit(false),
-        );
-
-        // c2 = true -> c2
-        assert_eq!((col("c2").eq(lit(true))).rewrite(&mut rewriter)?, col("c2"),);
-
-        // c2 = false => !c2
-        assert_eq!(
-            (col("c2").eq(lit(false))).rewrite(&mut rewriter)?,
-            col("c2").not(),
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn simplify_expr_eq_skip_nonboolean_type() -> Result<()> {
-        let schema = expr_test_schema();
-        let mut rewriter = Simplifier {
-            schemas: vec![&schema],
-        };
-
-        // When one of the operand is not of boolean type, folding the other boolean constant will
-        // change return type of expression to non-boolean.
-        //
-        // Make sure c1 column to be used in tests is not boolean type
-        assert_eq!(col("c1").get_type(&schema)?, DataType::Utf8);
-
-        // don't fold c1 = true
-        assert_eq!(
-            (col("c1").eq(lit(true))).rewrite(&mut rewriter)?,
-            col("c1").eq(lit(true)),
-        );
-
-        // don't fold c1 = false
-        assert_eq!(
-            (col("c1").eq(lit(false))).rewrite(&mut rewriter)?,
-            col("c1").eq(lit(false)),
-        );
-
-        // test constant operands
-        assert_eq!(
-            (lit(1).eq(lit(true))).rewrite(&mut rewriter)?,
-            lit(1).eq(lit(true)),
-        );
-
-        assert_eq!(
-            (lit("a").eq(lit(false))).rewrite(&mut rewriter)?,
-            lit("a").eq(lit(false)),
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn simplify_expr_not_eq() -> Result<()> {
-        let schema = expr_test_schema();
-        let mut rewriter = Simplifier {
-            schemas: vec![&schema],
-        };
-
-        assert_eq!(col("c2").get_type(&schema)?, DataType::Boolean);
-
-        // c2 != true -> !c2
-        assert_eq!(
-            (col("c2").not_eq(lit(true))).rewrite(&mut rewriter)?,
-            col("c2").not(),
-        );
-
-        // c2 != false -> c2
-        assert_eq!(
-            (col("c2").not_eq(lit(false))).rewrite(&mut rewriter)?,
-            col("c2"),
-        );
-
-        // test constant
-        assert_eq!(
-            (lit(true).not_eq(lit(true))).rewrite(&mut rewriter)?,
-            lit(false),
-        );
-
-        assert_eq!(
-            (lit(true).not_eq(lit(false))).rewrite(&mut rewriter)?,
-            lit(true),
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn simplify_expr_not_eq_skip_nonboolean_type() -> Result<()> {
-        let schema = expr_test_schema();
-        let mut rewriter = Simplifier {
-            schemas: vec![&schema],
-        };
-
-        // when one of the operand is not of boolean type, folding the other boolean constant will
-        // change return type of expression to non-boolean.
-        assert_eq!(col("c1").get_type(&schema)?, DataType::Utf8);
-
-        assert_eq!(
-            (col("c1").not_eq(lit(true))).rewrite(&mut rewriter)?,
-            col("c1").not_eq(lit(true)),
-        );
-
-        assert_eq!(
-            (col("c1").not_eq(lit(false))).rewrite(&mut rewriter)?,
-            col("c1").not_eq(lit(false)),
-        );
-
-        // test constants
-        assert_eq!(
-            (lit(1).not_eq(lit(true))).rewrite(&mut rewriter)?,
-            lit(1).not_eq(lit(true)),
-        );
-
-        assert_eq!(
-            (lit("a").not_eq(lit(false))).rewrite(&mut rewriter)?,
-            lit("a").not_eq(lit(false)),
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn simplify_expr_case_when_then_else() -> Result<()> {
-        let schema = expr_test_schema();
-        let mut rewriter = Simplifier {
-            schemas: vec![&schema],
-        };
-
-        assert_eq!(
-            (Box::new(Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
-                    Box::new(col("c2").not_eq(lit(false))),
-                    Box::new(lit("ok").eq(lit(true))),
-                )],
-                else_expr: Some(Box::new(col("c2").eq(lit(true)))),
-            }))
-            .rewrite(&mut rewriter)?,
-            Expr::Case {
-                expr: None,
-                when_then_expr: vec![(
-                    Box::new(col("c2")),
-                    Box::new(lit("ok").eq(lit(true)))
-                )],
-                else_expr: Some(Box::new(col("c2"))),
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn simplify_expr_bool_or() -> Result<()> {
-        let schema = expr_test_schema();
-        let mut rewriter = Simplifier {
-            schemas: vec![&schema],
-        };
-
-        // col || true is always true
-        assert_eq!(
-            (col("c2").or(Expr::Literal(ScalarValue::Boolean(Some(true)))))
-                .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(Some(true))),
-        );
-
-        // col || false is always col
-        assert_eq!(
-            (col("c2").or(Expr::Literal(ScalarValue::Boolean(Some(false)))))
-                .rewrite(&mut rewriter)?,
-            col("c2"),
-        );
-
-        // true || null is always true
-        assert_eq!(
-            (Expr::Literal(ScalarValue::Boolean(Some(true)))
-                .or(Expr::Literal(ScalarValue::Boolean(None))))
-            .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(Some(true))),
-        );
-
-        // null || true is always true
-        assert_eq!(
-            (Expr::Literal(ScalarValue::Boolean(None))
-                .or(Expr::Literal(ScalarValue::Boolean(Some(true)))))
-            .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(Some(true))),
-        );
-
-        // false || null is always null
-        assert_eq!(
-            (Expr::Literal(ScalarValue::Boolean(Some(false)))
-                .or(Expr::Literal(ScalarValue::Boolean(None))))
-            .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
-        );
-
-        // null || false is always null
-        assert_eq!(
-            (Expr::Literal(ScalarValue::Boolean(None))
-                .or(Expr::Literal(ScalarValue::Boolean(Some(false)))))
-            .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
-        );
-
-        // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
-        // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
-        // and should not be rewritten
-        let expr = Expr::Between {
-            expr: Box::new(col("c1")),
-            negated: false,
-            low: Box::new(lit(0)),
-            high: Box::new(lit(10)),
-        };
-        let expr = expr.or(Expr::Literal(ScalarValue::Boolean(None)));
-        let result = expr.clone().rewrite(&mut rewriter)?;
-        assert_eq!(expr, result);
-
-        Ok(())
-    }
-
-    #[test]
-    fn simplify_expr_bool_and() -> Result<()> {
-        let schema = expr_test_schema();
-        let mut rewriter = Simplifier {
-            schemas: vec![&schema],
-        };
-
-        // col & true is always col
-        assert_eq!(
-            (col("c2").and(Expr::Literal(ScalarValue::Boolean(Some(true)))))
-                .rewrite(&mut rewriter)?,
-            col("c2"),
-        );
-        // col & false is always false
-        assert_eq!(
-            (col("c2").and(Expr::Literal(ScalarValue::Boolean(Some(false)))))
-                .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(Some(false))),
-        );
-
-        // true && null is always null
-        assert_eq!(
-            (Expr::Literal(ScalarValue::Boolean(Some(true)))
-                .and(Expr::Literal(ScalarValue::Boolean(None))))
-            .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
-        );
-
-        // null && true is always null
-        assert_eq!(
-            (Expr::Literal(ScalarValue::Boolean(None))
-                .and(Expr::Literal(ScalarValue::Boolean(Some(true)))))
-            .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(None)),
-        );
-
-        // false && null is always false
-        assert_eq!(
-            (Expr::Literal(ScalarValue::Boolean(Some(false)))
-                .and(Expr::Literal(ScalarValue::Boolean(None))))
-            .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(Some(false))),
-        );
-
-        // null && false is always false
-        assert_eq!(
-            (Expr::Literal(ScalarValue::Boolean(None))
-                .and(Expr::Literal(ScalarValue::Boolean(Some(false)))))
-            .rewrite(&mut rewriter)?,
-            lit(ScalarValue::Boolean(Some(false))),
-        );
-
-        // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
-        // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10`
-        // and should not be rewritten
-        let expr = Expr::Between {
-            expr: Box::new(col("c1")),
-            negated: false,
-            low: Box::new(lit(0)),
-            high: Box::new(lit(10)),
-        };
-        let expr = expr.and(Expr::Literal(ScalarValue::Boolean(None)));
-        let result = expr.clone().rewrite(&mut rewriter)?;
-        assert_eq!(expr, result);
-
-        Ok(())
+        let mut rewriter = Simplifier::new(vec![&schema]);
+        expr.rewrite(&mut rewriter).expect("expected to simplify")
     }
 
     fn expr_test_schema() -> DFSchemaRef {
@@ -1557,14 +1199,249 @@ mod tests {
         )
     }
 
-    fn test_table_scan() -> Result<LogicalPlan> {
+    #[test]
+    fn simplify_expr_not_not() {
+        assert_eq!(do_simplify(col("c2").not().not().not()), col("c2").not(),);
+    }
+
+    #[test]
+    fn simplify_expr_null_comparison() {
+        // x = null is always null
+        assert_eq!(
+            do_simplify(lit(true).eq(lit(ScalarValue::Boolean(None)))),
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        // null != null is always null
+        assert_eq!(
+            do_simplify(
+                lit(ScalarValue::Boolean(None)).not_eq(lit(ScalarValue::Boolean(None)))
+            ),
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        // x != null is always null
+        assert_eq!(
+            do_simplify(col("c2").not_eq(lit(ScalarValue::Boolean(None)))),
+            lit(ScalarValue::Boolean(None)),
+        );
+
+        // null = x is always null
+        assert_eq!(
+            do_simplify(lit(ScalarValue::Boolean(None)).eq(col("c2"))),
+            lit(ScalarValue::Boolean(None)),
+        );
+    }
+
+    #[test]
+    fn simplify_expr_eq() {
+        let schema = expr_test_schema();
+        assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
+
+        // true = ture -> true
+        assert_eq!(do_simplify(lit(true).eq(lit(true))), lit(true));
+
+        // true = false -> false
+        assert_eq!(do_simplify(lit(true).eq(lit(false))), lit(false),);
+
+        // c2 = true -> c2
+        assert_eq!(do_simplify(col("c2").eq(lit(true))), col("c2"));
+
+        // c2 = false => !c2
+        assert_eq!(do_simplify(col("c2").eq(lit(false))), col("c2").not(),);
+    }
+
+    #[test]
+    fn simplify_expr_eq_skip_nonboolean_type() {
+        let schema = expr_test_schema();
+
+        // When one of the operand is not of boolean type, folding the
+        // other boolean constant will change return type of
+        // expression to non-boolean.
+        //
+        // Make sure c1 column to be used in tests is not boolean type
+        assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
+
+        // don't fold c1 = true
+        assert_eq!(
+            do_simplify(col("c1").eq(lit(true))),
+            col("c1").eq(lit(true)),
+        );
+
+        // don't fold c1 = false
+        assert_eq!(
+            do_simplify(col("c1").eq(lit(false))),
+            col("c1").eq(lit(false)),
+        );
+
+        // test constant operands
+        assert_eq!(do_simplify(lit(1).eq(lit(true))), lit(1).eq(lit(true)),);
+
+        assert_eq!(
+            do_simplify(lit("a").eq(lit(false))),
+            lit("a").eq(lit(false)),
+        );
+    }
+
+    #[test]
+    fn simplify_expr_not_eq() {
+        let schema = expr_test_schema();
+
+        assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
+
+        // c2 != true -> !c2
+        assert_eq!(do_simplify(col("c2").not_eq(lit(true))), col("c2").not(),);
+
+        // c2 != false -> c2
+        assert_eq!(do_simplify(col("c2").not_eq(lit(false))), col("c2"),);
+
+        // test constant
+        assert_eq!(do_simplify(lit(true).not_eq(lit(true))), lit(false),);
+
+        assert_eq!(do_simplify(lit(true).not_eq(lit(false))), lit(true),);
+    }
+
+    #[test]
+    fn simplify_expr_not_eq_skip_nonboolean_type() {
+        let schema = expr_test_schema();
+
+        // when one of the operand is not of boolean type, folding the
+        // other boolean constant will change return type of
+        // expression to non-boolean.
+        assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
+
+        assert_eq!(
+            do_simplify(col("c1").not_eq(lit(true))),
+            col("c1").not_eq(lit(true)),
+        );
+
+        assert_eq!(
+            do_simplify(col("c1").not_eq(lit(false))),
+            col("c1").not_eq(lit(false)),
+        );
+
+        // test constants
+        assert_eq!(
+            do_simplify(lit(1).not_eq(lit(true))),
+            lit(1).not_eq(lit(true)),
+        );
+
+        assert_eq!(
+            do_simplify(lit("a").not_eq(lit(false))),
+            lit("a").not_eq(lit(false)),
+        );
+    }
+
+    #[test]
+    fn simplify_expr_case_when_then_else() {
+        assert_eq!(
+            do_simplify(Expr::Case {
+                expr: None,
+                when_then_expr: vec![(
+                    Box::new(col("c2").not_eq(lit(false))),
+                    Box::new(lit("ok").eq(lit(true))),
+                )],
+                else_expr: Some(Box::new(col("c2").eq(lit(true)))),
+            }),
+            Expr::Case {
+                expr: None,
+                when_then_expr: vec![(
+                    Box::new(col("c2")),
+                    Box::new(lit("ok").eq(lit(true)))
+                )],
+                else_expr: Some(Box::new(col("c2"))),
+            }
+        );
+    }
+
+    /// Boolean null
+    fn lit_null() -> Expr {
+        Expr::Literal(ScalarValue::Boolean(None))
+    }
+
+    #[test]
+    fn simplify_expr_bool_or() {
+        // col || true is always true
+        assert_eq!(do_simplify(col("c2").or(lit(true))), lit(true),);
+
+        // col || false is always col
+        assert_eq!(do_simplify(col("c2").or(lit(false))), col("c2"),);
+
+        // true || null is always true
+        assert_eq!(do_simplify(lit(true).or(lit_null())), lit(true),);
+
+        // null || true is always true
+        assert_eq!(do_simplify(lit_null().or(lit(true))), lit(true),);
+
+        // false || null is always null
+        assert_eq!(do_simplify(lit(false).or(lit_null())), lit_null(),);
+
+        // null || false is always null
+        assert_eq!(do_simplify(lit_null().or(lit(false))), lit_null(),);
+
+        // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
+        // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
+        // and should not be rewritten
+        let expr = Expr::Between {
+            expr: Box::new(col("c1")),
+            negated: false,
+            low: Box::new(lit(0)),
+            high: Box::new(lit(10)),
+        };
+        let expr = expr.or(lit_null());
+        let result = do_simplify(expr.clone());
+        assert_eq!(expr, result);
+    }
+
+    #[test]
+    fn simplify_expr_bool_and() {
+        // col & true is always col
+        assert_eq!(do_simplify(col("c2").and(lit(true))), col("c2"),);
+        // col & false is always false
+        assert_eq!(do_simplify(col("c2").and(lit(false))), lit(false),);
+
+        // true && null is always null
+        assert_eq!(do_simplify(lit(true).and(lit_null())), lit_null(),);
+
+        // null && true is always null
+        assert_eq!(do_simplify(lit_null().and(lit(true))), lit_null(),);
+
+        // false && null is always false
+        assert_eq!(do_simplify(lit(false).and(lit_null())), lit(false),);
+
+        // null && false is always false
+        assert_eq!(do_simplify(lit_null().and(lit(false))), lit(false),);
+
+        // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
+        // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10`
+        // and should not be rewritten
+        let expr = Expr::Between {
+            expr: Box::new(col("c1")),
+            negated: false,
+            low: Box::new(lit(0)),
+            high: Box::new(lit(10)),
+        };
+        let expr = expr.and(lit_null());
+        let result = do_simplify(expr.clone());
+        assert_eq!(expr, result);
+    }
+
+    // ------------------------------
+    // -- SimplifyExpressions tests -
+    // (test plans are simplified correctly)
+    // ------------------------------
+
+    fn test_table_scan() -> LogicalPlan {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Boolean, false),
             Field::new("b", DataType::Boolean, false),
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::UInt32, false),
         ]);
-        LogicalPlanBuilder::scan_empty(Some("test"), &schema, None)?.build()
+        LogicalPlanBuilder::scan_empty(Some("test"), &schema, None)
+            .expect("creating scan")
+            .build()
+            .expect("building plan")
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
@@ -1577,12 +1454,15 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_optimized_plan() -> Result<()> {
-        let table_scan = test_table_scan()?;
+    fn test_simplify_optimized_plan() {
+        let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a")])?
-            .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))?
-            .build()?;
+            .project(vec![col("a")])
+            .unwrap()
+            .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))
+            .unwrap()
+            .build()
+            .unwrap();
 
         assert_optimized_plan_eq(
             &plan,
@@ -1591,20 +1471,22 @@ mod tests {
             \n  Projection: #test.a\
             \n    TableScan: test projection=None",
         );
-        Ok(())
     }
 
     // ((c > 5) AND (d < 6)) AND (c > 5) --> (c > 5) AND (d < 6)
     #[test]
-    fn test_simplify_optimized_plan_with_composed_and() -> Result<()> {
-        let table_scan = test_table_scan()?;
+    fn test_simplify_optimized_plan_with_composed_and() {
+        let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a")])?
+            .project(vec![col("a")])
+            .unwrap()
             .filter(and(
                 and(col("a").gt(lit(5)), col("b").lt(lit(6))),
                 col("a").gt(lit(5)),
-            ))?
-            .build()?;
+            ))
+            .unwrap()
+            .build()
+            .unwrap();
 
         assert_optimized_plan_eq(
             &plan,
@@ -1613,17 +1495,20 @@ mod tests {
             \n  Projection: #test.a\
 	        \n    TableScan: test projection=None",
         );
-        Ok(())
     }
 
     #[test]
-    fn test_simplity_optimized_plan_eq_expr() -> Result<()> {
-        let table_scan = test_table_scan()?;
+    fn test_simplity_optimized_plan_eq_expr() {
+        let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").eq(lit(true)))?
-            .filter(col("c").eq(lit(false)))?
-            .project(vec![col("a")])?
-            .build()?;
+            .filter(col("b").eq(lit(true)))
+            .unwrap()
+            .filter(col("c").eq(lit(false)))
+            .unwrap()
+            .project(vec![col("a")])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let expected = "\
         Projection: #test.a\
@@ -1632,18 +1517,22 @@ mod tests {
         \n      TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplity_optimized_plan_not_eq_expr() -> Result<()> {
-        let table_scan = test_table_scan()?;
+    fn test_simplity_optimized_plan_not_eq_expr() {
+        let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").not_eq(lit(true)))?
-            .filter(col("c").not_eq(lit(false)))?
-            .limit(1)?
-            .project(vec![col("a")])?
-            .build()?;
+            .filter(col("b").not_eq(lit(true)))
+            .unwrap()
+            .filter(col("c").not_eq(lit(false)))
+            .unwrap()
+            .limit(1)
+            .unwrap()
+            .project(vec![col("a")])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let expected = "\
         Projection: #test.a\
@@ -1653,16 +1542,18 @@ mod tests {
         \n        TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplity_optimized_plan_and_expr() -> Result<()> {
-        let table_scan = test_table_scan()?;
+    fn test_simplity_optimized_plan_and_expr() {
+        let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").not_eq(lit(true)).and(col("c").eq(lit(true))))?
-            .project(vec![col("a")])?
-            .build()?;
+            .filter(col("b").not_eq(lit(true)).and(col("c").eq(lit(true))))
+            .unwrap()
+            .project(vec![col("a")])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let expected = "\
         Projection: #test.a\
@@ -1670,16 +1561,18 @@ mod tests {
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplity_optimized_plan_or_expr() -> Result<()> {
-        let table_scan = test_table_scan()?;
+    fn test_simplity_optimized_plan_or_expr() {
+        let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").not_eq(lit(true)).or(col("c").eq(lit(false))))?
-            .project(vec![col("a")])?
-            .build()?;
+            .filter(col("b").not_eq(lit(true)).or(col("c").eq(lit(false))))
+            .unwrap()
+            .project(vec![col("a")])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let expected = "\
         Projection: #test.a\
@@ -1687,16 +1580,18 @@ mod tests {
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplity_optimized_plan_not_expr() -> Result<()> {
-        let table_scan = test_table_scan()?;
+    fn test_simplity_optimized_plan_not_expr() {
+        let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").eq(lit(false)).not())?
-            .project(vec![col("a")])?
-            .build()?;
+            .filter(col("b").eq(lit(false)).not())
+            .unwrap()
+            .project(vec![col("a")])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let expected = "\
         Projection: #test.a\
@@ -1704,37 +1599,40 @@ mod tests {
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplity_optimized_plan_support_projection() -> Result<()> {
-        let table_scan = test_table_scan()?;
+    fn test_simplity_optimized_plan_support_projection() {
+        let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), col("d"), col("b").eq(lit(false))])?
-            .build()?;
+            .project(vec![col("a"), col("d"), col("b").eq(lit(false))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let expected = "\
         Projection: #test.a, #test.d, NOT #test.b AS test.b = Boolean(false)\
         \n  TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplity_optimized_plan_support_aggregate() -> Result<()> {
-        let table_scan = test_table_scan()?;
+    fn test_simplity_optimized_plan_support_aggregate() {
+        let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), col("c"), col("b")])?
+            .project(vec![col("a"), col("c"), col("b")])
+            .unwrap()
             .aggregate(
                 vec![col("a"), col("c")],
                 vec![
                     crate::logical_plan::max(col("b").eq(lit(true))),
                     crate::logical_plan::min(col("b")),
                 ],
-            )?
-            .build()?;
+            )
+            .unwrap()
+            .build()
+            .unwrap();
 
         let expected = "\
         Aggregate: groupBy=[[#test.a, #test.c]], aggr=[[MAX(#test.b) AS MAX(test.b = Boolean(true)), MIN(#test.b)]]\
@@ -1742,11 +1640,10 @@ mod tests {
         \n    TableScan: test projection=None";
 
         assert_optimized_plan_eq(&plan, expected);
-        Ok(())
     }
 
     #[test]
-    fn test_simplity_optimized_plan_support_values() -> Result<()> {
+    fn test_simplity_optimized_plan_support_values() {
         let expr1 = Expr::BinaryExpr {
             left: Box::new(lit(1)),
             op: Operator::Plus,
@@ -1758,13 +1655,12 @@ mod tests {
             right: Box::new(lit(1)),
         };
         let values = vec![vec![expr1, expr2]];
-        let plan = LogicalPlanBuilder::values(values)?.build()?;
+        let plan = LogicalPlanBuilder::values(values).unwrap().build().unwrap();
 
         let expected = "\
         Values: (Int32(3) AS Int32(1) + Int32(2), Int32(1) AS Int32(2) - Int32(1))";
 
         assert_optimized_plan_eq(&plan, expected);
-        Ok(())
     }
 
     // expect optimizing will result in an error, returning the error string
@@ -1798,7 +1694,7 @@ mod tests {
 
     #[test]
     fn to_timestamp_expr_folded() {
-        let table_scan = test_table_scan().unwrap();
+        let table_scan = test_table_scan();
         let proj = vec![to_timestamp_expr("2020-09-08T12:00:00+00:00")];
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -1816,7 +1712,7 @@ mod tests {
 
     #[test]
     fn to_timestamp_expr_wrong_arg() {
-        let table_scan = test_table_scan().unwrap();
+        let table_scan = test_table_scan();
         let proj = vec![to_timestamp_expr("I'M NOT A TIMESTAMP")];
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
@@ -1831,7 +1727,7 @@ mod tests {
 
     #[test]
     fn cast_expr() {
-        let table_scan = test_table_scan().unwrap();
+        let table_scan = test_table_scan();
         let proj = vec![Expr::Cast {
             expr: Box::new(lit("0")),
             data_type: DataType::Int32,
@@ -1850,7 +1746,7 @@ mod tests {
 
     #[test]
     fn cast_expr_wrong_arg() {
-        let table_scan = test_table_scan().unwrap();
+        let table_scan = test_table_scan();
         let proj = vec![Expr::Cast {
             expr: Box::new(lit("")),
             data_type: DataType::Int32,
@@ -1869,7 +1765,7 @@ mod tests {
 
     #[test]
     fn multiple_now_expr() {
-        let table_scan = test_table_scan().unwrap();
+        let table_scan = test_table_scan();
         let time = Utc::now();
         let proj = vec![
             now_expr(),
@@ -1897,7 +1793,7 @@ mod tests {
     fn simplify_and_eval() {
         // demonstrate a case where the evaluation needs to run prior
         // to the simplifier for it to work
-        let table_scan = test_table_scan().unwrap();
+        let table_scan = test_table_scan();
         let time = Utc::now();
         // (true or false) != col --> !col
         let proj = vec![lit(true).or(lit(false)).not_eq(col("a"))];
@@ -1917,7 +1813,7 @@ mod tests {
 
     #[test]
     fn now_less_than_timestamp() {
-        let table_scan = test_table_scan().unwrap();
+        let table_scan = test_table_scan();
 
         let ts_string = "2020-09-08T12:05:00+00:00";
         let time = chrono::Utc.timestamp_nanos(1599566400000000000i64);
