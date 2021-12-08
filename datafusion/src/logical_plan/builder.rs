@@ -491,7 +491,7 @@ impl LogicalPlanBuilder {
                     new_expr.push(normalize_col(Expr::Column(c.clone()), &input)?);
 
                     Ok(())
-                });
+                })?;
 
                 let new_inputs =
                     curr_plan.inputs().into_iter().cloned().collect::<Vec<_>>();
@@ -515,7 +515,7 @@ impl LogicalPlanBuilder {
                     new_inputs.push(new_input);
 
                     Ok(())
-                });
+                })?;
 
                 let expr = curr_plan.expressions();
                 utils::from_plan(&curr_plan, &expr, &new_inputs)
