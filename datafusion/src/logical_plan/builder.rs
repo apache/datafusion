@@ -546,33 +546,33 @@ impl LogicalPlanBuilder {
                 Ok(())
             })?;
 
-        if !missing_cols.is_empty() {
-            let plan = self.add_missing_columns(self.plan.clone(), &missing_cols);
-            let sort_plan = LogicalPlan::Sort(Sort {
-                expr: normalize_cols(exprs, &plan)?,
-                input: Arc::new(plan.clone()),
-            });
-            // remove pushed down sort columns
-            let mut new_expr = Vec::with_capacity(schema.fields().len());
-            schema.fields().iter().for_each(|f| {
-                let col = f.qualified_column();
-                new_expr.push(Expr::Column(col));
-            });
-            let new_schema =
-                DFSchema::new(exprlist_to_fields(&new_expr, schema).unwrap()).unwrap();
-
-            Ok(Self::from(LogicalPlan::Projection(Projection {
-                expr: new_expr,
-                input: Arc::new(sort_plan),
-                schema: DFSchemaRef::new(new_schema),
-                alias: None,
-            })))
-        } else {
-            Ok(Self::from(LogicalPlan::Sort(Sort {
+        if missing_cols.is_empty() {
+            return Ok(Self::from(LogicalPlan::Sort(Sort {
                 expr: normalize_cols(exprs, &self.plan)?,
                 input: Arc::new(self.plan.clone()),
-            })))
+            })));
         }
+
+        let plan = self.add_missing_columns(self.plan.clone(), &missing_cols);
+        let sort_plan = LogicalPlan::Sort(Sort {
+            expr: normalize_cols(exprs, &plan)?,
+            input: Arc::new(plan.clone()),
+        });
+        // remove pushed down sort columns
+        let mut new_expr = Vec::with_capacity(schema.fields().len());
+        schema.fields().iter().for_each(|f| {
+            let col = f.qualified_column();
+            new_expr.push(Expr::Column(col));
+        });
+        let new_schema =
+            DFSchema::new(exprlist_to_fields(&new_expr, schema).unwrap()).unwrap();
+
+        Ok(Self::from(LogicalPlan::Projection(Projection {
+            expr: new_expr,
+            input: Arc::new(sort_plan),
+            schema: DFSchemaRef::new(new_schema),
+            alias: None,
+        })))
     }
 
     /// Apply a union
