@@ -193,8 +193,7 @@ mod tests {
         let input_types = vec![
             vec![DataType::Int32],
             vec![DataType::Float32],
-            // support the decimal data type
-            // vec![DataType::Decimal(20, 3)],
+            vec![DataType::Decimal(20, 3)],
         ];
         for fun in funs {
             for input_type in &input_types {

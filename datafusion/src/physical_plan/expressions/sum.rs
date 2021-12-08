@@ -56,9 +56,19 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
         DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
             Ok(DataType::UInt64)
         }
+        // In the https://www.postgresql.org/docs/8.2/functions-aggregate.html doc,
+        // the result type of floating-point is FLOAT64 with the double precision.
+        // TODO, we should change this rule
         DataType::Float32 => Ok(DataType::Float32),
         DataType::Float64 => Ok(DataType::Float64),
-        DataType::Decimal(precision, scale) => Ok(DataType::Decimal(*precision, *scale)),
+        // TODO get the wider precision
+        // Max precision is 38
+        DataType::Decimal(precision, scale) => {
+            // // in the spark, the result type is DECIMAL(p + min(10, 31-p), s)
+            // let new_precision = *precision + 10.min(31-*precision);
+            // Ok(DataType::Decimal(new_precision, *scale))
+            Ok(DataType::Decimal(*precision, *scale))
+        }
         other => Err(DataFusionError::Plan(format!(
             "SUM does not support type \"{:?}\"",
             other
@@ -79,6 +89,7 @@ pub(crate) fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
+            | DataType::Decimal(_,_)
     )
 }
 
@@ -156,22 +167,24 @@ macro_rules! typed_sum_delta_batch {
     }};
 }
 
+// TODO implement this in arrow-rs with simd
+// https://github.com/apache/arrow-rs/issues/1010
 fn sum_decimal_batch(
     values: &ArrayRef,
     precision: &usize,
     scale: &usize,
 ) -> Result<ScalarValue> {
-    // TODO, if the values is empty, what should we return?
-    // None or 0
     let array = values.as_any().downcast_ref::<DecimalArray>().unwrap();
+
+    if array.null_count() == array.len() {
+        return Ok(ScalarValue::Decimal128(None, *precision, *scale));
+    }
+
     let mut result = 0_i128;
     for i in 0..array.len() {
         if array.is_valid(i) {
             result += array.value(i);
         }
-    }
-    if array.null_count() == array.len() {
-        return Ok(ScalarValue::Decimal128(None, *precision, *scale));
     }
     Ok(ScalarValue::Decimal128(Some(result), *precision, *scale))
 }
@@ -180,7 +193,6 @@ fn sum_decimal_batch(
 pub(super) fn sum_batch(values: &ArrayRef) -> Result<ScalarValue> {
     Ok(match values.data_type() {
         DataType::Decimal(precision, scale) => {
-            // TODO the result data type should use the new precision and scale
             sum_decimal_batch(values, precision, scale)?
         }
         DataType::Float64 => typed_sum_delta_batch!(values, Float64Array, Float64),
@@ -214,6 +226,8 @@ macro_rules! typed_sum {
     }};
 }
 
+// TODO implement this in arrow-rs with simd
+// https://github.com/apache/arrow-rs/issues/1010
 fn sum_decimal(
     lhs: &Option<i128>,
     rhs: &Option<i128>,
@@ -232,9 +246,8 @@ fn sum_decimal(
 
 pub(super) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     Ok(match (lhs, rhs) {
-        (ScalarValue::Decimal128(v1, p1, s1), ScalarValue::Decimal128(v2, p2, s2)) => {
-            if p1.eq(p2) && s1.eq(s2) {
-                // TODO the result data type should use the new precision and scale
+        (ScalarValue::Decimal128(v1, p1, s1), ScalarValue::Decimal128(v2, _p2, s2)) => {
+            if s1.eq(s2) {
                 sum_decimal(v1, v2, p1, s1)
             } else {
                 return Err(DataFusionError::Internal(format!(
@@ -320,12 +333,16 @@ impl Accumulator for SumAccumulator {
 
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         // sum(v1, v2, v3) = v1 + v2 + v3
+        // For the decimal data type, the precision of `sum` may be different from that of value,
+        // but the scale must be same.
         self.sum = sum(&self.sum, &values[0])?;
         Ok(())
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
+        // For the decimal data type, the precision of `sum` may be different from that of value,
+        // but the scale must be same.
         self.sum = sum(&self.sum, &sum_batch(values)?)?;
         Ok(())
     }
@@ -341,6 +358,8 @@ impl Accumulator for SumAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
+        // TODO: For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
+        // We should add the checker
         Ok(self.sum.clone())
     }
 }
@@ -361,9 +380,9 @@ mod tests {
         let right = ScalarValue::Decimal128(Some(124), 10, 2);
         let result = sum(&left, &right)?;
         assert_eq!(ScalarValue::Decimal128(Some(123 + 124), 10, 2), result);
-        // negative test
+        // negative test with diff scale
         let left = ScalarValue::Decimal128(Some(123), 10, 2);
-        let right = ScalarValue::Decimal128(Some(124), 11, 2);
+        let right = ScalarValue::Decimal128(Some(124), 11, 3);
         let result = sum(&left, &right);
         assert_eq!(
             DataFusionError::Internal(format!(

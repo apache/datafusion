@@ -115,6 +115,7 @@ pub fn return_type(
             // The coerced_data_types is same with input_types.
             Ok(coerced_data_types[0].clone())
         }
+        // TODO get the new decimal data type
         AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
         AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
         AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(

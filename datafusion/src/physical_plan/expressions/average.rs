@@ -38,12 +38,14 @@ use super::{format_state_name, sum};
 pub struct Avg {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
+    data_type: DataType,
 }
 
 /// function return type of an average
 pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
-        // TODO decimal type
+        // TODO how to handler decimal data type
+        DataType::Decimal(precision,scale) => Ok(DataType::Decimal(*precision, *scale)),
         DataType::Int8
         | DataType::Int16
         | DataType::Int32
@@ -74,6 +76,7 @@ pub(crate) fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
+            | DataType::Decimal(_,_)
     )
 }
 
@@ -87,11 +90,17 @@ impl Avg {
         // Average is always Float64, but Avg::new() has a data_type
         // parameter to keep a consistent signature with the other
         // Aggregate expressions.
-        assert_eq!(data_type, DataType::Float64);
-
-        Self {
-            name: name.into(),
-            expr,
+        match data_type {
+            DataType::Float64 | DataType::Decimal(_,_) => {
+            Self {
+                name: name.into(),
+                expr,
+                data_type,
+            }
+            }
+            _ => {
+                unreachable!();
+            }
         }
     }
 }
@@ -103,13 +112,13 @@ impl AggregateExpr for Avg {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, DataType::Float64, true))
+        Ok(Field::new(&self.name, self.data_type.clone(), true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(AvgAccumulator::try_new(
-            // avg is f64
-            &DataType::Float64,
+            // avg is f64 or decimal
+            &self.data_type
         )?))
     }
 
@@ -122,7 +131,7 @@ impl AggregateExpr for Avg {
             ),
             Field::new(
                 &format_state_name(&self.name, "sum"),
-                DataType::Float64,
+                self.data_type.clone(),
                 true,
             ),
         ])
@@ -206,6 +215,15 @@ impl Accumulator for AvgAccumulator {
             ScalarValue::Float64(e) => {
                 Ok(ScalarValue::Float64(e.map(|f| f / self.count as f64)))
             }
+            ScalarValue::Decimal128(value, precision, scale) => {
+                // TODO support the decimal data type
+                Ok(match value {
+                    None => ScalarValue::Decimal128(None, precision, scale),
+                    Some(v) => {
+                        ScalarValue::Decimal128(Some(v / self.count as i128), precision, scale)
+                    }
+                })
+            }
             _ => Err(DataFusionError::Internal(
                 "Sum should be f64 on average".to_string(),
             )),
@@ -223,20 +241,58 @@ mod tests {
 
     #[test]
     fn avg_decimal() -> Result<()> {
-        // TODO
-        Ok(())
+        // test agg
+        let mut decimal_builder = DecimalBuilder::new(6, 10, 0);
+        for i in 1..7 {
+            // the avg is 3.5, but we get the result of 3
+            decimal_builder.append_value(i as i128)?;
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+
+        generic_test_op!(
+            array,
+            DataType::Decimal(10, 0),
+            Avg,
+            ScalarValue::Decimal128(Some(3), 10, 0),
+            DataType::Decimal(10, 0)
+        )
     }
 
     #[test]
     fn avg_decimal_with_nulls() -> Result<()> {
-        // TODO
-        Ok(())
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for i in 1..6 {
+            if i == 2 {
+                decimal_builder.append_null()?;
+            } else {
+                decimal_builder.append_value(i)?;
+            }
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        generic_test_op!(
+            array,
+            DataType::Decimal(10, 0),
+            Avg,
+            ScalarValue::Decimal128(Some(3), 10, 0),
+            DataType::Decimal(10, 0)
+        )
     }
 
     #[test]
     fn avg_decimal_all_nulls() -> Result<()> {
-        // TODO
-        Ok(())
+        // test agg
+        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        for _i in 1..6 {
+            decimal_builder.append_null()?;
+        }
+        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        generic_test_op!(
+            array,
+            DataType::Decimal(10, 0),
+            Avg,
+            ScalarValue::Decimal128(None, 10, 0),
+            DataType::Decimal(10, 0)
+        )
     }
 
     #[test]
