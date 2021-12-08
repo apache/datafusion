@@ -479,46 +479,32 @@ impl LogicalPlanBuilder {
                 expr,
                 schema: _,
                 alias,
-            }) => {
+            }) if missing_cols
+                .iter()
+                .all(|c| input.schema().field_from_column(c).is_ok()) =>
+            {
                 let input_schema = input.schema();
-                if missing_cols
-                    .iter()
-                    .all(|c| input_schema.field_from_column(c).is_ok())
-                {
-                    let mut new_expr = Vec::new();
-                    new_expr.extend(expr);
-                    missing_cols.iter().for_each(|c| {
-                        new_expr.push(
-                            normalize_col(Expr::Column(c.clone()), &input).unwrap(),
-                        );
-                    });
 
-                    let new_inputs =
-                        curr_plan.inputs().into_iter().cloned().collect::<Vec<_>>();
+                let mut new_expr = Vec::new();
+                new_expr.extend(expr);
+                missing_cols.iter().for_each(|c| {
+                    new_expr
+                        .push(normalize_col(Expr::Column(c.clone()), &input).unwrap());
+                });
 
-                    let new_schema = DFSchema::new(
-                        exprlist_to_fields(&new_expr, input_schema).unwrap(),
-                    )
-                    .unwrap();
+                let new_inputs =
+                    curr_plan.inputs().into_iter().cloned().collect::<Vec<_>>();
 
-                    LogicalPlan::Projection(Projection {
-                        expr: new_expr,
-                        input: Arc::new(new_inputs.get(0).unwrap().clone()),
-                        schema: DFSchemaRef::new(new_schema),
-                        alias,
-                    })
-                } else {
-                    let inputs = curr_plan.inputs();
-                    let new_inputs = inputs
-                        .iter()
-                        .map(|input_plan| {
-                            self.add_missing_columns((*input_plan).clone(), missing_cols)
-                        })
-                        .collect::<Vec<_>>();
+                let new_schema =
+                    DFSchema::new(exprlist_to_fields(&new_expr, input_schema).unwrap())
+                        .unwrap();
 
-                    let expr = curr_plan.expressions();
-                    utils::from_plan(&curr_plan, &expr, &new_inputs).unwrap()
-                }
+                LogicalPlan::Projection(Projection {
+                    expr: new_expr,
+                    input: Arc::new(new_inputs.get(0).unwrap().clone()),
+                    schema: DFSchemaRef::new(new_schema),
+                    alias,
+                })
             }
             _ => {
                 let inputs = curr_plan.inputs();
@@ -567,7 +553,7 @@ impl LogicalPlanBuilder {
                 input: Arc::new(plan.clone()),
             });
             // remove pushed down sort columns
-            let mut new_expr = Vec::new();
+            let mut new_expr = Vec::with_capacity(schema.fields().len());
             schema.fields().iter().for_each(|f| {
                 let col = f.qualified_column();
                 new_expr.push(Expr::Column(col));
