@@ -366,9 +366,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Maps the SQL type to the corresponding Arrow `DataType`
     fn make_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
-            SQLDataType::BigInt(_display) => Ok(DataType::Int64),
-            SQLDataType::Int(_display) => Ok(DataType::Int32),
-            SQLDataType::SmallInt(_display) => Ok(DataType::Int16),
+            SQLDataType::BigInt(_) => Ok(DataType::Int64),
+            SQLDataType::Int(_) => Ok(DataType::Int32),
+            SQLDataType::SmallInt(_) => Ok(DataType::Int16),
             SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
                 Ok(DataType::Utf8)
             }
@@ -1989,10 +1989,10 @@ fn extract_possible_join_keys(
 pub fn convert_data_type(sql: &SQLDataType) -> Result<DataType> {
     match sql {
         SQLDataType::Boolean => Ok(DataType::Boolean),
-        SQLDataType::SmallInt(_display) => Ok(DataType::Int16),
-        SQLDataType::Int(_display) => Ok(DataType::Int32),
-        SQLDataType::BigInt(_display) => Ok(DataType::Int64),
-        SQLDataType::Float(_) => Ok(DataType::Float64),
+        SQLDataType::SmallInt(_) => Ok(DataType::Int16),
+        SQLDataType::Int(_) => Ok(DataType::Int32),
+        SQLDataType::BigInt(_) => Ok(DataType::Int64),
+        SQLDataType::Float(_) => Ok(DataType::Float32),
         SQLDataType::Real => Ok(DataType::Float32),
         SQLDataType::Double => Ok(DataType::Float64),
         SQLDataType::Char(_) | SQLDataType::Varchar(_) => Ok(DataType::Utf8),
