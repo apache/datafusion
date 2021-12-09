@@ -769,7 +769,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = plan?;
 
         // The SELECT expressions, with wildcards expanded.
-        let select_exprs = self.prepare_select_exprs(&plan, &select.projection)?;
+        let select_exprs = self.prepare_select_exprs(&plan, select)?;
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
@@ -900,10 +900,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn prepare_select_exprs(
         &self,
         plan: &LogicalPlan,
-        projection: &[SelectItem],
+        select: &Select,
     ) -> Result<Vec<Expr>> {
         let input_schema = plan.schema();
-
+        let projection = &select.projection;
         projection
             .iter()
             .map(|expr| self.sql_select_to_rex(expr, input_schema))
@@ -911,7 +911,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .into_iter()
             .map(|expr| {
                 Ok(match expr {
-                    Expr::Wildcard => expand_wildcard(input_schema, plan)?,
+                    Expr::Wildcard => {
+                        if select.from.is_empty() {
+                            return Err(DataFusionError::Plan(
+                                "SELECT * with no tables specified is not valid"
+                                    .to_string(),
+                            ));
+                        }
+                        expand_wildcard(input_schema, plan)?
+                    }
                     _ => vec![normalize_col(expr, plan)?],
                 })
             })
