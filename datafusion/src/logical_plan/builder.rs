@@ -467,16 +467,16 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Add missing sort columns to downstream projection
+    /// Add missing sort columns to all downstream projection
     fn add_missing_columns(
         &self,
         curr_plan: LogicalPlan,
         missing_cols: &[Column],
     ) -> Result<LogicalPlan> {
-        match curr_plan.clone() {
+        match curr_plan {
             LogicalPlan::Projection(Projection {
                 input,
-                expr,
+                mut expr,
                 schema: _,
                 alias,
             }) if missing_cols
@@ -485,37 +485,30 @@ impl LogicalPlanBuilder {
             {
                 let input_schema = input.schema();
 
-                let mut new_expr = Vec::new();
-                new_expr.extend(expr);
-                missing_cols.iter().try_for_each::<_, Result<()>>(|c| {
-                    new_expr.push(normalize_col(Expr::Column(c.clone()), &input)?);
+                let missing_exprs = missing_cols
+                    .iter()
+                    .map(|c| normalize_col(Expr::Column(c.clone()), &input))
+                    .collect::<Result<Vec<_>>>()?;
 
-                    Ok(())
-                })?;
+                expr.extend(missing_exprs);
 
-                let new_inputs =
-                    curr_plan.inputs().into_iter().cloned().collect::<Vec<_>>();
-
-                let new_schema =
-                    DFSchema::new(exprlist_to_fields(&new_expr, input_schema)?)?;
+                let new_schema = DFSchema::new(exprlist_to_fields(&expr, input_schema)?)?;
 
                 Ok(LogicalPlan::Projection(Projection {
-                    expr: new_expr,
-                    input: Arc::new(new_inputs.get(0).unwrap().clone()),
+                    expr,
+                    input,
                     schema: DFSchemaRef::new(new_schema),
                     alias,
                 }))
             }
             _ => {
-                let inputs = curr_plan.inputs();
-                let mut new_inputs = vec![];
-                inputs.iter().try_for_each::<_, Result<()>>(|input_plan| {
-                    let new_input =
-                        self.add_missing_columns((*input_plan).clone(), missing_cols)?;
-                    new_inputs.push(new_input);
-
-                    Ok(())
-                })?;
+                let new_inputs = curr_plan
+                    .inputs()
+                    .into_iter()
+                    .map(|input_plan| {
+                        self.add_missing_columns((*input_plan).clone(), missing_cols)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
                 let expr = curr_plan.expressions();
                 utils::from_plan(&curr_plan, &expr, &new_inputs)
