@@ -3001,6 +3001,16 @@ mod tests {
     }
 
     #[test]
+    fn select_order_by_multiple_index() {
+        let sql = "SELECT id, state, age FROM person ORDER BY 1, 3";
+        let expected = "Sort: #person.id ASC NULLS LAST, #person.age ASC NULLS LAST\
+                        \n  Projection: #person.id, #person.state, #person.age\
+                        \n    TableScan: person projection=None";
+
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn select_order_by_index_of_0() {
         let sql = "SELECT id FROM person ORDER BY 0";
         let err = logical_plan(sql).expect_err("query should have failed");
