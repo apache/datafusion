@@ -346,7 +346,7 @@ are mapped to Arrow types according to the following table
 | `SMALLINT`    | `Int16`                           |
 | `INT`         | `Int32`                           |
 | `BIGINT`      | `Int64`                           |
-| `REAL`        | `Float64`                         |
+| `REAL`        | `Float32`                         |
 | `DOUBLE`      | `Float64`                         |
 | `BOOLEAN`     | `Boolean`                         |
 | `DATE`        | `Date32`                          |
