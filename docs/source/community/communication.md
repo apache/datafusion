@@ -54,11 +54,11 @@ can also ask for one in our Discord server.
 
 ### Sync up Zoom calls
 
-We have biweekly sync calls every other Thursdays at 16:00 UTC
-(starting September 30, 2021) on Zoom [Meeting Link](https://influxdata.zoom.us/j/94666921249)
+We have biweekly sync calls every other Thursdays at 04:00 UTC and 16:00 UTC
+(starting September 30, 2021) which are held if there are agenda items to discuss
 
-The[agenda](https://docs.google.com/document/d/1atCVnoff5SR4eM4Lwf2M1BBJTY6g3_HUNR6qswYJW_U/edit)
-is available if you would like to add a topic for discussion or see what is planned.
+Please see the [agenda](https://docs.google.com/document/d/1atCVnoff5SR4eM4Lwf2M1BBJTY6g3_HUNR6qswYJW_U/edit)
+to learn about what others plan to discuss and topics for future discussion.
 
 The goals of these calls are:
 
