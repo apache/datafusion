@@ -6442,3 +6442,20 @@ async fn test_specific_nulls_first_asc() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_select_wildcard_without_table() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT * ";
+    let actual = ctx.sql(sql).await;
+    match actual {
+        Ok(_) => panic!("expect err"),
+        Err(e) => {
+            assert_contains!(
+                e.to_string(),
+                "Error during planning: SELECT * with no tables specified is not valid"
+            );
+        }
+    }
+    Ok(())
+}
