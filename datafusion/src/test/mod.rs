@@ -202,7 +202,7 @@ pub fn table_with_decimal() -> Arc<dyn TableProvider> {
 
 fn make_decimal() -> RecordBatch {
     let mut decimal_builder = DecimalBuilder::new(20, 10, 3);
-    for i in 100000..100010 {
+    for i in 110000..110010 {
         decimal_builder.append_value(i as i128).unwrap();
     }
     for i in 100000..100010 {
