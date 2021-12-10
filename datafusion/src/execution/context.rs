@@ -1843,6 +1843,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_decimal_min() -> Result<()> {
+        let mut ctx = ExecutionContext::new();
+        ctx.register_table("d_table", test::table_with_decimal())
+            .unwrap();
+
+        let result = plan_and_collect(&mut ctx, "select min(c1) from d_table")
+            .await
+            .unwrap();
+        let expected = vec![
+            "+-----------------+",
+            "| MIN(d_table.c1) |",
+            "+-----------------+",
+            "| -100.009        |",
+            "+-----------------+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_decimal_max() -> Result<()> {
+        let mut ctx = ExecutionContext::new();
+        ctx.register_table("d_table", test::table_with_decimal())
+            .unwrap();
+
+        let result = plan_and_collect(&mut ctx, "select max(c1) from d_table")
+            .await
+            .unwrap();
+        let expected = vec![
+            "+-----------------+",
+            "| MAX(d_table.c1) |",
+            "+-----------------+",
+            "| 110.009         |",
+            "+-----------------+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn aggregate() -> Result<()> {
         let results = execute("SELECT SUM(c1), SUM(c2) FROM test", 4).await?;
         assert_eq!(results.len(), 1);
