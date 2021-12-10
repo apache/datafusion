@@ -33,7 +33,6 @@ use crate::logical_plan::{
     DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
     ToDFSchema, ToStringifiedPlan,
 };
-
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
@@ -656,7 +655,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported ast node {:?} in create_relation",
                     relation
-                )))
+                )));
             }
         };
         if let Some(alias) = alias {
@@ -1035,14 +1034,44 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// convert sql OrderByExpr to Expr::Sort
     fn order_by_to_sort_expr(&self, e: &OrderByExpr, schema: &DFSchema) -> Result<Expr> {
+        let OrderByExpr {
+            asc,
+            expr,
+            nulls_first,
+        } = e;
+
+        let expr = match &expr {
+            SQLExpr::Value(Value::Number(v, _)) => {
+                let field_index = v
+                    .parse::<usize>()
+                    .map_err(|err| DataFusionError::Plan(err.to_string()))?;
+
+                if field_index == 0 {
+                    return Err(DataFusionError::Plan(
+                        "Order by index starts at 1 for column indexes".to_string(),
+                    ));
+                } else if schema.fields().len() < field_index {
+                    return Err(DataFusionError::Plan(format!(
+                        "Order by column out of bounds, specified: {}, max: {}",
+                        field_index,
+                        schema.fields().len()
+                    )));
+                }
+
+                let field = schema.field(field_index - 1);
+                let col_ident = SQLExpr::Identifier(Ident::new(field.qualified_name()));
+                self.sql_expr_to_logical_expr(&col_ident, schema)?
+            }
+            e => self.sql_expr_to_logical_expr(e, schema)?,
+        };
         Ok({
-            let asc = e.asc.unwrap_or(true);
+            let asc = asc.unwrap_or(true);
             Expr::Sort {
-                expr: Box::new(self.sql_expr_to_logical_expr(&e.expr, schema)?),
+                expr: Box::new(expr),
                 asc,
                 // when asc is true, by default nulls last to be consistent with postgres
                 // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-                nulls_first: e.nulls_first.unwrap_or(!asc),
+                nulls_first: nulls_first.unwrap_or(!asc),
             }
         })
     }
@@ -1201,14 +1230,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match expr {
                     // optimization: if it's a number literal, we apply the negative operator
                     // here directly to calculate the new literal.
-                    SQLExpr::Value(Value::Number(n,_)) => match n.parse::<i64>() {
+                    SQLExpr::Value(Value::Number(n, _)) => match n.parse::<i64>() {
                         Ok(n) => Ok(lit(-n)),
                         Err(_) => Ok(lit(-n
                             .parse::<f64>()
                             .map_err(|_e| {
                                 DataFusionError::Internal(format!(
                                     "negative operator can be only applied to integer and float operands, got: {}",
-                                n))
+                                    n))
                             })?)),
                     },
                     // not a literal, apply negative operator on expression
@@ -1520,7 +1549,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             } else {
                                 Ok(window_frame)
                             }
-
                         })
                         .transpose()?;
                     let fun = window_functions::WindowFunction::from_str(&name)?;
@@ -1549,7 +1577,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 fun: window_functions::WindowFunction::BuiltInWindowFunction(
                                     window_fun,
                                 ),
-                                args:self.function_args_to_expr(function, schema)?,
+                                args: self.function_args_to_expr(function, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
@@ -1694,7 +1722,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "Unsupported Interval Expression with value {:?}",
                         value
-                    ))))
+                    ))));
                 }
             };
 
@@ -2015,11 +2043,13 @@ pub fn convert_data_type(sql: &SQLDataType) -> Result<DataType> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use functions::ScalarFunctionImplementation;
+
     use crate::datasource::empty::EmptyTable;
     use crate::physical_plan::functions::Volatility;
     use crate::{logical_plan::create_udf, sql::parser::DFParser};
-    use functions::ScalarFunctionImplementation;
+
+    use super::*;
 
     #[test]
     fn select_no_relation() {
@@ -2805,6 +2835,7 @@ mod tests {
              \n    TableScan: person projection=None",
         )
     }
+
     #[test]
     fn select_simple_aggregate_with_groupby_non_column_expression_unselected() {
         quick_test(
@@ -2976,6 +3007,46 @@ mod tests {
             \n  Filter: #aggregate_test_100.c3 > Float64(0.1) AND #aggregate_test_100.c4 > Int64(0)\
             \n    TableScan: aggregate_test_100 projection=None";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn select_order_by_index() {
+        let sql = "SELECT id FROM person ORDER BY 1";
+        let expected = "Sort: #person.id ASC NULLS LAST\
+                        \n  Projection: #person.id\
+                        \n    TableScan: person projection=None";
+
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn select_order_by_multiple_index() {
+        let sql = "SELECT id, state, age FROM person ORDER BY 1, 3";
+        let expected = "Sort: #person.id ASC NULLS LAST, #person.age ASC NULLS LAST\
+                        \n  Projection: #person.id, #person.state, #person.age\
+                        \n    TableScan: person projection=None";
+
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn select_order_by_index_of_0() {
+        let sql = "SELECT id FROM person ORDER BY 0";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Order by index starts at 1 for column indexes\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn select_order_by_index_oob() {
+        let sql = "SELECT id FROM person ORDER BY 2";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Order by column out of bounds, specified: 2, max: 1\")",
+            format!("{:?}", err)
+        );
     }
 
     #[test]
