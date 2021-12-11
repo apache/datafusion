@@ -360,6 +360,47 @@ impl LogicalPlanBuilder {
     }
 
     /// Convert a table provider into a builder with a TableScan
+    pub fn scan_with_limit_and_filters(
+        table_name: impl Into<String>,
+        provider: Arc<dyn TableProvider>,
+        projection: Option<Vec<usize>>,
+        limit: Option<usize>,
+        filters: Vec<Expr>
+    )->Result<Self>{
+        let table_name = table_name.into();
+        if table_name.is_empty() {
+            return Err(DataFusionError::Plan(
+                "table_name cannot be empty".to_string(),
+            ));
+        }
+        let schema = provider.schema();
+        let projected_schema = projection
+        .as_ref()
+        .map(|p| {
+            DFSchema::new(
+                p.iter()
+                    .map(|i| {
+                        DFField::from_qualified(&table_name, schema.field(*i).clone())
+                    })
+                    .collect(),
+            )
+        })
+        .unwrap_or_else(|| {
+            DFSchema::try_from_qualified_schema(&table_name, &schema)
+        })?;
+
+        let table_scan = LogicalPlan::TableScan {
+            table_name,
+            source: provider,
+            projected_schema: Arc::new(projected_schema),
+            projection,
+            filters,
+            limit,
+        };
+        Ok(Self::from(table_scan))
+    }
+
+    /// Convert a table provider into a builder with a TableScan
     pub fn scan_with_filters(
         table_name: impl Into<String>,
         provider: Arc<dyn TableProvider>,
@@ -471,6 +512,11 @@ impl LogicalPlanBuilder {
     /// Apply a union
     pub fn union(&self, plan: LogicalPlan) -> Result<Self> {
         Ok(Self::from(union_with_alias(self.plan.clone(), plan, None)?))
+    }
+    
+    /// Create a union with an alias
+    pub fn union_with_alias(&self, plan: LogicalPlan, alias: Option<String>)->Result<Self>{
+        Ok(Self::from(union_with_alias(self.plan.clone(), plan, alias)?))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)

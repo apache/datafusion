@@ -45,5 +45,3 @@ tokomak={path="../tokomak"}
 [dev-dependencies]
 ballista-core = { path = "../ballista/rust/core" }
 
-[profile.release]
-opt-level=1

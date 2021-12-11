@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use datafusion::{error::DataFusionError, scalar::ScalarValue};
 use datafusion::arrow::datatypes::{DataType, Field};
 use ordered_float::OrderedFloat;
@@ -26,13 +28,13 @@ pub enum TokomakScalar {
     /// unsigned 64bit int
     UInt64(Option<u64>),
     /// utf-8 encoded string.
-    Utf8(Option<String>),
+    Utf8(Option<Box<str>>),
     /// utf-8 encoded string representing a LargeString's arrow type.
-    LargeUtf8(Option<String>),
+    LargeUtf8(Option<Box<str>>),
     /// binary
-    Binary(Option<Vec<u8>>),
+    Binary(Option<Box<[u8]>>),
     /// large binary
-    LargeBinary(Option<Vec<u8>>),
+    LargeBinary(Option<Box<[u8]>>),
     /// list of nested ScalarValue (boxed to reduce size_of(ScalarValue))
     #[allow(clippy::box_vec)]
     List(Option<Box<Vec<TokomakScalar>>>, Box<DataType>),
@@ -86,7 +88,7 @@ impl std::str::FromStr for TokomakScalar {
         } else if let Ok(val) = s.parse() {
             TokomakScalar::Boolean(Some(val))
         } else {
-            let first_char = match s.chars().nth(0) {
+            let first_char = match s.chars().next() {
                 Some(c) => c,
                 _ => return Err(DataFusionError::Internal(String::new())),
             };
@@ -108,7 +110,8 @@ impl std::str::FromStr for TokomakScalar {
             } else {
                 return Err(DataFusionError::Internal(String::new()));
             }
-            TokomakScalar::Utf8(Some(str_in.to_string()))
+            let boxed_str = String::from_str(str_in).unwrap().into_boxed_str();
+            TokomakScalar::Utf8(Some(boxed_str))
         };
         Ok(value)
     }
@@ -128,10 +131,10 @@ impl From<ScalarValue> for TokomakScalar {
             ScalarValue::UInt16(v) => TokomakScalar::UInt16(v),
             ScalarValue::UInt32(v) => TokomakScalar::UInt32(v),
             ScalarValue::UInt64(v) => TokomakScalar::UInt64(v),
-            ScalarValue::Utf8(v) => TokomakScalar::Utf8(v),
-            ScalarValue::LargeUtf8(v) => TokomakScalar::LargeUtf8(v),
-            ScalarValue::Binary(v) => TokomakScalar::Binary(v),
-            ScalarValue::LargeBinary(v) => TokomakScalar::LargeBinary(v),
+            ScalarValue::Utf8(v) => TokomakScalar::Utf8(v.map( String::into_boxed_str)),
+            ScalarValue::LargeUtf8(v) => TokomakScalar::LargeUtf8(v.map(String::into_boxed_str)),
+            ScalarValue::Binary(v) => TokomakScalar::Binary(v.map(Vec::into_boxed_slice)),
+            ScalarValue::LargeBinary(v) => TokomakScalar::LargeBinary(v.map(Vec::into_boxed_slice)),
             ScalarValue::List(v, d) => TokomakScalar::List(
                 v.map(|list| {
                     Box::new(list.into_iter().map(|item| item.into()).collect())
@@ -177,10 +180,10 @@ impl From<TokomakScalar> for ScalarValue {
             TokomakScalar::UInt16(v) => ScalarValue::UInt16(v),
             TokomakScalar::UInt32(v) => ScalarValue::UInt32(v),
             TokomakScalar::UInt64(v) => ScalarValue::UInt64(v),
-            TokomakScalar::Utf8(v) => ScalarValue::Utf8(v),
-            TokomakScalar::LargeUtf8(v) => ScalarValue::LargeUtf8(v),
-            TokomakScalar::Binary(v) => ScalarValue::Binary(v),
-            TokomakScalar::LargeBinary(v) => ScalarValue::LargeBinary(v),
+            TokomakScalar::Utf8(v) => ScalarValue::Utf8(v.map(|bs| bs.into())),
+            TokomakScalar::LargeUtf8(v) => ScalarValue::LargeUtf8(v.map(|bs| bs.into())),
+            TokomakScalar::Binary(v) => ScalarValue::Binary(v.map(|bs| bs.into())),
+            TokomakScalar::LargeBinary(v) => ScalarValue::LargeBinary(v.map(|bs| bs.into())),
             TokomakScalar::List(v, d) => ScalarValue::List(
                 v.map(|list| {
                     Box::new(list.into_iter().map(|item| item.into()).collect())

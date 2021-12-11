@@ -370,6 +370,13 @@ pub enum Expr {
     Wildcard,
 }
 
+impl std::ops::Neg for Expr{
+    type Output=Expr;
+
+    fn neg(self) -> Self::Output {
+        Expr::Negative(Box::new(self))
+    }
+}
 impl Expr {
     /// Returns the [arrow::datatypes::DataType] of the expression based on [arrow::datatypes::Schema].
     ///

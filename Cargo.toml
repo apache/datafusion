@@ -34,6 +34,7 @@ exclude = ["python"]
 
 #[profile.release]
 #opt-level=1
+#lto=false
 
 [profile.release]
 lto = true

@@ -22,7 +22,7 @@ use std::{fs, iter::Iterator, path::{Path, PathBuf}, sync::Arc, time::{Duration,
 use ballista::context::BallistaContext;
 use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
 
-use datafusion::{datasource::{MemTable, TableProvider}, optimizer::optimizer::OptimizerRule};
+use datafusion::{datasource::{MemTable, TableProvider}, optimizer::{constant_folding::ConstantFolding, common_subexpr_eliminate::CommonSubexprEliminate, eliminate_limit::EliminateLimit, projection_push_down::ProjectionPushDown, filter_push_down::FilterPushDown, simplify_expressions::SimplifyExpressions, limit_push_down::LimitPushDown}};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::parquet::basic::Compression;
@@ -46,7 +46,7 @@ use datafusion::{
 };
 
 use structopt::StructOpt;
-use tokomak::{RunnerSettings, SIMPLIFICATION_RULES} ;
+use tokomak::{RunnerSettings, Tokomak, EXPR_SIMPLIFICATION_RULES, PLAN_SIMPLIFICATION_RULES} ;
 
 #[cfg(feature = "snmalloc")]
 #[global_allocator]
@@ -75,7 +75,7 @@ struct BallistaBenchmarkOpt {
     batch_size: usize,
 
     /// Path to data files
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
+    #[structopt(parse(from_os_str), required = true, short = "z", long = "data")]
     path: PathBuf,
 
     /// File format: `csv` or `parquet`
@@ -87,7 +87,7 @@ struct BallistaBenchmarkOpt {
     mem_table: bool,
 
     /// Number of partitions to process in parallel
-    #[structopt(short = "p", long = "partitions", default_value = "2")]
+    #[structopt( long = "partitions", default_value = "2")]
     partitions: usize,
 
     /// Ballista executor host
@@ -122,7 +122,7 @@ struct DataFusionBenchmarkOpt {
     batch_size: usize,
 
     /// Path to data files
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
+    #[structopt(parse(from_os_str), required = true,  long = "data")]
     path: PathBuf,
 
     /// File format: `csv` or `parquet`
@@ -199,9 +199,30 @@ async fn main() -> Result<()> {
 
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
+    let mut settings = RunnerSettings::new();
+    println!("Setup up runner settings");
+    settings
+        .with_iter_limit(100)
+        .with_node_limit(200_000)
+        .with_time_limit(Duration::from_secs_f64(0.1));
+    let tokomak_optimizer = Tokomak::with_builtin_rules(settings, EXPR_SIMPLIFICATION_RULES | PLAN_SIMPLIFICATION_RULES);
     let config = ExecutionConfig::new()
         .with_target_partitions(opt.partitions)
-        .with_batch_size(opt.batch_size);
+        .with_batch_size(opt.batch_size)
+        .with_optimizer_rules(vec![
+            Arc::new(ConstantFolding::new()),
+            Arc::new(ProjectionPushDown::new()),
+            Arc::new(FilterPushDown::new()),
+            Arc::new(tokomak_optimizer), 
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(EliminateLimit::new()),
+            Arc::new(ProjectionPushDown::new()),
+            Arc::new(FilterPushDown::new()),
+
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(LimitPushDown::new())
+
+            ]);
     let mut ctx = ExecutionContext::with_config(config);
 
     // register tables
@@ -233,9 +254,12 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     let mut millis = vec![];
     // run benchmark
     let mut result: Vec<RecordBatch> = Vec::with_capacity(1);
+    
     for i in 0..opt.iterations {
-        let start = Instant::now();
+        println!("Startin iteration {}", i);
         let plan = create_logical_plan(&mut ctx, opt.query)?;
+        
+        let start = Instant::now();
         result = execute_query(&mut ctx, &plan, opt.debug).await?;
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         millis.push(elapsed as f64);
@@ -353,17 +377,11 @@ async fn execute_query(
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
     }
-    let tokomak_optimizer = tokomak::TokomakOptimizer::with_builtin_rules((), RunnerSettings{iter_limit:Some(25), node_limit:Some(50_000), time_limit: Some(Duration::from_secs_f64(0.5))}, SIMPLIFICATION_RULES);
     let plan = ctx.optimize(plan)?;
-    let props = ctx.state.lock().unwrap().execution_props.clone();
-    let now = std::time::Instant::now();
-    let plan = tokomak_optimizer.optimize(&plan, &props)?;
-    let duration = std::time::Instant::now() - now;
-    println!("It took {:?} to optimize the plan using the TokomakOptimizer", duration);
+    
     if debug {
         println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
-    std::process::exit(0);
     let physical_plan = ctx.create_physical_plan(&plan).await?;
     if debug {
         println!(

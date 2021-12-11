@@ -29,5 +29,8 @@ repository = "https://github.com/apache/arrow-datafusion"
 datafusion = { path = "../datafusion", version = "5.1.0" }
 ordered-float="2.0"
 log="^0.4"
-egg = {git="https://github.com/pjmore/egg"}
+egg = "0.7"
 tokio="^1"
+indexmap = "1"
+fxhash = "0.2"
+

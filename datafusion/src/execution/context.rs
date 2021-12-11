@@ -926,7 +926,6 @@ impl ExecutionConfig {
         self.query_planner = query_planner;
         self
     }
-
     /// Replace the optimizer rules
     pub fn with_optimizer_rules(
         mut self,

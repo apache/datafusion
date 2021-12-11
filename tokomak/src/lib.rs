@@ -1,13 +1,17 @@
 #![allow(missing_docs)]
 #![allow(unused_imports)]
+#![allow(dead_code)]
 #![allow(unused_variables)]
 
 use datafusion::arrow::datatypes::DataType;
+use datafusion::physical_plan::PhysicalExpr;
+use plan::{TokomakLogicalPlan, convert_to_df_plan};
 use scalar::TokomakScalar;
 use std::convert::TryInto;
 use std::fmt::Display;
 use std::hash::Hash;
-
+use log::{info, error, warn};
+use std::marker::PhantomData;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -18,7 +22,7 @@ use log::debug;
 
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::context::ExecutionProps;
-use datafusion::logical_plan::Expr;
+use datafusion::logical_plan::{DFSchema, Expr};
 use datafusion::{logical_plan::Operator, optimizer::utils};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,10 +31,13 @@ use egg::*;
 
 pub mod datatype;
 pub mod expr;
+pub mod plan;
 pub mod rules;
 pub mod scalar;
+mod machine;
+pub mod pattern;
 use datatype::TokomakDataType;
-use expr::TokomakExpr;
+use expr::{BetweenExpr, CastExpr,  FunctionCall, InListExpr, TokomakExpr, WindowBuiltinCallFramed, WindowBuiltinCallUnframed};
 
 use std::rc::Rc;
 
@@ -69,6 +76,71 @@ impl<F: Fn(Rc<HashMap<String, UDF>>) -> Vec<Rewrite<TokomakExpr, ()>>>
     }
 }
 
+pub struct TokomakAnalysis{
+    plan_schema_map: HashMap<Id, Arc<DFSchema>, fxhash::FxBuildHasher>,
+    expr_alias_map: HashMap<Id, String, fxhash::FxBuildHasher>,
+    expr_data_map: HashMap<Id, (DataType, bool)>,
+}
+impl Default for TokomakAnalysis{
+    fn default() -> Self {
+        Self { plan_schema_map: Default::default(), expr_alias_map: Default::default(), expr_data_map: Default::default() }
+    }
+}
+impl TokomakAnalysis{
+    pub fn add_datatype(&mut self, expr:&Expr, expr_id: Id, dt: DataType, nullable: bool)->DFResult<()>{
+        match self.expr_data_map.get(&expr_id){
+            Some((ty, null)) => {
+                if *ty != dt || *null != nullable{
+                    return Err(DataFusionError::Internal(format!("Found conflicting datatypes for the expresion {:?}. Initial {{datatype: {}, nullable {}}} new {{datatype: {}, nullable{}}}"
+                    ,expr, ty, null, dt, nullable
+                )))
+                }
+            },
+            None => {
+                self.expr_data_map.insert(expr_id, (dt, nullable));
+            },
+        }
+        Ok(())
+    }
+
+    pub fn add_schema(&mut self, plan: &LogicalPlan, plan_id:Id)->DFResult<()>{
+        match self.plan_schema_map.get(&plan_id){
+            Some(schema) => if schema.as_ref() != plan.schema().as_ref(){
+                return Err(DataFusionError::Internal(format!("Found inconsistent schemas for the plan {:?}. Initial {:?} new {:?}", plan, schema, plan.schema())));
+            }else{
+                ()
+            },
+            None => {
+                self.plan_schema_map.insert(plan_id, plan.schema().clone());
+            },
+        }
+        Ok(())
+    }
+
+    pub fn add_alias(&mut self, expr: &Expr, expr_id: Id, alias: &str)->DFResult<()>{
+        match self.expr_alias_map.get(&expr_id){
+            Some(existing_alias) => if alias != existing_alias{
+                return Err(DataFusionError::Internal(format!("Found inconsistent aliases for the expression {:?}. Initial {:?} new {:?}", expr,  existing_alias,alias)));
+            }else{
+                ()
+            },
+            None => {
+                self.expr_alias_map.insert(expr_id, alias.to_string());
+            },
+        }
+        Ok(())
+    }
+
+}
+impl Analysis<TokomakLogicalPlan> for TokomakAnalysis{
+    type Data=();
+    fn make(egraph: &EGraph<TokomakLogicalPlan, Self>, enode: &TokomakLogicalPlan) -> Self::Data {}
+    fn merge(&mut self, a: &mut Self::Data, b: Self::Data) -> DidMerge {
+        DidMerge(false, false)
+    }
+}
+
+/* 
 #[derive(Default)]
 pub struct TokomakAnalysis<T: CustomTokomakAnalysis >{
     custom: T
@@ -85,9 +157,11 @@ impl<T:CustomTokomakAnalysis> TokomakAnalysis<T>{
         DidMerge(false,false)
     }
 }
-
+*/
 use std::fmt::Debug;
 
+use crate::expr::SortExpr;
+/* 
 #[derive(Debug)]
 pub struct TokomakAnalysisData{
     const_folding: Option<TokomakScalar>,
@@ -163,15 +237,12 @@ impl CustomTokomakAnalysis for (){
     }
 }
 
-
-
-
-
+*/
 
 
 pub struct Tokomak
 {
-    rules: Vec<Rewrite<TokomakExpr, ()>>,
+    rules: Vec<Rewrite<TokomakLogicalPlan, TokomakAnalysis>>,
     added_builtins: BuiltinRulesFlag,
     runner_settings: RunnerSettings,
     name: String,
@@ -180,7 +251,7 @@ pub struct Tokomak
 
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct BuiltinRulesFlag(u32);
+pub struct BuiltinRulesFlag(pub(crate) u32);
 impl std::ops::BitOr for BuiltinRulesFlag{
     type Output=BuiltinRulesFlag;
     fn bitor(self, rhs: Self) -> Self::Output {
@@ -203,18 +274,30 @@ impl std::ops::BitOrAssign for BuiltinRulesFlag{
 }
 
 
+const ALL_BUILTIN_RULES: [BuiltinRulesFlag; 2] = [EXPR_SIMPLIFICATION_RULES, PLAN_SIMPLIFICATION_RULES];
 
-pub const SIMPLIFICATION_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0x1);
+pub const EXPR_SIMPLIFICATION_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0x1);
+pub const PLAN_SIMPLIFICATION_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0x2);
 const NO_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0);
 
+pub const ALL_RULES: BuiltinRulesFlag = {
+    let mut idx = 0;
+    let mut flag = 0;
+    while idx < ALL_BUILTIN_RULES.len(){
+        flag = flag| ALL_BUILTIN_RULES[idx].0;
+        idx +=1;
+    }
+    BuiltinRulesFlag(flag)
+};
 
-const ALL_BUILTIN_RULES: [BuiltinRulesFlag; 1] = [SIMPLIFICATION_RULES];
 
 impl BuiltinRulesFlag{
     
     fn is_set(&self, other: BuiltinRulesFlag)->bool{
         (*self & other) != NO_RULES
     }
+
+    
 
 
 }
@@ -224,17 +307,78 @@ impl Default for BuiltinRulesFlag{
     }
 }
 
+pub struct TokomakScheduler{
+    period_length: usize,
+    //default_match_limit: usize,
+    //default_ban_length: usize,
+    //plan_rules: indexmap::IndexMap<Symbol, RuleStats, fxhash::FxBuildHasher>,
+    //expr_rules: indexmap::IndexMap<Symbol, RuleStats, fxhash::FxBuildHasher>,
+}
+impl TokomakScheduler{
+    fn new()->Self{
+        TokomakScheduler{
+            period_length: 3,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RuleStats {
+    times_applied: usize,
+    banned_until: usize,
+    times_banned: usize,
+    match_limit: usize,
+    ban_length: usize,
+}
+
+impl<A: Analysis<TokomakLogicalPlan>> RewriteScheduler<TokomakLogicalPlan,A> for TokomakScheduler{
+    fn can_stop(&mut self, iteration: usize) -> bool {
+        true
+    }
+
+    fn search_rewrite<'a>(
+        &mut self,
+        iteration: usize,
+        egraph: &EGraph<TokomakLogicalPlan, A>,
+        rewrite: &'a Rewrite<TokomakLogicalPlan, A>,
+    ) -> Vec<SearchMatches<'a, TokomakLogicalPlan>> {
+        let is_plan_iter = iteration % self.period_length == 0;
+        self.period_length+=1;
+        if is_plan_iter {
+            if !rewrite.name.as_str().starts_with("plan"){
+                return vec![];
+            }
+        }else{
+            if !rewrite.name.as_str().starts_with("expr"){
+                return vec![];
+            }
+        }
+        rewrite.search(egraph)
+    }
+
+    fn apply_rewrite(
+        &mut self,
+        iteration: usize,
+        egraph: &mut EGraph<TokomakLogicalPlan, A>,
+        rewrite: &Rewrite<TokomakLogicalPlan, A>,
+        matches: Vec<SearchMatches<TokomakLogicalPlan>>,
+    ) -> usize {
+        rewrite.apply(egraph, &matches).len()
+    }
+}
+
+
 pub struct RunnerSettings{
     pub iter_limit: Option<usize>,
     pub node_limit: Option<usize>,
     pub time_limit: Option<Duration>,
 }
-impl  RunnerSettings{
+impl RunnerSettings{
     pub fn new()->Self{
         Self::default()
     }
-    fn create_runner(&self)->Runner<TokomakExpr,()>{
-        let mut runner = Runner::<TokomakExpr,()>::new(());
+    fn create_runner(&self, egraph: EGraph<TokomakLogicalPlan, TokomakAnalysis>)->Runner<TokomakLogicalPlan,TokomakAnalysis>{
+        let mut runner = Runner::default().with_egraph(egraph);
         if let Some(iter_limit) = self.iter_limit{
             runner = runner.with_iter_limit(iter_limit);
         }
@@ -264,39 +408,34 @@ impl  RunnerSettings{
         self
     }
 
-    pub fn optimize_exprs<C: CostFunction<TokomakExpr>>(&self, exprs: &[Expr], udf_reg: &mut HashMap<String, UDF>, rules: &[Rewrite<TokomakExpr, ()>], cost_function: C)->Result<Vec<Expr>, DataFusionError>{
-        //println!("Optimizing:");
-        //for e in exprs{
-        //    println!("\t{:#}", e)
-        //}
-        let rec_exprs = exprs.iter().map(|e| convert_to_tokomak_expr(e, udf_reg)).collect::<Result<Vec<_>,_>>()?;
-        let mut runner = self.create_runner();
-        for expr in &rec_exprs{
-            //println!("Adding {} to optimizer", expr.pretty(120));
-            runner = runner.with_expr(expr);
+    pub fn optimize_plan<C: CostFunction<TokomakLogicalPlan>>(&self,root: Id, egraph: EGraph<TokomakLogicalPlan, TokomakAnalysis>, rules: &[Rewrite<TokomakLogicalPlan, TokomakAnalysis>],udf_reg: &HashMap<String, UDF>, cost_func: C)->Result<LogicalPlan, DataFusionError>{
+        let mut runner = self.create_runner(egraph).with_scheduler(BackoffScheduler::default()
+        .rule_match_limit("expr-rotate-and", 5000)
+        .rule_match_limit("expr-rotate-or", 5000)
+        .with_initial_match_limit(200)
+        .with_ban_length(3) );
+        runner = runner.run(rules.iter());
+        for (idx,iter) in runner.iterations.iter().enumerate(){    
+            info!("The iteration {} had {:?}", idx, iter);
         }
-        //println!("There are {} rules", rules.len());
-        runner = runner.run(rules);
-        //for (idx,it) in runner.iterations.iter().enumerate(){
-        //    println!("[{}]{:?}", idx, it);
-        //}
-        //println!("Stopped optimizing: {:#?}", runner.stop_reason);
-        let mut output_expressions= Vec::with_capacity(exprs.len());
-        let extractor= Extractor::new(&runner.egraph, cost_function);
-        for id in &runner.roots{
-            let (_, best) = extractor.find_best(*id);
-            //println!("THe optimzed expr is: {}", best.pretty(120));
-            let expr = to_expr(&best, udf_reg)?;
-            output_expressions.push(expr);
-        }
-        Ok(output_expressions)
-        
+
+        let ex = Extractor::new(&runner.egraph, cost_func);
+        let (_,plan, eclasses) = ex.find_best_with_ids(root);
+        let plan = convert_to_df_plan(&plan, udf_reg, &runner.egraph.analysis, &eclasses).unwrap();
+        Ok(plan)
+
     }
+
+    
 }
 
 impl Default for RunnerSettings {
     fn default() -> Self {
-        Self::new()
+        RunnerSettings{
+            iter_limit: None,
+            node_limit: None,
+            time_limit: None,
+        }
     }
 }
 
@@ -307,21 +446,20 @@ impl OptimizerRule for Tokomak{
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> DFResult<LogicalPlan> {
-        let plan = utils::optimize_children(self, plan, execution_props)?;
-        let inputs = plan.inputs();
-        let expressions = plan.expressions();
-        let mut udf_registry: HashMap<String, UDF> = HashMap::new(); 
-
-
-        let optimzed_expressions = self.runner_settings.optimize_exprs(&expressions, &mut  udf_registry, &self.rules, AstSize)?;
-        let inputs: Vec<LogicalPlan> = inputs.iter().map(|p| (*p).to_owned()).collect();
-        utils::from_plan(&plan, &optimzed_expressions, inputs.as_slice())
+        let udf_registry: HashMap<String, UDF> = HashMap::new(); 
+        let analysis = TokomakAnalysis::default();
+        let mut egraph = EGraph::new(analysis);
+        let root = plan::to_tokomak_plan(plan, &mut egraph).unwrap();
+        let optimized_plan = self.runner_settings.optimize_plan( root, egraph, &self.rules, &udf_registry,DefaultCostFunc )?;
+        Ok(optimized_plan)   
     }
 
     fn name(&self) -> &str {
         self.name.as_str()
     }
 }
+
+
 
 
 
@@ -347,11 +485,11 @@ impl Tokomak{
     ///Adds the builtin rules defined by the builtin rules flag to the optimizer
     pub fn add_builtin_rules(&mut self, builtin_rules: BuiltinRulesFlag){
         for rule in ALL_BUILTIN_RULES{
-            println!("The rule {:#0x?} is being added: {}",rule.0 ,builtin_rules.is_set(rule));
             //If the current flag is set and the ruleset has not been added to optimizer already
             if builtin_rules.is_set(rule) && !self.added_builtins.is_set(rule){
                 match rule{
-                    SIMPLIFICATION_RULES => self.add_simplification_rules(),
+                    EXPR_SIMPLIFICATION_RULES => self.add_expr_simplification_rules(),
+                    PLAN_SIMPLIFICATION_RULES => self.add_plan_simplification_rules(),
                     _ => panic!("Found invalid rule flag")
                 }
             } 
@@ -360,343 +498,103 @@ impl Tokomak{
     
 }
 
+struct DefaultCostFunc;
+const PLAN_NODE_COST: u64 = 1000;
+impl CostFunction<TokomakLogicalPlan> for DefaultCostFunc{
+    type Cost=u64;
 
-fn convert_to_tokomak_expr(
-    expr: &Expr,
-    udf_reg: &mut HashMap<String, UDF>,
-) -> DFResult<RecExpr<TokomakExpr>> {
-    let mut rec_expr = RecExpr::default();
-    let mut converter = ExprConverter::new(&mut rec_expr, udf_reg);
-    converter.to_tokomak_expr(expr)?;
-    Ok(rec_expr)
-}
+    fn cost<C>(&mut self, enode: &TokomakLogicalPlan, mut costs: C) -> Self::Cost
+    where
+        C: FnMut(Id) -> Self::Cost {
+        let op_cost = match enode{
+            TokomakLogicalPlan::Filter(_) |
+            TokomakLogicalPlan::Projection(_) => PLAN_NODE_COST,
+            TokomakLogicalPlan::InnerJoin(_) => PLAN_NODE_COST,
+            TokomakLogicalPlan::LeftJoin(_) => todo!(),
+            TokomakLogicalPlan::RightJoin(_) => todo!(),
+            TokomakLogicalPlan::FullJoin(_) => todo!(),
+            TokomakLogicalPlan::SemiJoin(_) => todo!(),
+            TokomakLogicalPlan::AntiJoin(_) => todo!(),
+            TokomakLogicalPlan::Extension(_) => todo!(),
+            TokomakLogicalPlan::CrossJoin(_) => PLAN_NODE_COST*PLAN_NODE_COST,
+            TokomakLogicalPlan::Limit(_) => todo!(),
+            TokomakLogicalPlan::EmptyRelation(_) => todo!(),
+            TokomakLogicalPlan::Repartition(_) => todo!(),
+            TokomakLogicalPlan::TableScan(_) => 0,
+            TokomakLogicalPlan::Union(_) => todo!(),
+            TokomakLogicalPlan::Window(_) => todo!(),
+            TokomakLogicalPlan::Aggregate(_) => PLAN_NODE_COST,
+            TokomakLogicalPlan::Sort(_) => PLAN_NODE_COST ,
+            TokomakLogicalPlan::PList(_) => todo!(),
+            TokomakLogicalPlan::PartitioningScheme(_) => todo!(),
+            //These are supporting 
+            TokomakLogicalPlan::Table(_) |
+            TokomakLogicalPlan::Schema(_)|
+            TokomakLogicalPlan::Values(_) |
+            TokomakLogicalPlan::TableProject(_)|
+            TokomakLogicalPlan::LimitCount(_) |
+            TokomakLogicalPlan::JoinKeys(_) |
+            TokomakLogicalPlan::Str(_)|
+            TokomakLogicalPlan::ExprAlias(_)|
+            TokomakLogicalPlan::None => 0,
+            //Expressions use AstDepth for now
+            TokomakLogicalPlan::Plus(_) |
+            TokomakLogicalPlan::Minus(_) |
+            TokomakLogicalPlan::Multiply(_) |
+            TokomakLogicalPlan::Divide(_) |
+            TokomakLogicalPlan::Modulus(_) |
+            TokomakLogicalPlan::Or(_) |
+            TokomakLogicalPlan::And(_) |
+            TokomakLogicalPlan::Eq(_) |
+            TokomakLogicalPlan::NotEq(_) |
+            TokomakLogicalPlan::Lt(_) |
+            TokomakLogicalPlan::LtEq(_) |
+            TokomakLogicalPlan::Gt(_) |
+            TokomakLogicalPlan::GtEq(_) |
+            TokomakLogicalPlan::RegexMatch(_) |
+            TokomakLogicalPlan::RegexIMatch(_) |
+            TokomakLogicalPlan::RegexNotMatch(_) |
+            TokomakLogicalPlan::RegexNotIMatch(_) |
+            TokomakLogicalPlan::IsDistinctFrom(_) |
+            TokomakLogicalPlan::IsNotDistinctFrom(_) |
+            TokomakLogicalPlan::Not(_) |
+            TokomakLogicalPlan::IsNotNull(_) |
+            TokomakLogicalPlan::IsNull(_) |
+            TokomakLogicalPlan::Negative(_) |
+            TokomakLogicalPlan::Between(_) |
+            TokomakLogicalPlan::BetweenInverted(_) |
+            TokomakLogicalPlan::Like(_) |
+            TokomakLogicalPlan::NotLike(_) |
+            TokomakLogicalPlan::InList(_) |
+            TokomakLogicalPlan::NotInList(_) |
+            TokomakLogicalPlan::EList(_) |
+            TokomakLogicalPlan::ScalarBuiltin(_) |
+            TokomakLogicalPlan::AggregateBuiltin(_) |
+            TokomakLogicalPlan::WindowBuiltin(_) |
+            TokomakLogicalPlan::Scalar(_) |
+            TokomakLogicalPlan::ScalarBuiltinCall(_) |
+            TokomakLogicalPlan::ScalarUDFCall(_) |
+            TokomakLogicalPlan::AggregateBuiltinCall(_) |
+            TokomakLogicalPlan::AggregateBuiltinDistinctCall(_) |
+            TokomakLogicalPlan::AggregateUDFCall(_) |
+            TokomakLogicalPlan::WindowBuiltinCallUnframed(_) |
+            TokomakLogicalPlan::WindowBuiltinCallFramed(_) |
+            TokomakLogicalPlan::SortExpr(_) |
+            TokomakLogicalPlan::SortSpec(_) |
+            TokomakLogicalPlan::ScalarUDF(_) |
+            TokomakLogicalPlan::AggregateUDF(_) |
+            TokomakLogicalPlan::Column(_) |
+            TokomakLogicalPlan::WindowFrame(_) |
+            TokomakLogicalPlan::Cast(_) |
+            TokomakLogicalPlan::TryCast(_) => 1,
 
-
-fn to_expr(
-    rec_expr: &RecExpr<TokomakExpr>,
-    udf_reg: &HashMap<String, UDF>,
-) -> DFResult<Expr> {
-    let converter = TokomakExprConverter::new(udf_reg, rec_expr);
-    let start = rec_expr.as_ref().len() - 1;
-    converter.convert_to_expr(start.into())
-}
-struct TokomakExprConverter<'a> {
-    udf_reg: &'a HashMap<String, UDF>,
-    rec_expr: &'a RecExpr<TokomakExpr>,
-    refs: &'a [TokomakExpr],
-}
-
-impl<'a> TokomakExprConverter<'a> {
-    fn new(
-        udf_reg: &'a HashMap<String, UDF>,
-        rec_expr: &'a RecExpr<TokomakExpr>,
-    ) -> Self {
-        Self {
-            udf_reg,
-            rec_expr,
-            refs: rec_expr.as_ref(),
-        }
-    }
-    fn get_ref(&self, id: Id) -> &TokomakExpr {
-        let idx: usize = id.into();
-        &self.refs[idx]
-    }
-
-    fn to_list(&self, id: Id) -> DFResult<Vec<Expr>> {
-        let idx: usize = id.into();
-        let list_expr = &self.rec_expr.as_ref()[idx];
-        match list_expr {
-            TokomakExpr::List(ids) => ids
-                .iter()
-                .map(|i| self.convert_to_expr(*i))
-                .collect::<DFResult<Vec<_>>>(),
-            e => Err(DataFusionError::Internal(format!(
-                "Expected Tokomak list found: {:?}",
-                e
-            ))),
-        }
-    }
-    fn to_binary_op(&self, &[l, r]: &[Id; 2], op: Operator) -> DFResult<Expr> {
-        let l = self.convert_to_expr(l)?;
-        let r = self.convert_to_expr(r)?;
-        Ok(Expr::BinaryExpr {
-            left: Box::new(l),
-            op,
-            right: Box::new(r),
-        })
-    }
-    fn convert_to_expr(&self, id: Id) -> DFResult<Expr> {
-        let expr = match self.get_ref(id) {
-            TokomakExpr::Plus(ids) => self.to_binary_op(ids, Operator::Plus)?,
-            TokomakExpr::Minus(ids) => self.to_binary_op(ids, Operator::Minus)?,
-            TokomakExpr::Divide(ids) =>self.to_binary_op(ids, Operator::Divide)?,
-            TokomakExpr::Modulus(ids) => self.to_binary_op(ids, Operator::Modulo)?,
-            TokomakExpr::Multiply(ids) => self.to_binary_op(ids, Operator::Multiply)?,
-            TokomakExpr::Or(ids) => self.to_binary_op(ids, Operator::Or)?,
-            TokomakExpr::And(ids) => self.to_binary_op(ids, Operator::And)?,
-            TokomakExpr::Eq(ids) => self.to_binary_op(ids, Operator::Eq)?,
-            TokomakExpr::NotEq(ids) => self.to_binary_op(ids, Operator::NotEq)?,
-            TokomakExpr::Lt(ids) => self.to_binary_op(ids, Operator::Lt)?,
-            TokomakExpr::LtEq(ids) =>self.to_binary_op(ids, Operator::LtEq)?,
-            TokomakExpr::Gt(ids) => self.to_binary_op(ids, Operator::Gt)?,
-            TokomakExpr::GtEq(ids) => self.to_binary_op(ids, Operator::GtEq)?,
-            TokomakExpr::Like(ids) => self.to_binary_op(ids, Operator::Like)?,
-            TokomakExpr::NotLike(ids) => self.to_binary_op(ids, Operator::NotLike)?,
-            TokomakExpr::RegexMatch(ids) => self.to_binary_op(ids, Operator::RegexMatch)?,
-            TokomakExpr::RegexIMatch(ids) => self.to_binary_op(ids, Operator::RegexIMatch)?,
-            TokomakExpr::RegexNotMatch(ids) => self.to_binary_op(ids, Operator::RegexNotMatch)?,
-            TokomakExpr::RegexNotIMatch(ids) => self.to_binary_op(ids, Operator::RegexNotIMatch)?,
-            TokomakExpr::IsDistinctFrom(ids)=>self.to_binary_op(ids, Operator::IsNotDistinctFrom)?,
-            TokomakExpr::IsNotDistinctFrom(ids)=>self.to_binary_op(ids, Operator::IsNotDistinctFrom)?,
-            TokomakExpr::Not(id) => {
-                let l = self.convert_to_expr(*id)?;
-                Expr::Not(Box::new(l))
-            }
-            TokomakExpr::IsNotNull(id) => {
-                let l = self.convert_to_expr(*id)?;
-                Expr::IsNotNull(Box::new(l))
-            }
-            TokomakExpr::IsNull(id) => {
-                let l = self.convert_to_expr(*id)?;
-                Expr::IsNull(Box::new(l))
-            }
-            TokomakExpr::Negative(id) => {
-                let l = self.convert_to_expr(*id)?;
-                Expr::Negative(Box::new(l))
-            }
-            TokomakExpr::Between([expr, low, high]) => {
-                let left = self.convert_to_expr(*expr)?;
-                let low_expr = self.convert_to_expr(*low)?;
-                let high_expr = self.convert_to_expr(*high)?;
-                Expr::Between {
-                    expr: Box::new(left),
-                    negated: false,
-                    low: Box::new(low_expr),
-                    high: Box::new(high_expr),
-                }
-            }
-            TokomakExpr::BetweenInverted([expr, low, high]) => {
-                let left = self.convert_to_expr(*expr)?;
-                let low_expr = self.convert_to_expr(*low)?;
-                let high_expr = self.convert_to_expr(*high)?;
-                Expr::Between {
-                    expr: Box::new(left),
-                    negated: false,
-                    low: Box::new(low_expr),
-                    high: Box::new(high_expr),
-                }
-            }
-            //TODO: Fix column handling
-            TokomakExpr::Column(col) => Expr::Column(col.clone()),
-            TokomakExpr::Cast([e, ty]) => {
-                let l = self.convert_to_expr(*e)?;
-                let dt = match self.get_ref(*ty) {
-                    TokomakExpr::Type(s) => s,
-                    e => return Err(DataFusionError::Internal(format!("Cast expected a type expression in the second position, found: {:?}",e))),
-                };
-                let dt: DataType = dt.into();
-                Expr::Cast { expr: Box::new(l), data_type: dt}
-            }
-            TokomakExpr::Type(_) => {
-                panic!("Type should only be part of expression")
-            }
-            TokomakExpr::InList([val, list])=>{
-                let l = self.convert_to_expr(*val)?;
-                let list = self.get_ref(*list);
-                let list = match list{
-                    TokomakExpr::List(ref l) => l.iter().map(|i| self.convert_to_expr(*i )).collect::<DFResult<Vec<Expr>>>()?,
-                    e => return Err(DataFusionError::Internal(format!("InList expected a list in the second position found {:?}", e))),
-                };
-                Expr::InList{
-                  list,
-                  expr: Box::new(l),
-                  negated: false,
-                }
-            }
-            TokomakExpr::NotInList([val, list])=>{
-                let l = self.convert_to_expr(*val)?;
-                let list = self.get_ref(*list);
-                let list = match list{
-                    TokomakExpr::List(ref l) => l.iter().map(|i| self.convert_to_expr(*i )).collect::<DFResult<Vec<Expr>>>()?,
-                    e=> return Err(DataFusionError::Internal(format!("NotInList expected a list in the second position found {:?}", e))),
-                };
-                Expr::InList{
-                  list,
-                  expr: Box::new(l),
-                  negated: true,
-                }
-            }
-            TokomakExpr::List(_) => return Err(DataFusionError::Internal("TokomakExpr::List should only ever be a child expr and should be handled by the parent expression".to_string())),
-            TokomakExpr::Scalar(s) => Expr::Literal(s.clone().into()),
-            TokomakExpr::ScalarBuiltin(_) => panic!("ScalarBuiltin should only be part of an expression"),
-            TokomakExpr::ScalarBuiltinCall([fun, args]) => {
-                let fun = match self.get_ref(*fun){
-                    TokomakExpr::ScalarBuiltin(f)=>f,
-                    f => return Err(DataFusionError::Internal(format!("Expected a builtin scalar function function in the first position, found {:?}", f))),
-                };
-                let arg_ids = match self.get_ref(*args){
-                    TokomakExpr::List(args)=> args,
-                    e => panic!("Expected a list of function arguments for a ScalarBuiltinCall, found: {:?}", e),
-                };
-                let args = arg_ids.iter().map(|expr| self.convert_to_expr(*expr)).collect::<DFResult<Vec<_>>>()?;
-                Expr::ScalarFunction{
-                    fun:fun.clone(),
-                    args,
-                }
-            },
-            TokomakExpr::TryCast([e, ty]) => {
-                let l = self.convert_to_expr(*e)?;
-                let dt = match self.get_ref(*ty) {
-                    TokomakExpr::Type(s) => s,
-                    e => return Err(DataFusionError::Internal(format!("Cast expected a type expression in the second position, found: {:?}",e))),
-                };
-                let dt: DataType = dt.into();
-                Expr::TryCast { expr: Box::new(l), data_type: dt}
-            },
-            TokomakExpr::AggregateBuiltin(_) => todo!(),
-            TokomakExpr::ScalarUDFCall([name, args]) => {
-                let args = self.get_ref(*args);
-                let args = match args{
-                    TokomakExpr::List(ref l) => l.iter().map(|i| self.convert_to_expr(*i )).collect::<DFResult<Vec<Expr>>>()?,
-                    e => return Err(DataFusionError::Internal(format!("ScalarUDFCall expected a type expression in the second position, found: {:?}",e))),
-                };
-                let name = self.get_ref(*name);
-                let name = match name{
-                    TokomakExpr::ScalarUDF(sym)=> sym.0.to_string(),
-                    e => panic!("Found a non ScalarUDF node in the first position of ScalarUdf: {:#?}",e),
-                };
-                let fun = match self.udf_reg.get(&name){
-                    Some(s) => s,
-                    None => return Err(DataFusionError::Internal(format!("Did not find the scalar UDF {} in the registry", name))),
-                };
-                let fun = match fun{
-                    UDF::Scalar(s) => s.clone(),
-                    UDF::Aggregate(_) => return Err(DataFusionError::Internal(format!("Did not find scalar UDF named {}. Found an aggregate UDF instead.", name))),
-                };
-                Expr::ScalarUDF{
-                    fun,
-                    args
-                }
-            },
-            TokomakExpr::AggregateBuiltinCall([fun, args]) =>{
-                let fun = match self.get_ref(*fun){
-                    TokomakExpr::AggregateBuiltin(f)=>f.clone(),
-                    e => return Err(DataFusionError::Internal(format!("Expected a built in AggregateFunction, found {:?}", e))),
-                };
-                let args = self.to_list(*args).map_err(|e| DataFusionError::Internal(format!("AggregateBuiltinCall could not convert args expr to list of expressions: {}", e)))?;
-                Expr::AggregateFunction{
-                    fun,
-                    args,
-                    distinct: false
-                }
-            },
-            TokomakExpr::AggregateBuiltinDistinctCall([fun,args]) => {
-                let fun = match self.get_ref(*fun){
-                    TokomakExpr::AggregateBuiltin(f)=>f.clone(),
-                    e => return Err(DataFusionError::Internal(format!("Expected a built in AggregateFunction, found {:?}", e))),
-                };
-                let args = self.to_list(*args).map_err(|e| DataFusionError::Internal(format!("AggregateBuiltinDistinctCall could not convert args expr to list of expressions: {}", e)))?;
-                Expr::AggregateFunction{
-                    fun,
-                    args,
-                    distinct: true
-                }
-            },
-            TokomakExpr::AggregateUDF(name) => return Err(DataFusionError::Internal(format!("Encountered an AggregateUDF expression with the name {}, these should only occur in a AggregateUDFCall and should be dealt with there", name))),
-
-            TokomakExpr::ScalarUDF(name) => return Err(DataFusionError::Internal(format!("Encountered an ScalarUDF expression with the name {}, these should only occur in a ScalarUDFCall and should be dealt with there", name))),
-            TokomakExpr::AggregateUDFCall([fun, args]) => {
-                let udf_name = match self.get_ref(*fun){
-                    TokomakExpr::AggregateUDF(name) => name.to_string(),
-                    e =>    return Err(DataFusionError::Internal(format!("Expected an AggregateUDF node at index 0 of AggregateUDFCall, found: {:?}",e)))
-                };
-                let fun = match self.udf_reg.get(&udf_name){
-                    Some(s) => s,
-                    None => return Err(DataFusionError::Internal(format!("Did not find the aggregate UDF '{}' in the registry", udf_name))),
-                };
-                let fun = match fun{
-                    UDF::Aggregate(a) =>a.clone() ,
-                    UDF::Scalar(_) => return Err(DataFusionError::Internal(format!("Did not find aggregate UDF named {}. Found a scalar UDF instead.", udf_name))),
-                };
-                let args = self.to_list(*args).map_err(|e| DataFusionError::Internal(format!("AggregateUDFCall could not convert args expr to list of expressions: {}", e)))?;
-                Expr::AggregateUDF{
-                    fun,
-                    args
-                }
-            },
-            TokomakExpr::WindowBuiltinCallUnframed([fun, partition, order , args]) => {
-                let fun = match self.get_ref(*fun){
-                    TokomakExpr::WindowBuiltin(f)=>f.clone(),
-                    e=>return Err(DataFusionError::Internal(format!("WindowBuiltinCallUnframed expected a WindowBuiltin expression found {:?}",e))),
-                };
-                let partition_by = self.to_list(*partition).map_err(
-                    |e| DataFusionError::Internal(format!("WindowBuiltinCallUnframed could not transform parition expressions: {:?}", e))
-                )?;
-                let order_by = self.to_list(*order).map_err(
-                    |e| DataFusionError::Internal(format!("WindowBuiltinCallUnframed could not transform order expressions: {:?}", e))
-                )?;
-                let args = self.to_list(*args).map_err(
-                    |e| DataFusionError::Internal(format!("WindowBuiltinCallUnframed could not transform the argument list: {:?}", e))
-                )?;
-                Expr::WindowFunction{
-                    fun,
-                    partition_by,
-                    order_by,
-                    args,
-                    window_frame: None
-                }
-            },
-            TokomakExpr::WindowBuiltinCallFramed([fun, partition, order, frame, args]) => {
-                let fun = match self.get_ref(*fun){
-                    TokomakExpr::WindowBuiltin(f)=>f.clone(),
-                    e=>return Err(DataFusionError::Internal(format!("WindowBuiltinCallUnframed expected a WindowBuiltin expression found {:?}",e))),
-                };
-                let partition_by = self.to_list(*partition).map_err(
-                    |e| DataFusionError::Internal(format!("WindowBuiltinCallUnframed could not transform parition expressions: {:?}", e))
-                )?;
-                let order_by = self.to_list(*order).map_err(
-                    |e| DataFusionError::Internal(format!("WindowBuiltinCallUnframed could not transform order expressions: {:?}", e))
-                )?;
-                let args = self.to_list(*args).map_err(
-                    |e| DataFusionError::Internal(format!("WindowBuiltinCallUnframed could not transform the argument list: {:?}", e))
-                )?;
-                let window_frame = match self.get_ref(*frame){
-                    TokomakExpr::WindowFrame(f)=>*f,
-                    e=> return Err(DataFusionError::Internal(format!("WindowBuiltinCallFramed expected a WindowFrame expression, found: {:?}", e))),
-                };
-                Expr::WindowFunction{
-                    fun,
-                    partition_by,
-                    order_by,
-                    args,
-                    window_frame: Some(window_frame)
-                }
-            },
-            TokomakExpr::Sort([e, sort_spec]) => {
-                let expr = self.convert_to_expr(*e)?;
-                let sort_spec = match self.get_ref(*sort_spec){
-                    TokomakExpr::SortSpec(s)=>*s,
-                    e => return Err(unexpected_tokomak_expr("Sort", "SortSpec", e)),
-                };
-                let (asc, nulls_first)= match sort_spec{
-                    SortSpec::Asc => (true,false),
-                    SortSpec::Desc => (false, false),
-                    SortSpec::AscNullsFirst => (true, true),
-                    SortSpec::DescNullsFirst => (false,true),
-                };
-                Expr::Sort{
-                    expr: Box::new(expr),
-                    asc,
-                    nulls_first
-                }
-            },
-            TokomakExpr::SortSpec(_) => todo!(),
-            TokomakExpr::WindowFrame(_) => todo!(),
-            TokomakExpr::WindowBuiltin(_) => todo!(),
+            
         };
-        Ok(expr)
+        enode.fold(op_cost, |sum, id| sum + costs(id))
     }
-}
+} 
+
+
 
 fn unexpected_tokomak_expr(
     name: &str,
@@ -709,230 +607,8 @@ fn unexpected_tokomak_expr(
     ))
 }
 
-struct ExprConverter<'a> {
-    rec_expr: &'a mut RecExpr<TokomakExpr>,
-    udf_registry: &'a mut HashMap<String, UDF>,
-}
 
-impl<'a> ExprConverter<'a> {
-    fn new(
-        rec_expr: &'a mut RecExpr<TokomakExpr>,
-        udf_registry: &'a mut HashMap<String, UDF>,
-    ) -> Self {
-        ExprConverter {
-            rec_expr,
-            udf_registry,
-        }
-    }
 
-    fn add_list(&mut self, exprs: &[Expr]) -> Result<Id, DataFusionError> {
-        let list = exprs
-            .iter()
-            .map(|expr| self.to_tokomak_expr(expr))
-            .collect::<Result<Vec<Id>, _>>()?;
-        Ok(self.rec_expr.add(TokomakExpr::List(list)))
-    }
-    #[allow(clippy::wrong_self_convention)]
-    fn to_tokomak_expr(&mut self, expr: &Expr) -> Result<Id, DataFusionError> {
-        Ok(match expr {
-            Expr::BinaryExpr { left, op, right } => {
-                let left = self.to_tokomak_expr(left)?;
-                let right = self.to_tokomak_expr(right)?;
-                let binary_expr = match op {
-                    Operator::Eq => TokomakExpr::Eq,
-                    Operator::NotEq => TokomakExpr::NotEq,
-                    Operator::Lt => TokomakExpr::Lt,
-                    Operator::LtEq => TokomakExpr::LtEq,
-                    Operator::Gt => TokomakExpr::Gt,
-                    Operator::GtEq => TokomakExpr::GtEq,
-                    Operator::Plus => TokomakExpr::Plus,
-                    Operator::Minus => TokomakExpr::Minus,
-                    Operator::Multiply => TokomakExpr::Multiply,
-                    Operator::Divide => TokomakExpr::Divide,
-                    Operator::Modulo => TokomakExpr::Modulus,
-                    Operator::And => TokomakExpr::And,
-                    Operator::Or => TokomakExpr::Or,
-                    Operator::Like => TokomakExpr::Like,
-                    Operator::NotLike => TokomakExpr::NotLike,
-                    Operator::RegexMatch => TokomakExpr::RegexMatch,
-                    Operator::RegexIMatch => TokomakExpr::RegexIMatch,
-                    Operator::RegexNotMatch => TokomakExpr::RegexNotMatch,
-                    Operator::RegexNotIMatch => TokomakExpr::RegexNotIMatch,
-                    Operator::IsDistinctFrom => TokomakExpr::IsDistinctFrom,
-                    Operator::IsNotDistinctFrom => TokomakExpr::IsNotDistinctFrom,
-                };
-                self.rec_expr.add(binary_expr([left, right]))
-            }
-            Expr::Column(c) => self
-                .rec_expr
-                .add(TokomakExpr::Column(c.clone())),
-            Expr::Literal(s) => self.rec_expr.add(TokomakExpr::Scalar(s.clone().into())),
-            Expr::Not(expr) => {
-                let e = self.to_tokomak_expr(expr)?;
-                self.rec_expr.add(TokomakExpr::Not(e))
-            }
-            Expr::IsNull(expr) => {
-                let e = self.to_tokomak_expr(expr)?;
-                self.rec_expr.add(TokomakExpr::IsNull(e))
-            }
-            Expr::IsNotNull(expr) => {
-                let e = self.to_tokomak_expr(expr)?;
-                self.rec_expr.add(TokomakExpr::IsNotNull(e))
-            }
-            Expr::Negative(expr) => {
-                let e = self.to_tokomak_expr(expr)?;
-                self.rec_expr.add(TokomakExpr::Negative(e))
-            }
-            Expr::Between {
-                expr,
-                negated,
-                low,
-                high,
-            } => {
-                let e = self.to_tokomak_expr(expr)?;
-                let low = self.to_tokomak_expr(low)?;
-                let high = self.to_tokomak_expr(high)?;
-                if *negated {
-                    self.rec_expr
-                        .add(TokomakExpr::BetweenInverted([e, low, high]))
-                } else {
-                    self.rec_expr.add(TokomakExpr::Between([e, low, high]))
-                }
-            }
-
-            Expr::Cast { expr, data_type } => {
-                let ty = data_type.clone().try_into()?;
-                let e = self.to_tokomak_expr(expr)?;
-                let t = self.rec_expr.add(TokomakExpr::Type(ty));
-
-                self.rec_expr.add(TokomakExpr::Cast([e, t]))
-            }
-            Expr::TryCast { expr, data_type } => {
-                let ty: TokomakDataType = data_type.clone().try_into()?;
-                let e = self.to_tokomak_expr(expr)?;
-                let t = self.rec_expr.add(TokomakExpr::Type(ty));
-                self.rec_expr.add(TokomakExpr::TryCast([e, t]))
-            }
-            Expr::ScalarFunction { fun, args } => {
-                let fun_id = self.rec_expr.add(TokomakExpr::ScalarBuiltin(fun.clone()));
-                let args_id = self.add_list(args)?;
-                self.rec_expr
-                    .add(TokomakExpr::ScalarBuiltinCall([fun_id, args_id]))
-            }
-            Expr::Alias(expr, _) => self.to_tokomak_expr(expr)?,
-            Expr::InList {
-                expr,
-                list,
-                negated,
-            } => {
-                let val_expr = self.to_tokomak_expr(expr)?;
-                let list_id = self.add_list(list)?;
-                match negated {
-                    false => self.rec_expr.add(TokomakExpr::InList([val_expr, list_id])),
-                    true => self
-                        .rec_expr
-                        .add(TokomakExpr::NotInList([val_expr, list_id])),
-                }
-            }
-            Expr::AggregateFunction {
-                fun,
-                args,
-                distinct,
-            } => {
-                let agg_expr = TokomakExpr::AggregateBuiltin(fun.clone());
-                let fun_id = self.rec_expr.add(agg_expr);
-                let args_id = self.add_list(args)?;
-                match distinct {
-                    true => {
-                        self.rec_expr
-                            .add(TokomakExpr::AggregateBuiltinDistinctCall([
-                                fun_id, args_id,
-                            ]))
-                    }
-                    false => self
-                        .rec_expr
-                        .add(TokomakExpr::AggregateBuiltinCall([fun_id, args_id])),
-                }
-            }
-            //Expr::Case { expr, when_then_expr, else_expr } => todo!(),
-            Expr::Sort {
-                expr,
-                asc,
-                nulls_first,
-            } => {
-                let sort_spec = match (asc, nulls_first) {
-                    (true, true) => SortSpec::AscNullsFirst,
-                    (true, false) => SortSpec::Asc,
-                    (false, true) => SortSpec::Desc,
-                    (false, false) => SortSpec::DescNullsFirst,
-                };
-                let expr_id = self.to_tokomak_expr(expr)?;
-                let spec_id = self.rec_expr.add(TokomakExpr::SortSpec(sort_spec));
-                self.rec_expr.add(TokomakExpr::Sort([expr_id, spec_id]))
-            }
-            Expr::ScalarUDF { fun, args } => {
-                let args_id = self.add_list(args)?;
-                self.udf_registry.add_sudf(fun.clone());
-                let fun_name: Symbol = fun.name.clone().into();
-                let fun_name_id = self
-                    .rec_expr
-                    .add(TokomakExpr::ScalarUDF(ScalarUDFName(fun_name)));
-                self.rec_expr
-                    .add(TokomakExpr::ScalarUDFCall([fun_name_id, args_id]))
-            }
-            Expr::WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-            } => {
-                let args_id = self.add_list(args)?;
-                let partition_id = self.add_list(partition_by)?;
-                let order_by_id = self.add_list(order_by)?;
-                let fun_id = self.rec_expr.add(TokomakExpr::WindowBuiltin(fun.clone()));
-                match window_frame {
-                    Some(frame) => {
-                        let frame_id = self.rec_expr.add(TokomakExpr::WindowFrame(frame.clone()));
-                        self.rec_expr.add(TokomakExpr::WindowBuiltinCallFramed([
-                            fun_id,
-                            partition_id,
-                            order_by_id,
-                            frame_id,
-                            args_id,
-                        ]))
-                    }
-                    None => self.rec_expr.add(TokomakExpr::WindowBuiltinCallUnframed([
-                        fun_id,
-                        partition_id,
-                        order_by_id,
-                        args_id,
-                    ])),
-                }
-            }
-            Expr::AggregateUDF { fun, args } => {
-                let args_id = self.add_list(args)?;
-                self.udf_registry.add_uadf(fun.clone());
-                let fun_name: Symbol = fun.name.clone().into(); //Symbols are leaked at this point in time. Maybe different solution is required.
-                let fun_name_id = self
-                    .rec_expr
-                    .add(TokomakExpr::AggregateUDF(UDAFName(fun_name)));
-                self.rec_expr
-                    .add(TokomakExpr::AggregateUDFCall([fun_name_id, args_id]))
-            }
-            //Expr::Wildcard => todo!(),
-            //Expr::ScalarVariable(_) => todo!(),
-
-            // not yet supported
-            e => {
-                return Err(DataFusionError::Internal(format!(
-                    "Expression not yet supported in tokomak optimizer {:?}",
-                    e
-                )))
-            }
-        })
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SortSpec {

@@ -120,12 +120,15 @@ impl OptimizerRule for ConstantFolding {
 ///
 /// For example
 /// `true && col` --> `col` where `col` is a boolean types
-struct Simplifier<'a> {
+pub(crate) struct Simplifier<'a> {
     /// input schemas
     schemas: Vec<&'a DFSchemaRef>,
 }
 
 impl<'a> Simplifier<'a> {
+    pub(crate) fn new(schemas: Vec<&'a DFSchemaRef>)->Self{
+        Self{schemas}
+    }
     fn is_boolean_type(&self, expr: &Expr) -> bool {
         for schema in &self.schemas {
             if let Ok(DataType::Boolean) = expr.get_type(schema) {
