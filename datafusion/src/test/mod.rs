@@ -17,7 +17,7 @@
 
 //! Common unit test utility methods
 
-use crate::datasource::object_store::local::local_file_meta;
+use crate::datasource::object_store::local::local_unpartitioned_file;
 use crate::datasource::{MemTable, PartitionedFile, TableProvider};
 use crate::error::Result;
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
@@ -25,8 +25,8 @@ use array::{
     Array, ArrayRef, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray,
 };
-use arrow::array::{self, Int32Array};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::array::{self, DecimalBuilder, Int32Array};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use futures::{Future, FutureExt};
 use std::fs::File;
@@ -98,33 +98,10 @@ pub fn create_partitioned_csv(
 
     let groups = files
         .into_iter()
-        .map(|f| {
-            vec![PartitionedFile {
-                file_meta: local_file_meta(f.to_str().unwrap().to_owned()),
-            }]
-        })
+        .map(|f| vec![local_unpartitioned_file(f.to_str().unwrap().to_owned())])
         .collect::<Vec<_>>();
 
     Ok((tmp_dir.into_path().to_str().unwrap().to_string(), groups))
-}
-
-/// Get the schema for the aggregate_test_* csv files
-pub fn aggr_test_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Utf8, false),
-        Field::new("c2", DataType::UInt32, false),
-        Field::new("c3", DataType::Int8, false),
-        Field::new("c4", DataType::Int16, false),
-        Field::new("c5", DataType::Int32, false),
-        Field::new("c6", DataType::Int64, false),
-        Field::new("c7", DataType::UInt8, false),
-        Field::new("c8", DataType::UInt16, false),
-        Field::new("c9", DataType::UInt32, false),
-        Field::new("c10", DataType::UInt64, false),
-        Field::new("c11", DataType::Float32, false),
-        Field::new("c12", DataType::Float64, false),
-        Field::new("c13", DataType::Utf8, false),
-    ]))
 }
 
 /// some tests share a common table with different names
@@ -213,6 +190,27 @@ pub fn table_with_timestamps() -> Arc<dyn TableProvider> {
     let schema = batch.schema();
     let partitions = vec![vec![batch]];
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
+}
+
+/// Return a new table which provide this decimal column
+pub fn table_with_decimal() -> Arc<dyn TableProvider> {
+    let batch_decimal = make_decimal();
+    let schema = batch_decimal.schema();
+    let partitions = vec![vec![batch_decimal]];
+    Arc::new(MemTable::try_new(schema, partitions).unwrap())
+}
+
+fn make_decimal() -> RecordBatch {
+    let mut decimal_builder = DecimalBuilder::new(20, 10, 3);
+    for i in 110000..110010 {
+        decimal_builder.append_value(i as i128).unwrap();
+    }
+    for i in 100000..100010 {
+        decimal_builder.append_value(-i as i128).unwrap();
+    }
+    let array = decimal_builder.finish();
+    let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
+    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
 }
 
 /// Return  record batch with all of the supported timestamp types

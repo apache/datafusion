@@ -25,10 +25,11 @@ use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
 
-use super::{FileFormat, PhysicalPlanConfig};
+use super::FileFormat;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
-use crate::physical_plan::file_format::CsvExec;
+use crate::logical_plan::Expr;
+use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
@@ -123,18 +124,9 @@ impl FileFormat for CsvFormat {
     async fn create_physical_plan(
         &self,
         conf: PhysicalPlanConfig,
+        _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = CsvExec::new(
-            conf.object_store,
-            conf.files,
-            conf.statistics,
-            conf.schema,
-            self.has_header,
-            self.delimiter,
-            conf.projection,
-            conf.batch_size,
-            conf.limit,
-        );
+        let exec = CsvExec::new(conf, self.has_header, self.delimiter);
         Ok(Arc::new(exec))
     }
 }
@@ -148,10 +140,9 @@ mod tests {
         datasource::{
             file_format::PhysicalPlanConfig,
             object_store::local::{
-                local_file_meta, local_object_reader, local_object_reader_stream,
-                LocalFileSystem,
+                local_object_reader, local_object_reader_stream,
+                local_unpartitioned_file, LocalFileSystem,
             },
-            PartitionedFile,
         },
         physical_plan::collect,
     };
@@ -261,7 +252,7 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/csv/{}", testdata, file_name);
         let format = CsvFormat::default();
-        let schema = format
+        let file_schema = format
             .infer_schema(local_object_reader_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
@@ -269,20 +260,21 @@ mod tests {
             .infer_stats(local_object_reader(filename.clone()))
             .await
             .expect("Stats inference");
-        let files = vec![vec![PartitionedFile {
-            file_meta: local_file_meta(filename.to_owned()),
-        }]];
+        let file_groups = vec![vec![local_unpartitioned_file(filename.to_owned())]];
         let exec = format
-            .create_physical_plan(PhysicalPlanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                schema,
-                files,
-                statistics,
-                projection: projection.clone(),
-                batch_size,
-                filters: vec![],
-                limit,
-            })
+            .create_physical_plan(
+                PhysicalPlanConfig {
+                    object_store: Arc::new(LocalFileSystem {}),
+                    file_schema,
+                    file_groups,
+                    statistics,
+                    projection: projection.clone(),
+                    batch_size,
+                    limit,
+                    table_partition_cols: vec![],
+                },
+                &[],
+            )
             .await?;
         Ok(exec)
     }

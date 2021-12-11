@@ -23,11 +23,15 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::ExecutionContextState;
+use crate::logical_plan::plan::{
+    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, TableScan, Window,
+};
 use crate::logical_plan::{
-    unnormalize_cols, DFSchema, Expr, LogicalPlan, Operator,
-    Partitioning as LogicalPartitioning, PlanType, ToStringifiedPlan,
+    unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
+    Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
     UserDefinedLogicalNode,
 };
+use crate::logical_plan::{Limit, Values};
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
@@ -182,10 +186,27 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
-        other => Err(DataFusionError::NotImplemented(format!(
-            "Cannot derive physical field name for logical expression {:?}",
-            other
-        ))),
+        Expr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => {
+            let expr = create_physical_name(expr, false)?;
+            let low = create_physical_name(low, false)?;
+            let high = create_physical_name(high, false)?;
+            if *negated {
+                Ok(format!("{} NOT BETWEEN {} AND {}", expr, low, high))
+            } else {
+                Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
+            }
+        }
+        Expr::Sort { .. } => Err(DataFusionError::Internal(
+            "Create physical name does not support sort expression".to_string(),
+        )),
+        Expr::Wildcard => Err(DataFusionError::Internal(
+            "Create physical name does not support wildcard".to_string(),
+        )),
     }
 }
 
@@ -241,16 +262,9 @@ pub trait ExtensionPlanner {
 
 /// Default single node physical query planner that converts a
 /// `LogicalPlan` to an `ExecutionPlan` suitable for execution.
+#[derive(Default)]
 pub struct DefaultPhysicalPlanner {
     extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
-}
-
-impl Default for DefaultPhysicalPlanner {
-    fn default() -> Self {
-        Self {
-            extension_planners: vec![],
-        }
-    }
 }
 
 #[async_trait]
@@ -316,23 +330,24 @@ impl DefaultPhysicalPlanner {
             let batch_size = ctx_state.config.batch_size;
 
             let exec_plan: Result<Arc<dyn ExecutionPlan>> = match logical_plan {
-                LogicalPlan::TableScan {
+                LogicalPlan::TableScan (TableScan {
                     source,
                     projection,
                     filters,
                     limit,
                     ..
-                } => {
+                }) => {
                     // Remove all qualifiers from the scan as the provider
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
-                    source.scan(projection, batch_size, &filters, *limit).await
+                    let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
+                    source.scan(projection, batch_size, &unaliased, *limit).await
                 }
-                LogicalPlan::Values {
+                LogicalPlan::Values(Values {
                     values,
                     schema,
-                } => {
+                }) => {
                     let exec_schema = schema.as_ref().to_owned().into();
                     let exprs = values.iter()
                         .map(|row| {
@@ -353,9 +368,9 @@ impl DefaultPhysicalPlanner {
                     )?;
                     Ok(Arc::new(value_exec))
                 }
-                LogicalPlan::Window {
+                LogicalPlan::Window(Window {
                     input, window_expr, ..
-                } => {
+                }) => {
                     if window_expr.is_empty() {
                         return Err(DataFusionError::Internal(
                             "Impossibly got empty window expression".to_owned(),
@@ -466,12 +481,12 @@ impl DefaultPhysicalPlanner {
                         physical_input_schema,
                     )?) )
                 }
-                LogicalPlan::Aggregate {
+                LogicalPlan::Aggregate(Aggregate {
                     input,
                     group_expr,
                     aggr_expr,
                     ..
-                } => {
+                }) => {
                     // Initially need to perform the aggregate and then merge the partitions
                     let input_exec = self.create_initial_plan(input, ctx_state).await?;
                     let physical_input_schema = input_exec.schema();
@@ -559,7 +574,7 @@ impl DefaultPhysicalPlanner {
                         physical_input_schema.clone(),
                     )?) )
                 }
-                LogicalPlan::Projection { input, expr, .. } => {
+                LogicalPlan::Projection(Projection { input, expr, .. }) => {
                     let input_exec = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = input.as_ref().schema();
 
@@ -611,9 +626,9 @@ impl DefaultPhysicalPlanner {
                         input_exec,
                     )?) )
                 }
-                LogicalPlan::Filter {
+                LogicalPlan::Filter(Filter {
                     input, predicate, ..
-                } => {
+                }) => {
                     let physical_input = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = input.as_ref().schema();
@@ -625,17 +640,17 @@ impl DefaultPhysicalPlanner {
                     )?;
                     Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?) )
                 }
-                LogicalPlan::Union { inputs, .. } => {
+                LogicalPlan::Union(Union { inputs, .. }) => {
                     let physical_plans = futures::stream::iter(inputs)
                         .then(|lp| self.create_initial_plan(lp, ctx_state))
                         .try_collect::<Vec<_>>()
                         .await?;
                     Ok(Arc::new(UnionExec::new(physical_plans)) )
                 }
-                LogicalPlan::Repartition {
+                LogicalPlan::Repartition(Repartition {
                     input,
                     partitioning_scheme,
-                } => {
+                }) => {
                     let physical_input = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = physical_input.schema();
                     let input_dfschema = input.as_ref().schema();
@@ -663,7 +678,7 @@ impl DefaultPhysicalPlanner {
                         physical_partitioning,
                     )?) )
                 }
-                LogicalPlan::Sort { expr, input, .. } => {
+                LogicalPlan::Sort(Sort { expr, input, .. }) => {
                     let physical_input = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = input.as_ref().schema();
@@ -691,13 +706,14 @@ impl DefaultPhysicalPlanner {
                         .collect::<Result<Vec<_>>>()?;
                     Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?) )
                 }
-                LogicalPlan::Join {
+                LogicalPlan::Join(Join {
                     left,
                     right,
                     on: keys,
                     join_type,
+                    null_equals_null,
                     ..
-                } => {
+                }) => {
                     let left_df_schema = left.schema();
                     let physical_left = self.create_initial_plan(left, ctx_state).await?;
                     let right_df_schema = right.schema();
@@ -744,6 +760,7 @@ impl DefaultPhysicalPlanner {
                             join_on,
                             join_type,
                             PartitionMode::Partitioned,
+                            null_equals_null,
                         )?))
                     } else {
                         Ok(Arc::new(HashJoinExec::try_new(
@@ -752,22 +769,23 @@ impl DefaultPhysicalPlanner {
                             join_on,
                             join_type,
                             PartitionMode::CollectLeft,
+                            null_equals_null,
                         )?))
                     }
                 }
-                LogicalPlan::CrossJoin { left, right, .. } => {
+                LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                     let left = self.create_initial_plan(left, ctx_state).await?;
                     let right = self.create_initial_plan(right, ctx_state).await?;
                     Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
                 }
-                LogicalPlan::EmptyRelation {
+                LogicalPlan::EmptyRelation(EmptyRelation {
                     produce_one_row,
                     schema,
-                } => Ok(Arc::new(EmptyExec::new(
+                }) => Ok(Arc::new(EmptyExec::new(
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
-                LogicalPlan::Limit { input, n, .. } => {
+                LogicalPlan::Limit(Limit { input, n, .. }) => {
                     let limit = *n;
                     let input = self.create_initial_plan(input, ctx_state).await?;
 
@@ -782,7 +800,7 @@ impl DefaultPhysicalPlanner {
 
                     Ok(Arc::new(GlobalLimitExec::new(input, limit)))
                 }
-                LogicalPlan::CreateExternalTable { .. } => {
+                LogicalPlan::CreateExternalTable(_) => {
                     // There is no default plan for "CREATE EXTERNAL
                     // TABLE" -- it must be handled at a higher level (so
                     // that the appropriate table can be registered with
@@ -791,20 +809,23 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateExternalTable".to_string(),
                     ))
                 }
-                LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
+                | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable (_) => {
+                    // Create a dummy exec.
+                    Ok(Arc::new(EmptyExec::new(
+                        false,
+                        SchemaRef::new(Schema::empty()),
+                    )))
+                }
+                LogicalPlan::Explain (_) => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),
                 )),
-                LogicalPlan::Analyze {
-                    verbose,
-                    input,
-                    schema,
-                } => {
-                    let input = self.create_initial_plan(input, ctx_state).await?;
-                    let schema = SchemaRef::new(schema.as_ref().to_owned().into());
-                    Ok(Arc::new(AnalyzeExec::new(*verbose, input, schema)))
+                LogicalPlan::Analyze(a) => {
+                    let input = self.create_initial_plan(&a.input, ctx_state).await?;
+                    let schema = SchemaRef::new((*a.schema).clone().into());
+                    Ok(Arc::new(AnalyzeExec::new(a.verbose, input, schema)))
                 }
-                LogicalPlan::Extension { node } => {
-                    let physical_inputs = futures::stream::iter(node.inputs())
+                LogicalPlan::Extension(e) => {
+                    let physical_inputs = futures::stream::iter(e.node.inputs())
                         .then(|lp| self.create_initial_plan(lp, ctx_state))
                         .try_collect::<Vec<_>>()
                         .await?;
@@ -817,8 +838,8 @@ impl DefaultPhysicalPlanner {
                             } else {
                                 planner.plan_extension(
                                     self,
-                                    node.as_ref(),
-                                    &node.inputs(),
+                                    e.node.as_ref(),
+                                    &e.node.inputs(),
                                     &physical_inputs,
                                     ctx_state,
                                 )
@@ -826,17 +847,17 @@ impl DefaultPhysicalPlanner {
                         },
                     )?;
                     let plan = maybe_plan.ok_or_else(|| DataFusionError::Plan(format!(
-                        "No installed planner was able to convert the custom node to an execution plan: {:?}", node
+                        "No installed planner was able to convert the custom node to an execution plan: {:?}", e.node
                     )))?;
 
                     // Ensure the ExecutionPlan's schema matches the
                     // declared logical schema to catch and warn about
                     // logic errors when creating user defined plans.
-                    if !node.schema().matches_arrow_schema(&plan.schema()) {
+                    if !e.node.schema().matches_arrow_schema(&plan.schema()) {
                         Err(DataFusionError::Plan(format!(
                             "Extension planner for {:?} created an ExecutionPlan with mismatched schema. \
                             LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
-                            node, node.schema(), plan.schema()
+                            e.node, e.node.schema(), plan.schema()
                         )))
                     } else {
                         Ok(plan)
@@ -1322,7 +1343,7 @@ impl DefaultPhysicalPlanner {
         physical_input_schema: &Schema,
         ctx_state: &ExecutionContextState,
     ) -> Result<Arc<dyn AggregateExpr>> {
-        // unpack aliased logical expressions, e.g. "sum(col) as total"
+        // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
         let (name, e) = match e {
             Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
             _ => (physical_name(e)?, e),
@@ -1367,19 +1388,13 @@ impl DefaultPhysicalPlanner {
         logical_plan: &LogicalPlan,
         ctx_state: &ExecutionContextState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if let LogicalPlan::Explain {
-            verbose,
-            plan,
-            stringified_plans,
-            schema,
-        } = logical_plan
-        {
+        if let LogicalPlan::Explain(e) = logical_plan {
             use PlanType::*;
-            let mut stringified_plans = stringified_plans.clone();
+            let mut stringified_plans = e.stringified_plans.clone();
 
-            stringified_plans.push(plan.to_stringified(FinalLogicalPlan));
+            stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
 
-            let input = self.create_initial_plan(plan, ctx_state).await?;
+            let input = self.create_initial_plan(e.plan.as_ref(), ctx_state).await?;
 
             stringified_plans
                 .push(displayable(input.as_ref()).to_stringified(InitialPhysicalPlan));
@@ -1394,9 +1409,9 @@ impl DefaultPhysicalPlanner {
                 .push(displayable(input.as_ref()).to_stringified(FinalPhysicalPlan));
 
             Ok(Some(Arc::new(ExplainExec::new(
-                SchemaRef::new(schema.as_ref().to_owned().into()),
+                SchemaRef::new(e.schema.as_ref().to_owned().into()),
                 stringified_plans,
-                *verbose,
+                e.verbose,
             ))))
         } else {
             Ok(None)
@@ -1422,6 +1437,10 @@ impl DefaultPhysicalPlanner {
             new_plan = optimizer.optimize(new_plan, &ctx_state.config)?;
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
+        debug!(
+            "Optimized physical plan short version:\n{}\n",
+            displayable(new_plan.as_ref()).indent()
+        );
         debug!("Optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
     }
@@ -1441,6 +1460,7 @@ mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::execution::options::CsvReadOptions;
+    use crate::logical_plan::plan::Extension;
     use crate::logical_plan::{DFField, DFSchema, DFSchemaRef};
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
@@ -1591,9 +1611,9 @@ mod tests {
     async fn default_extension_planner() {
         let ctx_state = make_ctx_state();
         let planner = DefaultPhysicalPlanner::default();
-        let logical_plan = LogicalPlan::Extension {
+        let logical_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoOpExtensionNode::default()),
-        };
+        });
         let plan = planner
             .create_physical_plan(&logical_plan, &ctx_state)
             .await;
@@ -1620,9 +1640,9 @@ mod tests {
             BadExtensionPlanner {},
         )]);
 
-        let logical_plan = LogicalPlan::Extension {
+        let logical_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoOpExtensionNode::default()),
-        };
+        });
         let plan = planner
             .create_physical_plan(&logical_plan, &ctx_state)
             .await;

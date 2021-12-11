@@ -22,7 +22,7 @@ use arrow::datatypes::{DataType, Field};
 use crate::error::{DataFusionError, Result};
 use crate::scalar::ScalarValue;
 
-/// Returns the field access indexed by `key` from a [`DataType::List`]
+/// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Struct`]
 /// # Error
 /// Errors if
 /// * the `data_type` is not a Struct or,
@@ -39,6 +39,25 @@ pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Fiel
                 Ok(Field::new(&i.to_string(), lt.data_type().clone(), false))
             }
         }
+        (DataType::Struct(fields), ScalarValue::Utf8(Some(s))) => {
+            if s.is_empty() {
+                Err(DataFusionError::Plan(
+                    "Struct based indexed access requires a non empty string".to_string(),
+                ))
+            } else {
+                let field = fields.iter().find(|f| f.name() == s);
+                match field {
+                    None => Err(DataFusionError::Plan(format!(
+                        "Field {} not found in struct",
+                        s
+                    ))),
+                    Some(f) => Ok(f.clone()),
+                }
+            }
+        }
+        (DataType::Struct(_), _) => Err(DataFusionError::Plan(
+            "Only utf8 strings are valid as an indexed field in a struct".to_string(),
+        )),
         (DataType::List(_), _) => Err(DataFusionError::Plan(
             "Only ints are valid as an indexed field in a list".to_string(),
         )),

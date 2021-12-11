@@ -17,47 +17,32 @@
 
 import pyarrow as pa
 import pytest
-from datafusion import ExecutionContext
+
+from datafusion import ExecutionContext, column
 from datafusion import functions as f
 
 
 @pytest.fixture
 def df():
     ctx = ExecutionContext()
+
     # create a RecordBatch and a new DataFrame from it
     batch = pa.RecordBatch.from_arrays(
-        [pa.array(["Hello", "World", "!"]), pa.array([4, 5, 6])],
+        [pa.array([1, 2, 3]), pa.array([4, 4, 6])],
         names=["a", "b"],
     )
     return ctx.create_dataframe([[batch]])
 
 
-def test_lit(df):
-    """test lit function"""
-    df = df.select(
-        f.lit(1),
-        f.lit("1"),
-        f.lit("OK"),
-        f.lit(3.14),
-        f.lit(True),
-        f.lit(b"hello world"),
+def test_built_in_aggregation(df):
+    col_a = column("a")
+    col_b = column("b")
+    df = df.aggregate(
+        [],
+        [f.max(col_a), f.min(col_a), f.count(col_a), f.approx_distinct(col_b)],
     )
-    result = df.collect()
-    assert len(result) == 1
-    result = result[0]
-    assert result.column(0) == pa.array([1] * 3)
-    assert result.column(1) == pa.array(["1"] * 3)
-    assert result.column(2) == pa.array(["OK"] * 3)
-    assert result.column(3) == pa.array([3.14] * 3)
-    assert result.column(4) == pa.array([True] * 3)
-    assert result.column(5) == pa.array([b"hello world"] * 3)
-
-
-def test_lit_arith(df):
-    """test lit function within arithmatics"""
-    df = df.select(f.lit(1) + f.col("b"), f.concat(f.col("a"), f.lit("!")))
-    result = df.collect()
-    assert len(result) == 1
-    result = result[0]
-    assert result.column(0) == pa.array([5, 6, 7])
-    assert result.column(1) == pa.array(["Hello!", "World!", "!!"])
+    result = df.collect()[0]
+    assert result.column(0) == pa.array([3])
+    assert result.column(1) == pa.array([1])
+    assert result.column(2) == pa.array([3], type=pa.uint64())
+    assert result.column(3) == pa.array([2], type=pa.uint64())

@@ -61,6 +61,7 @@ to provide:
 - Additional constant folding / partial evaluation [#1070](https://github.com/apache/arrow-datafusion/issues/1070)
 - More sophisticated cost based optimizer for join ordering
 - Implement advanced query optimization framework (Tokomak) #440
+- Finer optimizations for group by and aggregate functions
 
 ## Datasources
 

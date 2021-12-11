@@ -55,7 +55,7 @@ Here are some of the projects known to use DataFusion:
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [datafusion-python](https://pypi.org/project/datafusion)
-- [datafusion-java](https://github.com/Jimexist/datafusion-java)
+- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
 - [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
 - [delta-rs](https://github.com/delta-io/delta-rs)
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
@@ -129,7 +129,7 @@ To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-datafusion = "5.0.0"
+datafusion = "6.0.0"
 ```
 
 ## Using DataFusion as a binary
@@ -215,13 +215,13 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
 - [ ] Lists
 - [x] Subqueries
 - [x] Common table expressions
-- [ ] Set Operations
+- [x] Set Operations
   - [x] UNION ALL
   - [x] UNION
-  - [ ] INTERSECT
-  - [ ] INTERSECT ALL
-  - [ ] EXCEPT
-  - [ ] EXCEPT ALL
+  - [x] INTERSECT
+  - [x] INTERSECT ALL
+  - [x] EXCEPT
+  - [x] EXCEPT ALL
 - [x] Joins
   - [x] INNER JOIN
   - [x] LEFT JOIN
@@ -346,7 +346,7 @@ are mapped to Arrow types according to the following table
 | `SMALLINT`    | `Int16`                           |
 | `INT`         | `Int32`                           |
 | `BIGINT`      | `Int64`                           |
-| `REAL`        | `Float64`                         |
+| `REAL`        | `Float32`                         |
 | `DOUBLE`      | `Float64`                         |
 | `BOOLEAN`     | `Boolean`                         |
 | `DATE`        | `Date32`                          |
@@ -367,7 +367,7 @@ Please see [Roadmap](docs/source/specification/roadmap.md) for information of wh
 
 There is no formal document describing DataFusion's architecture yet, but the following presentations offer a good overview of its different components and how they interact together.
 
-- (March 2021): The DataFusion architecture is described in _Query Engine Design and the Rust-Based DataFusion in Apache Arrow_: [recording](https://www.youtube.com/watch?v=K6eCAVEk4kU) (DataFusion content starts ~ 15 minutes in) and [slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
+- (March 2021): The DataFusion architecture is described in _Query Engine Design and the Rust-Based DataFusion in Apache Arrow_: [recording](https://www.youtube.com/watch?v=K6eCAVEk4kU) (DataFusion content starts [~ 15 minutes in](https://www.youtube.com/watch?v=K6eCAVEk4kU&t=875s)) and [slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
 - (Feburary 2021): How DataFusion is used within the Ballista Project is described in \*Ballista: Distributed Compute with Rust and Apache Arrow: [recording](https://www.youtube.com/watch?v=ZZHQaOap9pQ)
 
 # Developer's guide

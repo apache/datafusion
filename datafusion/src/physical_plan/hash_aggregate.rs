@@ -361,14 +361,6 @@ fn group_aggregate_batch(
     // of them anyways, it is more performant to do it while they are together.
     let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
 
-    // create vector large enough to hold the grouping key
-    // this is an optimization to avoid allocating `key` on every row.
-    // it will be overwritten on every iteration of the loop below
-    let mut group_by_values = Vec::with_capacity(group_values.len());
-    for _ in 0..group_values.len() {
-        group_by_values.push(ScalarValue::UInt32(Some(0)));
-    }
-
     // 1.1 construct the key from the group values
     // 1.2 construct the mapping key if it does not exist
     // 1.3 add the row' index to `indices`

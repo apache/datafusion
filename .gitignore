@@ -91,3 +91,6 @@ rusty-tags.vi
 
 .vscode
 venv/*
+
+# apache release artifacts
+dev/dist

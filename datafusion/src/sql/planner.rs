@@ -18,6 +18,7 @@
 //! SQL Query Planner (produces logical plan from SQL AST)
 
 use std::collections::HashSet;
+use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
@@ -28,8 +29,9 @@ use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_wildcard, col, lit, normalize_col, union_with_alias, Column,
-    DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema,
-    ToStringifiedPlan,
+    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
+    DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
+    ToDFSchema, ToStringifiedPlan,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -47,12 +49,12 @@ use arrow::datatypes::*;
 use hashbrown::HashMap;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
-    Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query, Select, SelectItem,
-    SetExpr, SetOperator, ShowStatementFilter, TableFactor, TableWithJoins,
-    TrimWhereField, UnaryOperator, Value, Values as SQLValues,
+    HiveDistributionStyle, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
+    Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableFactor,
+    TableWithJoins, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
-use sqlparser::ast::{OrderByExpr, Statement};
+use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
 
 use super::{
@@ -64,6 +66,7 @@ use super::{
     },
 };
 use crate::logical_plan::builder::project_with_alias;
+use crate::logical_plan::plan::{Analyze, Explain};
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
@@ -132,15 +135,66 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => self.explain_statement_to_plan(*verbose, *analyze, statement),
             Statement::Query(query) => self.query_to_plan(query),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(variable),
+            Statement::CreateTable {
+                query: Some(query),
+                name,
+                or_replace: false,
+                columns,
+                constraints,
+                hive_distribution: HiveDistributionStyle::NONE,
+                hive_formats: _hive_formats,
+                table_properties,
+                with_options,
+                file_format: None,
+                location: None,
+                like: None,
+                temporary: _temporary,
+                external: false,
+                if_not_exists: false,
+                without_rowid: _without_row_id,
+            } if columns.is_empty()
+                && constraints.is_empty()
+                && table_properties.is_empty()
+                && with_options.is_empty() =>
+            {
+                let plan = self.query_to_plan(query)?;
+
+                Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                    name: name.to_string(),
+                    input: Arc::new(plan),
+                }))
+            }
+            Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(
+                "Only `CREATE TABLE table_name AS SELECT ...` statement is supported"
+                    .to_string(),
+            )),
+
+            Statement::Drop {
+                object_type: ObjectType::Table,
+                if_exists,
+                names,
+                cascade: _,
+                purge: _,
+            } =>
+            // We don't support cascade and purge for now.
+            {
+                Ok(LogicalPlan::DropTable(DropTable {
+                    name: names.get(0).unwrap().to_string(),
+                    if_exist: *if_exists,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                }))
+            }
+
             Statement::ShowColumns {
                 extended,
                 full,
                 table_name,
                 filter,
             } => self.show_columns_to_plan(*extended, *full, table_name, filter.as_ref()),
-            _ => Err(DataFusionError::NotImplemented(
-                "Only SELECT statements are implemented".to_string(),
-            )),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported SQL statement: {:?}",
+                sql
+            ))),
         }
     }
 
@@ -191,23 +245,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 left,
                 right,
                 all,
-            } => match (op, all) {
-                (SetOperator::Union, true) => {
-                    let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
-                    let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
-                    union_with_alias(left_plan, right_plan, alias)
+            } => {
+                let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
+                let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
+                match (op, all) {
+                    (SetOperator::Union, true) => {
+                        union_with_alias(left_plan, right_plan, alias)
+                    }
+                    (SetOperator::Union, false) => {
+                        let union_plan = union_with_alias(left_plan, right_plan, alias)?;
+                        LogicalPlanBuilder::from(union_plan).distinct()?.build()
+                    }
+                    (SetOperator::Intersect, true) => {
+                        LogicalPlanBuilder::intersect(left_plan, right_plan, true)
+                    }
+                    (SetOperator::Intersect, false) => {
+                        LogicalPlanBuilder::intersect(left_plan, right_plan, false)
+                    }
+                    (SetOperator::Except, true) => {
+                        LogicalPlanBuilder::except(left_plan, right_plan, true)
+                    }
+                    (SetOperator::Except, false) => {
+                        LogicalPlanBuilder::except(left_plan, right_plan, false)
+                    }
                 }
-                (SetOperator::Union, false) => {
-                    let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
-                    let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
-                    let union_plan = union_with_alias(left_plan, right_plan, alias)?;
-                    LogicalPlanBuilder::from(union_plan).distinct()?.build()
-                }
-                _ => Err(DataFusionError::NotImplemented(format!(
-                    "Only UNION ALL and UNION [DISTINCT] are supported, found {}",
-                    op
-                ))),
-            },
+            }
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Query {} not implemented yet",
                 set_expr
@@ -245,13 +307,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let schema = self.build_schema(columns)?;
 
-        Ok(LogicalPlan::CreateExternalTable {
+        Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
             schema: schema.to_dfschema_ref()?,
             name: name.clone(),
             location: location.clone(),
             file_type: *file_type,
             has_header: *has_header,
-        })
+        }))
     }
 
     /// Generate a plan for EXPLAIN ... that will print out a plan
@@ -268,20 +330,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(LogicalPlan::Analyze {
+            Ok(LogicalPlan::Analyze(Analyze {
                 verbose,
                 input: plan,
                 schema,
-            })
+            }))
         } else {
             let stringified_plans =
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
-            Ok(LogicalPlan::Explain {
+            Ok(LogicalPlan::Explain(Explain {
                 verbose,
                 plan,
                 stringified_plans,
                 schema,
-            })
+            }))
         }
     }
 
@@ -303,15 +365,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Maps the SQL type to the corresponding Arrow `DataType`
     fn make_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
-            SQLDataType::BigInt(_display) => Ok(DataType::Int64),
-            SQLDataType::Int(_display) => Ok(DataType::Int32),
-            SQLDataType::SmallInt(_display) => Ok(DataType::Int16),
+            SQLDataType::BigInt(_) => Ok(DataType::Int64),
+            SQLDataType::Int(_) => Ok(DataType::Int32),
+            SQLDataType::SmallInt(_) => Ok(DataType::Int16),
             SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
                 Ok(DataType::Utf8)
             }
-            SQLDataType::Decimal(_, _) => Ok(DataType::Float64),
+            SQLDataType::Decimal(precision, scale) => {
+                match (precision, scale) {
+                    (None, _) | (_, None) => {
+                        return Err(DataFusionError::Internal(format!(
+                            "Invalid Decimal type ({:?}), precision or scale can't be empty.",
+                            sql_type
+                        )));
+                    }
+                    (Some(p), Some(s)) => {
+                        // TODO add bound checker in some utils file or function
+                        if *p > 38 || *s > *p {
+                            return Err(DataFusionError::Internal(format!(
+                                "Error Decimal Type ({:?}), precision must be less than or equal to 38 and scale can't be greater than precision",
+                                sql_type
+                            )));
+                        } else {
+                            Ok(DataType::Decimal(*p as usize, *s as usize))
+                        }
+                    }
+                }
+            }
             SQLDataType::Float(_) => Ok(DataType::Float32),
-            SQLDataType::Real | SQLDataType::Double => Ok(DataType::Float64),
+            SQLDataType::Real => Ok(DataType::Float32),
+            SQLDataType::Double => Ok(DataType::Float64),
             SQLDataType::Boolean => Ok(DataType::Boolean),
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time => Ok(DataType::Time64(TimeUnit::Millisecond)),
@@ -592,7 +675,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported ast node {:?} in create_relation",
                     relation
-                )))
+                )));
             }
         };
         if let Some(alias) = alias {
@@ -705,7 +788,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = plan?;
 
         // The SELECT expressions, with wildcards expanded.
-        let select_exprs = self.prepare_select_exprs(&plan, &select.projection)?;
+        let select_exprs = self.prepare_select_exprs(&plan, select)?;
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
@@ -822,7 +905,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = if select.distinct {
             return LogicalPlanBuilder::from(plan)
-                .aggregate(select_exprs_post_aggr, vec![])?
+                .aggregate(select_exprs_post_aggr, iter::empty::<Expr>())?
                 .build();
         } else {
             plan
@@ -836,10 +919,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn prepare_select_exprs(
         &self,
         plan: &LogicalPlan,
-        projection: &[SelectItem],
+        select: &Select,
     ) -> Result<Vec<Expr>> {
         let input_schema = plan.schema();
-
+        let projection = &select.projection;
         projection
             .iter()
             .map(|expr| self.sql_select_to_rex(expr, input_schema))
@@ -847,7 +930,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .into_iter()
             .map(|expr| {
                 Ok(match expr {
-                    Expr::Wildcard => expand_wildcard(input_schema, plan)?,
+                    Expr::Wildcard => {
+                        if select.from.is_empty() {
+                            return Err(DataFusionError::Plan(
+                                "SELECT * with no tables specified is not valid"
+                                    .to_string(),
+                            ));
+                        }
+                        expand_wildcard(input_schema, plan)?
+                    }
                     _ => vec![normalize_col(expr, plan)?],
                 })
             })
@@ -963,12 +1054,45 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// convert sql OrderByExpr to Expr::Sort
     fn order_by_to_sort_expr(&self, e: &OrderByExpr, schema: &DFSchema) -> Result<Expr> {
-        Ok(Expr::Sort {
-            expr: Box::new(self.sql_expr_to_logical_expr(&e.expr, schema)?),
-            // by default asc
-            asc: e.asc.unwrap_or(true),
-            // by default nulls first to be consistent with spark
-            nulls_first: e.nulls_first.unwrap_or(true),
+        let OrderByExpr {
+            asc,
+            expr,
+            nulls_first,
+        } = e;
+
+        let expr = match &expr {
+            SQLExpr::Value(Value::Number(v, _)) => {
+                let field_index = v
+                    .parse::<usize>()
+                    .map_err(|err| DataFusionError::Plan(err.to_string()))?;
+
+                if field_index == 0 {
+                    return Err(DataFusionError::Plan(
+                        "Order by index starts at 1 for column indexes".to_string(),
+                    ));
+                } else if schema.fields().len() < field_index {
+                    return Err(DataFusionError::Plan(format!(
+                        "Order by column out of bounds, specified: {}, max: {}",
+                        field_index,
+                        schema.fields().len()
+                    )));
+                }
+
+                let field = schema.field(field_index - 1);
+                let col_ident = SQLExpr::Identifier(Ident::new(field.qualified_name()));
+                self.sql_expr_to_logical_expr(&col_ident, schema)?
+            }
+            e => self.sql_expr_to_logical_expr(e, schema)?,
+        };
+        Ok({
+            let asc = asc.unwrap_or(true);
+            Expr::Sort {
+                expr: Box::new(expr),
+                asc,
+                // when asc is true, by default nulls last to be consistent with postgres
+                // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
+                nulls_first: nulls_first.unwrap_or(!asc),
+            }
         })
     }
 
@@ -1000,8 +1124,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map_err(|_: DataFusionError| {
                     DataFusionError::Plan(format!(
                         "Invalid identifier '{}' for schema {}",
-                        col,
-                        schema.to_string()
+                        col, schema
                     ))
                 }),
                 _ => Err(DataFusionError::Internal("Not a column".to_string())),
@@ -1127,14 +1250,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match expr {
                     // optimization: if it's a number literal, we apply the negative operator
                     // here directly to calculate the new literal.
-                    SQLExpr::Value(Value::Number(n,_)) => match n.parse::<i64>() {
+                    SQLExpr::Value(Value::Number(n, _)) => match n.parse::<i64>() {
                         Ok(n) => Ok(lit(-n)),
                         Err(_) => Ok(lit(-n
                             .parse::<f64>()
                             .map_err(|_e| {
                                 DataFusionError::Internal(format!(
                                     "negative operator can be only applied to integer and float operands, got: {}",
-                                n))
+                                    n))
                             })?)),
                     },
                     // not a literal, apply negative operator on expression
@@ -1446,7 +1569,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             } else {
                                 Ok(window_frame)
                             }
-
                         })
                         .transpose()?;
                     let fun = window_functions::WindowFunction::from_str(&name)?;
@@ -1475,7 +1597,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 fun: window_functions::WindowFunction::BuiltInWindowFunction(
                                     window_fun,
                                 ),
-                                args:self.function_args_to_expr(function, schema)?,
+                                args: self.function_args_to_expr(function, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
@@ -1620,7 +1742,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "Unsupported Interval Expression with value {:?}",
                         value
-                    ))))
+                    ))));
                 }
             };
 
@@ -1786,9 +1908,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .rev()
             .zip(columns)
-            .map(|(ident, column_name)| {
-                format!(r#"{} = '{}'"#, column_name, ident.to_string())
-            })
+            .map(|(ident, column_name)| format!(r#"{} = '{}'"#, column_name, ident))
             .collect::<Vec<_>>()
             .join(" AND ");
 
@@ -1922,17 +2042,39 @@ fn extract_possible_join_keys(
 }
 
 /// Convert SQL data type to relational representation of data type
-pub fn convert_data_type(sql: &SQLDataType) -> Result<DataType> {
-    match sql {
+pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
+    match sql_type {
         SQLDataType::Boolean => Ok(DataType::Boolean),
-        SQLDataType::SmallInt(_display) => Ok(DataType::Int16),
-        SQLDataType::Int(_display) => Ok(DataType::Int32),
-        SQLDataType::BigInt(_display) => Ok(DataType::Int64),
-        SQLDataType::Float(_) | SQLDataType::Real => Ok(DataType::Float64),
+        SQLDataType::SmallInt(_) => Ok(DataType::Int16),
+        SQLDataType::Int(_) => Ok(DataType::Int32),
+        SQLDataType::BigInt(_) => Ok(DataType::Int64),
+        SQLDataType::Float(_) => Ok(DataType::Float32),
+        SQLDataType::Real => Ok(DataType::Float32),
         SQLDataType::Double => Ok(DataType::Float64),
         SQLDataType::Char(_) | SQLDataType::Varchar(_) => Ok(DataType::Utf8),
         SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         SQLDataType::Date => Ok(DataType::Date32),
+        SQLDataType::Decimal(precision, scale) => {
+            match (precision, scale) {
+                (None, _) | (_, None) => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Invalid Decimal type ({:?}), precision or scale can't be empty.",
+                        sql_type
+                    )));
+                }
+                (Some(p), Some(s)) => {
+                    // TODO add bound checker in some utils file or function
+                    if *p > 38 || *s > *p {
+                        return Err(DataFusionError::Internal(format!(
+                            "Error Decimal Type ({:?})",
+                            sql_type
+                        )));
+                    } else {
+                        Ok(DataType::Decimal(*p as usize, *s as usize))
+                    }
+                }
+            }
+        }
         other => Err(DataFusionError::NotImplemented(format!(
             "Unsupported SQL type {:?}",
             other
@@ -1942,17 +2084,28 @@ pub fn convert_data_type(sql: &SQLDataType) -> Result<DataType> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use functions::ScalarFunctionImplementation;
+
     use crate::datasource::empty::EmptyTable;
     use crate::physical_plan::functions::Volatility;
     use crate::{logical_plan::create_udf, sql::parser::DFParser};
-    use functions::ScalarFunctionImplementation;
+
+    use super::*;
 
     #[test]
     fn select_no_relation() {
         quick_test(
             "SELECT 1",
             "Projection: Int64(1)\
+             \n  EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn test_real_f32() {
+        quick_test(
+            "SELECT CAST(1.1 AS REAL)",
+            "Projection: CAST(Float64(1.1) AS Float32)\
              \n  EmptyRelation",
         );
     }
@@ -2723,6 +2876,7 @@ mod tests {
              \n    TableScan: person projection=None",
         )
     }
+
     #[test]
     fn select_simple_aggregate_with_groupby_non_column_expression_unselected() {
         quick_test(
@@ -2897,9 +3051,49 @@ mod tests {
     }
 
     #[test]
+    fn select_order_by_index() {
+        let sql = "SELECT id FROM person ORDER BY 1";
+        let expected = "Sort: #person.id ASC NULLS LAST\
+                        \n  Projection: #person.id\
+                        \n    TableScan: person projection=None";
+
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn select_order_by_multiple_index() {
+        let sql = "SELECT id, state, age FROM person ORDER BY 1, 3";
+        let expected = "Sort: #person.id ASC NULLS LAST, #person.age ASC NULLS LAST\
+                        \n  Projection: #person.id, #person.state, #person.age\
+                        \n    TableScan: person projection=None";
+
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn select_order_by_index_of_0() {
+        let sql = "SELECT id FROM person ORDER BY 0";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Order by index starts at 1 for column indexes\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn select_order_by_index_oob() {
+        let sql = "SELECT id FROM person ORDER BY 2";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Order by column out of bounds, specified: 2, max: 1\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
     fn select_order_by() {
         let sql = "SELECT id FROM person ORDER BY id";
-        let expected = "Sort: #person.id ASC NULLS FIRST\
+        let expected = "Sort: #person.id ASC NULLS LAST\
                         \n  Projection: #person.id\
                         \n    TableScan: person projection=None";
         quick_test(sql, expected);
@@ -3217,9 +3411,9 @@ mod tests {
     fn empty_over_dup_with_different_sort() {
         let sql = "SELECT order_id oid, MAX(order_id) OVER (), MAX(order_id) OVER (ORDER BY order_id) from orders";
         let expected = "\
-        Projection: #orders.order_id AS oid, #MAX(orders.order_id), #MAX(orders.order_id) ORDER BY [#orders.order_id ASC NULLS FIRST]\
+        Projection: #orders.order_id AS oid, #MAX(orders.order_id), #MAX(orders.order_id) ORDER BY [#orders.order_id ASC NULLS LAST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.order_id)]]\
-        \n    WindowAggr: windowExpr=[[MAX(#orders.order_id) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MAX(#orders.order_id) ORDER BY [#orders.order_id ASC NULLS LAST]]]\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -3280,8 +3474,8 @@ mod tests {
     fn over_order_by() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST], #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST], #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST]]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3291,8 +3485,8 @@ mod tests {
     fn over_order_by_with_window_frame_double_end() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS BETWEEN 3 PRECEDING and 3 FOLLOWING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING, #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING]]\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING, #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3302,8 +3496,8 @@ mod tests {
     fn over_order_by_with_window_frame_single_end() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3345,8 +3539,8 @@ mod tests {
     fn over_order_by_with_window_frame_single_end_groups() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id GROUPS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW, #MIN(orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3368,9 +3562,9 @@ mod tests {
     fn over_order_by_two_sort_keys() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY (order_id + 1)) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST], #MIN(orders.qty) ORDER BY [#orders.order_id + Int64(1) ASC NULLS FIRST]\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
-        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id + Int64(1) ASC NULLS FIRST]]]\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST], #MIN(orders.qty) ORDER BY [#orders.order_id + Int64(1) ASC NULLS LAST]\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST]]]\
+        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id + Int64(1) ASC NULLS LAST]]]\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -3392,10 +3586,10 @@ mod tests {
     fn over_order_by_sort_keys_sorting() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST], #SUM(orders.qty), #MIN(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.qty ASC NULLS LAST, #orders.order_id ASC NULLS LAST], #SUM(orders.qty), #MIN(orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST, #orders.qty ASC NULLS LAST]\
         \n  WindowAggr: windowExpr=[[SUM(#orders.qty)]]\
-        \n    WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST]]]\
-        \n      WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.qty ASC NULLS LAST, #orders.order_id ASC NULLS LAST]]]\
+        \n      WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST, #orders.qty ASC NULLS LAST]]]\
         \n        TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -3417,10 +3611,10 @@ mod tests {
     fn over_order_by_sort_keys_sorting_prefix_compacting() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST], #SUM(orders.qty), #MIN(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]\
+        Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST], #SUM(orders.qty), #MIN(orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST, #orders.qty ASC NULLS LAST]\
         \n  WindowAggr: windowExpr=[[SUM(#orders.qty)]]\
-        \n    WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
-        \n      WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST]]]\
+        \n      WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST, #orders.qty ASC NULLS LAST]]]\
         \n        TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -3445,11 +3639,11 @@ mod tests {
     fn over_order_by_sort_keys_sorting_global_order_compacting() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders ORDER BY order_id";
         let expected = "\
-        Sort: #orders.order_id ASC NULLS FIRST\
-        \n  Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST], #SUM(orders.qty), #MIN(orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]\
+        Sort: #orders.order_id ASC NULLS LAST\
+        \n  Projection: #orders.order_id, #MAX(orders.qty) ORDER BY [#orders.qty ASC NULLS LAST, #orders.order_id ASC NULLS LAST], #SUM(orders.qty), #MIN(orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST, #orders.qty ASC NULLS LAST]\
         \n    WindowAggr: windowExpr=[[SUM(#orders.qty)]]\
-        \n      WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.qty ASC NULLS FIRST, #orders.order_id ASC NULLS FIRST]]]\
-        \n        WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS FIRST, #orders.qty ASC NULLS FIRST]]]\
+        \n      WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.qty ASC NULLS LAST, #orders.order_id ASC NULLS LAST]]]\
+        \n        WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST, #orders.qty ASC NULLS LAST]]]\
         \n          TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -3468,8 +3662,8 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS FIRST]\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
+        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS LAST]\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS LAST]]]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -3488,8 +3682,8 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS FIRST]\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
+        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS LAST]\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS LAST]]]\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -3511,9 +3705,9 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty), MIN(qty) OVER (PARTITION BY qty ORDER BY order_id) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS FIRST], #MIN(orders.qty) PARTITION BY [#orders.qty] ORDER BY [#orders.order_id ASC NULLS FIRST]\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
-        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.qty] ORDER BY [#orders.order_id ASC NULLS FIRST]]]\
+        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS LAST], #MIN(orders.qty) PARTITION BY [#orders.qty] ORDER BY [#orders.order_id ASC NULLS LAST]\
+        \n  WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.qty] ORDER BY [#orders.order_id ASC NULLS LAST]]]\
+        \n    WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS LAST]]]\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
     }
@@ -3534,21 +3728,11 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty), MIN(qty) OVER (PARTITION BY order_id, qty ORDER BY price) from orders";
         let expected = "\
-        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS FIRST], #MIN(orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.price ASC NULLS FIRST]\
-        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS FIRST]]]\
-        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.price ASC NULLS FIRST]]]\
+        Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS LAST], #MIN(orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.price ASC NULLS LAST]\
+        \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS LAST]]]\
+        \n    WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.price ASC NULLS LAST]]]\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
-    }
-
-    #[test]
-    fn only_union_all_supported() {
-        let sql = "SELECT order_id from orders EXCEPT SELECT order_id FROM orders";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "NotImplemented(\"Only UNION ALL and UNION [DISTINCT] are supported, found EXCEPT\")",
-            format!("{:?}", err)
-        );
     }
 
     #[test]

@@ -246,7 +246,7 @@ pub enum Expr {
     IsNull(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
-    /// Returns the field of a [`ListArray`] by key
+    /// Returns the field of a [`ListArray`] or [`StructArray`] by key
     GetIndexedField {
         /// the expression to take the field from
         expr: Box<Expr>,
@@ -547,6 +547,9 @@ impl Expr {
     /// This function errors when it is impossible to cast the
     /// expression to the target [arrow::datatypes::DataType].
     pub fn cast_to(self, cast_to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
+        // TODO(kszucs): most of the operations do not validate the type correctness
+        // like all of the binary expressions below. Perhaps Expr should track the
+        // type of the expression?
         let this_type = self.get_type(schema)?;
         if this_type == *cast_to_type {
             Ok(self)
@@ -1312,10 +1315,13 @@ fn normalize_col_with_schemas(
 /// Recursively normalize all Column expressions in a list of expression trees
 #[inline]
 pub fn normalize_cols(
-    exprs: impl IntoIterator<Item = Expr>,
+    exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
 ) -> Result<Vec<Expr>> {
-    exprs.into_iter().map(|e| normalize_col(e, plan)).collect()
+    exprs
+        .into_iter()
+        .map(|e| normalize_col(e.into(), plan))
+        .collect()
 }
 
 /// Recursively 'unnormalize' (remove all qualifiers) from an
@@ -1348,6 +1354,15 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
 #[inline]
 pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()
+}
+
+/// Recursively un-alias an expressions
+#[inline]
+pub fn unalias(expr: Expr) -> Expr {
+    match expr {
+        Expr::Alias(sub_expr, _) => unalias(*sub_expr),
+        _ => expr,
+    }
 }
 
 /// Create an expression to represent the min() aggregate function
@@ -1551,6 +1566,8 @@ pub fn approx_distinct(expr: Expr) -> Expr {
     }
 }
 
+// TODO(kszucs): this seems buggy, unary_scalar_expr! is used for many
+// varying arity functions
 /// Create an convenience function representing a unary scalar function
 macro_rules! unary_scalar_expr {
     ($ENUM:ident, $FUNC:ident) => {
@@ -1971,10 +1988,27 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
-        other => Err(DataFusionError::NotImplemented(format!(
-            "Create name does not support logical expression {:?}",
-            other
-        ))),
+        Expr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => {
+            let expr = create_name(expr, input_schema)?;
+            let low = create_name(low, input_schema)?;
+            let high = create_name(high, input_schema)?;
+            if *negated {
+                Ok(format!("{} NOT BETWEEN {} AND {}", expr, low, high))
+            } else {
+                Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
+            }
+        }
+        Expr::Sort { .. } => Err(DataFusionError::Internal(
+            "Create name does not support sort expression".to_string(),
+        )),
+        Expr::Wildcard => Err(DataFusionError::Internal(
+            "Create name does not support wildcard".to_string(),
+        )),
     }
 }
 

@@ -224,31 +224,35 @@ mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::expressions::*;
-    use crate::physical_plan::file_format::CsvExec;
+    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::physical_plan::ExecutionPlan;
     use crate::scalar::ScalarValue;
-    use crate::test::{self, aggr_test_schema};
+    use crate::test;
+    use crate::test_util;
     use crate::{logical_plan::Operator, physical_plan::collect};
     use std::iter::Iterator;
 
     #[tokio::test]
     async fn simple_predicate() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
 
         let csv = CsvExec::new(
-            Arc::new(LocalFileSystem {}),
-            files,
-            Statistics::default(),
-            aggr_test_schema(),
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: Arc::clone(&schema),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         );
 
         let predicate: Arc<dyn PhysicalExpr> = binary(

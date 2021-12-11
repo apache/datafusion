@@ -633,7 +633,6 @@ impl<'a> PlanConverter<'a>{
                 let args = self.as_tokomak_expr_list(args, schema)?;
                 TokomakLogicalPlan::ScalarBuiltinCall(FunctionCall::new(func, args ))
             }
-            Expr::Alias(expr, _) => return self.to_tokomak_expr(expr, schema),
             Expr::InList {
                 expr,
                 list,

@@ -43,7 +43,7 @@ This crate is tested with the latest stable version of Rust. We do not currrentl
 
 There are numerous ways to start a Ballista cluster, including support for Docker and
 Kubernetes. For full documentation, refer to the
-[DataFusion User Guide](https://github.com/apache/arrow-datafusion/tree/master/docs/user-guide)
+[DataFusion User Guide](https://arrow.apache.org/datafusion/user-guide/introduction.html)
 
 A simple way to start a local cluster for testing purposes is to use cargo to install
 the scheduler and executor crates.
@@ -79,6 +79,15 @@ RUST_LOG=info ballista-executor --bind-port 50052 -c 4
 
 Ballista provides a `BallistaContext` as a starting point for creating queries. DataFrames can be created
 by invoking the `read_csv`, `read_parquet`, and `sql` methods.
+
+To build a simple ballista example, add the following dependencies to your `Cargo.toml` file:
+
+```toml
+[dependencies]
+ballista = "0.6"
+datafusion = "6.0"
+tokio = "1.0"
+```
 
 The following example runs a simple aggregate SQL query against a CSV file from the
 [New York Taxi and Limousine Commission](https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page)
@@ -120,3 +129,5 @@ async fn main() -> Result<()> {
    Ok(())
 }
 ```
+
+More [examples](https://github.com/apache/arrow-datafusion/tree/master/ballista-examples) can be found in the arrow-datafusion repository.

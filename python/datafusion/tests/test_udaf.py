@@ -20,11 +20,11 @@ from typing import List
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
-from datafusion import ExecutionContext
-from datafusion import functions as f
+
+from datafusion import Accumulator, ExecutionContext, column, udaf
 
 
-class Accumulator:
+class Summarize(Accumulator):
     """
     Interface of a user-defined accumulation.
     """
@@ -32,7 +32,7 @@ class Accumulator:
     def __init__(self):
         self._sum = pa.scalar(0.0)
 
-    def to_scalars(self) -> List[pa.Scalar]:
+    def state(self) -> List[pa.Scalar]:
         return [self._sum]
 
     def update(self, values: pa.Array) -> None:
@@ -49,6 +49,18 @@ class Accumulator:
         return self._sum
 
 
+class NotSubclassOfAccumulator:
+    pass
+
+
+class MissingMethods(Accumulator):
+    def __init__(self):
+        self._sum = pa.scalar(0)
+
+    def state(self) -> List[pa.Scalar]:
+        return [self._sum]
+
+
 @pytest.fixture
 def df():
     ctx = ExecutionContext()
@@ -61,16 +73,43 @@ def df():
     return ctx.create_dataframe([[batch]])
 
 
+def test_errors(df):
+    with pytest.raises(TypeError):
+        udaf(
+            NotSubclassOfAccumulator,
+            pa.float64(),
+            pa.float64(),
+            [pa.float64()],
+            volatility="immutable",
+        )
+
+    accum = udaf(
+        MissingMethods,
+        pa.int64(),
+        pa.int64(),
+        [pa.int64()],
+        volatility="immutable",
+    )
+    df = df.aggregate([], [accum(column("a"))])
+
+    msg = (
+        "Can't instantiate abstract class MissingMethods with abstract "
+        "methods evaluate, merge, update"
+    )
+    with pytest.raises(Exception, match=msg):
+        df.collect()
+
+
 def test_aggregate(df):
-    udaf = f.udaf(
-        Accumulator,
+    summarize = udaf(
+        Summarize,
         pa.float64(),
         pa.float64(),
         [pa.float64()],
-        f.Volatility.immutable(),
+        volatility="immutable",
     )
 
-    df = df.aggregate([], [udaf(f.col("a"))])
+    df = df.aggregate([], [summarize(column("a"))])
 
     # execute and collect the first (and only) batch
     result = df.collect()[0]
@@ -79,17 +118,18 @@ def test_aggregate(df):
 
 
 def test_group_by(df):
-    udaf = f.udaf(
-        Accumulator,
+    summarize = udaf(
+        Summarize,
         pa.float64(),
         pa.float64(),
         [pa.float64()],
-        f.Volatility.immutable(),
+        volatility="immutable",
     )
 
-    df = df.aggregate([f.col("b")], [udaf(f.col("a"))])
+    df = df.aggregate([column("b")], [summarize(column("a"))])
 
     batches = df.collect()
+
     arrays = [batch.column(1) for batch in batches]
     joined = pa.concat_arrays(arrays)
     assert joined == pa.array([1.0 + 2.0, 3.0])

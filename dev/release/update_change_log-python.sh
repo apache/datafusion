@@ -25,4 +25,8 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 
 CURRENT_VER=$(grep version "${SOURCE_TOP_DIR}/python/Cargo.toml" | head -n 1 | awk '{print $3}' | tr -d '"')
-${SOURCE_DIR}/update_change_log.sh python 4.0.0 "python-${CURRENT_VER}-rc-local"
+${SOURCE_DIR}/update_change_log.sh \
+    python \
+    python-0.3.0 \
+    --exclude-tags-regex "ballista-.+" \
+    --future-release "python-${CURRENT_VER}"

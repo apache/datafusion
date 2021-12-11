@@ -42,6 +42,7 @@ use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::logical_plan::combine_filters;
+use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::ParquetExec;
 use crate::physical_plan::ExecutionPlan;
@@ -92,38 +93,30 @@ impl FileFormat for ParquetFormat {
             .next()
             .await
             .ok_or_else(|| DataFusionError::Plan("No data file found".to_owned()))??;
-        let (schema, _) = fetch_metadata(first_file)?;
+        let schema = fetch_schema(first_file)?;
         Ok(Arc::new(schema))
     }
 
     async fn infer_stats(&self, reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
-        let (_, stats) = fetch_metadata(reader)?;
+        let stats = fetch_statistics(reader)?;
         Ok(stats)
     }
 
     async fn create_physical_plan(
         &self,
         conf: PhysicalPlanConfig,
+        filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
         let predicate = if self.enable_pruning {
-            combine_filters(&conf.filters)
+            combine_filters(filters)
         } else {
             None
         };
 
-        Ok(Arc::new(ParquetExec::new(
-            conf.object_store,
-            conf.files,
-            conf.statistics,
-            conf.schema,
-            conf.projection,
-            predicate,
-            conf.batch_size,
-            conf.limit,
-        )))
+        Ok(Arc::new(ParquetExec::new(conf, predicate)))
     }
 }
 
@@ -249,8 +242,18 @@ fn summarize_min_max(
     }
 }
 
-/// Read and parse the metadata of the Parquet file at location `path`
-fn fetch_metadata(object_reader: Arc<dyn ObjectReader>) -> Result<(Schema, Statistics)> {
+/// Read and parse the schema of the Parquet file at location `path`
+fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
+    let obj_reader = ChunkObjectReader(object_reader);
+    let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
+    let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
+    let schema = arrow_reader.get_schema()?;
+
+    Ok(schema)
+}
+
+/// Read and parse the statistics of the Parquet file at location `path`
+fn fetch_statistics(object_reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
     let obj_reader = ChunkObjectReader(object_reader);
     let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
@@ -305,7 +308,7 @@ fn fetch_metadata(object_reader: Arc<dyn ObjectReader>) -> Result<(Schema, Stati
         is_exact: true,
     };
 
-    Ok((schema, statistics))
+    Ok(statistics)
 }
 
 /// A wrapper around the object reader to make it implement `ChunkReader`
@@ -330,12 +333,9 @@ impl ChunkReader for ChunkObjectReader {
 #[cfg(test)]
 mod tests {
     use crate::{
-        datasource::{
-            object_store::local::{
-                local_file_meta, local_object_reader, local_object_reader_stream,
-                LocalFileSystem,
-            },
-            PartitionedFile,
+        datasource::object_store::local::{
+            local_object_reader, local_object_reader_stream, local_unpartitioned_file,
+            LocalFileSystem,
         },
         physical_plan::collect,
     };
@@ -595,7 +595,7 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, file_name);
         let format = ParquetFormat::default();
-        let schema = format
+        let file_schema = format
             .infer_schema(local_object_reader_stream(vec![filename.clone()]))
             .await
             .expect("Schema inference");
@@ -603,20 +603,21 @@ mod tests {
             .infer_stats(local_object_reader(filename.clone()))
             .await
             .expect("Stats inference");
-        let files = vec![vec![PartitionedFile {
-            file_meta: local_file_meta(filename.clone()),
-        }]];
+        let file_groups = vec![vec![local_unpartitioned_file(filename.clone())]];
         let exec = format
-            .create_physical_plan(PhysicalPlanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                schema,
-                files,
-                statistics,
-                projection: projection.clone(),
-                batch_size,
-                filters: vec![],
-                limit,
-            })
+            .create_physical_plan(
+                PhysicalPlanConfig {
+                    object_store: Arc::new(LocalFileSystem {}),
+                    file_schema,
+                    file_groups,
+                    statistics,
+                    projection: projection.clone(),
+                    batch_size,
+                    limit,
+                    table_partition_cols: vec![],
+                },
+                &[],
+            )
             .await?;
         Ok(exec)
     }

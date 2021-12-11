@@ -17,7 +17,10 @@
 
 //! Utility functions to make testing DataFusion based crates easier
 
-use std::{env, error::Error, path::PathBuf};
+use std::collections::BTreeMap;
+use std::{env, error::Error, path::PathBuf, sync::Arc};
+
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -155,7 +158,7 @@ pub fn arrow_test_data() -> String {
     }
 }
 
-/// Returns the parquest test data directory, which is by default
+/// Returns the parquet test data directory, which is by default
 /// stored in a git submodule rooted at
 /// `parquest-testing/data`.
 ///
@@ -197,7 +200,7 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
             } else {
                 return Err(format!(
                     "the data dir `{}` defined by env {} not found",
-                    pb.display().to_string(),
+                    pb.display(),
                     udf_env
                 )
                 .into());
@@ -220,9 +223,34 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
             "env `{}` is undefined or has empty value, and the pre-defined data dir `{}` not found\n\
              HINT: try running `git submodule update --init`",
             udf_env,
-            pb.display().to_string(),
+            pb.display(),
         ).into())
     }
+}
+
+/// Get the schema for the aggregate_test_* csv files
+pub fn aggr_test_schema() -> SchemaRef {
+    let mut f1 = Field::new("c1", DataType::Utf8, false);
+    f1.set_metadata(Some(BTreeMap::from_iter(
+        vec![("testing".into(), "test".into())].into_iter(),
+    )));
+    let schema = Schema::new(vec![
+        f1,
+        Field::new("c2", DataType::UInt32, false),
+        Field::new("c3", DataType::Int8, false),
+        Field::new("c4", DataType::Int16, false),
+        Field::new("c5", DataType::Int32, false),
+        Field::new("c6", DataType::Int64, false),
+        Field::new("c7", DataType::UInt8, false),
+        Field::new("c8", DataType::UInt16, false),
+        Field::new("c9", DataType::UInt32, false),
+        Field::new("c10", DataType::UInt64, false),
+        Field::new("c11", DataType::Float32, false),
+        Field::new("c12", DataType::Float64, false),
+        Field::new("c13", DataType::Utf8, false),
+    ]);
+
+    Arc::new(schema)
 }
 
 #[cfg(test)]

@@ -187,6 +187,10 @@ impl SchemaProvider for InformationSchemaProvider {
             None
         }
     }
+
+    fn table_exist(&self, name: &str) -> bool {
+        return matches!(name.to_ascii_lowercase().as_str(), TABLES | COLUMNS);
+    }
 }
 
 /// Builds the `information_schema.TABLE` table row by row

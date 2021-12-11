@@ -231,6 +231,24 @@ impl DataFrame for DataFrameImpl {
                 .build()?,
         )))
     }
+
+    fn intersect(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>> {
+        let left_plan = self.to_logical_plan();
+        let right_plan = dataframe.to_logical_plan();
+        Ok(Arc::new(DataFrameImpl::new(
+            self.ctx_state.clone(),
+            &LogicalPlanBuilder::intersect(left_plan, right_plan, true)?,
+        )))
+    }
+
+    fn except(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>> {
+        let left_plan = self.to_logical_plan();
+        let right_plan = dataframe.to_logical_plan();
+        Ok(Arc::new(DataFrameImpl::new(
+            self.ctx_state.clone(),
+            &LogicalPlanBuilder::except(left_plan, right_plan, true)?,
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -239,11 +257,11 @@ mod tests {
 
     use super::*;
     use crate::execution::options::CsvReadOptions;
-    use crate::logical_plan::*;
+    use crate::physical_plan::functions::ScalarFunctionImplementation;
     use crate::physical_plan::functions::Volatility;
     use crate::physical_plan::{window_functions, ColumnarValue};
     use crate::{assert_batches_sorted_eq, execution::context::ExecutionContext};
-    use crate::{physical_plan::functions::ScalarFunctionImplementation, test};
+    use crate::{logical_plan::*, test_util};
     use arrow::datatypes::DataType;
 
     #[tokio::test]
@@ -438,6 +456,34 @@ mod tests {
         task.await.expect("task completed successfully");
     }
 
+    #[tokio::test]
+    async fn intersect() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c3"])?;
+        let plan = df.intersect(df.clone())?;
+        let result = plan.to_logical_plan();
+        let expected = create_plan(
+            "SELECT c1, c3 FROM aggregate_test_100
+            INTERSECT ALL SELECT c1, c3 FROM aggregate_test_100",
+        )
+        .await?;
+        assert_same_plan(&result, &expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn except() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c3"])?;
+        let plan = df.except(df.clone())?;
+        let result = plan.to_logical_plan();
+        let expected = create_plan(
+            "SELECT c1, c3 FROM aggregate_test_100
+            EXCEPT ALL SELECT c1, c3 FROM aggregate_test_100",
+        )
+        .await?;
+        assert_same_plan(&result, &expected);
+        Ok(())
+    }
+
     /// Compare the formatted string representation of two plans for equality
     fn assert_same_plan(plan1: &LogicalPlan, plan2: &LogicalPlan) {
         assert_eq!(format!("{:?}", plan1), format!("{:?}", plan2));
@@ -464,7 +510,7 @@ mod tests {
         ctx: &mut ExecutionContext,
         table_name: &str,
     ) -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let testdata = crate::test_util::arrow_test_data();
         ctx.register_csv(
             table_name,

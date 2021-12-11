@@ -346,7 +346,7 @@ struct SortPreservingMergeStream {
     receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
 
     /// Drop helper for tasks feeding the [`receivers`](Self::receivers)
-    drop_helper: AbortOnDropMany<()>,
+    _drop_helper: AbortOnDropMany<()>,
 
     /// For each input stream maintain a dequeue of SortKeyCursor
     ///
@@ -379,7 +379,7 @@ struct SortPreservingMergeStream {
 impl SortPreservingMergeStream {
     fn new(
         receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
-        drop_helper: AbortOnDropMany<()>,
+        _drop_helper: AbortOnDropMany<()>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
         target_batch_size: usize,
@@ -394,7 +394,7 @@ impl SortPreservingMergeStream {
             schema,
             cursors,
             receivers,
-            drop_helper,
+            _drop_helper,
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             sort_options: expressions.iter().map(|x| x.options).collect(),
             target_batch_size,
@@ -664,14 +664,14 @@ mod tests {
     use std::iter::FromIterator;
 
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
-    use crate::assert_batches_eq;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::CsvExec;
+    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::sort::SortExec;
     use crate::physical_plan::{collect, common};
     use crate::test::{self, assert_is_pending};
+    use crate::{assert_batches_eq, test_util};
 
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -930,21 +930,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort() {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let partitions = 4;
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
 
         let csv = Arc::new(CsvExec::new(
-            Arc::new(LocalFileSystem {}),
-            files,
-            Statistics::default(),
-            Arc::clone(&schema),
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: Arc::clone(&schema),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         ));
 
         let sort = vec![
@@ -1010,21 +1013,24 @@ mod tests {
         sort: Vec<PhysicalSortExpr>,
         sizes: &[usize],
     ) -> Arc<dyn ExecutionPlan> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let partitions = 4;
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
 
         let csv = Arc::new(CsvExec::new(
-            Arc::new(LocalFileSystem {}),
-            files,
-            Statistics::default(),
-            schema,
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: schema,
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
             true,
             b',',
-            None,
-            1024,
-            None,
         ));
 
         let sorted = basic_sort(csv, sort).await;
@@ -1035,7 +1041,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input() {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let sort = vec![
             // uint8
             PhysicalSortExpr {
@@ -1074,7 +1080,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input_output() {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
 
         let sort = vec![
             // float64
@@ -1189,7 +1195,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_async() {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
         let sort = vec![PhysicalSortExpr {
             expr: col("c12", &schema).unwrap(),
             options: SortOptions::default(),

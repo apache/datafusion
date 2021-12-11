@@ -39,10 +39,9 @@ Simple usage:
 .. code-block:: python
 
    import datafusion
+   from datafusion import functions as f
+   from datafusion import col
    import pyarrow
-
-   # an alias
-   f = datafusion.functions
 
    # create a context
    ctx = datafusion.ExecutionContext()
@@ -56,8 +55,8 @@ Simple usage:
 
    # create a new statement
    df = df.select(
-       f.col("a") + f.col("b"),
-       f.col("a") - f.col("b"),
+       col("a") + col("b"),
+       col("a") - col("b"),
    )
 
    # execute and collect the first (and only) batch
@@ -77,7 +76,7 @@ UDFs
 
    udf = f.udf(is_null, [pyarrow.int64()], pyarrow.bool_())
 
-   df = df.select(udf(f.col("a")))
+   df = df.select(udf(col("a")))
 
 
 UDAF
@@ -117,7 +116,7 @@ UDAF
 
    df = df.aggregate(
        [],
-       [udaf(f.col("a"))]
+       [udaf(col("a"))]
    )
 
 

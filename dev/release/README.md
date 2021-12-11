@@ -50,7 +50,7 @@ release backport branch.
 As part of the Apache governance model, official releases consist of signed
 source tarballs approved by the PMC.
 
-We then use the code in the approved source tarball to release to crates.io and
+We then use the code in the approved artifacts to release to crates.io and
 PyPI.
 
 ### Change Log
@@ -82,7 +82,11 @@ git fetch apache
 git checkout apache/master
 ```
 
-Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`.
+Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`:
+
+```
+./dev/update_datafusion_versions.py 5.1.0
+```
 
 If there is a ballista release, update versions in ballista Cargo.tomls, run
 
@@ -101,19 +105,9 @@ git commit -a -m 'Update version'
 
 ### Update CHANGELOG.md
 
-Create local release rc tags:
-
-```
-git tag -f 5.1.0-rc-local
-# if there is ballista release
-git tag -f ballista-0.5.0-rc-local
-# if there is python binding release
-git tag -f python-0.3.0-rc-local
-```
-
-Manully edit the previous release version tag in
+Manully edit the base version tag argument in
 `dev/release/update_change_log-{ballista,datafusion,python}.sh`. Commits
-between the previous verstion tag and the new rc tag will be used to
+between the base verstion tag and the latest upstream master will be used to
 populate the changelog content.
 
 ```bash
@@ -122,9 +116,6 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-all.sh
 # review change log / edit issues and labels if needed, rerun until you are happy with the result
 git commit -a -m 'Create changelog for release'
 ```
-
-Note that when reviewing the change log, rather than editing the
-`CHANGELOG.md`, it is preferred to update the issues and their labels.
 
 You can add `invalid` or `development-process` label to exclude items from
 release notes. Add `datafusion`, `ballista` and `python` labels to group items
@@ -135,9 +126,9 @@ could change the change log content landed in the `master` branch before you
 could merge the PR, you need to rerun the changelog update script to regenerate
 the changelog and update the PR accordingly.
 
-## Prepare release candidate tarball
+## Prepare release candidate artifacts
 
-After the PR gets merged, you are ready to create a releaes tarball from the
+After the PR gets merged, you are ready to create releaes artifacts based off the
 merged commit.
 
 (Note you need to be a committer to run these scripts as they upload to the apache svn distribution servers)
@@ -148,7 +139,8 @@ Pick numbers in sequential order, with `0` for `rc0`, `1` for `rc1`, etc.
 
 ### Create git tag for the release:
 
-While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
+While the official release artifacts are signed tarballs and zip files, we also
+tag the commit it was created for convenience and code archaeology.
 
 Using a string such as `5.1.0` as the `<version>`, create and push the tag thusly:
 
@@ -159,24 +151,27 @@ git tag <version>-<rc> apache/master
 git push apache <version>
 ```
 
-### Create, sign, and upload tarball
+This should trigger the `Python Release Build` Github Action workflow for the
+pushed tag. You can monitor the pipline run status at https://github.com/apache/arrow-datafusion/actions/workflows/python_build.yml.
+
+### Create, sign, and upload artifacts
 
 Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps:
 
 ```shell
-./dev/release/create-tarball.sh 5.1.0 0
+GH_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 5.1.0 0
 ```
 
 The `create-tarball.sh` script
 
-1. creates and uploads a release candidate tarball to the [arrow
+1. creates and uploads all release candidate artifacts to the [arrow
    dev](https://dist.apache.org/repos/dist/dev/arrow) location on the
    apache distribution svn server
 
 2. provide you an email template to
    send to dev@arrow.apache.org for release voting.
 
-### Vote on Release Candidate tarball
+### Vote on Release Candidate artifacts
 
 Send the email output from the script to dev@arrow.apache.org. The email should look like
 
@@ -190,7 +185,7 @@ I would like to propose a release of Apache Arrow Datafusion Implementation,
 version 5.1.0.
 
 This release candidate is based on commit: a5dd428f57e62db20a945e8b1895de91405958c4 [1]
-The proposed release tarball and signatures are hosted at [2].
+The proposed release artifacts and signatures are hosted at [2].
 The changelog is located at [3].
 
 Please download, verify checksums and signatures, run the unit tests,
@@ -224,9 +219,11 @@ changes into master if there is any and try again with the next RC number.
 
 ## Finalize the release
 
+NOTE: steps in this section can only be done by PMC members.
+
 ### After the release is approved
 
-Move tarball to the release location in SVN, e.g.
+Move artifacts to the release location in SVN, e.g.
 https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-5.1.0/, using
 the `release-tarball.sh` script:
 
@@ -241,23 +238,23 @@ Congratulations! The release is now offical!
 Tag the same release candidate commit with the final release tag
 
 ```
-git co apache/5.1.0-RC0
+git co apache/5.1.0-rc0
 git tag 5.1.0
-git push 5.1.0
+git push apache 5.1.0
 ```
 
 If there is a ballista release, also push the ballista tag
 
 ```
 git tag ballista-0.5.0
-git push ballista-0.5.0
+git push apache ballista-0.5.0
 ```
 
 If there is a datafusion python binding release, also push the python tag
 
 ```
 git tag python-0.3.0
-git push python-0.3.0
+git push apache python-0.3.0
 ```
 
 ### Publish on Crates.io
@@ -293,15 +290,40 @@ following commands
 If there is a ballista release, run
 
 ```shell
-(cd ballista/rust/client && cargo publish)
 (cd ballista/rust/core && cargo publish)
 (cd ballista/rust/executor && cargo publish)
 (cd ballista/rust/scheduler && cargo publish)
+(cd ballista/rust/client && cargo publish)
 ```
 
-### Publish on PyPI
+### Publish Python binding on PyPI
 
-TODO
+Only approved releases of the source tarball and wheels should be published to
+PyPI, in order to conform to Apache Software Foundation governance standards.
+
+First, download all official python release artifacts:
+
+```shell
+svn co https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-5.1.0/python ./python-artifacts
+```
+
+Use [twine](https://pypi.org/project/twine/) to perform the upload.
+
+```shell
+twine upload ./python-artifacts/*.{tar.gz,whl}
+```
+
+### Publish datafusion-cli on Homebrew and crates.io
+
+For Homebrew, Send a simple PR to update tag and commit hash for the datafusion
+formula in homebrew-core. Here is an example PR:
+https://github.com/Homebrew/homebrew-core/pull/89562.
+
+For crates.io, run
+
+```shell
+(cd datafusion-cli && cargo publish)
+```
 
 ### Call the vote
 
@@ -309,4 +331,21 @@ Call the vote on the Arrow dev list by replying to the RC voting thread. The
 reply should have a new subject constructed by adding `[RESULT]` prefix to the
 old subject line.
 
-TODO: add example mail
+Sample announcement template:
+
+```
+The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
+with the release verification.
+```
+
+You can include mention crates.io and PyPI version URLs in the email if applicable.
+
+```
+We have published new versions of datafusion and ballista to crates.io:
+
+https://crates.io/crates/datafusion/5.0.0
+https://crates.io/crates/ballista/0.5.0
+https://crates.io/crates/ballista-core/0.5.0
+https://crates.io/crates/ballista-executor/0.5.0
+https://crates.io/crates/ballista-scheduler/0.5.0
+```

@@ -28,6 +28,7 @@ use crate::error::{DataFusionError, Result};
 use arrow::array::{ArrayRef, GenericStringArray, StringOffsetSizeTrait};
 use arrow::compute;
 use hashbrown::HashMap;
+use lazy_static::lazy_static;
 use regex::Regex;
 
 macro_rules! downcast_string_arg {

@@ -18,7 +18,7 @@
 //! Object store that represents the Local File System.
 
 use std::fs::{self, File, Metadata};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -27,6 +27,7 @@ use futures::{stream, AsyncRead, StreamExt};
 use crate::datasource::object_store::{
     FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
+use crate::datasource::PartitionedFile;
 use crate::error::DataFusionError;
 use crate::error::Result;
 
@@ -86,7 +87,10 @@ impl ObjectReader for LocalFileReader {
         // This okay because chunks are usually fairly large.
         let mut file = File::open(&self.file.path)?;
         file.seek(SeekFrom::Start(start))?;
-        Ok(Box::new(file.take(length as u64)))
+
+        let file = BufReader::new(file.take(length as u64));
+
+        Ok(Box::new(file))
     }
 
     fn length(&self) -> u64 {
@@ -161,19 +165,22 @@ pub fn local_object_reader_stream(files: Vec<String>) -> ObjectReaderStream {
 /// Helper method to convert a file location to a `LocalFileReader`
 pub fn local_object_reader(file: String) -> Arc<dyn ObjectReader> {
     LocalFileSystem
-        .file_reader(local_file_meta(file).sized_file)
+        .file_reader(local_unpartitioned_file(file).file_meta.sized_file)
         .expect("File not found")
 }
 
 /// Helper method to fetch the file size and date at given path and create a `FileMeta`
-pub fn local_file_meta(file: String) -> FileMeta {
+pub fn local_unpartitioned_file(file: String) -> PartitionedFile {
     let metadata = fs::metadata(&file).expect("Local file metadata");
-    FileMeta {
-        sized_file: SizedFile {
-            size: metadata.len(),
-            path: file,
+    PartitionedFile {
+        file_meta: FileMeta {
+            sized_file: SizedFile {
+                size: metadata.len(),
+                path: file,
+            },
+            last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
         },
-        last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
+        partition_values: vec![],
     }
 }
 

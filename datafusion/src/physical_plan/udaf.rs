@@ -114,22 +114,22 @@ impl AggregateUDF {
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
-    args: &[Arc<dyn PhysicalExpr>],
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
     // coerce
-    let args = coerce(args, input_schema, &fun.signature)?;
+    let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &fun.signature)?;
 
-    let arg_types = args
+    let coerced_exprs_types = coerced_phy_exprs
         .iter()
         .map(|arg| arg.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
-        args: args.clone(),
-        data_type: (fun.return_type)(&arg_types)?.as_ref().clone(),
+        args: coerced_phy_exprs.clone(),
+        data_type: (fun.return_type)(&coerced_exprs_types)?.as_ref().clone(),
         name: name.into(),
     }))
 }

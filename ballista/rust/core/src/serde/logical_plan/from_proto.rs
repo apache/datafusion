@@ -33,8 +33,8 @@ use datafusion::logical_plan::window_frames::{
 };
 use datafusion::logical_plan::{
     abs, acos, asin, atan, ceil, cos, digest, exp, floor, ln, log10, log2, round, signum,
-    sin, sqrt, tan, trunc, Column, DFField, DFSchema, Expr, JoinConstraint, JoinType,
-    LogicalPlan, LogicalPlanBuilder, Operator,
+    sin, sqrt, tan, trunc, Column, CreateExternalTable, DFField, DFSchema, Expr,
+    JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
@@ -106,14 +106,15 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
             }
             LogicalPlanType::Selection(selection) => {
                 let input: LogicalPlan = convert_box_required!(selection.input)?;
+                let expr: Expr = selection
+                    .expr
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BallistaError::General("expression required".to_string())
+                    })?
+                    .try_into()?;
                 LogicalPlanBuilder::from(input)
-                    .filter(
-                        selection
-                            .expr
-                            .as_ref()
-                            .expect("expression required")
-                            .try_into()?,
-                    )?
+                    .filter(expr)?
                     .build()
                     .map_err(|e| e.into())
             }
@@ -123,7 +124,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .window_expr
                     .iter()
                     .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .window(window_expr)?
                     .build()
@@ -135,12 +136,12 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                     .group_expr
                     .iter()
                     .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<Expr>, _>>()?;
                 let aggr_expr = aggregate
                     .aggr_expr
                     .iter()
                     .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .aggregate(group_expr, aggr_expr)?
                     .build()
@@ -191,7 +192,7 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,
-                    partitions: scan.partitions.clone(),
+                    table_partition_cols: scan.table_partition_cols.clone(),
                     collect_stat: scan.collect_stat,
                     target_partitions: scan.target_partitions as usize,
                 };
@@ -270,13 +271,13 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                 let pb_file_type: protobuf::FileType =
                     create_extern_table.file_type.try_into()?;
 
-                Ok(LogicalPlan::CreateExternalTable {
+                Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
                     name: create_extern_table.name.clone(),
                     location: create_extern_table.location.clone(),
                     file_type: pb_file_type.into(),
                     has_header: create_extern_table.has_header,
-                })
+                }))
             }
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan = convert_box_required!(analyze.input)?;

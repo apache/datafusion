@@ -54,12 +54,12 @@ type FlightDataReceiver = Receiver<Result<FlightData, Status>>;
 #[derive(Clone)]
 pub struct BallistaFlightService {
     /// Executor
-    executor: Arc<Executor>,
+    _executor: Arc<Executor>,
 }
 
 impl BallistaFlightService {
-    pub fn new(executor: Arc<Executor>) -> Self {
-        Self { executor }
+    pub fn new(_executor: Arc<Executor>) -> Self {
+        Self { _executor }
     }
 }
 
