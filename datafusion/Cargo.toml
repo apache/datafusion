@@ -54,7 +54,7 @@ ahash = "0.7"
 hashbrown = { version = "0.11", features = ["raw"] }
 arrow = { version = "6.3.0", features = ["prettyprint"] }
 parquet = { version = "6.3.0", features = ["arrow"] }
-sqlparser = "0.12"
+sqlparser = "0.13"
 paste = "^1.0"
 num_cpus = "1.13.0"
 chrono = "0.4"
