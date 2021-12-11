@@ -232,6 +232,7 @@ pub use arrow;
 pub use parquet;
 
 pub(crate) mod field_util;
+pub(crate) mod safe_stack;
 
 #[cfg(feature = "pyarrow")]
 mod pyarrow;

@@ -68,6 +68,7 @@ use super::{
 };
 use crate::logical_plan::builder::project_with_alias;
 use crate::logical_plan::plan::{Analyze, Explain};
+use crate::safe_stack::{ProtectRecursion, SafeRecursion};
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
@@ -83,6 +84,13 @@ pub trait ContextProvider {
 /// SQL query planner
 pub struct SqlToRel<'a, S: ContextProvider> {
     schema_provider: &'a S,
+    project_recursion: ProtectRecursion,
+}
+
+impl<'a, S: ContextProvider> SafeRecursion for SqlToRel<'_, S> {
+    fn protect_recursion(&self) -> &ProtectRecursion {
+        &self.project_recursion
+    }
 }
 
 fn plan_key(key: Value) -> ScalarValue {
@@ -114,7 +122,10 @@ fn plan_indexed(expr: Expr, mut keys: Vec<Value>) -> Expr {
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
     pub fn new(schema_provider: &'a S) -> Self {
-        SqlToRel { schema_provider }
+        SqlToRel {
+            schema_provider,
+            project_recursion: ProtectRecursion::new_with_limit(1024),
+        }
     }
 
     /// Generate a logical plan from an DataFusion SQL statement
@@ -206,6 +217,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Generate a logic plan from an SQL query with optional alias
     pub fn query_to_plan_with_alias(
+        &self,
+        query: &Query,
+        alias: Option<String>,
+        ctes: &mut HashMap<String, LogicalPlan>,
+    ) -> Result<LogicalPlan> {
+        self.safe_recursion(|| self.query_to_plan_with_alias_inner(query, alias, ctes))
+    }
+
+    /// The inner of query_to_plan_with_alias
+    pub fn query_to_plan_with_alias_inner(
         &self,
         query: &Query,
         alias: Option<String>,
@@ -1291,6 +1312,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     fn sql_expr_to_logical_expr(&self, sql: &SQLExpr, schema: &DFSchema) -> Result<Expr> {
+        self.safe_recursion(|| self.sql_expr_to_logical_expr_inner(sql, schema))
+    }
+
+    fn sql_expr_to_logical_expr_inner(
+        &self,
+        sql: &SQLExpr,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(n),
             SQLExpr::Value(Value::SingleQuotedString(ref s)) => Ok(lit(s.clone())),

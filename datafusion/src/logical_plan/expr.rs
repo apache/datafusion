@@ -27,6 +27,7 @@ use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
     window_functions,
 };
+use crate::safe_stack::maybe_grow;
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
 use arrow::{compute::can_cast_types, datatypes::DataType};
@@ -379,7 +380,7 @@ impl Expr {
     /// This happens when e.g. the expression refers to a column that does not exist in the schema, or when
     /// the expression is incorrectly typed (e.g. `[utf8] + [bool]`).
     pub fn get_type(&self, schema: &DFSchema) -> Result<DataType> {
-        match self {
+        maybe_grow(|| match self {
             Expr::Alias(expr, _) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.field_from_column(c)?.data_type().clone()),
             Expr::ScalarVariable(_) => Ok(DataType::Utf8),
@@ -446,7 +447,7 @@ impl Expr {
 
                 get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
             }
-        }
+        })
     }
 
     /// Returns the nullability of the expression based on [arrow::datatypes::Schema].
@@ -456,7 +457,7 @@ impl Expr {
     /// This function errors when it is not possible to compute its nullability.
     /// This happens when the expression refers to a column that does not exist in the schema.
     pub fn nullable(&self, input_schema: &DFSchema) -> Result<bool> {
-        match self {
+        maybe_grow(|| match self {
             Expr::Alias(expr, _) => expr.nullable(input_schema),
             Expr::Column(c) => Ok(input_schema.field_from_column(c)?.is_nullable()),
             Expr::Literal(value) => Ok(value.is_null()),
@@ -505,7 +506,7 @@ impl Expr {
                 let data_type = expr.get_type(input_schema)?;
                 get_indexed_field(&data_type, key).map(|x| x.is_nullable())
             }
-        }
+        })
     }
 
     /// Returns the name of this expression based on [crate::logical_plan::DFSchema].
@@ -702,7 +703,7 @@ impl Expr {
         };
 
         // recurse (and cover all expression types)
-        let visitor = match self {
+        let visitor = maybe_grow(|| match self {
             Expr::Alias(expr, _) => expr.accept(visitor),
             Expr::Column(_) => Ok(visitor),
             Expr::ScalarVariable(..) => Ok(visitor),
@@ -784,7 +785,7 @@ impl Expr {
             }
             Expr::Wildcard => Ok(visitor),
             Expr::GetIndexedField { ref expr, .. } => expr.accept(visitor),
-        }?;
+        })?;
 
         visitor.post_visit(self)
     }
@@ -834,121 +835,125 @@ impl Expr {
         };
 
         // recurse into all sub expressions(and cover all expression types)
-        let expr = match self {
-            Expr::Alias(expr, name) => Expr::Alias(rewrite_boxed(expr, rewriter)?, name),
-            Expr::Column(_) => self.clone(),
-            Expr::ScalarVariable(names) => Expr::ScalarVariable(names),
-            Expr::Literal(value) => Expr::Literal(value),
-            Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
-                left: rewrite_boxed(left, rewriter)?,
-                op,
-                right: rewrite_boxed(right, rewriter)?,
-            },
-            Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
-            Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),
-            Expr::IsNull(expr) => Expr::IsNull(rewrite_boxed(expr, rewriter)?),
-            Expr::Negative(expr) => Expr::Negative(rewrite_boxed(expr, rewriter)?),
-            Expr::Between {
-                expr,
-                low,
-                high,
-                negated,
-            } => Expr::Between {
-                expr: rewrite_boxed(expr, rewriter)?,
-                low: rewrite_boxed(low, rewriter)?,
-                high: rewrite_boxed(high, rewriter)?,
-                negated,
-            },
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            } => {
-                let expr = rewrite_option_box(expr, rewriter)?;
-                let when_then_expr = when_then_expr
-                    .into_iter()
-                    .map(|(when, then)| {
-                        Ok((
-                            rewrite_boxed(when, rewriter)?,
-                            rewrite_boxed(then, rewriter)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let else_expr = rewrite_option_box(else_expr, rewriter)?;
-
+        let expr = maybe_grow(|| {
+            Ok::<_, DataFusionError>(match self {
+                Expr::Alias(expr, name) => {
+                    Expr::Alias(rewrite_boxed(expr, rewriter)?, name)
+                }
+                Expr::Column(_) => self.clone(),
+                Expr::ScalarVariable(names) => Expr::ScalarVariable(names),
+                Expr::Literal(value) => Expr::Literal(value),
+                Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
+                    left: rewrite_boxed(left, rewriter)?,
+                    op,
+                    right: rewrite_boxed(right, rewriter)?,
+                },
+                Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
+                Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),
+                Expr::IsNull(expr) => Expr::IsNull(rewrite_boxed(expr, rewriter)?),
+                Expr::Negative(expr) => Expr::Negative(rewrite_boxed(expr, rewriter)?),
+                Expr::Between {
+                    expr,
+                    low,
+                    high,
+                    negated,
+                } => Expr::Between {
+                    expr: rewrite_boxed(expr, rewriter)?,
+                    low: rewrite_boxed(low, rewriter)?,
+                    high: rewrite_boxed(high, rewriter)?,
+                    negated,
+                },
                 Expr::Case {
                     expr,
                     when_then_expr,
                     else_expr,
+                } => {
+                    let expr = rewrite_option_box(expr, rewriter)?;
+                    let when_then_expr = when_then_expr
+                        .into_iter()
+                        .map(|(when, then)| {
+                            Ok((
+                                rewrite_boxed(when, rewriter)?,
+                                rewrite_boxed(then, rewriter)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    let else_expr = rewrite_option_box(else_expr, rewriter)?;
+
+                    Expr::Case {
+                        expr,
+                        when_then_expr,
+                        else_expr,
+                    }
                 }
-            }
-            Expr::Cast { expr, data_type } => Expr::Cast {
-                expr: rewrite_boxed(expr, rewriter)?,
-                data_type,
-            },
-            Expr::TryCast { expr, data_type } => Expr::TryCast {
-                expr: rewrite_boxed(expr, rewriter)?,
-                data_type,
-            },
-            Expr::Sort {
-                expr,
-                asc,
-                nulls_first,
-            } => Expr::Sort {
-                expr: rewrite_boxed(expr, rewriter)?,
-                asc,
-                nulls_first,
-            },
-            Expr::ScalarFunction { args, fun } => Expr::ScalarFunction {
-                args: rewrite_vec(args, rewriter)?,
-                fun,
-            },
-            Expr::ScalarUDF { args, fun } => Expr::ScalarUDF {
-                args: rewrite_vec(args, rewriter)?,
-                fun,
-            },
-            Expr::WindowFunction {
-                args,
-                fun,
-                partition_by,
-                order_by,
-                window_frame,
-            } => Expr::WindowFunction {
-                args: rewrite_vec(args, rewriter)?,
-                fun,
-                partition_by: rewrite_vec(partition_by, rewriter)?,
-                order_by: rewrite_vec(order_by, rewriter)?,
-                window_frame,
-            },
-            Expr::AggregateFunction {
-                args,
-                fun,
-                distinct,
-            } => Expr::AggregateFunction {
-                args: rewrite_vec(args, rewriter)?,
-                fun,
-                distinct,
-            },
-            Expr::AggregateUDF { args, fun } => Expr::AggregateUDF {
-                args: rewrite_vec(args, rewriter)?,
-                fun,
-            },
-            Expr::InList {
-                expr,
-                list,
-                negated,
-            } => Expr::InList {
-                expr: rewrite_boxed(expr, rewriter)?,
-                list: rewrite_vec(list, rewriter)?,
-                negated,
-            },
-            Expr::Wildcard => Expr::Wildcard,
-            Expr::GetIndexedField { expr, key } => Expr::GetIndexedField {
-                expr: rewrite_boxed(expr, rewriter)?,
-                key,
-            },
-        };
+                Expr::Cast { expr, data_type } => Expr::Cast {
+                    expr: rewrite_boxed(expr, rewriter)?,
+                    data_type,
+                },
+                Expr::TryCast { expr, data_type } => Expr::TryCast {
+                    expr: rewrite_boxed(expr, rewriter)?,
+                    data_type,
+                },
+                Expr::Sort {
+                    expr,
+                    asc,
+                    nulls_first,
+                } => Expr::Sort {
+                    expr: rewrite_boxed(expr, rewriter)?,
+                    asc,
+                    nulls_first,
+                },
+                Expr::ScalarFunction { args, fun } => Expr::ScalarFunction {
+                    args: rewrite_vec(args, rewriter)?,
+                    fun,
+                },
+                Expr::ScalarUDF { args, fun } => Expr::ScalarUDF {
+                    args: rewrite_vec(args, rewriter)?,
+                    fun,
+                },
+                Expr::WindowFunction {
+                    args,
+                    fun,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                } => Expr::WindowFunction {
+                    args: rewrite_vec(args, rewriter)?,
+                    fun,
+                    partition_by: rewrite_vec(partition_by, rewriter)?,
+                    order_by: rewrite_vec(order_by, rewriter)?,
+                    window_frame,
+                },
+                Expr::AggregateFunction {
+                    args,
+                    fun,
+                    distinct,
+                } => Expr::AggregateFunction {
+                    args: rewrite_vec(args, rewriter)?,
+                    fun,
+                    distinct,
+                },
+                Expr::AggregateUDF { args, fun } => Expr::AggregateUDF {
+                    args: rewrite_vec(args, rewriter)?,
+                    fun,
+                },
+                Expr::InList {
+                    expr,
+                    list,
+                    negated,
+                } => Expr::InList {
+                    expr: rewrite_boxed(expr, rewriter)?,
+                    list: rewrite_vec(list, rewriter)?,
+                    negated,
+                },
+                Expr::Wildcard => Expr::Wildcard,
+                Expr::GetIndexedField { expr, key } => Expr::GetIndexedField {
+                    expr: rewrite_boxed(expr, rewriter)?,
+                    key,
+                },
+            })
+        })?;
 
         // now rewrite this expression itself
         if need_mutate {
@@ -1722,7 +1727,7 @@ fn fmt_function(
 
 impl fmt::Debug for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
+        maybe_grow(|| match self {
             Expr::Alias(expr, alias) => write!(f, "{:?} AS {}", expr, alias),
             Expr::Column(c) => write!(f, "{}", c),
             Expr::ScalarVariable(var_names) => write!(f, "{}", var_names.join(".")),
@@ -1841,7 +1846,7 @@ impl fmt::Debug for Expr {
             Expr::GetIndexedField { ref expr, key } => {
                 write!(f, "({:?})[{}]", expr, key)
             }
-        }
+        })
     }
 }
 
@@ -1865,7 +1870,7 @@ fn create_function_name(
 /// Returns a readable name of an expression based on the input schema.
 /// This function recursively transverses the expression for names such as "CAST(a > 2)".
 fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
-    match e {
+    maybe_grow(|| match e {
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
         Expr::ScalarVariable(variable_names) => Ok(variable_names.join(".")),
@@ -2002,7 +2007,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::Wildcard => Err(DataFusionError::Internal(
             "Create name does not support wildcard".to_string(),
         )),
-    }
+    })
 }
 
 /// Create field meta-data from an expression, for use in a result set schema

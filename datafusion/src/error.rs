@@ -61,6 +61,8 @@ pub enum DataFusionError {
     /// Error returned during execution of the query.
     /// Examples include files not found, errors in parsing certain types.
     Execution(String),
+    /// Error returned if recursion exceeded limit
+    RecursionLimitErr(usize),
 }
 
 impl DataFusionError {
@@ -128,6 +130,9 @@ impl Display for DataFusionError {
             }
             DataFusionError::Execution(ref desc) => {
                 write!(f, "Execution error: {}", desc)
+            }
+            DataFusionError::RecursionLimitErr(ref desc) => {
+                write!(f, "Recursion exceeded limit: {}", desc)
             }
         }
     }
