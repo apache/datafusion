@@ -3761,6 +3761,28 @@ async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
     Ok(())
 }
 
+async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &mut ExecutionContext) {
+    let df = ctx
+        .sql(
+            "CREATE EXTERNAL TABLE aggregate_simple (
+            c1  DECIMAL(10,6) NOT NULL,
+            c2  DOUBLE NOT NULL,
+            c3  BOOLEAN NOT NULL
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            LOCATION 'tests/aggregate_simple.csv'",
+        )
+        .await
+        .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");
+
+    let results = df.collect().await.expect("Executing CREATE EXTERNAL TABLE");
+    assert!(
+        results.is_empty(),
+        "Expected no rows from executing CREATE EXTERNAL TABLE"
+    );
+}
+
 async fn register_aggregate_simple_csv(ctx: &mut ExecutionContext) -> Result<()> {
     // It's not possible to use aggregate_test_100, not enought similar values to test grouping on floats
     let schema = Arc::new(Schema::new(vec![
@@ -6457,5 +6479,36 @@ async fn test_select_wildcard_without_table() -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_with_decimal_by_sql() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_simple_aggregate_csv_with_decimal_by_sql(&mut ctx).await;
+    let sql = "SELECT c1 from aggregate_simple";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------+",
+        "| c1       |",
+        "+----------+",
+        "| 0.000010 |",
+        "| 0.000020 |",
+        "| 0.000020 |",
+        "| 0.000030 |",
+        "| 0.000030 |",
+        "| 0.000030 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
