@@ -376,7 +376,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match (precision, scale) {
                     (None, _) | (_, None) => {
                         return Err(DataFusionError::Internal(format!(
-                            "Error Decimal Type ({:?})",
+                            "Invalid Decimal type ({:?}), precision or scale can't be empty.",
                             sql_type
                         )));
                     }
@@ -384,7 +384,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         // TODO add bound checker in some utils file or function
                         if *p > 38 || *s > *p {
                             return Err(DataFusionError::Internal(format!(
-                                "Error Decimal Type ({:?})",
+                                "Error Decimal Type ({:?}), precision must be less than or equal to 38 and scale can't be greater than precision",
                                 sql_type
                             )));
                         } else {
@@ -2030,7 +2030,7 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
             match (precision, scale) {
                 (None, _) | (_, None) => {
                     return Err(DataFusionError::Internal(format!(
-                        "Error Decimal Type ({:?})",
+                        "Invalid Decimal type ({:?}), precision or scale can't be empty.",
                         sql_type
                     )));
                 }

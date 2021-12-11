@@ -3764,7 +3764,7 @@ async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
 async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &mut ExecutionContext) {
     let df = ctx
         .sql(
-            "         CREATE EXTERNAL TABLE aggregate_simple (
+            "CREATE EXTERNAL TABLE aggregate_simple (
             c1  DECIMAL(10,6) NOT NULL,
             c2  DOUBLE NOT NULL,
             c3  BOOLEAN NOT NULL
