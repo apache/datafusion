@@ -681,6 +681,7 @@ impl ConstEvaluator {
             &self.input_batch.schema(),
             &self.ctx_state,
         )?;
+
         let col_val = phys_expr.evaluate(&self.input_batch)?;
         match col_val {
             crate::physical_plan::ColumnarValue::Array(a) => {

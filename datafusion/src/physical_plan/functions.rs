@@ -592,7 +592,10 @@ pub fn return_type(
         BuiltinScalarFunction::ToTimestampSeconds => {
             Ok(DataType::Timestamp(TimeUnit::Second, None))
         }
-        BuiltinScalarFunction::Now => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        BuiltinScalarFunction::Now => Ok(DataType::Timestamp(
+            TimeUnit::Nanosecond,
+            Some("UTC".to_owned()),
+        )),
         BuiltinScalarFunction::Translate => utf8_to_str_type(&arg_types[0], "translate"),
         BuiltinScalarFunction::Trim => utf8_to_str_type(&arg_types[0], "trim"),
         BuiltinScalarFunction::Upper => utf8_to_str_type(&arg_types[0], "upper"),

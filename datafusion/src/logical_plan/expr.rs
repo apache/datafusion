@@ -974,7 +974,7 @@ impl std::fmt::Display for Expr {
                 ref left,
                 ref right,
                 ref op,
-            } => write!(f, "{} {} {}", left, op, right),
+            } => write!(f, "{:?} {} {:?}", left, op, right),
             Expr::AggregateFunction {
                 /// Name of the function
                 ref fun,
@@ -1469,9 +1469,10 @@ macro_rules! make_timestamp_literal {
         #[doc = $DOC]
         impl TimestampLiteral for $TYPE {
             fn lit_timestamp_nano(&self) -> Expr {
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some(
-                    (self.clone()).into(),
-                )))
+                Expr::Literal(ScalarValue::TimestampNanosecond(
+                    Some((self.clone()).into()),
+                    None,
+                ))
             }
         }
     };
@@ -2028,7 +2029,8 @@ mod tests {
     #[test]
     fn test_lit_timestamp_nano() {
         let expr = col("time").eq(lit_timestamp_nano(10)); // 10 is an implicit i32
-        let expected = col("time").eq(lit(ScalarValue::TimestampNanosecond(Some(10))));
+        let expected =
+            col("time").eq(lit(ScalarValue::TimestampNanosecond(Some(10), None)));
         assert_eq!(expr, expected);
 
         let i: i64 = 10;
