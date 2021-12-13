@@ -45,7 +45,7 @@ pub struct Avg {
 pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
         // TODO how to handler decimal data type
-        DataType::Decimal(precision,scale) => Ok(DataType::Decimal(*precision, *scale)),
+        DataType::Decimal(precision, scale) => Ok(DataType::Decimal(*precision, *scale)),
         DataType::Int8
         | DataType::Int16
         | DataType::Int32
@@ -76,7 +76,7 @@ pub(crate) fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
-            | DataType::Decimal(_,_)
+            | DataType::Decimal(_, _)
     )
 }
 
@@ -91,13 +91,11 @@ impl Avg {
         // parameter to keep a consistent signature with the other
         // Aggregate expressions.
         match data_type {
-            DataType::Float64 | DataType::Decimal(_,_) => {
-            Self {
+            DataType::Float64 | DataType::Decimal(_, _) => Self {
                 name: name.into(),
                 expr,
                 data_type,
-            }
-            }
+            },
             _ => {
                 unreachable!();
             }
@@ -118,7 +116,7 @@ impl AggregateExpr for Avg {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(AvgAccumulator::try_new(
             // avg is f64 or decimal
-            &self.data_type
+            &self.data_type,
         )?))
     }
 
@@ -219,9 +217,11 @@ impl Accumulator for AvgAccumulator {
                 // TODO support the decimal data type
                 Ok(match value {
                     None => ScalarValue::Decimal128(None, precision, scale),
-                    Some(v) => {
-                        ScalarValue::Decimal128(Some(v / self.count as i128), precision, scale)
-                    }
+                    Some(v) => ScalarValue::Decimal128(
+                        Some(v / self.count as i128),
+                        precision,
+                        scale,
+                    ),
                 })
             }
             _ => Err(DataFusionError::Internal(

@@ -1659,10 +1659,10 @@ async fn csv_query_cast() -> Result<()> {
 
     let expected = vec![
         "+-----------------------------------------+",
-        "| CAST(aggregate_test_100.c12 AS Float64) |",
+        "| CAST(aggregate_test_100.c12 AS Float32) |",
         "+-----------------------------------------+",
-        "| 0.39144436569161134                     |",
-        "| 0.38870280983958583                     |",
+        "| 0.39144436                              |",
+        "| 0.3887028                               |",
         "+-----------------------------------------+",
     ];
 
@@ -1680,7 +1680,7 @@ async fn csv_query_cast_literal() -> Result<()> {
 
     let expected = vec![
         "+--------------------+---------------------------+",
-        "| c12                | CAST(Int64(1) AS Float64) |",
+        "| c12                | CAST(Int64(1) AS Float32) |",
         "+--------------------+---------------------------+",
         "| 0.9294097332465232 | 1                         |",
         "| 0.3114712539863804 | 1                         |",
@@ -3759,6 +3759,28 @@ async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &mut ExecutionContext) {
+    let df = ctx
+        .sql(
+            "CREATE EXTERNAL TABLE aggregate_simple (
+            c1  DECIMAL(10,6) NOT NULL,
+            c2  DOUBLE NOT NULL,
+            c3  BOOLEAN NOT NULL
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            LOCATION 'tests/aggregate_simple.csv'",
+        )
+        .await
+        .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");
+
+    let results = df.collect().await.expect("Executing CREATE EXTERNAL TABLE");
+    assert!(
+        results.is_empty(),
+        "Expected no rows from executing CREATE EXTERNAL TABLE"
+    );
 }
 
 async fn register_aggregate_simple_csv(ctx: &mut ExecutionContext) -> Result<()> {
@@ -6357,6 +6379,21 @@ async fn test_expect_distinct() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_sort_unprojected_col() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_alltypes_parquet(&mut ctx).await;
+    // execute the query
+    let sql = "SELECT id FROM alltypes_plain ORDER BY int_col, double_col";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+", "| id |", "+----+", "| 4  |", "| 6  |", "| 2  |", "| 0  |", "| 5  |",
+        "| 7  |", "| 3  |", "| 1  |", "+----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_nulls_first_asc() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num";
@@ -6423,6 +6460,54 @@ async fn test_specific_nulls_first_asc() -> Result<()> {
         "| 1   | one    |",
         "| 2   | two    |",
         "+-----+--------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_select_wildcard_without_table() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT * ";
+    let actual = ctx.sql(sql).await;
+    match actual {
+        Ok(_) => panic!("expect err"),
+        Err(e) => {
+            assert_contains!(
+                e.to_string(),
+                "Error during planning: SELECT * with no tables specified is not valid"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_with_decimal_by_sql() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_simple_aggregate_csv_with_decimal_by_sql(&mut ctx).await;
+    let sql = "SELECT c1 from aggregate_simple";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----------+",
+        "| c1       |",
+        "+----------+",
+        "| 0.000010 |",
+        "| 0.000020 |",
+        "| 0.000020 |",
+        "| 0.000030 |",
+        "| 0.000030 |",
+        "| 0.000030 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000040 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "| 0.000050 |",
+        "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

@@ -1875,7 +1875,7 @@ mod tests {
             "+-----------------+",
             "| MAX(d_table.c1) |",
             "+-----------------+",
-            "| 100.009         |",
+            "| 110.009         |",
             "+-----------------+",
         ];
         assert_batches_sorted_eq!(expected, &result);
@@ -1891,8 +1891,6 @@ mod tests {
     async fn aggregate_decimal_avg() -> Result<()> {
         Ok(())
     }
-
-
 
     #[tokio::test]
     async fn aggregate() -> Result<()> {

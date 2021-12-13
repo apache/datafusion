@@ -37,7 +37,6 @@ use super::expressions::Column;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use async_trait::async_trait;
-
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 
@@ -62,18 +61,22 @@ impl ProjectionExec {
     ) -> Result<Self> {
         let input_schema = input.schema();
 
-        let fields: Result<Vec<_>> = expr
+        let fields: Result<Vec<Field>> = expr
             .iter()
-            .map(|(e, name)| {
-                Ok(Field::new(
-                    name,
-                    e.data_type(&input_schema)?,
-                    e.nullable(&input_schema)?,
-                ))
+            .map(|(e, name)| match input_schema.field_with_name(name) {
+                Ok(f) => Ok(f.clone()),
+                Err(_) => {
+                    let dt = e.data_type(&input_schema)?;
+                    let nullable = e.nullable(&input_schema)?;
+                    Ok(Field::new(name, dt, nullable))
+                }
             })
             .collect();
 
-        let schema = Arc::new(Schema::new(fields?));
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields?,
+            input_schema.metadata().clone(),
+        ));
 
         Ok(Self {
             expr,
@@ -295,6 +298,11 @@ mod tests {
             vec![(col("c1", &schema)?, "c1".to_string())],
             Arc::new(csv),
         )?;
+
+        let col_field = projection.schema.field(0);
+        let col_metadata = col_field.metadata().clone().unwrap().clone();
+        let data: &str = &col_metadata["testing"];
+        assert_eq!(data, "test");
 
         let mut partition_count = 0;
         let mut row_count = 0;

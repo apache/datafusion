@@ -29,6 +29,7 @@ use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
     TableScan, ToStringifiedPlan, Union, Window,
 };
+use crate::optimizer::utils;
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
 use arrow::{
@@ -466,11 +467,105 @@ impl LogicalPlanBuilder {
         })))
     }
 
+    /// Add missing sort columns to all downstream projection
+    fn add_missing_columns(
+        &self,
+        curr_plan: LogicalPlan,
+        missing_cols: &[Column],
+    ) -> Result<LogicalPlan> {
+        match curr_plan {
+            LogicalPlan::Projection(Projection {
+                input,
+                mut expr,
+                schema: _,
+                alias,
+            }) if missing_cols
+                .iter()
+                .all(|c| input.schema().field_from_column(c).is_ok()) =>
+            {
+                let input_schema = input.schema();
+
+                let missing_exprs = missing_cols
+                    .iter()
+                    .map(|c| normalize_col(Expr::Column(c.clone()), &input))
+                    .collect::<Result<Vec<_>>>()?;
+
+                expr.extend(missing_exprs);
+
+                let new_schema = DFSchema::new(exprlist_to_fields(&expr, input_schema)?)?;
+
+                Ok(LogicalPlan::Projection(Projection {
+                    expr,
+                    input,
+                    schema: DFSchemaRef::new(new_schema),
+                    alias,
+                }))
+            }
+            _ => {
+                let new_inputs = curr_plan
+                    .inputs()
+                    .into_iter()
+                    .map(|input_plan| {
+                        self.add_missing_columns((*input_plan).clone(), missing_cols)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let expr = curr_plan.expressions();
+                utils::from_plan(&curr_plan, &expr, &new_inputs)
+            }
+        }
+    }
+
     /// Apply a sort
-    pub fn sort(&self, exprs: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Sort(Sort {
-            expr: normalize_cols(exprs, &self.plan)?,
-            input: Arc::new(self.plan.clone()),
+    pub fn sort(
+        &self,
+        exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone,
+    ) -> Result<Self> {
+        let schema = self.plan.schema();
+
+        // Collect sort columns that are missing in the input plan's schema
+        let mut missing_cols: Vec<Column> = vec![];
+        exprs
+            .clone()
+            .into_iter()
+            .try_for_each::<_, Result<()>>(|expr| {
+                let mut columns: HashSet<Column> = HashSet::new();
+                utils::expr_to_columns(&expr.into(), &mut columns)?;
+
+                columns.into_iter().for_each(|c| {
+                    if schema.field_from_column(&c).is_err() {
+                        missing_cols.push(c);
+                    }
+                });
+
+                Ok(())
+            })?;
+
+        if missing_cols.is_empty() {
+            return Ok(Self::from(LogicalPlan::Sort(Sort {
+                expr: normalize_cols(exprs, &self.plan)?,
+                input: Arc::new(self.plan.clone()),
+            })));
+        }
+
+        let plan = self.add_missing_columns(self.plan.clone(), &missing_cols)?;
+        let sort_plan = LogicalPlan::Sort(Sort {
+            expr: normalize_cols(exprs, &plan)?,
+            input: Arc::new(plan.clone()),
+        });
+        // remove pushed down sort columns
+        let new_expr = schema
+            .fields()
+            .iter()
+            .map(|f| Expr::Column(f.qualified_column()))
+            .collect();
+        let new_schema = DFSchema::new(exprlist_to_fields(&new_expr, schema)?)?;
+
+        Ok(Self::from(LogicalPlan::Projection(Projection {
+            expr: new_expr,
+            input: Arc::new(sort_plan),
+            schema: DFSchemaRef::new(new_schema),
+            alias: None,
         })))
     }
 

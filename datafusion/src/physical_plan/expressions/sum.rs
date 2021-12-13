@@ -89,7 +89,7 @@ pub(crate) fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
-            | DataType::Decimal(_,_)
+            | DataType::Decimal(_, _)
     )
 }
 

@@ -90,7 +90,7 @@ struct BallistaBenchmarkOpt {
     // #[structopt(short = "m", long = "mem-table")]
     // mem_table: bool,
     /// Number of partitions to process in parallel
-    #[structopt(short = "p", long = "partitions", default_value = "2")]
+    #[structopt(short = "n", long = "partitions", default_value = "2")]
     partitions: usize,
 
     /// Ballista executor host
@@ -117,7 +117,7 @@ struct DataFusionBenchmarkOpt {
     iterations: usize,
 
     /// Number of partitions to process in parallel
-    #[structopt(short = "p", long = "partitions", default_value = "2")]
+    #[structopt(short = "n", long = "partitions", default_value = "2")]
     partitions: usize,
 
     /// Batch size when reading CSV or Parquet files
@@ -156,7 +156,7 @@ struct ConvertOpt {
     compression: String,
 
     /// Number of partitions to produce
-    #[structopt(short = "p", long = "partitions", default_value = "1")]
+    #[structopt(short = "n", long = "partitions", default_value = "1")]
     partitions: usize,
 
     /// Batch size when reading CSV or Parquet files
