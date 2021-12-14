@@ -70,7 +70,7 @@ impl ProjectionExec {
                     e.data_type(&input_schema)?,
                     e.nullable(&input_schema)?,
                 );
-                field.set_metadata(get_field_metadata(&e, &input_schema));
+                field.set_metadata(get_field_metadata(e, &input_schema));
 
                 Ok(field)
             })
