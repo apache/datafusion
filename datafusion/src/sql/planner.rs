@@ -1062,10 +1062,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
 
                 let field = schema.field(field_index - 1);
-                Expr::Column(Column {
-                    relation: field.qualifier().cloned(),
-                    name: field.name().clone(),
-                })
+                Expr::Column(field.qualified_column())
             }
             e => self.sql_expr_to_logical_expr(e, schema)?,
         };
