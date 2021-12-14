@@ -58,16 +58,12 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
         }
         // In the https://www.postgresql.org/docs/8.2/functions-aggregate.html doc,
         // the result type of floating-point is FLOAT64 with the double precision.
-        // TODO, we should change this rule
-        DataType::Float32 => Ok(DataType::Float32),
-        DataType::Float64 => Ok(DataType::Float64),
-        // TODO get the wider precision
+        DataType::Float64 | DataType::Float32 => Ok(DataType::Float64),
         // Max precision is 38
         DataType::Decimal(precision, scale) => {
-            // // in the spark, the result type is DECIMAL(p + min(10, 31-p), s)
-            // let new_precision = *precision + 10.min(31-*precision);
-            // Ok(DataType::Decimal(new_precision, *scale))
-            Ok(DataType::Decimal(*precision, *scale))
+            // in the spark, the result type is DECIMAL(min(38,precision+10), s)
+            let new_precision = 38.min(*precision + 10);
+            Ok(DataType::Decimal(new_precision, *scale))
         }
         other => Err(DataFusionError::Plan(format!(
             "SUM does not support type \"{:?}\"",
@@ -244,11 +240,38 @@ fn sum_decimal(
     }
 }
 
+fn sum_decimal_with_diff_scale(
+    lhs: &Option<i128>,
+    rhs: &Option<i128>,
+    precision: &usize,
+    lhs_scale: &usize,
+    rhs_scale: &usize,
+) -> ScalarValue {
+    // the lhs_scale must be greater or equal rhs_scale.
+    match (lhs, rhs) {
+        (None, None) => ScalarValue::Decimal128(None, *precision, *lhs_scale),
+        (None, rhs) => {
+            let new_value = rhs.unwrap() * 10_i128.pow((lhs_scale - rhs_scale) as u32);
+            ScalarValue::Decimal128(Some(new_value), *precision, *lhs_scale)
+        }
+        (lhs, None) => ScalarValue::Decimal128(*lhs, *precision, *lhs_scale),
+        (lhs, rhs) => {
+            let new_value =
+                rhs.unwrap() * 10_i128.pow((lhs_scale - rhs_scale) as u32) + lhs.unwrap();
+            ScalarValue::Decimal128(Some(new_value), *precision, *lhs_scale)
+        }
+    }
+}
+
 pub(super) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     Ok(match (lhs, rhs) {
-        (ScalarValue::Decimal128(v1, p1, s1), ScalarValue::Decimal128(v2, _p2, s2)) => {
+        (ScalarValue::Decimal128(v1, p1, s1), ScalarValue::Decimal128(v2, p2, s2)) => {
             if s1.eq(s2) {
                 sum_decimal(v1, v2, p1, s1)
+            } else if s1.gt(s2) && p1.ge(p2) {
+                // For avg aggravate function.
+                // In the avg function, the scale of result data type is different with the scale of the input data type.
+                sum_decimal_with_diff_scale(v1, v2, p1, s1, s2)
             } else {
                 return Err(DataFusionError::Internal(format!(
                     "Sum is not expected to receive lhs {:?}, rhs {:?}",
@@ -333,16 +356,12 @@ impl Accumulator for SumAccumulator {
 
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         // sum(v1, v2, v3) = v1 + v2 + v3
-        // For the decimal data type, the precision of `sum` may be different from that of value,
-        // but the scale must be same.
         self.sum = sum(&self.sum, &values[0])?;
         Ok(())
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        // For the decimal data type, the precision of `sum` may be different from that of value,
-        // but the scale must be same.
         self.sum = sum(&self.sum, &sum_batch(values)?)?;
         Ok(())
     }
@@ -358,8 +377,8 @@ impl Accumulator for SumAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        // TODO: For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
-        // We should add the checker
+        // TODO: add the checker for overflow
+        // For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
         Ok(self.sum.clone())
     }
 }
@@ -374,12 +393,32 @@ mod tests {
     use arrow::record_batch::RecordBatch;
 
     #[test]
+    fn test_sum_return_data_type() -> Result<()> {
+        let data_type = DataType::Decimal(10, 5);
+        let result_type = sum_return_type(&data_type)?;
+        assert_eq!(DataType::Decimal(20, 5), result_type);
+
+        let data_type = DataType::Decimal(36, 10);
+        let result_type = sum_return_type(&data_type)?;
+        assert_eq!(DataType::Decimal(38, 10), result_type);
+        Ok(())
+    }
+
+    #[test]
     fn sum_decimal() -> Result<()> {
         // test sum
         let left = ScalarValue::Decimal128(Some(123), 10, 2);
         let right = ScalarValue::Decimal128(Some(124), 10, 2);
         let result = sum(&left, &right)?;
         assert_eq!(ScalarValue::Decimal128(Some(123 + 124), 10, 2), result);
+        // test sum decimal with diff scale
+        let left = ScalarValue::Decimal128(Some(123), 10, 3);
+        let right = ScalarValue::Decimal128(Some(124), 10, 2);
+        let result = sum(&left, &right)?;
+        assert_eq!(
+            ScalarValue::Decimal128(Some(123 + 124 * 10_i128.pow(1)), 10, 3),
+            result
+        );
         // negative test with diff scale
         let left = ScalarValue::Decimal128(Some(123), 10, 2);
         let right = ScalarValue::Decimal128(Some(124), 11, 3);
@@ -413,8 +452,8 @@ mod tests {
             array,
             DataType::Decimal(10, 0),
             Sum,
-            ScalarValue::Decimal128(Some(15), 10, 0),
-            DataType::Decimal(10, 0)
+            ScalarValue::Decimal128(Some(15), 20, 0),
+            DataType::Decimal(20, 0)
         )
     }
 
@@ -440,7 +479,7 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(Some(13), 10, 0), result);
 
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        let mut decimal_builder = DecimalBuilder::new(5, 35, 0);
         for i in 1..6 {
             if i == 2 {
                 decimal_builder.append_null()?;
@@ -451,10 +490,10 @@ mod tests {
         let array: ArrayRef = Arc::new(decimal_builder.finish());
         generic_test_op!(
             array,
-            DataType::Decimal(10, 0),
+            DataType::Decimal(35, 0),
             Sum,
-            ScalarValue::Decimal128(Some(13), 10, 0),
-            DataType::Decimal(10, 0)
+            ScalarValue::Decimal128(Some(13), 38, 0),
+            DataType::Decimal(38, 0)
         )
     }
 
@@ -485,8 +524,8 @@ mod tests {
             array,
             DataType::Decimal(10, 0),
             Sum,
-            ScalarValue::Decimal128(None, 10, 0),
-            DataType::Decimal(10, 0)
+            ScalarValue::Decimal128(None, 20, 0),
+            DataType::Decimal(20, 0)
         )
     }
 

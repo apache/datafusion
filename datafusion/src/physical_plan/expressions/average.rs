@@ -44,8 +44,12 @@ pub struct Avg {
 /// function return type of an average
 pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
-        // TODO how to handler decimal data type
-        DataType::Decimal(precision, scale) => Ok(DataType::Decimal(*precision, *scale)),
+        DataType::Decimal(precision, scale) => {
+            // the new precision and scale for return type of avg function
+            let new_precision = 38.min(*precision + 4);
+            let new_scale = 38.min(*scale + 4);
+            Ok(DataType::Decimal(new_precision, new_scale))
+        }
         DataType::Int8
         | DataType::Int16
         | DataType::Int32
@@ -214,9 +218,9 @@ impl Accumulator for AvgAccumulator {
                 Ok(ScalarValue::Float64(e.map(|f| f / self.count as f64)))
             }
             ScalarValue::Decimal128(value, precision, scale) => {
-                // TODO support the decimal data type
                 Ok(match value {
                     None => ScalarValue::Decimal128(None, precision, scale),
+                    // TODO add the checker for overflow the precision
                     Some(v) => ScalarValue::Decimal128(
                         Some(v / self.count as i128),
                         precision,
@@ -240,6 +244,18 @@ mod tests {
     use arrow::{array::*, datatypes::*};
 
     #[test]
+    fn test_avg_return_data_type() -> Result<()> {
+        let data_type = DataType::Decimal(10, 5);
+        let result_type = avg_return_type(&data_type)?;
+        assert_eq!(DataType::Decimal(14, 9), result_type);
+
+        let data_type = DataType::Decimal(36, 10);
+        let result_type = avg_return_type(&data_type)?;
+        assert_eq!(DataType::Decimal(38, 14), result_type);
+        Ok(())
+    }
+
+    #[test]
     fn avg_decimal() -> Result<()> {
         // test agg
         let mut decimal_builder = DecimalBuilder::new(6, 10, 0);
@@ -253,8 +269,8 @@ mod tests {
             array,
             DataType::Decimal(10, 0),
             Avg,
-            ScalarValue::Decimal128(Some(3), 10, 0),
-            DataType::Decimal(10, 0)
+            ScalarValue::Decimal128(Some(35000), 14, 4),
+            DataType::Decimal(14, 4)
         )
     }
 
@@ -273,8 +289,8 @@ mod tests {
             array,
             DataType::Decimal(10, 0),
             Avg,
-            ScalarValue::Decimal128(Some(3), 10, 0),
-            DataType::Decimal(10, 0)
+            ScalarValue::Decimal128(Some(32500), 14, 4),
+            DataType::Decimal(14, 4)
         )
     }
 
@@ -290,8 +306,8 @@ mod tests {
             array,
             DataType::Decimal(10, 0),
             Avg,
-            ScalarValue::Decimal128(None, 10, 0),
-            DataType::Decimal(10, 0)
+            ScalarValue::Decimal128(None, 14, 4),
+            DataType::Decimal(14, 4)
         )
     }
 
