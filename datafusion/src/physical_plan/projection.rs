@@ -63,13 +63,22 @@ impl ProjectionExec {
 
         let fields: Result<Vec<Field>> = expr
             .iter()
-            .map(|(e, name)| match input_schema.field_with_name(name) {
-                Ok(f) => Ok(f.clone()),
-                Err(_) => {
-                    let dt = e.data_type(&input_schema)?;
-                    let nullable = e.nullable(&input_schema)?;
-                    Ok(Field::new(name, dt, nullable))
-                }
+            .map(|(e, name)| {
+                // copy field metadata from the input field to a
+                // similarly named output field
+                let metadata = input_schema
+                    .field_with_name(name)
+                    .ok()
+                    .and_then(|f| f.metadata().as_ref().cloned());
+
+                let mut field = Field::new(
+                    name,
+                    e.data_type(&input_schema)?,
+                    e.nullable(&input_schema)?,
+                );
+                field.set_metadata(metadata);
+
+                Ok(field)
             })
             .collect();
 
