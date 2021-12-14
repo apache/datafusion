@@ -77,6 +77,14 @@ impl PhysicalExpr for TryCastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
+        // TODO cast signed numeric to decimal
+        // INT32, INT64, FLOAT, DOUBLE
+        // private[sql] val IntDecimal = DecimalType(3, 0)
+        // private[sql] val IntDecimal = DecimalType(5, 0)
+        // private[sql] val IntDecimal = DecimalType(10, 0)
+        // private[sql] val LongDecimal = DecimalType(20, 0)
+        // private[sql] val FloatDecimal = DecimalType(14, 7)
+        // private[sql] val DoubleDecimal = DecimalType(30, 15)
         match value {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(kernels::cast::cast(
                 &array,
@@ -105,6 +113,11 @@ pub fn try_cast(
     if expr_type == cast_type {
         Ok(expr.clone())
     } else if can_cast_types(&expr_type, &cast_type) {
+        // TODO
+        // support numeric data type to decimal
+        // support one type decimal to another type decimal
+        // Now we just support signed numeric type to decimal,
+        // and will implement decimal to signed numeric data type later.
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {
         Err(DataFusionError::Internal(format!(
@@ -121,9 +134,10 @@ mod tests {
     use crate::physical_plan::expressions::col;
     use arrow::array::{StringArray, Time64NanosecondArray};
     use arrow::{
-        array::{Array, Int32Array, Int64Array, TimestampNanosecondArray, UInt32Array},
+        array::{Array, Int8Array, Int16Array, Int32Array, Int64Array, DecimalArray, TimestampNanosecondArray, UInt32Array},
         datatypes::*,
     };
+    use crate::scalar::ScalarValue::Decimal128;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -173,6 +187,122 @@ mod tests {
                 }
             }
         }};
+    }
+
+    // #[test]
+    fn test_try_cast_numeric_to_decimal() -> Result<()> {
+        // int8
+        generic_test_cast!(
+            Int8Array,
+            DataType::Int8,
+            vec![1, 2, 3, 4, 5],
+            // TODO
+            DecimalArray,
+            DataType::Decimal(3,0),
+            vec![
+                Some(Decimal128(Some(1), 3, 0)),
+                Some(Decimal128(Some(2), 3, 0)),
+                Some(Decimal128(Some(3), 3, 0)),
+                Some(Decimal128(Some(4), 3, 0)),
+                Some(Decimal128(Some(5), 3, 0))
+            ]
+        );
+        // int16
+        generic_test_cast!(
+            Int16Array,
+            DataType::Int16,
+            vec![1, 2, 3, 4, 5],
+            // TODO
+            DecimalArray,
+            DataType::Decimal(5,0),
+            vec![
+                Some(Decimal128(Some(1), 3, 0)),
+                Some(Decimal128(Some(2), 3, 0)),
+                Some(Decimal128(Some(3), 3, 0)),
+                Some(Decimal128(Some(4), 3, 0)),
+                Some(Decimal128(Some(5), 3, 0))
+            ]
+        );
+        // int32
+        generic_test_cast!(
+            Int32Array,
+            DataType::Int32,
+            vec![1, 2, 3, 4, 5],
+            // TODO
+            DecimalArray,
+            DataType::Decimal(10,0),
+            vec![
+                Some(Decimal128(Some(1), 3, 0)),
+                Some(Decimal128(Some(2), 3, 0)),
+                Some(Decimal128(Some(3), 3, 0)),
+                Some(Decimal128(Some(4), 3, 0)),
+                Some(Decimal128(Some(5), 3, 0))
+            ]
+        );
+        // int64
+        generic_test_cast!(
+            Int32Array,
+            DataType::Int64,
+            vec![1, 2, 3, 4, 5],
+            // TODO
+            UInt32Array,
+            DataType::UInt32,
+            vec![
+                Some(1_u32),
+                Some(2_u32),
+                Some(3_u32),
+                Some(4_u32),
+                Some(5_u32)
+            ]
+        );
+        // float32
+        generic_test_cast!(
+            Int32Array,
+            DataType::Float32,
+            vec![1, 2, 3, 4, 5],
+            // TODO
+            UInt32Array,
+            DataType::UInt32,
+            vec![
+                Some(1_u32),
+                Some(2_u32),
+                Some(3_u32),
+                Some(4_u32),
+                Some(5_u32)
+            ]
+        );
+        // float64
+        generic_test_cast!(
+            Int32Array,
+            DataType::Float64,
+            vec![1, 2, 3, 4, 5],
+            // TODO
+            UInt32Array,
+            DataType::UInt32,
+            vec![
+                Some(1_u32),
+                Some(2_u32),
+                Some(3_u32),
+                Some(4_u32),
+                Some(5_u32)
+            ]
+        );
+        generic_test_cast!(
+            Int32Array,
+            DataType::Decimal(10, 4),
+            vec![1, 2, 3, 4, 5],
+            // TODO
+            UInt32Array,
+            DataType::UInt32,
+            vec![
+                Some(1_u32),
+                Some(2_u32),
+                Some(3_u32),
+                Some(4_u32),
+                Some(5_u32)
+            ]
+        );
+        Ok(())
     }
 
     #[test]
