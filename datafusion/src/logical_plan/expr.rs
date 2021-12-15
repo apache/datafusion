@@ -2263,7 +2263,7 @@ mod tests {
                 assert_eq!(name, fun);
                 assert_eq!(expected.len(), args.len());
             } else {
-                assert!(false, "unexpected");
+                assert!(false, "unexpected: {:?}", result);
             }               
         };  
     }    
