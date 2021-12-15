@@ -1341,22 +1341,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
-                let mut var_names = vec![];
-                for id in ids {
-                    var_names.push(id.value.clone());
-                }
+                let mut var_names: Vec<_> =
+                    ids.iter().map(|id| id.value.clone()).collect();
+
                 if &var_names[0][0..1] == "@" {
                     Ok(Expr::ScalarVariable(var_names))
-                } else if var_names.len() == 2 {
-                    // table.column identifier
-                    let name = var_names.pop().unwrap();
-                    let relation = Some(var_names.pop().unwrap());
-                    Ok(Expr::Column(Column { relation, name }))
                 } else {
-                    Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported compound identifier '{:?}'",
-                        var_names,
-                    )))
+                    match (var_names.pop(), var_names.pop()) {
+                        (Some(name), Some(relation)) if var_names.is_empty() => {
+                            // table.column identifier
+                            Ok(Expr::Column(Column {
+                                relation: Some(relation),
+                                name,
+                            }))
+                        }
+                        _ => Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported compound identifier '{:?}'",
+                            var_names,
+                        ))),
+                    }
                 }
             }
 
