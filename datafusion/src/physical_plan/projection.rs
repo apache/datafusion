@@ -21,6 +21,7 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -63,13 +64,15 @@ impl ProjectionExec {
 
         let fields: Result<Vec<Field>> = expr
             .iter()
-            .map(|(e, name)| match input_schema.field_with_name(name) {
-                Ok(f) => Ok(f.clone()),
-                Err(_) => {
-                    let dt = e.data_type(&input_schema)?;
-                    let nullable = e.nullable(&input_schema)?;
-                    Ok(Field::new(name, dt, nullable))
-                }
+            .map(|(e, name)| {
+                let mut field = Field::new(
+                    name,
+                    e.data_type(&input_schema)?,
+                    e.nullable(&input_schema)?,
+                );
+                field.set_metadata(get_field_metadata(e, &input_schema));
+
+                Ok(field)
             })
             .collect();
 
@@ -177,6 +180,24 @@ impl ExecutionPlan for ProjectionExec {
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
         )
     }
+}
+
+/// If e is a direct column reference, returns the field level
+/// metadata for that field, if any. Otherwise returns None
+fn get_field_metadata(
+    e: &Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+) -> Option<BTreeMap<String, String>> {
+    let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
+        column.name()
+    } else {
+        return None;
+    };
+
+    input_schema
+        .field_with_name(name)
+        .ok()
+        .and_then(|f| f.metadata().as_ref().cloned())
 }
 
 fn stats_projection(
