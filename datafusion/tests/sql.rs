@@ -892,6 +892,29 @@ async fn projection_same_fields() -> Result<()> {
 }
 
 #[tokio::test]
+async fn projection_type_alias() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_simple_csv(&mut ctx).await?;
+
+    // Query that aliases one column to the name of a different column
+    // that also has a different type (c1 == float32, c3 == boolean)
+    let sql = "SELECT c1 as c3 FROM aggregate_simple ORDER BY c3 LIMIT 2";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    let expected = vec![
+        "+---------+",
+        "| c3      |",
+        "+---------+",
+        "| 0.00001 |",
+        "| 0.00002 |",
+        "+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_group_by_float64() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_simple_csv(&mut ctx).await?;
