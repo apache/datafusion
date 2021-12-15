@@ -147,6 +147,7 @@ impl ExecutionContext {
         Self::with_config(ExecutionConfig::new())
     }
 
+    /// Create a new execution context from an existing state context
     pub fn with_context(state: Arc<Mutex<ExecutionContextState>>) -> Self {
         Self { state }
     }
@@ -189,6 +190,7 @@ impl ExecutionContext {
         }
     }
 
+    /// Return the current state context
     pub fn get_state(&self) -> Arc<Mutex<ExecutionContextState>> {
         self.state.clone()
     }
