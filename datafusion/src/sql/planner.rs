@@ -1062,8 +1062,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
 
                 let field = schema.field(field_index - 1);
-                let col_ident = SQLExpr::Identifier(Ident::new(field.qualified_name()));
-                self.sql_expr_to_logical_expr(&col_ident, schema)?
+                Expr::Column(field.qualified_column())
             }
             e => self.sql_expr_to_logical_expr(e, schema)?,
         };
@@ -1323,9 +1322,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let var_names = vec![id.value.clone()];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
-                    // create a column expression based on raw user input, this column will be
-                    // normalized with qualifer later by the SQL planner.
-                    Ok(col(&id.value))
+                    // Don't use `col()` here because it will try to
+                    // interpret names with '.' as if they were
+                    // compound indenfiers, but this is not a compound
+                    // identifier. (e.g. it is "foo.bar" not foo.bar)
+                    Ok(Expr::Column(Column {
+                        relation: None,
+                        name: id.value.clone(),
+                    }))
                 }
             }
 
