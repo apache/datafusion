@@ -147,6 +147,10 @@ impl ExecutionContext {
         Self::with_config(ExecutionConfig::new())
     }
 
+    pub fn with_context(state: Arc<Mutex<ExecutionContextState>>) -> Self {
+        Self { state }
+    }
+
     /// Creates a new execution context using the provided configuration.
     pub fn with_config(config: ExecutionConfig) -> Self {
         let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
@@ -183,6 +187,10 @@ impl ExecutionContext {
                 object_store_registry: Arc::new(ObjectStoreRegistry::new()),
             })),
         }
+    }
+
+    pub fn get_state(&self) -> Arc<Mutex<ExecutionContextState>> {
+        self.state.clone()
     }
 
     /// Creates a dataframe that will execute a SQL query.
