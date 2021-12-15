@@ -5446,7 +5446,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
     ctx.register_table("test", Arc::new(table))?;
 
     // referring to the unquoted column is an error
-    let sql = format!(r#"SELECT f1.c1 from test"#);
+    let sql = r#"SELECT f1.c1 from test"#;
     let error = ctx.create_logical_plan(&sql).unwrap_err();
     assert_contains!(
         error.to_string(),
@@ -5454,7 +5454,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
     );
 
     // however, enclosing it in double quotes is ok
-    let sql = format!(r#"SELECT "f.c1" from test"#);
+    let sql = r#"SELECT "f.c1" from test"#;
     let actual = execute_to_batches(&mut ctx, &sql).await;
     let expected = vec![
         "+--------+",
@@ -5467,12 +5467,12 @@ async fn qualified_table_references_and_fields() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
     // Works fully qualified too
-    let sql = format!(r#"SELECT test."f.c1" from test"#);
+    let sql = r#"SELECT test."f.c1" from test"#;
     let actual = execute_to_batches(&mut ctx, &sql).await;
     assert_batches_eq!(expected, &actual);
 
     // check that duplicated table name and column name are ok
-    let sql = format!(r#"SELECT "test.c2" as expr1, test."test.c2" as expr2 from test"#);
+    let sql = r#"SELECT "test.c2" as expr1, test."test.c2" as expr2 from test"#;
     let actual = execute_to_batches(&mut ctx, &sql).await;
     let expected = vec![
         "+-------+-------+",
