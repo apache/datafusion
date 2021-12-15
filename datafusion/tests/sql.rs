@@ -5435,11 +5435,14 @@ async fn qualified_table_references_and_fields() -> Result<()> {
         .map(Some)
         .collect();
     let c2: Int64Array = vec![1, 2, 3].into_iter().map(Some).collect();
+    let c3: Int64Array = vec![10, 20, 30].into_iter().map(Some).collect();
 
     let batch = RecordBatch::try_from_iter(vec![
         ("f.c1", Arc::new(c1) as ArrayRef),
         //  evil -- use the same name as the table
         ("test.c2", Arc::new(c2) as ArrayRef),
+        //  more evil still
+        ("....", Arc::new(c3) as ArrayRef),
     ])?;
 
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
@@ -5482,6 +5485,22 @@ async fn qualified_table_references_and_fields() -> Result<()> {
         "| 2     | 2     |",
         "| 3     | 3     |",
         "+-------+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // check that '....' is also an ok column name (in the sense that
+    // datafusion should run the query, not that someone should write
+    // this
+    let sql = r#"SELECT "....", "...." as c3 from test order by "....""#;
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+------+----+",
+        "| .... | c3 |",
+        "+------+----+",
+        "| 10   | 10 |",
+        "| 20   | 20 |",
+        "| 30   | 30 |",
+        "+------+----+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
