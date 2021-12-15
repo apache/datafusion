@@ -5447,7 +5447,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
 
     // referring to the unquoted column is an error
     let sql = r#"SELECT f1.c1 from test"#;
-    let error = ctx.create_logical_plan(&sql).unwrap_err();
+    let error = ctx.create_logical_plan(sql).unwrap_err();
     assert_contains!(
         error.to_string(),
         "No field named 'f1.c1'. Valid fields are 'test.f.c1', 'test.test.c2'"
@@ -5455,7 +5455,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
 
     // however, enclosing it in double quotes is ok
     let sql = r#"SELECT "f.c1" from test"#;
-    let actual = execute_to_batches(&mut ctx, &sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+--------+",
         "| f.c1   |",
@@ -5468,12 +5468,12 @@ async fn qualified_table_references_and_fields() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     // Works fully qualified too
     let sql = r#"SELECT test."f.c1" from test"#;
-    let actual = execute_to_batches(&mut ctx, &sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     assert_batches_eq!(expected, &actual);
 
     // check that duplicated table name and column name are ok
     let sql = r#"SELECT "test.c2" as expr1, test."test.c2" as expr2 from test"#;
-    let actual = execute_to_batches(&mut ctx, &sql).await;
+    let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+-------+-------+",
         "| expr1 | expr2 |",
