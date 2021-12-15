@@ -67,7 +67,6 @@ fn create_test_table() -> Result<Arc<dyn DataFrame>> {
 /// Excutes an expression on the test dataframe as a select.
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, using the assert_batch_eq! macro
-///
 macro_rules! assert_fn_batches {
     ($EXPR:expr, $EXPECTED: expr) => {
         assert_fn_batches!($EXPR, $EXPECTED, 10)
@@ -80,10 +79,6 @@ macro_rules! assert_fn_batches {
         assert_batches_eq!($EXPECTED, &batches);  
     };
 } 
-
-fn assert_record_count(batches: &Vec<RecordBatch>, count: usize) {
-    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), count);
-}
 
 #[tokio::test]
 async fn test_fn_ascii() -> Result<()> {

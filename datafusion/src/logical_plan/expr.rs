@@ -1592,10 +1592,10 @@ macro_rules! nary_scalar_expr {
         pub fn $FUNC(args: Vec<Expr>) -> Expr {            
             Expr::ScalarFunction {
                 fun: functions::BuiltinScalarFunction::$ENUM,
-                args: args,
+                args,
             }
         }
-    };  
+    };    
 }
 
 // generate methods for creating the supported unary/binary expressions
