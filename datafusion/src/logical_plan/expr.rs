@@ -1624,8 +1624,6 @@ unary_scalar_expr!(Ln, ln);
 scalar_expr!(Ascii, ascii, string);
 scalar_expr!(BitLength, bit_length, string);
 nary_scalar_expr!(Btrim, btrim);
-// scalar_expr!(Btrim, btrim, string);
-// scalar_expr!(Btrim, btrim_chars, string, characters);
 scalar_expr!(CharacterLength, character_length, string);
 scalar_expr!(CharacterLength, length, string);
 scalar_expr!(Chr, chr, string);
