@@ -35,8 +35,6 @@ use datafusion::execution::context::ExecutionContext;
 
 use datafusion::assert_batches_eq;
 
-
-
 fn create_test_table() -> Result<Arc<dyn DataFrame>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
@@ -47,9 +45,12 @@ fn create_test_table() -> Result<Arc<dyn DataFrame>> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from(
-                vec!["abcDEF", "abc123", "CBAdef", "123AbcDef"]
-            )),
+            Arc::new(StringArray::from(vec![
+                "abcDEF",
+                "abc123",
+                "CBAdef",
+                "123AbcDef",
+            ])),
             Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
         ],
     )?;
@@ -63,7 +64,6 @@ fn create_test_table() -> Result<Arc<dyn DataFrame>> {
     ctx.table("test")
 }
 
-
 /// Excutes an expression on the test dataframe as a select.
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, using the assert_batch_eq! macro
@@ -73,16 +73,15 @@ macro_rules! assert_fn_batches {
     };
     ($EXPR:expr, $EXPECTED: expr, $LIMIT: expr) => {
         let df = create_test_table()?;
-        let df = df.select( vec![$EXPR])?.limit($LIMIT)?;
+        let df = df.select(vec![$EXPR])?.limit($LIMIT)?;
         let batches = df.collect().await?;
 
-        assert_batches_eq!($EXPECTED, &batches);  
+        assert_batches_eq!($EXPECTED, &batches);
     };
-} 
+}
 
 #[tokio::test]
 async fn test_fn_ascii() -> Result<()> {
-
     let expr = ascii(col("a"));
 
     let expected = vec![
@@ -92,7 +91,7 @@ async fn test_fn_ascii() -> Result<()> {
         "| 97            |",
         "+---------------+",
     ];
-    
+
     assert_fn_batches!(expr, expected, 1);
 
     Ok(())
@@ -100,9 +99,8 @@ async fn test_fn_ascii() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_bit_length() -> Result<()> {
-
     let expr = bit_length(col("a"));
-    
+
     let expected = vec![
         "+-------------------+",
         "| bitlength(test.a) |",
@@ -120,7 +118,6 @@ async fn test_fn_bit_length() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_btrim() -> Result<()> {
-
     let expr = btrim(vec![lit("      a b c             ")]);
 
     let expected = vec![
@@ -150,7 +147,7 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
         "| 123AbcDef                |",
         "+--------------------------+",
     ];
-    
+
     assert_fn_batches!(expr, expected);
 
     Ok(())
@@ -178,7 +175,7 @@ async fn test_fn_character_length() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_chr() -> Result<()> {
-    let expr = chr(lit(128175) );
+    let expr = chr(lit(128175));
 
     let expected = vec![
         "+--------------------+",
@@ -195,7 +192,7 @@ async fn test_fn_chr() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_initcap() -> Result<()> {
-    let expr = initcap(col("a") );
+    let expr = initcap(col("a"));
 
     let expected = vec![
         "+-----------------+",
@@ -215,7 +212,7 @@ async fn test_fn_initcap() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_left() -> Result<()> {
-    let expr = left(col("a"), lit(3) );
+    let expr = left(col("a"), lit(3));
 
     let expected = vec![
         "+-----------------------+",
@@ -225,7 +222,7 @@ async fn test_fn_left() -> Result<()> {
         "| abc                   |",
         "| CBA                   |",
         "| 123                   |",
-        "+-----------------------+",            
+        "+-----------------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -235,7 +232,7 @@ async fn test_fn_left() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_lower() -> Result<()> {
-    let expr = lower(col("a") );
+    let expr = lower(col("a"));
 
     let expected = vec![
         "+---------------+",
@@ -255,7 +252,7 @@ async fn test_fn_lower() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_lpad() -> Result<()> {
-    let expr = lpad(vec![col("a"), lit(10)] );
+    let expr = lpad(vec![col("a"), lit(10)]);
 
     let expected = vec![
         "+------------------------+",
@@ -275,7 +272,7 @@ async fn test_fn_lpad() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_lpad_with_string() -> Result<()> {
-    let expr = lpad(vec![col("a"), lit(10), lit("*")] );
+    let expr = lpad(vec![col("a"), lit(10), lit("*")]);
 
     let expected = vec![
         "+----------------------------------+",
@@ -332,7 +329,7 @@ async fn test_fn_ltrim_with_columns() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_md5() -> Result<()> {
-    let expr = md5( col("a") );
+    let expr = md5(col("a"));
 
     let expected = vec![
         "+----------------------------------+",
@@ -355,7 +352,7 @@ async fn test_fn_md5() -> Result<()> {
 //       g flag doesn't compile
 #[tokio::test]
 async fn test_fn_regexp_match() -> Result<()> {
-    let expr = regexp_match( vec![col("a"), lit("[a-z]")]);
+    let expr = regexp_match(vec![col("a"), lit("[a-z]")]);
     // The below will fail
     // let expr = regexp_match( vec![col("a"), lit("[a-z]"), lit("g")]);
 
@@ -373,11 +370,11 @@ async fn test_fn_regexp_match() -> Result<()> {
     assert_fn_batches!(expr, expected);
 
     Ok(())
-}    
+}
 
 #[tokio::test]
 async fn test_fn_regexp_replace() -> Result<()> {
-    let expr = regexp_replace( vec![col("a"), lit("[a-z]"), lit("x"), lit("g")]);
+    let expr = regexp_replace(vec![col("a"), lit("[a-z]"), lit("x"), lit("g")]);
 
     let expected = vec![
         "+---------------------------------------------------------+",
@@ -393,8 +390,8 @@ async fn test_fn_regexp_replace() -> Result<()> {
     assert_fn_batches!(expr, expected);
 
     Ok(())
-}    
-    
+}
+
 #[tokio::test]
 async fn test_fn_replace() -> Result<()> {
     let expr = replace(col("a"), lit("abc"), lit("x"));
@@ -417,7 +414,7 @@ async fn test_fn_replace() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_repeat() -> Result<()> {
-    let expr = repeat( col("a"), lit(2));
+    let expr = repeat(col("a"), lit(2));
 
     let expected = vec![
         "+-------------------------+",
@@ -433,13 +430,11 @@ async fn test_fn_repeat() -> Result<()> {
     assert_fn_batches!(expr, expected);
 
     Ok(())
-}    
-
-
+}
 
 #[tokio::test]
 async fn test_fn_reverse() -> Result<()> {
-    let expr = reverse( col("a"));
+    let expr = reverse(col("a"));
 
     let expected = vec![
         "+-----------------+",
@@ -455,11 +450,11 @@ async fn test_fn_reverse() -> Result<()> {
     assert_fn_batches!(expr, expected);
 
     Ok(())
-}    
+}
 
 #[tokio::test]
 async fn test_fn_right() -> Result<()> {
-    let expr = right( col("a"), lit(3));
+    let expr = right(col("a"), lit(3));
 
     let expected = vec![
         "+------------------------+",
@@ -475,11 +470,11 @@ async fn test_fn_right() -> Result<()> {
     assert_fn_batches!(expr, expected);
 
     Ok(())
-}    
+}
 
 #[tokio::test]
 async fn test_fn_rpad() -> Result<()> {
-    let expr = rpad( vec![col("a"), lit(11)]);
+    let expr = rpad(vec![col("a"), lit(11)]);
 
     let expected = vec![
         "+------------------------+",
@@ -495,11 +490,11 @@ async fn test_fn_rpad() -> Result<()> {
     assert_fn_batches!(expr, expected);
 
     Ok(())
-}        
+}
 
 #[tokio::test]
 async fn test_fn_rpad_with_characters() -> Result<()> {
-    let expr = rpad( vec![col("a"), lit(11), lit("x")]);
+    let expr = rpad(vec![col("a"), lit(11), lit("x")]);
 
     let expected = vec![
         "+----------------------------------+",
@@ -515,11 +510,11 @@ async fn test_fn_rpad_with_characters() -> Result<()> {
     assert_fn_batches!(expr, expected);
 
     Ok(())
-}         
+}
 
 #[tokio::test]
 async fn test_fn_sha224() -> Result<()> {
-    let expr = sha224( col("a") );
+    let expr = sha224(col("a"));
 
     let expected = vec![
         "+----------------------------------------------------------+",
@@ -537,10 +532,8 @@ async fn test_fn_sha224() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn test_fn_split_part() -> Result<()> {
-
     let expr = split_part(col("a"), lit("b"), lit(1));
 
     let expected = vec![
@@ -560,7 +553,6 @@ async fn test_fn_split_part() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_starts_with() -> Result<()> {
-
     let expr = starts_with(col("a"), lit("abc"));
 
     let expected = vec![
@@ -581,7 +573,6 @@ async fn test_fn_starts_with() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_strpos() -> Result<()> {
-
     let expr = strpos(col("a"), lit("f"));
 
     let expected = vec![
@@ -601,7 +592,6 @@ async fn test_fn_strpos() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_substr() -> Result<()> {
-
     let expr = substr(col("a"), lit(2));
 
     let expected = vec![
@@ -612,7 +602,7 @@ async fn test_fn_substr() -> Result<()> {
         "| bc123                   |",
         "| BAdef                   |",
         "| 23AbcDef                |",
-        "+-------------------------+",            
+        "+-------------------------+",
     ];
     assert_fn_batches!(expr, expected);
 
@@ -621,7 +611,6 @@ async fn test_fn_substr() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_to_hex() -> Result<()> {
-
     let expr = to_hex(col("b"));
 
     let expected = vec![
@@ -632,17 +621,15 @@ async fn test_fn_to_hex() -> Result<()> {
         "| a             |",
         "| a             |",
         "| 64            |",
-        "+---------------+",       
+        "+---------------+",
     ];
     assert_fn_batches!(expr, expected);
 
     Ok(())
 }
 
-
 #[tokio::test]
 async fn test_fn_translate() -> Result<()> {
-
     let expr = translate(col("a"), lit("bc"), lit("xx"));
 
     let expected = vec![
@@ -653,17 +640,15 @@ async fn test_fn_translate() -> Result<()> {
         "| axx123                                  |",
         "| CBAdef                                  |",
         "| 123AxxDef                               |",
-        "+-----------------------------------------+",           
+        "+-----------------------------------------+",
     ];
     assert_fn_batches!(expr, expected);
 
     Ok(())
 }
 
-
 #[tokio::test]
 async fn test_fn_upper() -> Result<()> {
-
     let expr = upper(col("a"));
 
     let expected = vec![
@@ -674,10 +659,9 @@ async fn test_fn_upper() -> Result<()> {
         "| ABC123        |",
         "| CBADEF        |",
         "| 123ABCDEF     |",
-        "+---------------+",       
+        "+---------------+",
     ];
     assert_fn_batches!(expr, expected);
 
     Ok(())
 }
-

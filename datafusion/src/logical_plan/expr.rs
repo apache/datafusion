@@ -1577,25 +1577,25 @@ macro_rules! unary_scalar_expr {
 macro_rules! scalar_expr {
     ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
         #[doc = concat!("Scalar function definition for ", stringify!($FUNC) ) ]
-        pub fn $FUNC($($arg: Expr),*) -> Expr {            
+        pub fn $FUNC($($arg: Expr),*) -> Expr {
             Expr::ScalarFunction {
                 fun: functions::BuiltinScalarFunction::$ENUM,
                 args: vec![$($arg),*],
             }
         }
-    };  
+    };
 }
 
 macro_rules! nary_scalar_expr {
     ($ENUM:ident, $FUNC:ident) => {
         #[doc = concat!("Scalar function definition for ", stringify!($FUNC) ) ]
-        pub fn $FUNC(args: Vec<Expr>) -> Expr {            
+        pub fn $FUNC(args: Vec<Expr>) -> Expr {
             Expr::ScalarFunction {
                 fun: functions::BuiltinScalarFunction::$ENUM,
                 args,
             }
         }
-    };    
+    };
 }
 
 // generate methods for creating the supported unary/binary expressions
@@ -2230,11 +2230,11 @@ mod tests {
 
     macro_rules! test_scalar_expr {
         ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-            let expected = vec![$(stringify!($arg)),*];            
+            let expected = vec![$(stringify!($arg)),*];
             let result = $FUNC(
                 $(
                     col(stringify!($arg.to_string()))
-                ),*    
+                ),*
             );
             if let Expr::ScalarFunction { fun, args } = result {
                 let name = functions::BuiltinScalarFunction::$ENUM;
@@ -2242,18 +2242,18 @@ mod tests {
                 assert_eq!(expected.len(), args.len());
             } else {
                 assert!(false, "unexpected: {:?}", result);
-            }               
-        };  
-    }    
+            }
+        };
+    }
 
     macro_rules! test_nary_scalar_expr {
         ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-            let expected = vec![$(stringify!($arg)),*]; 
+            let expected = vec![$(stringify!($arg)),*];
             let result = $FUNC(
                 vec![
                     $(
                         col(stringify!($arg.to_string()))
-                    ),*    
+                    ),*
                 ]
             );
             if let Expr::ScalarFunction { fun, args } = result {
@@ -2262,9 +2262,9 @@ mod tests {
                 assert_eq!(expected.len(), args.len());
             } else {
                 assert!(false, "unexpected: {:?}", result);
-            }               
-        };  
-    }    
+            }
+        };
+    }
 
     #[test]
     fn digest_function_definitions() {
@@ -2316,8 +2316,21 @@ mod tests {
         test_scalar_expr!(OctetLength, octet_length, string);
         test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern);
         test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern, flags);
-        test_nary_scalar_expr!(RegexpReplace, regexp_replace, string, pattern, replacement);
-        test_nary_scalar_expr!(RegexpReplace, regexp_replace, string, pattern, replacement, flags);
+        test_nary_scalar_expr!(
+            RegexpReplace,
+            regexp_replace,
+            string,
+            pattern,
+            replacement
+        );
+        test_nary_scalar_expr!(
+            RegexpReplace,
+            regexp_replace,
+            string,
+            pattern,
+            replacement,
+            flags
+        );
         test_scalar_expr!(Replace, replace, string, from, to);
         test_scalar_expr!(Repeat, repeat, string, count);
         test_scalar_expr!(Reverse, reverse, string);

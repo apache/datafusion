@@ -2574,7 +2574,7 @@ mod tests {
             i32,
             Int32,
             Int32Array
-        );   
+        );
         #[cfg(feature = "regex_expressions")]
         test_function!(
             RegexpReplace,
