@@ -2574,20 +2574,7 @@ mod tests {
             i32,
             Int32,
             Int32Array
-        );
-        // #[cfg(feature = "regex_expressions")]
-        // test_function!(
-        //     RegexpMatch,
-        //     &[
-        //         lit(ScalarValue::Utf8(Some("abc".to_string()))),
-        //         lit(ScalarValue::Utf8(Some("a..".to_string()))),
-        //         lit(ScalarValue::Utf8(Some("g".to_string()))),
-        //     ],
-        //     Ok(Some("abc")),
-        //     &str,
-        //     Utf8,
-        //     StringArray
-        // );        
+        );   
         #[cfg(feature = "regex_expressions")]
         test_function!(
             RegexpReplace,
