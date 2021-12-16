@@ -616,7 +616,9 @@ pub fn return_type(
             TimeUnit::Nanosecond,
             Some("UTC".to_owned()),
         )),
-        BuiltinScalarFunction::Translate => utf8_to_str_type(&input_expr_types[0], "translate"),
+        BuiltinScalarFunction::Translate => {
+            utf8_to_str_type(&input_expr_types[0], "translate")
+        }
         BuiltinScalarFunction::Trim => utf8_to_str_type(&input_expr_types[0], "trim"),
         BuiltinScalarFunction::Upper => utf8_to_str_type(&input_expr_types[0], "upper"),
         BuiltinScalarFunction::RegexpMatch => Ok(match input_expr_types[0] {
