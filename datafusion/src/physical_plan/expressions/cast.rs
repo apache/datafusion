@@ -129,9 +129,6 @@ pub fn cast_with_options(
     if expr_type == cast_type {
         Ok(expr.clone())
     } else if can_cast_types(&expr_type, &cast_type) {
-        // TODO
-        // support numeric data type to decimal
-        // support one type decimal to another type decimal
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
         Err(DataFusionError::Internal(format!(
@@ -222,87 +219,120 @@ mod tests {
 
     #[test]
     fn test_cast_numeric_to_decimal() -> Result<()> {
+        // int8
+        generic_test_cast!(
+            Int8Array,
+            DataType::Int8,
+            vec![1, 2, 3, 4, 5],
+            DecimalArray,
+            DataType::Decimal(3, 0),
+            vec![
+                Some(Decimal128(Some(1), 3, 0)),
+                Some(Decimal128(Some(2), 3, 0)),
+                Some(Decimal128(Some(3), 3, 0)),
+                Some(Decimal128(Some(4), 3, 0)),
+                Some(Decimal128(Some(5), 3, 0))
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
+        // int16
+        generic_test_cast!(
+            Int16Array,
+            DataType::Int16,
+            vec![1, 2, 3, 4, 5],
+            DecimalArray,
+            DataType::Decimal(5, 0),
+            vec![
+                Some(Decimal128(Some(1), 5, 0)),
+                Some(Decimal128(Some(2), 5, 0)),
+                Some(Decimal128(Some(3), 5, 0)),
+                Some(Decimal128(Some(4), 5, 0)),
+                Some(Decimal128(Some(5), 5, 0))
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
         // int32
         generic_test_cast!(
             Int32Array,
             DataType::Int32,
             vec![1, 2, 3, 4, 5],
-            // TODO
-            UInt32Array,
-            DataType::UInt32,
+            DecimalArray,
+            DataType::Decimal(10, 0),
             vec![
-                Some(1_u32),
-                Some(2_u32),
-                Some(3_u32),
-                Some(4_u32),
-                Some(5_u32)
+                Some(Decimal128(Some(1), 10, 0)),
+                Some(Decimal128(Some(2), 10, 0)),
+                Some(Decimal128(Some(3), 10, 0)),
+                Some(Decimal128(Some(4), 10, 0)),
+                Some(Decimal128(Some(5), 10, 0))
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
+
         // int64
         generic_test_cast!(
-            Int32Array,
+            Int64Array,
             DataType::Int64,
             vec![1, 2, 3, 4, 5],
-            // TODO
-            UInt32Array,
-            DataType::UInt32,
+            DecimalArray,
+            DataType::Decimal(20, 0),
             vec![
-                Some(1_u32),
-                Some(2_u32),
-                Some(3_u32),
-                Some(4_u32),
-                Some(5_u32)
+                Some(Decimal128(Some(1), 20, 0)),
+                Some(Decimal128(Some(2), 20, 0)),
+                Some(Decimal128(Some(3), 20, 0)),
+                Some(Decimal128(Some(4), 20, 0)),
+                Some(Decimal128(Some(5), 20, 0))
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
+
+        generic_test_cast!(
+            Int64Array,
+            DataType::Int64,
+            vec![1, 2, 3, 4, 5],
+            DecimalArray,
+            DataType::Decimal(20, 2),
+            vec![
+                Some(Decimal128(Some(100), 20, 2)),
+                Some(Decimal128(Some(200), 20, 2)),
+                Some(Decimal128(Some(300), 20, 2)),
+                Some(Decimal128(Some(400), 20, 2)),
+                Some(Decimal128(Some(500), 20, 2))
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
         // float32
         generic_test_cast!(
-            Int32Array,
+            Float32Array,
             DataType::Float32,
-            vec![1, 2, 3, 4, 5],
-            // TODO
-            UInt32Array,
-            DataType::UInt32,
+            vec![1.5, 2.5, 3, 1.123_456_8, 5.50],
+            DecimalArray,
+            DataType::Decimal(10, 2),
             vec![
-                Some(1_u32),
-                Some(2_u32),
-                Some(3_u32),
-                Some(4_u32),
-                Some(5_u32)
+                Some(Decimal128(Some(150), 20, 2)),
+                Some(Decimal128(Some(250), 20, 2)),
+                Some(Decimal128(Some(300), 20, 2)),
+                Some(Decimal128(Some(112), 20, 2)),
+                Some(Decimal128(Some(550), 20, 2))
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
+
         // float64
         generic_test_cast!(
-            Int32Array,
+            Float64Array,
             DataType::Float64,
-            vec![1, 2, 3, 4, 5],
-            // TODO
-            UInt32Array,
-            DataType::UInt32,
+            vec![1.5, 2.5, 3, 1.123_456_8, 5.50],
+            DecimalArray,
+            DataType::Decimal(20, 4),
             vec![
-                Some(1_u32),
-                Some(2_u32),
-                Some(3_u32),
-                Some(4_u32),
-                Some(5_u32)
-            ],
-            DEFAULT_DATAFUSION_CAST_OPTIONS
-        );
-        generic_test_cast!(
-            Int32Array,
-            DataType::Decimal(10, 4),
-            vec![1, 2, 3, 4, 5],
-            // TODO
-            UInt32Array,
-            DataType::UInt32,
-            vec![
-                Some(1_u32),
-                Some(2_u32),
-                Some(3_u32),
-                Some(4_u32),
-                Some(5_u32)
+                Some(Decimal128(Some(15000), 20, 4)),
+                Some(Decimal128(Some(25000), 20, 4)),
+                Some(Decimal128(Some(30000), 20, 4)),
+                Some(Decimal128(Some(11234), 20, 4)),
+                Some(Decimal128(Some(55000), 20, 4))
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
