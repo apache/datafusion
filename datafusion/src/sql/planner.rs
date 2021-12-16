@@ -1062,8 +1062,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
 
                 let field = schema.field(field_index - 1);
-                let col_ident = SQLExpr::Identifier(Ident::new(field.qualified_name()));
-                self.sql_expr_to_logical_expr(&col_ident, schema)?
+                Expr::Column(field.qualified_column())
             }
             e => self.sql_expr_to_logical_expr(e, schema)?,
         };
@@ -1323,9 +1322,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let var_names = vec![id.value.clone()];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
-                    // create a column expression based on raw user input, this column will be
-                    // normalized with qualifer later by the SQL planner.
-                    Ok(col(&id.value))
+                    // Don't use `col()` here because it will try to
+                    // interpret names with '.' as if they were
+                    // compound indenfiers, but this is not a compound
+                    // identifier. (e.g. it is "foo.bar" not foo.bar)
+                    Ok(Expr::Column(Column {
+                        relation: None,
+                        name: id.value.clone(),
+                    }))
                 }
             }
 
@@ -1341,22 +1345,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
-                let mut var_names = vec![];
-                for id in ids {
-                    var_names.push(id.value.clone());
-                }
+                let mut var_names: Vec<_> =
+                    ids.iter().map(|id| id.value.clone()).collect();
+
                 if &var_names[0][0..1] == "@" {
                     Ok(Expr::ScalarVariable(var_names))
-                } else if var_names.len() == 2 {
-                    // table.column identifier
-                    let name = var_names.pop().unwrap();
-                    let relation = Some(var_names.pop().unwrap());
-                    Ok(Expr::Column(Column { relation, name }))
                 } else {
-                    Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported compound identifier '{:?}'",
-                        var_names,
-                    )))
+                    match (var_names.pop(), var_names.pop()) {
+                        (Some(name), Some(relation)) if var_names.is_empty() => {
+                            // table.column identifier
+                            Ok(Expr::Column(Column {
+                                relation: Some(relation),
+                                name,
+                            }))
+                        }
+                        _ => Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported compound identifier '{:?}'",
+                            var_names,
+                        ))),
+                    }
                 }
             }
 
