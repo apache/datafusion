@@ -652,12 +652,12 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::Date32(val) => {
                 create_proto_scalar(val, PrimitiveScalarType::Date32, |s| Value::Date32Value(*s))
             }
-            datafusion::scalar::ScalarValue::TimestampMicrosecond(val) => {
+            datafusion::scalar::ScalarValue::TimestampMicrosecond(val, _) => {
                 create_proto_scalar(val, PrimitiveScalarType::TimeMicrosecond, |s| {
                     Value::TimeMicrosecondValue(*s)
                 })
             }
-            datafusion::scalar::ScalarValue::TimestampNanosecond(val) => {
+            datafusion::scalar::ScalarValue::TimestampNanosecond(val, _) => {
                 create_proto_scalar(val, PrimitiveScalarType::TimeNanosecond, |s| {
                     Value::TimeNanosecondValue(*s)
                 })
