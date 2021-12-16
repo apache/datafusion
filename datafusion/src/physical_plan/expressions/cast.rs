@@ -162,7 +162,10 @@ mod tests {
     use crate::physical_plan::expressions::col;
     use arrow::array::{StringArray, Time64NanosecondArray};
     use arrow::{
-        array::{Array, Int32Array, Int64Array, TimestampNanosecondArray, UInt32Array},
+        array::{
+            Array, DecimalArray, Float32Array, Float64Array, Int16Array, Int32Array,
+            Int64Array, Int8Array, TimestampNanosecondArray, UInt32Array,
+        },
         datatypes::*,
     };
 
@@ -227,11 +230,11 @@ mod tests {
             DecimalArray,
             DataType::Decimal(3, 0),
             vec![
-                Some(Decimal128(Some(1), 3, 0)),
-                Some(Decimal128(Some(2), 3, 0)),
-                Some(Decimal128(Some(3), 3, 0)),
-                Some(Decimal128(Some(4), 3, 0)),
-                Some(Decimal128(Some(5), 3, 0))
+                Some(1_i128),
+                Some(2_i128),
+                Some(3_i128),
+                Some(4_i128),
+                Some(5_i128),
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
@@ -244,11 +247,11 @@ mod tests {
             DecimalArray,
             DataType::Decimal(5, 0),
             vec![
-                Some(Decimal128(Some(1), 5, 0)),
-                Some(Decimal128(Some(2), 5, 0)),
-                Some(Decimal128(Some(3), 5, 0)),
-                Some(Decimal128(Some(4), 5, 0)),
-                Some(Decimal128(Some(5), 5, 0))
+                Some(1_i128),
+                Some(2_i128),
+                Some(3_i128),
+                Some(4_i128),
+                Some(5_i128),
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
@@ -261,11 +264,11 @@ mod tests {
             DecimalArray,
             DataType::Decimal(10, 0),
             vec![
-                Some(Decimal128(Some(1), 10, 0)),
-                Some(Decimal128(Some(2), 10, 0)),
-                Some(Decimal128(Some(3), 10, 0)),
-                Some(Decimal128(Some(4), 10, 0)),
-                Some(Decimal128(Some(5), 10, 0))
+                Some(1_i128),
+                Some(2_i128),
+                Some(3_i128),
+                Some(4_i128),
+                Some(5_i128),
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
@@ -278,15 +281,16 @@ mod tests {
             DecimalArray,
             DataType::Decimal(20, 0),
             vec![
-                Some(Decimal128(Some(1), 20, 0)),
-                Some(Decimal128(Some(2), 20, 0)),
-                Some(Decimal128(Some(3), 20, 0)),
-                Some(Decimal128(Some(4), 20, 0)),
-                Some(Decimal128(Some(5), 20, 0))
+                Some(1_i128),
+                Some(2_i128),
+                Some(3_i128),
+                Some(4_i128),
+                Some(5_i128),
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
 
+        // int64 to different scale
         generic_test_cast!(
             Int64Array,
             DataType::Int64,
@@ -294,11 +298,11 @@ mod tests {
             DecimalArray,
             DataType::Decimal(20, 2),
             vec![
-                Some(Decimal128(Some(100), 20, 2)),
-                Some(Decimal128(Some(200), 20, 2)),
-                Some(Decimal128(Some(300), 20, 2)),
-                Some(Decimal128(Some(400), 20, 2)),
-                Some(Decimal128(Some(500), 20, 2))
+                Some(100_i128),
+                Some(200_i128),
+                Some(300_i128),
+                Some(400_i128),
+                Some(500_i128),
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
@@ -307,15 +311,15 @@ mod tests {
         generic_test_cast!(
             Float32Array,
             DataType::Float32,
-            vec![1.5, 2.5, 3, 1.123_456_8, 5.50],
+            vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
             DecimalArray,
             DataType::Decimal(10, 2),
             vec![
-                Some(Decimal128(Some(150), 20, 2)),
-                Some(Decimal128(Some(250), 20, 2)),
-                Some(Decimal128(Some(300), 20, 2)),
-                Some(Decimal128(Some(112), 20, 2)),
-                Some(Decimal128(Some(550), 20, 2))
+                Some(150_i128),
+                Some(250_i128),
+                Some(300_i128),
+                Some(112_i128),
+                Some(550_i128),
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
@@ -324,15 +328,15 @@ mod tests {
         generic_test_cast!(
             Float64Array,
             DataType::Float64,
-            vec![1.5, 2.5, 3, 1.123_456_8, 5.50],
+            vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
             DecimalArray,
             DataType::Decimal(20, 4),
             vec![
-                Some(Decimal128(Some(15000), 20, 4)),
-                Some(Decimal128(Some(25000), 20, 4)),
-                Some(Decimal128(Some(30000), 20, 4)),
-                Some(Decimal128(Some(11234), 20, 4)),
-                Some(Decimal128(Some(55000), 20, 4))
+                Some(15000_i128),
+                Some(25000_i128),
+                Some(30000_i128),
+                Some(11234_i128),
+                Some(55000_i128),
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
@@ -341,6 +345,22 @@ mod tests {
 
     #[test]
     fn test_cast_i32_u32() -> Result<()> {
+        generic_test_cast!(
+            Int32Array,
+            DataType::Int32,
+            vec![1, 2, 3, 4, 5],
+            UInt32Array,
+            DataType::UInt32,
+            vec![
+                Some(1_u32),
+                Some(2_u32),
+                Some(3_u32),
+                Some(4_u32),
+                Some(5_u32)
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
         generic_test_cast!(
             Int32Array,
             DataType::Int32,
