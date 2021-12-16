@@ -608,6 +608,7 @@ pub mod analyze;
 pub mod array_expressions;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
+mod coercion_rule;
 pub mod common;
 pub mod cross_join;
 #[cfg(feature = "crypto_expressions")]

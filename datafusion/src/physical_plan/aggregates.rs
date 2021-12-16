@@ -28,15 +28,16 @@
 
 use super::{
     functions::{Signature, Volatility},
-    type_coercion::{coerce, data_types},
     Accumulator, AggregateExpr, PhysicalExpr,
 };
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::coercion_rule::aggregate_rule::{coerce_exprs, coerce_types};
 use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
-use arrow::datatypes::{DataType, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use expressions::{avg_return_type, sum_return_type};
 use std::{fmt, str::FromStr, sync::Arc};
+
 /// the implementation of an aggregate function
 pub type AccumulatorFunctionImplementation =
     Arc<dyn Fn() -> Result<Box<dyn Accumulator>> + Send + Sync>;
@@ -46,7 +47,7 @@ pub type AccumulatorFunctionImplementation =
 pub type StateTypeFunction =
     Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
 
-/// Enum of all built-in scalar functions
+/// Enum of all built-in aggregate functions
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub enum AggregateFunction {
     /// count
@@ -61,6 +62,8 @@ pub enum AggregateFunction {
     Avg,
     /// Approximate aggregate function
     ApproxDistinct,
+    /// array_agg
+    ArrayAgg,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -80,92 +83,130 @@ impl FromStr for AggregateFunction {
             "avg" => AggregateFunction::Avg,
             "sum" => AggregateFunction::Sum,
             "approx_distinct" => AggregateFunction::ApproxDistinct,
+            "array_agg" => AggregateFunction::ArrayAgg,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",
                     name
-                )))
+                )));
             }
         })
     }
 }
 
-/// Returns the datatype of the scalar function
-pub fn return_type(fun: &AggregateFunction, arg_types: &[DataType]) -> Result<DataType> {
+/// Returns the datatype of the aggregate function.
+/// This is used to get the returned data type for aggregate expr.
+pub fn return_type(
+    fun: &AggregateFunction,
+    input_expr_types: &[DataType],
+) -> Result<DataType> {
     // Note that this function *must* return the same type that the respective physical expression returns
     // or the execution panics.
 
-    // verify that this is a valid set of data types for this function
-    data_types(arg_types, &signature(fun))?;
+    let coerced_data_types = coerce_types(fun, input_expr_types, &signature(fun))?;
 
     match fun {
+        // TODO If the datafusion is compatible with PostgreSQL, the returned data type should be INT64.
         AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
             Ok(DataType::UInt64)
         }
-        AggregateFunction::Max | AggregateFunction::Min => Ok(arg_types[0].clone()),
-        AggregateFunction::Sum => sum_return_type(&arg_types[0]),
-        AggregateFunction::Avg => avg_return_type(&arg_types[0]),
+        AggregateFunction::Max | AggregateFunction::Min => {
+            // For min and max agg function, the returned type is same as input type.
+            // The coerced_data_types is same with input_types.
+            Ok(coerced_data_types[0].clone())
+        }
+        AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
+        AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
+        AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(
+            "item",
+            coerced_data_types[0].clone(),
+            true,
+        )))),
     }
 }
 
-/// Create a physical (function) expression.
-/// This function errors when `args`' can't be coerced to a valid argument type of the function.
+/// Create a physical aggregation expression.
+/// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
 pub fn create_aggregate_expr(
     fun: &AggregateFunction,
     distinct: bool,
-    args: &[Arc<dyn PhysicalExpr>],
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let name = name.into();
-    let arg = coerce(args, input_schema, &signature(fun))?;
-    if arg.is_empty() {
+    // get the coerced phy exprs if some expr need to be wrapped with the try cast.
+    let coerced_phy_exprs =
+        coerce_exprs(fun, input_phy_exprs, input_schema, &signature(fun))?;
+    if coerced_phy_exprs.is_empty() {
         return Err(DataFusionError::Plan(format!(
             "Invalid or wrong number of arguments passed to aggregate: '{}'",
             name,
         )));
     }
-    let arg = arg[0].clone();
-
-    let arg_types = args
+    let coerced_exprs_types = coerced_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let return_type = return_type(fun, &arg_types)?;
+    // get the result data type for this aggregate function
+    let input_phy_types = input_phy_exprs
+        .iter()
+        .map(|e| e.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
+    let return_type = return_type(fun, &input_phy_types)?;
 
     Ok(match (fun, distinct) {
-        (AggregateFunction::Count, false) => {
-            Arc::new(expressions::Count::new(arg, name, return_type))
-        }
+        (AggregateFunction::Count, false) => Arc::new(expressions::Count::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
         (AggregateFunction::Count, true) => {
             Arc::new(distinct_expressions::DistinctCount::new(
-                arg_types,
-                args.to_vec(),
+                coerced_exprs_types,
+                coerced_phy_exprs,
                 name,
                 return_type,
             ))
         }
-        (AggregateFunction::Sum, false) => {
-            Arc::new(expressions::Sum::new(arg, name, return_type))
-        }
+        (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
         (AggregateFunction::Sum, true) => {
             return Err(DataFusionError::NotImplemented(
                 "SUM(DISTINCT) aggregations are not available".to_string(),
             ));
         }
-        (AggregateFunction::ApproxDistinct, _) => Arc::new(
-            expressions::ApproxDistinct::new(arg, name, arg_types[0].clone()),
-        ),
-        (AggregateFunction::Min, _) => {
-            Arc::new(expressions::Min::new(arg, name, return_type))
+        (AggregateFunction::ApproxDistinct, _) => {
+            Arc::new(expressions::ApproxDistinct::new(
+                coerced_phy_exprs[0].clone(),
+                name,
+                coerced_exprs_types[0].clone(),
+            ))
         }
-        (AggregateFunction::Max, _) => {
-            Arc::new(expressions::Max::new(arg, name, return_type))
-        }
-        (AggregateFunction::Avg, false) => {
-            Arc::new(expressions::Avg::new(arg, name, return_type))
-        }
+        (AggregateFunction::ArrayAgg, _) => Arc::new(expressions::ArrayAgg::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            coerced_exprs_types[0].clone(),
+        )),
+        (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
+        (AggregateFunction::Max, _) => Arc::new(expressions::Max::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
+        (AggregateFunction::Avg, false) => Arc::new(expressions::Avg::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
         (AggregateFunction::Avg, true) => {
             return Err(DataFusionError::NotImplemented(
                 "AVG(DISTINCT) aggregations are not available".to_string(),
@@ -202,9 +243,9 @@ static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 pub fn signature(fun: &AggregateFunction) -> Signature {
     // note: the physical expression must accept the type returned by this function or the execution panics.
     match fun {
-        AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
-            Signature::any(1, Volatility::Immutable)
-        }
+        AggregateFunction::Count
+        | AggregateFunction::ApproxDistinct
+        | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
         AggregateFunction::Min | AggregateFunction::Max => {
             let valid = STRINGS
                 .iter()
@@ -225,6 +266,189 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::physical_plan::expressions::{
+        ApproxDistinct, ArrayAgg, Avg, Count, Max, Min, Sum,
+    };
+
+    #[test]
+    fn test_count_arragg_approx_expr() -> Result<()> {
+        let funcs = vec![
+            AggregateFunction::Count,
+            AggregateFunction::ArrayAgg,
+            AggregateFunction::ApproxDistinct,
+        ];
+        let data_types = vec![
+            DataType::UInt32,
+            DataType::Int32,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal(10, 2),
+            DataType::Utf8,
+        ];
+        for fun in funcs {
+            for data_type in &data_types {
+                let input_schema =
+                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
+                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
+                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
+                )];
+                let result_agg_phy_exprs = create_aggregate_expr(
+                    &fun,
+                    false,
+                    &input_phy_exprs[0..1],
+                    &input_schema,
+                    "c1",
+                )?;
+                match fun {
+                    AggregateFunction::Count => {
+                        assert!(result_agg_phy_exprs.as_any().is::<Count>());
+                        assert_eq!("c1", result_agg_phy_exprs.name());
+                        assert_eq!(
+                            Field::new("c1", DataType::UInt64, true),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
+                    AggregateFunction::ApproxDistinct => {
+                        assert!(result_agg_phy_exprs.as_any().is::<ApproxDistinct>());
+                        assert_eq!("c1", result_agg_phy_exprs.name());
+                        assert_eq!(
+                            Field::new("c1", DataType::UInt64, false),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
+                    AggregateFunction::ArrayAgg => {
+                        assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
+                        assert_eq!("c1", result_agg_phy_exprs.name());
+                        assert_eq!(
+                            Field::new(
+                                "c1",
+                                DataType::List(Box::new(Field::new(
+                                    "item",
+                                    data_type.clone(),
+                                    true
+                                ))),
+                                false
+                            ),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
+                    _ => {}
+                };
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_min_max_expr() -> Result<()> {
+        let funcs = vec![AggregateFunction::Min, AggregateFunction::Max];
+        let data_types = vec![
+            DataType::UInt32,
+            DataType::Int32,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal(10, 2),
+            DataType::Utf8,
+        ];
+        for fun in funcs {
+            for data_type in &data_types {
+                let input_schema =
+                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
+                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
+                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
+                )];
+                let result_agg_phy_exprs = create_aggregate_expr(
+                    &fun,
+                    false,
+                    &input_phy_exprs[0..1],
+                    &input_schema,
+                    "c1",
+                )?;
+                match fun {
+                    AggregateFunction::Min => {
+                        assert!(result_agg_phy_exprs.as_any().is::<Min>());
+                        assert_eq!("c1", result_agg_phy_exprs.name());
+                        assert_eq!(
+                            Field::new("c1", data_type.clone(), true),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
+                    AggregateFunction::Max => {
+                        assert!(result_agg_phy_exprs.as_any().is::<Max>());
+                        assert_eq!("c1", result_agg_phy_exprs.name());
+                        assert_eq!(
+                            Field::new("c1", data_type.clone(), true),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
+                    _ => {}
+                };
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_sum_avg_expr() -> Result<()> {
+        let funcs = vec![AggregateFunction::Sum, AggregateFunction::Avg];
+        let data_types = vec![
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::Float32,
+            DataType::Float64,
+        ];
+        for fun in funcs {
+            for data_type in &data_types {
+                let input_schema =
+                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
+                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
+                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
+                )];
+                let result_agg_phy_exprs = create_aggregate_expr(
+                    &fun,
+                    false,
+                    &input_phy_exprs[0..1],
+                    &input_schema,
+                    "c1",
+                )?;
+                match fun {
+                    AggregateFunction::Sum => {
+                        assert!(result_agg_phy_exprs.as_any().is::<Sum>());
+                        assert_eq!("c1", result_agg_phy_exprs.name());
+                        let expect_type = match data_type {
+                            DataType::UInt8
+                            | DataType::UInt16
+                            | DataType::UInt32
+                            | DataType::UInt64 => DataType::UInt64,
+                            DataType::Int8
+                            | DataType::Int16
+                            | DataType::Int32
+                            | DataType::Int64 => DataType::Int64,
+                            DataType::Float32 | DataType::Float64 => data_type.clone(),
+                            _ => data_type.clone(),
+                        };
+
+                        assert_eq!(
+                            Field::new("c1", expect_type.clone(), true),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
+                    AggregateFunction::Avg => {
+                        assert!(result_agg_phy_exprs.as_any().is::<Avg>());
+                        assert_eq!("c1", result_agg_phy_exprs.name());
+                        assert_eq!(
+                            Field::new("c1", DataType::Float64, true),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
+                    _ => {}
+                };
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_min_max() -> Result<()> {
@@ -233,6 +457,16 @@ mod tests {
 
         let observed = return_type(&AggregateFunction::Max, &[DataType::Int32])?;
         assert_eq!(DataType::Int32, observed);
+
+        // test decimal for min
+        let observed = return_type(&AggregateFunction::Min, &[DataType::Decimal(10, 6)])?;
+        assert_eq!(DataType::Decimal(10, 6), observed);
+
+        // test decimal for max
+        let observed =
+            return_type(&AggregateFunction::Max, &[DataType::Decimal(28, 13)])?;
+        assert_eq!(DataType::Decimal(28, 13), observed);
+
         Ok(())
     }
 
@@ -255,6 +489,10 @@ mod tests {
         assert_eq!(DataType::UInt64, observed);
 
         let observed = return_type(&AggregateFunction::Count, &[DataType::Int8])?;
+        assert_eq!(DataType::UInt64, observed);
+
+        let observed =
+            return_type(&AggregateFunction::Count, &[DataType::Decimal(28, 13)])?;
         assert_eq!(DataType::UInt64, observed);
         Ok(())
     }

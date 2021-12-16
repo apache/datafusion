@@ -18,7 +18,9 @@
 //! Command within CLI
 
 use crate::context::Context;
-use crate::print_options::PrintOptions;
+use crate::functions::{display_all_functions, Function};
+use crate::print_format::PrintFormat;
+use crate::print_options::{self, PrintOptions};
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -34,13 +36,21 @@ pub enum Command {
     Help,
     ListTables,
     DescribeTable(String),
+    ListFunctions,
+    SearchFunctions(String),
+    QuietMode(Option<bool>),
+    OutputFormat(Option<String>),
+}
+
+pub enum OutputFormat {
+    ChangeFormat(String),
 }
 
 impl Command {
     pub async fn execute(
         &self,
         ctx: &mut Context,
-        print_options: &PrintOptions,
+        print_options: &mut PrintOptions,
     ) -> Result<()> {
         let now = Instant::now();
         match self {
@@ -61,8 +71,37 @@ impl Command {
                     .print_batches(&batches, now)
                     .map_err(|e| DataFusionError::Execution(e.to_string()))
             }
+            Self::QuietMode(quiet) => {
+                if let Some(quiet) = quiet {
+                    print_options.quiet = *quiet;
+                    println!(
+                        "Quiet mode set to {}",
+                        if print_options.quiet { "true" } else { "false" }
+                    );
+                } else {
+                    println!(
+                        "Quiet mode is {}",
+                        if print_options.quiet { "true" } else { "false" }
+                    );
+                }
+                Ok(())
+            }
             Self::Quit => Err(DataFusionError::Execution(
                 "Unexpected quit, this should be handled outside".into(),
+            )),
+            Self::ListFunctions => display_all_functions(),
+            Self::SearchFunctions(function) => {
+                if let Ok(func) = function.parse::<Function>() {
+                    let details = func.function_details()?;
+                    println!("{}", details);
+                    Ok(())
+                } else {
+                    let msg = format!("{} is not a supported function", function);
+                    Err(DataFusionError::Execution(msg))
+                }
+            }
+            Self::OutputFormat(_) => Err(DataFusionError::Execution(
+                "Unexpected change output format, this should be handled outside".into(),
             )),
         }
     }
@@ -73,15 +112,25 @@ impl Command {
             Self::ListTables => ("\\d", "list tables"),
             Self::DescribeTable(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
+            Self::ListFunctions => ("\\h", "function list"),
+            Self::SearchFunctions(_) => ("\\h function", "search function"),
+            Self::QuietMode(_) => ("\\quiet (true|false)?", "print or set quiet mode"),
+            Self::OutputFormat(_) => {
+                ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
+            }
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 4] = [
+const ALL_COMMANDS: [Command; 8] = [
     Command::ListTables,
     Command::DescribeTable(String::new()),
     Command::Quit,
     Command::Help,
+    Command::ListFunctions,
+    Command::SearchFunctions(String::new()),
+    Command::QuietMode(None),
+    Command::OutputFormat(None),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -117,7 +166,52 @@ impl FromStr for Command {
             ("d", None) => Self::ListTables,
             ("d", Some(name)) => Self::DescribeTable(name.into()),
             ("?", None) => Self::Help,
+            ("h", None) => Self::ListFunctions,
+            ("h", Some(function)) => Self::SearchFunctions(function.into()),
+            ("quiet", Some("true" | "t" | "yes" | "y" | "on")) => {
+                Self::QuietMode(Some(true))
+            }
+            ("quiet", Some("false" | "f" | "no" | "n" | "off")) => {
+                Self::QuietMode(Some(false))
+            }
+            ("quiet", None) => Self::QuietMode(None),
+            ("pset", Some(subcommand)) => {
+                Self::OutputFormat(Some(subcommand.to_string()))
+            }
+            ("pset", None) => Self::OutputFormat(None),
             _ => return Err(()),
         })
+    }
+}
+
+impl FromStr for OutputFormat {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let (c, arg) = if let Some((a, b)) = s.split_once(' ') {
+            (a, Some(b))
+        } else {
+            (s, None)
+        };
+        Ok(match (c, arg) {
+            ("format", Some(format)) => Self::ChangeFormat(format.to_string()),
+            _ => return Err(()),
+        })
+    }
+}
+
+impl OutputFormat {
+    pub async fn execute(&self, print_options: &mut PrintOptions) -> Result<()> {
+        match self {
+            Self::ChangeFormat(format) => {
+                if let Ok(format) = format.parse::<PrintFormat>() {
+                    print_options.format = format;
+                    println!("Output format is {}.", print_options.format);
+                    Ok(())
+                } else {
+                    Err(DataFusionError::Execution(format!("{} is not a valid format type [possible values: csv, tsv, table, json, ndjson]", format)))
+                }
+            }
+        }
     }
 }

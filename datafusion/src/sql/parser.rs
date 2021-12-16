@@ -85,7 +85,7 @@ pub struct CreateExternalTable {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     /// ANSI SQL AST node
-    Statement(SQLStatement),
+    Statement(Box<SQLStatement>),
     /// Extension: `CREATE EXTERNAL TABLE`
     CreateExternalTable(CreateExternalTable),
 }
@@ -167,13 +167,17 @@ impl<'a> DFParser<'a> {
                     }
                     _ => {
                         // use the native parser
-                        Ok(Statement::Statement(self.parser.parse_statement()?))
+                        Ok(Statement::Statement(Box::from(
+                            self.parser.parse_statement()?,
+                        )))
                     }
                 }
             }
             _ => {
                 // use the native parser
-                Ok(Statement::Statement(self.parser.parse_statement()?))
+                Ok(Statement::Statement(Box::from(
+                    self.parser.parse_statement()?,
+                )))
             }
         }
     }
@@ -183,7 +187,7 @@ impl<'a> DFParser<'a> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table()
         } else {
-            Ok(Statement::Statement(self.parser.parse_create()?))
+            Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
         }
     }
 

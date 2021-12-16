@@ -16,7 +16,10 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::{and, replace_col, Column, LogicalPlan};
+use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection};
+use crate::logical_plan::{
+    and, replace_col, Column, CrossJoin, Limit, LogicalPlan, TableScan,
+};
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -179,10 +182,10 @@ fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
             and(acc, (*predicate).to_owned())
         });
 
-    LogicalPlan::Filter {
+    LogicalPlan::Filter(Filter {
         predicate,
         input: Arc::new(plan),
-    }
+    })
 }
 
 // remove all filters from `filters` that are in `predicate_columns`
@@ -242,6 +245,9 @@ fn split_members<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>) {
             split_members(left, predicates);
             split_members(right, predicates);
         }
+        Expr::Alias(expr, _) => {
+            split_members(expr, predicates);
+        }
         other => predicates.push(other),
     }
 }
@@ -285,7 +291,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             push_down(&state, plan)
         }
         LogicalPlan::Analyze { .. } => push_down(&state, plan),
-        LogicalPlan::Filter { input, predicate } => {
+        LogicalPlan::Filter(Filter { input, predicate }) => {
             let mut predicates = vec![];
             split_members(predicate, &mut predicates);
 
@@ -305,6 +311,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     }
                     Ok(())
                 })?;
+
             // Predicates without columns will not be pushed down.
             // As those contain only literals, they could be optimized using constant folding
             // and removal of WHERE TRUE / WHERE FALSE
@@ -314,12 +321,12 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 optimize(input, state)
             }
         }
-        LogicalPlan::Projection {
+        LogicalPlan::Projection(Projection {
             input,
             expr,
             schema,
             alias: _,
-        } => {
+        }) => {
             // A projection is filter-commutable, but re-writes all predicate expressions
             // collect projection.
             let projection = schema
@@ -351,9 +358,9 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             utils::from_plan(plan, expr, &[new_input])
         }
-        LogicalPlan::Aggregate {
-            input, aggr_expr, ..
-        } => {
+        LogicalPlan::Aggregate(Aggregate {
+            aggr_expr, input, ..
+        }) => {
             // An aggregate's aggreagate columns are _not_ filter-commutable => collect these:
             // * columns whose aggregation expression depends on
             // * the aggregation columns themselves
@@ -374,11 +381,11 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // sort is filter-commutable
             push_down(&state, plan)
         }
-        LogicalPlan::Union { .. } => {
+        LogicalPlan::Union(_) => {
             // union all is filter-commutable
             push_down(&state, plan)
         }
-        LogicalPlan::Limit { input, .. } => {
+        LogicalPlan::Limit(Limit { input, .. }) => {
             // limit is _not_ filter-commutable => collect all columns from its input
             let used_columns = input
                 .schema()
@@ -388,12 +395,12 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .collect::<HashSet<_>>();
             issue_filters(state, used_columns, plan)
         }
-        LogicalPlan::CrossJoin { left, right, .. } => {
+        LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
             optimize_join(state, plan, left, right)
         }
-        LogicalPlan::Join {
+        LogicalPlan::Join(Join {
             left, right, on, ..
-        } => {
+        }) => {
             // duplicate filters for joined columns so filters can be pushed down to both sides.
             // Take the following query as an example:
             //
@@ -451,14 +458,14 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             optimize_join(state, plan, left, right)
         }
-        LogicalPlan::TableScan {
+        LogicalPlan::TableScan(TableScan {
             source,
             projected_schema,
             filters,
             projection,
             table_name,
             limit,
-        } => {
+        }) => {
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
 
@@ -487,14 +494,14 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             issue_filters(
                 state,
                 used_columns,
-                &LogicalPlan::TableScan {
+                &LogicalPlan::TableScan(TableScan {
                     source: source.clone(),
                     projection: projection.clone(),
                     projected_schema: projected_schema.clone(),
                     table_name: table_name.clone(),
                     filters: new_filters,
                     limit: *limit,
-                },
+                }),
             )
         }
         _ => {
@@ -1174,7 +1181,7 @@ mod tests {
     ) -> Result<LogicalPlan> {
         let test_provider = PushDownProvider { filter_support };
 
-        let table_scan = LogicalPlan::TableScan {
+        let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".to_string(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
@@ -1183,7 +1190,7 @@ mod tests {
             projection: None,
             source: Arc::new(test_provider),
             limit: None,
-        };
+        });
 
         LogicalPlanBuilder::from(table_scan)
             .filter(col("a").eq(lit(1i64)))?

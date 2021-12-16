@@ -27,7 +27,7 @@ mod display;
 mod expr;
 mod extension;
 mod operators;
-mod plan;
+pub mod plan;
 mod registry;
 pub mod window_frames;
 pub use builder::{
@@ -44,14 +44,16 @@ pub use expr::{
     max, md5, min, normalize_col, normalize_cols, now, octet_length, or, random,
     regexp_match, regexp_replace, repeat, replace, replace_col, reverse, right, round,
     rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, split_part, sqrt,
-    starts_with, strpos, substr, sum, tan, to_hex, translate, trim, trunc,
+    starts_with, strpos, substr, sum, tan, to_hex, translate, trim, trunc, unalias,
     unnormalize_col, unnormalize_cols, upper, when, Column, Expr, ExprRewriter,
     ExpressionVisitor, Literal, Recursion, RewriteRecursion,
 };
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
 pub use plan::{
-    JoinConstraint, JoinType, LogicalPlan, Partitioning, PlanType, PlanVisitor,
+    CreateExternalTable, CreateMemoryTable, CrossJoin, DropTable, EmptyRelation,
+    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, PlanVisitor,
+    Repartition, TableScan, Union, Values,
 };
 pub(crate) use plan::{StringifiedPlan, ToStringifiedPlan};
 pub use registry::FunctionRegistry;

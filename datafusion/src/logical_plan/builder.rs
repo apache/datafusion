@@ -25,7 +25,11 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::plan::ToStringifiedPlan;
+use crate::logical_plan::plan::{
+    Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
+    TableScan, ToStringifiedPlan, Union, Window,
+};
+use crate::optimizer::utils;
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
 use arrow::{
@@ -42,8 +46,8 @@ use std::{
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, Column, DFField, DFSchema,
-    DFSchemaRef, Partitioning,
+    columnize_expr, normalize_col, normalize_cols, Column, CrossJoin, DFField, DFSchema,
+    DFSchemaRef, Limit, Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 
@@ -107,10 +111,10 @@ impl LogicalPlanBuilder {
     ///
     /// `produce_one_row` set to true means this empty node needs to produce a placeholder row.
     pub fn empty(produce_one_row: bool) -> Self {
-        Self::from(LogicalPlan::EmptyRelation {
+        Self::from(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
-        })
+        }))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
@@ -184,7 +188,7 @@ impl LogicalPlanBuilder {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
         let schema = DFSchemaRef::new(DFSchema::new(fields)?);
-        Ok(Self::from(LogicalPlan::Values { schema, values }))
+        Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
     /// Scan a memory data source
@@ -392,15 +396,14 @@ impl LogicalPlanBuilder {
                 DFSchema::try_from_qualified_schema(&table_name, &schema)
             })?;
 
-        let table_scan = LogicalPlan::TableScan {
+        let table_scan = LogicalPlan::TableScan(TableScan {
             table_name,
             source: provider,
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
             limit: None,
-        };
-
+        });
         Ok(Self::from(table_scan))
     }
     /// Wrap a plan in a window
@@ -450,26 +453,120 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(&self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Ok(Self::from(LogicalPlan::Filter {
+        Ok(Self::from(LogicalPlan::Filter(Filter {
             predicate: expr,
             input: Arc::new(self.plan.clone()),
-        }))
+        })))
     }
 
     /// Apply a limit
     pub fn limit(&self, n: usize) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Limit {
+        Ok(Self::from(LogicalPlan::Limit(Limit {
             n,
             input: Arc::new(self.plan.clone()),
-        }))
+        })))
+    }
+
+    /// Add missing sort columns to all downstream projection
+    fn add_missing_columns(
+        &self,
+        curr_plan: LogicalPlan,
+        missing_cols: &[Column],
+    ) -> Result<LogicalPlan> {
+        match curr_plan {
+            LogicalPlan::Projection(Projection {
+                input,
+                mut expr,
+                schema: _,
+                alias,
+            }) if missing_cols
+                .iter()
+                .all(|c| input.schema().field_from_column(c).is_ok()) =>
+            {
+                let input_schema = input.schema();
+
+                let missing_exprs = missing_cols
+                    .iter()
+                    .map(|c| normalize_col(Expr::Column(c.clone()), &input))
+                    .collect::<Result<Vec<_>>>()?;
+
+                expr.extend(missing_exprs);
+
+                let new_schema = DFSchema::new(exprlist_to_fields(&expr, input_schema)?)?;
+
+                Ok(LogicalPlan::Projection(Projection {
+                    expr,
+                    input,
+                    schema: DFSchemaRef::new(new_schema),
+                    alias,
+                }))
+            }
+            _ => {
+                let new_inputs = curr_plan
+                    .inputs()
+                    .into_iter()
+                    .map(|input_plan| {
+                        self.add_missing_columns((*input_plan).clone(), missing_cols)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let expr = curr_plan.expressions();
+                utils::from_plan(&curr_plan, &expr, &new_inputs)
+            }
+        }
     }
 
     /// Apply a sort
-    pub fn sort(&self, exprs: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Sort {
-            expr: normalize_cols(exprs, &self.plan)?,
-            input: Arc::new(self.plan.clone()),
-        }))
+    pub fn sort(
+        &self,
+        exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone,
+    ) -> Result<Self> {
+        let schema = self.plan.schema();
+
+        // Collect sort columns that are missing in the input plan's schema
+        let mut missing_cols: Vec<Column> = vec![];
+        exprs
+            .clone()
+            .into_iter()
+            .try_for_each::<_, Result<()>>(|expr| {
+                let mut columns: HashSet<Column> = HashSet::new();
+                utils::expr_to_columns(&expr.into(), &mut columns)?;
+
+                columns.into_iter().for_each(|c| {
+                    if schema.field_from_column(&c).is_err() {
+                        missing_cols.push(c);
+                    }
+                });
+
+                Ok(())
+            })?;
+
+        if missing_cols.is_empty() {
+            return Ok(Self::from(LogicalPlan::Sort(Sort {
+                expr: normalize_cols(exprs, &self.plan)?,
+                input: Arc::new(self.plan.clone()),
+            })));
+        }
+
+        let plan = self.add_missing_columns(self.plan.clone(), &missing_cols)?;
+        let sort_plan = LogicalPlan::Sort(Sort {
+            expr: normalize_cols(exprs, &plan)?,
+            input: Arc::new(plan.clone()),
+        });
+        // remove pushed down sort columns
+        let new_expr = schema
+            .fields()
+            .iter()
+            .map(|f| Expr::Column(f.qualified_column()))
+            .collect();
+        let new_schema = DFSchema::new(exprlist_to_fields(&new_expr, schema)?)?;
+
+        Ok(Self::from(LogicalPlan::Projection(Projection {
+            expr: new_expr,
+            input: Arc::new(sort_plan),
+            schema: DFSchemaRef::new(new_schema),
+            alias: None,
+        })))
     }
 
     /// Apply a union
@@ -585,7 +682,7 @@ impl LogicalPlanBuilder {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
-        Ok(Self::from(LogicalPlan::Join {
+        Ok(Self::from(LogicalPlan::Join(Join {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             on,
@@ -593,7 +690,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null,
-        }))
+        })))
     }
 
     /// Apply a join with using constraint, which duplicates all join columns in output schema.
@@ -617,7 +714,7 @@ impl LogicalPlanBuilder {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
-        Ok(Self::from(LogicalPlan::Join {
+        Ok(Self::from(LogicalPlan::Join(Join {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             on,
@@ -625,25 +722,25 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::Using,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null: false,
-        }))
+        })))
     }
 
     /// Apply a cross join
     pub fn cross_join(&self, right: &LogicalPlan) -> Result<Self> {
         let schema = self.plan.schema().join(right.schema())?;
-        Ok(Self::from(LogicalPlan::CrossJoin {
+        Ok(Self::from(LogicalPlan::CrossJoin(CrossJoin {
             left: Arc::new(self.plan.clone()),
             right: Arc::new(right.clone()),
             schema: DFSchemaRef::new(schema),
-        }))
+        })))
     }
 
     /// Repartition
     pub fn repartition(&self, partitioning_scheme: Partitioning) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Repartition {
+        Ok(Self::from(LogicalPlan::Repartition(Repartition {
             input: Arc::new(self.plan.clone()),
             partitioning_scheme,
-        }))
+        })))
     }
 
     /// Apply a window functions to extend the schema
@@ -657,11 +754,11 @@ impl LogicalPlanBuilder {
         let mut window_fields: Vec<DFField> =
             exprlist_to_fields(all_expr, self.plan.schema())?;
         window_fields.extend_from_slice(self.plan.schema().fields());
-        Ok(Self::from(LogicalPlan::Window {
+        Ok(Self::from(LogicalPlan::Window(Window {
             input: Arc::new(self.plan.clone()),
             window_expr,
             schema: Arc::new(DFSchema::new(window_fields)?),
-        }))
+        })))
     }
 
     /// Apply an aggregate: grouping on the `group_expr` expressions
@@ -678,12 +775,12 @@ impl LogicalPlanBuilder {
         validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
         let aggr_schema =
             DFSchema::new(exprlist_to_fields(all_expr, self.plan.schema())?)?;
-        Ok(Self::from(LogicalPlan::Aggregate {
+        Ok(Self::from(LogicalPlan::Aggregate(Aggregate {
             input: Arc::new(self.plan.clone()),
             group_expr,
             aggr_expr,
             schema: DFSchemaRef::new(aggr_schema),
-        }))
+        })))
     }
 
     /// Create an expression to represent the explanation of the plan
@@ -697,21 +794,21 @@ impl LogicalPlanBuilder {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(Self::from(LogicalPlan::Analyze {
+            Ok(Self::from(LogicalPlan::Analyze(Analyze {
                 verbose,
                 input: Arc::new(self.plan.clone()),
                 schema,
-            }))
+            })))
         } else {
             let stringified_plans =
                 vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
-            Ok(Self::from(LogicalPlan::Explain {
+            Ok(Self::from(LogicalPlan::Explain(Explain {
                 verbose,
                 plan: Arc::new(self.plan.clone()),
                 stringified_plans,
                 schema,
-            }))
+            })))
         }
     }
 
@@ -839,7 +936,7 @@ pub fn union_with_alias(
     let inputs = vec![left_plan, right_plan]
         .into_iter()
         .flat_map(|p| match p {
-            LogicalPlan::Union { inputs, .. } => inputs,
+            LogicalPlan::Union(Union { inputs, .. }) => inputs,
             x => vec![x],
         })
         .collect::<Vec<_>>();
@@ -862,11 +959,11 @@ pub fn union_with_alias(
         ));
     }
 
-    Ok(LogicalPlan::Union {
+    Ok(LogicalPlan::Union(Union {
         schema: union_schema,
         inputs,
         alias,
-    })
+    }))
 }
 
 /// Project with optional alias
@@ -897,12 +994,12 @@ pub fn project_with_alias(
         Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
         None => input_schema,
     };
-    Ok(LogicalPlan::Projection {
+    Ok(LogicalPlan::Projection(Projection {
         expr: projected_expr,
         input: Arc::new(plan.clone()),
         schema: DFSchemaRef::new(schema),
         alias,
-    })
+    }))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.

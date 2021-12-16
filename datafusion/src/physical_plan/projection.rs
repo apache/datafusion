@@ -21,6 +21,7 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -37,7 +38,6 @@ use super::expressions::Column;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use async_trait::async_trait;
-
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 
@@ -62,18 +62,24 @@ impl ProjectionExec {
     ) -> Result<Self> {
         let input_schema = input.schema();
 
-        let fields: Result<Vec<_>> = expr
+        let fields: Result<Vec<Field>> = expr
             .iter()
             .map(|(e, name)| {
-                Ok(Field::new(
+                let mut field = Field::new(
                     name,
                     e.data_type(&input_schema)?,
                     e.nullable(&input_schema)?,
-                ))
+                );
+                field.set_metadata(get_field_metadata(e, &input_schema));
+
+                Ok(field)
             })
             .collect();
 
-        let schema = Arc::new(Schema::new(fields?));
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields?,
+            input_schema.metadata().clone(),
+        ));
 
         Ok(Self {
             expr,
@@ -176,6 +182,24 @@ impl ExecutionPlan for ProjectionExec {
     }
 }
 
+/// If e is a direct column reference, returns the field level
+/// metadata for that field, if any. Otherwise returns None
+fn get_field_metadata(
+    e: &Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+) -> Option<BTreeMap<String, String>> {
+    let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
+        column.name()
+    } else {
+        return None;
+    };
+
+    input_schema
+        .field_with_name(name)
+        .ok()
+        .and_then(|f| f.metadata().as_ref().cloned())
+}
+
 fn stats_projection(
     stats: Statistics,
     exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
@@ -264,11 +288,12 @@ mod tests {
     use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::scalar::ScalarValue;
     use crate::test::{self};
+    use crate::test_util;
     use futures::future;
 
     #[tokio::test]
     async fn project_first_column() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
         let (_, files) =
@@ -294,6 +319,11 @@ mod tests {
             vec![(col("c1", &schema)?, "c1".to_string())],
             Arc::new(csv),
         )?;
+
+        let col_field = projection.schema.field(0);
+        let col_metadata = col_field.metadata().clone().unwrap().clone();
+        let data: &str = &col_metadata["testing"];
+        assert_eq!(data, "test");
 
         let mut partition_count = 0;
         let mut row_count = 0;

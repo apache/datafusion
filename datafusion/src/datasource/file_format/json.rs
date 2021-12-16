@@ -38,17 +38,9 @@ use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
 /// New line delimited JSON `FileFormat` implementation.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct JsonFormat {
     schema_infer_max_rec: Option<usize>,
-}
-
-impl Default for JsonFormat {
-    fn default() -> Self {
-        Self {
-            schema_infer_max_rec: None,
-        }
-    }
 }
 
 impl JsonFormat {

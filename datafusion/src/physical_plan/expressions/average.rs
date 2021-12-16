@@ -37,8 +37,6 @@ use super::{format_state_name, sum};
 #[derive(Debug)]
 pub struct Avg {
     name: String,
-    data_type: DataType,
-    nullable: bool,
     expr: Arc<dyn PhysicalExpr>,
 }
 
@@ -62,6 +60,22 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
     }
 }
 
+pub(crate) fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
+    matches!(
+        arg_type,
+        DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64
+    )
+}
+
 impl Avg {
     /// Create a new AVG aggregate function
     pub fn new(
@@ -69,11 +83,14 @@ impl Avg {
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
+        // Average is always Float64, but Avg::new() has a data_type
+        // parameter to keep a consistent signature with the other
+        // Aggregate expressions.
+        assert_eq!(data_type, DataType::Float64);
+
         Self {
             name: name.into(),
             expr,
-            data_type,
-            nullable: true,
         }
     }
 }

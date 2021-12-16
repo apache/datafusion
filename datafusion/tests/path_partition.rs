@@ -33,11 +33,9 @@ use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::ColumnStatistics,
     prelude::ExecutionContext,
-    test_util::{arrow_test_data, parquet_test_data},
+    test_util::{self, arrow_test_data, parquet_test_data},
 };
 use futures::{stream, StreamExt};
-
-mod common;
 
 #[tokio::test]
 async fn csv_filter_with_file_col() -> Result<()> {
@@ -281,7 +279,7 @@ fn register_partitioned_aggregate_csv(
 ) {
     let testdata = arrow_test_data();
     let csv_file_path = format!("{}/csv/aggregate_test_100.csv", testdata);
-    let file_schema = common::aggr_test_schema();
+    let file_schema = test_util::aggr_test_schema();
     let object_store = MirroringObjectStore::new_arc(csv_file_path, store_paths);
 
     let mut options = ListingOptions::new(Arc::new(CsvFormat::default()));

@@ -76,7 +76,7 @@ impl ListingOptions {
             file_extension: String::new(),
             format,
             table_partition_cols: vec![],
-            collect_stat: false,
+            collect_stat: true,
             target_partitions: 1,
         }
     }
@@ -297,6 +297,23 @@ mod tests {
         assert_eq!(exec.output_partitioning().partition_count(), 1);
 
         // test metadata
+        assert_eq!(exec.statistics().num_rows, Some(8));
+        assert_eq!(exec.statistics().total_byte_size, Some(671));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_table_stats_by_default() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema = opt
+            .infer_schema(Arc::new(LocalFileSystem {}), &filename)
+            .await?;
+        let table =
+            ListingTable::new(Arc::new(LocalFileSystem {}), filename, schema, opt);
+        let exec = table.scan(&None, 1024, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
 

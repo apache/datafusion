@@ -93,12 +93,12 @@ impl FileFormat for ParquetFormat {
             .next()
             .await
             .ok_or_else(|| DataFusionError::Plan("No data file found".to_owned()))??;
-        let (schema, _) = fetch_metadata(first_file)?;
+        let schema = fetch_schema(first_file)?;
         Ok(Arc::new(schema))
     }
 
     async fn infer_stats(&self, reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
-        let (_, stats) = fetch_metadata(reader)?;
+        let stats = fetch_statistics(reader)?;
         Ok(stats)
     }
 
@@ -242,8 +242,18 @@ fn summarize_min_max(
     }
 }
 
-/// Read and parse the metadata of the Parquet file at location `path`
-fn fetch_metadata(object_reader: Arc<dyn ObjectReader>) -> Result<(Schema, Statistics)> {
+/// Read and parse the schema of the Parquet file at location `path`
+fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
+    let obj_reader = ChunkObjectReader(object_reader);
+    let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
+    let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
+    let schema = arrow_reader.get_schema()?;
+
+    Ok(schema)
+}
+
+/// Read and parse the statistics of the Parquet file at location `path`
+fn fetch_statistics(object_reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
     let obj_reader = ChunkObjectReader(object_reader);
     let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
@@ -298,7 +308,7 @@ fn fetch_metadata(object_reader: Arc<dyn ObjectReader>) -> Result<(Schema, Stati
         is_exact: true,
     };
 
-    Ok((schema, statistics))
+    Ok(statistics)
 }
 
 /// A wrapper around the object reader to make it implement `ChunkReader`
