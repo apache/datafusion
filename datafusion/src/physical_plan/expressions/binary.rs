@@ -25,8 +25,8 @@ use arrow::compute::kernels::arithmetic::{
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::comparison::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow::compute::kernels::comparison::{
-    eq_bool, eq_bool_scalar, gt_bool, gt_eq_bool, lt_bool, lt_eq_bool, neq_bool,
-    neq_bool_scalar,
+    eq_bool, eq_bool_scalar, gt_bool, gt_bool_scalar, gt_eq_bool, gt_eq_bool_scalar,
+    lt_bool, lt_bool_scalar, lt_eq_bool, lt_eq_bool_scalar, neq_bool, neq_bool_scalar,
 };
 use arrow::compute::kernels::comparison::{
     eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
@@ -76,38 +76,6 @@ fn is_not_distinct_from_bool(
         .iter()
         .zip(right.iter())
         .map(|(left, right)| Some(left == right))
-        .collect())
-}
-
-// TODO use arrow-rs kernels when available. See
-// https://github.com/apache/arrow-rs/issues/959
-#[allow(clippy::bool_comparison)]
-fn lt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    Ok(left
-        .iter()
-        .map(|left| left.map(|left| left < right))
-        .collect())
-}
-
-fn lt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    Ok(left
-        .iter()
-        .map(|left| left.map(|left| left <= right))
-        .collect())
-}
-
-#[allow(clippy::bool_comparison)]
-fn gt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    Ok(left
-        .iter()
-        .map(|left| left.map(|left| left > right))
-        .collect())
-}
-
-fn gt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    Ok(left
-        .iter()
-        .map(|left| left.map(|left| left >= right))
         .collect())
 }
 
