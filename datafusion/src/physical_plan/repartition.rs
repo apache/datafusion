@@ -348,6 +348,9 @@ impl RepartitionExec {
                     for (num_output_partition, partition_indices) in
                         indices.into_iter().enumerate()
                     {
+                        if partition_indices.is_empty() {
+                            continue;
+                        }
                         let timer = r_metrics.repart_time.timer();
                         let indices = partition_indices.into();
                         // Produce batches based on indices
@@ -950,6 +953,34 @@ mod tests {
         drop(fut);
         assert_strong_count_converges_to_zero(refs).await;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hash_repartition_avoid_empty_batch() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(StringArray::from(vec!["foo"])) as ArrayRef,
+        )])
+        .unwrap();
+        let partitioning = Partitioning::Hash(
+            vec![Arc::new(crate::physical_plan::expressions::Column::new(
+                "a", 0,
+            ))],
+            2,
+        );
+        let schema = batch.schema();
+        let input = MockExec::new(vec![Ok(batch)], schema);
+        let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
+        let output_stream0 = exec.execute(0).await.unwrap();
+        let batch0 = crate::physical_plan::common::collect(output_stream0)
+            .await
+            .unwrap();
+        let output_stream1 = exec.execute(1).await.unwrap();
+        let batch1 = crate::physical_plan::common::collect(output_stream1)
+            .await
+            .unwrap();
+        assert!(batch0.is_empty() || batch1.is_empty());
         Ok(())
     }
 }
