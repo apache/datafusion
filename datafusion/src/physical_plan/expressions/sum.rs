@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::ScalarValue;
+use crate::scalar::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
 use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{
@@ -56,13 +56,13 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
         DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
             Ok(DataType::UInt64)
         }
-        // In the https://www.postgresql.org/docs/8.2/functions-aggregate.html doc,
+        // In the https://www.postgresql.org/docs/current/functions-aggregate.html doc,
         // the result type of floating-point is FLOAT64 with the double precision.
         DataType::Float64 | DataType::Float32 => Ok(DataType::Float64),
-        // Max precision is 38
         DataType::Decimal(precision, scale) => {
             // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-            let new_precision = 38.min(*precision + 10);
+            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
+            let new_precision = MAX_PRECISION_FOR_DECIMAL128.min(*precision + 10);
             Ok(DataType::Decimal(new_precision, *scale))
         }
         other => Err(DataFusionError::Plan(format!(
@@ -234,8 +234,8 @@ fn sum_decimal(
         (None, None) => ScalarValue::Decimal128(None, *precision, *scale),
         (None, rhs) => ScalarValue::Decimal128(*rhs, *precision, *scale),
         (lhs, None) => ScalarValue::Decimal128(*lhs, *precision, *scale),
-        (lhs, rhs) => {
-            ScalarValue::Decimal128(Some(lhs.unwrap() + rhs.unwrap()), *precision, *scale)
+        (Some(lhs_value), Some(rhs_value)) => {
+            ScalarValue::Decimal128(Some(lhs_value + rhs_value), *precision, *scale)
         }
     }
 }
@@ -250,14 +250,14 @@ fn sum_decimal_with_diff_scale(
     // the lhs_scale must be greater or equal rhs_scale.
     match (lhs, rhs) {
         (None, None) => ScalarValue::Decimal128(None, *precision, *lhs_scale),
-        (None, rhs) => {
-            let new_value = rhs.unwrap() * 10_i128.pow((lhs_scale - rhs_scale) as u32);
+        (None, Some(rhs_value)) => {
+            let new_value = rhs_value * 10_i128.pow((lhs_scale - rhs_scale) as u32);
             ScalarValue::Decimal128(Some(new_value), *precision, *lhs_scale)
         }
         (lhs, None) => ScalarValue::Decimal128(*lhs, *precision, *lhs_scale),
-        (lhs, rhs) => {
+        (Some(lhs_value), Some(rhs_value)) => {
             let new_value =
-                rhs.unwrap() * 10_i128.pow((lhs_scale - rhs_scale) as u32) + lhs.unwrap();
+                rhs_value * 10_i128.pow((lhs_scale - rhs_scale) as u32) + lhs_value;
             ScalarValue::Decimal128(Some(new_value), *precision, *lhs_scale)
         }
     }
@@ -266,17 +266,16 @@ fn sum_decimal_with_diff_scale(
 pub(super) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     Ok(match (lhs, rhs) {
         (ScalarValue::Decimal128(v1, p1, s1), ScalarValue::Decimal128(v2, p2, s2)) => {
+            let max_precision = p1.max(p2);
             if s1.eq(s2) {
-                sum_decimal(v1, v2, p1, s1)
-            } else if s1.gt(s2) && p1.ge(p2) {
-                // For avg aggravate function.
-                // In the avg function, the scale of result data type is different with the scale of the input data type.
-                sum_decimal_with_diff_scale(v1, v2, p1, s1, s2)
+                // s1 = s2
+                sum_decimal(v1, v2, max_precision, s1)
+            } else if s1.gt(s2) {
+                // s1 > s2
+                sum_decimal_with_diff_scale(v1, v2, max_precision, s1, s2)
             } else {
-                return Err(DataFusionError::Internal(format!(
-                    "Sum is not expected to receive lhs {:?}, rhs {:?}",
-                    lhs, rhs
-                )));
+                // s1 < s2
+                sum_decimal_with_diff_scale(v2, v1, max_precision, s2, s1)
             }
         }
         // float64 coerces everything to f64
@@ -419,17 +418,13 @@ mod tests {
             ScalarValue::Decimal128(Some(123 + 124 * 10_i128.pow(1)), 10, 3),
             result
         );
-        // negative test with diff scale
+        // diff precision and scale for decimal data type
         let left = ScalarValue::Decimal128(Some(123), 10, 2);
         let right = ScalarValue::Decimal128(Some(124), 11, 3);
         let result = sum(&left, &right);
         assert_eq!(
-            DataFusionError::Internal(format!(
-                "Sum is not expected to receive lhs {:?}, rhs {:?}",
-                left, right
-            ))
-            .to_string(),
-            result.unwrap_err().to_string()
+            ScalarValue::Decimal128(Some(123 * 10_i128.pow(3 - 2) + 124), 11, 3),
+            result.unwrap()
         );
 
         // test sum batch

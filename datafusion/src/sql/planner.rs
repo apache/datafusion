@@ -35,7 +35,7 @@ use crate::logical_plan::{
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
-use crate::scalar::ScalarValue;
+use crate::scalar::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::udaf::AggregateUDF,
@@ -371,27 +371,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
                 Ok(DataType::Utf8)
             }
-            SQLDataType::Decimal(precision, scale) => {
-                match (precision, scale) {
-                    (None, _) | (_, None) => {
+            SQLDataType::Decimal(precision, scale) => match (precision, scale) {
+                (None, _) | (_, None) => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Invalid Decimal type ({:?}), precision or scale can't be empty.",
+                        sql_type
+                    )));
+                }
+                (Some(p), Some(s)) => {
+                    if (*p as usize) > MAX_PRECISION_FOR_DECIMAL128 || *s > *p {
                         return Err(DataFusionError::Internal(format!(
-                            "Invalid Decimal type ({:?}), precision or scale can't be empty.",
-                            sql_type
-                        )));
-                    }
-                    (Some(p), Some(s)) => {
-                        // TODO add bound checker in some utils file or function
-                        if *p > 38 || *s > *p {
-                            return Err(DataFusionError::Internal(format!(
                                 "Error Decimal Type ({:?}), precision must be less than or equal to 38 and scale can't be greater than precision",
                                 sql_type
                             )));
-                        } else {
-                            Ok(DataType::Decimal(*p as usize, *s as usize))
-                        }
+                    } else {
+                        Ok(DataType::Decimal(*p as usize, *s as usize))
                     }
                 }
-            }
+            },
             SQLDataType::Float(_) => Ok(DataType::Float32),
             SQLDataType::Real => Ok(DataType::Float32),
             SQLDataType::Double => Ok(DataType::Float64),
@@ -2054,27 +2051,24 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         SQLDataType::Char(_) | SQLDataType::Varchar(_) => Ok(DataType::Utf8),
         SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         SQLDataType::Date => Ok(DataType::Date32),
-        SQLDataType::Decimal(precision, scale) => {
-            match (precision, scale) {
-                (None, _) | (_, None) => {
+        SQLDataType::Decimal(precision, scale) => match (precision, scale) {
+            (None, _) | (_, None) => {
+                return Err(DataFusionError::Internal(format!(
+                    "Invalid Decimal type ({:?}), precision or scale can't be empty.",
+                    sql_type
+                )));
+            }
+            (Some(p), Some(s)) => {
+                if (*p as usize) > MAX_PRECISION_FOR_DECIMAL128 || *s > *p {
                     return Err(DataFusionError::Internal(format!(
-                        "Invalid Decimal type ({:?}), precision or scale can't be empty.",
+                        "Error Decimal Type ({:?})",
                         sql_type
                     )));
-                }
-                (Some(p), Some(s)) => {
-                    // TODO add bound checker in some utils file or function
-                    if *p > 38 || *s > *p {
-                        return Err(DataFusionError::Internal(format!(
-                            "Error Decimal Type ({:?})",
-                            sql_type
-                        )));
-                    } else {
-                        Ok(DataType::Decimal(*p as usize, *s as usize))
-                    }
+                } else {
+                    Ok(DataType::Decimal(*p as usize, *s as usize))
                 }
             }
-        }
+        },
         other => Err(DataFusionError::NotImplemented(format!(
             "Unsupported SQL type {:?}",
             other

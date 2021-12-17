@@ -23,7 +23,9 @@ use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::ScalarValue;
+use crate::scalar::{
+    ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128,
+};
 use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{
@@ -45,9 +47,10 @@ pub struct Avg {
 pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
         DataType::Decimal(precision, scale) => {
-            // the new precision and scale for return type of avg function
-            let new_precision = 38.min(*precision + 4);
-            let new_scale = 38.min(*scale + 4);
+            // in the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
+            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
+            let new_precision = MAX_PRECISION_FOR_DECIMAL128.min(*precision + 4);
+            let new_scale = MAX_SCALE_FOR_DECIMAL128.min(*scale + 4);
             Ok(DataType::Decimal(new_precision, new_scale))
         }
         DataType::Int8
@@ -91,18 +94,15 @@ impl Avg {
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
-        // Average is always Float64, but Avg::new() has a data_type
-        // parameter to keep a consistent signature with the other
-        // Aggregate expressions.
-        match data_type {
-            DataType::Float64 | DataType::Decimal(_, _) => Self {
-                name: name.into(),
-                expr,
-                data_type,
-            },
-            _ => {
-                unreachable!();
-            }
+        // the result of avg just support FLOAT64 and Decimal data type.
+        assert!(matches!(
+            data_type,
+            DataType::Float64 | DataType::Decimal(_, _)
+        ));
+        Self {
+            name: name.into(),
+            expr,
+            data_type,
         }
     }
 }
@@ -260,7 +260,6 @@ mod tests {
         // test agg
         let mut decimal_builder = DecimalBuilder::new(6, 10, 0);
         for i in 1..7 {
-            // the avg is 3.5, but we get the result of 3
             decimal_builder.append_value(i as i128)?;
         }
         let array: ArrayRef = Arc::new(decimal_builder.finish());
