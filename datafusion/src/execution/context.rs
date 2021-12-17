@@ -1845,9 +1845,9 @@ mod tests {
     #[tokio::test]
     async fn aggregate_decimal_min() -> Result<()> {
         let mut ctx = ExecutionContext::new();
+        // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
-
         let result = plan_and_collect(&mut ctx, "select min(c1) from d_table")
             .await
             .unwrap();
@@ -1858,6 +1858,10 @@ mod tests {
             "| -100.009        |",
             "+-----------------+",
         ];
+        assert_eq!(
+            &DataType::Decimal(10, 3),
+            result[0].schema().field(0).data_type()
+        );
         assert_batches_sorted_eq!(expected, &result);
         Ok(())
     }
@@ -1865,6 +1869,7 @@ mod tests {
     #[tokio::test]
     async fn aggregate_decimal_max() -> Result<()> {
         let mut ctx = ExecutionContext::new();
+        // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
 
@@ -1878,6 +1883,58 @@ mod tests {
             "| 110.009         |",
             "+-----------------+",
         ];
+        assert_eq!(
+            &DataType::Decimal(10, 3),
+            result[0].schema().field(0).data_type()
+        );
+        assert_batches_sorted_eq!(expected, &result);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_decimal_sum() -> Result<()> {
+        let mut ctx = ExecutionContext::new();
+        // the data type of c1 is decimal(10,3)
+        ctx.register_table("d_table", test::table_with_decimal())
+            .unwrap();
+        let result = plan_and_collect(&mut ctx, "select sum(c1) from d_table")
+            .await
+            .unwrap();
+        let expected = vec![
+            "+-----------------+",
+            "| SUM(d_table.c1) |",
+            "+-----------------+",
+            "| 100.000         |",
+            "+-----------------+",
+        ];
+        assert_eq!(
+            &DataType::Decimal(20, 3),
+            result[0].schema().field(0).data_type()
+        );
+        assert_batches_sorted_eq!(expected, &result);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_decimal_avg() -> Result<()> {
+        let mut ctx = ExecutionContext::new();
+        // the data type of c1 is decimal(10,3)
+        ctx.register_table("d_table", test::table_with_decimal())
+            .unwrap();
+        let result = plan_and_collect(&mut ctx, "select avg(c1) from d_table")
+            .await
+            .unwrap();
+        let expected = vec![
+            "+-----------------+",
+            "| AVG(d_table.c1) |",
+            "+-----------------+",
+            "| 5.0000000       |",
+            "+-----------------+",
+        ];
+        assert_eq!(
+            &DataType::Decimal(14, 7),
+            result[0].schema().field(0).data_type()
+        );
         assert_batches_sorted_eq!(expected, &result);
         Ok(())
     }
