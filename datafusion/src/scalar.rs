@@ -33,6 +33,11 @@ use std::convert::{Infallible, TryInto};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
+// TODO may need to be moved to arrow-rs
+/// The max precision and scale for decimal128
+pub(crate) const MAX_PRECISION_FOR_DECIMAL128: usize = 38;
+pub(crate) const MAX_SCALE_FOR_DECIMAL128: usize = 38;
+
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow’s `Array`.
 #[derive(Clone)]
@@ -480,8 +485,7 @@ impl ScalarValue {
         scale: usize,
     ) -> Result<Self> {
         // make sure the precision and scale is valid
-        // TODO const the max precision and min scale
-        if precision <= 38 && scale <= precision {
+        if precision <= MAX_PRECISION_FOR_DECIMAL128 && scale <= precision {
             return Ok(ScalarValue::Decimal128(Some(value), precision, scale));
         }
         return Err(DataFusionError::Internal(format!(
