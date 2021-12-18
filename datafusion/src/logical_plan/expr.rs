@@ -974,7 +974,7 @@ impl std::fmt::Display for Expr {
                 ref left,
                 ref right,
                 ref op,
-            } => write!(f, "{:?} {} {:?}", left, op, right),
+            } => write!(f, "{} {} {}", left, op, right),
             Expr::AggregateFunction {
                 /// Name of the function
                 ref fun,
