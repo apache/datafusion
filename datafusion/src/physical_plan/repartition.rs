@@ -538,7 +538,7 @@ mod tests {
 
         let total_rows: usize = output_partitions
             .iter()
-            .map(|x| x.into_iter().map(|x| x.num_rows()).sum::<usize>())
+            .map(|x| x.iter().map(|x| x.num_rows()).sum::<usize>())
             .sum();
 
         assert_eq!(8, output_partitions.len());
