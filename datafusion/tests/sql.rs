@@ -6615,3 +6615,332 @@ async fn csv_query_with_decimal_by_sql() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn timestamp_coercion() -> Result<()> {
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampSecondType>()?;
+        let table_b = make_timestamp_table::<TimestampMillisecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------------------+-------------------------+--------------------------+",
+            "| ts                  | ts                      | table_a.ts Eq table_b.ts |",
+            "+---------------------+-------------------------+--------------------------+",
+            "| 2020-09-08 13:42:29 | 2020-09-08 13:42:29.190 | true                     |",
+            "| 2020-09-08 13:42:29 | 2020-09-08 12:42:29.190 | false                    |",
+            "| 2020-09-08 13:42:29 | 2020-09-08 11:42:29.190 | false                    |",
+            "| 2020-09-08 12:42:29 | 2020-09-08 13:42:29.190 | false                    |",
+            "| 2020-09-08 12:42:29 | 2020-09-08 12:42:29.190 | true                     |",
+            "| 2020-09-08 12:42:29 | 2020-09-08 11:42:29.190 | false                    |",
+            "| 2020-09-08 11:42:29 | 2020-09-08 13:42:29.190 | false                    |",
+            "| 2020-09-08 11:42:29 | 2020-09-08 12:42:29.190 | false                    |",
+            "| 2020-09-08 11:42:29 | 2020-09-08 11:42:29.190 | true                     |",
+            "+---------------------+-------------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampSecondType>()?;
+        let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------------------+----------------------------+--------------------------+",
+            "| ts                  | ts                         | table_a.ts Eq table_b.ts |",
+            "+---------------------+----------------------------+--------------------------+",
+            "| 2020-09-08 13:42:29 | 2020-09-08 13:42:29.190855 | true                     |",
+            "| 2020-09-08 13:42:29 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 13:42:29 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29 | 2020-09-08 12:42:29.190855 | true                     |",
+            "| 2020-09-08 12:42:29 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29 | 2020-09-08 11:42:29.190855 | true                     |",
+            "+---------------------+----------------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampSecondType>()?;
+        let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+---------------------+----------------------------+--------------------------+",
+            "| ts                  | ts                         | table_a.ts Eq table_b.ts |",
+            "+---------------------+----------------------------+--------------------------+",
+            "| 2020-09-08 13:42:29 | 2020-09-08 13:42:29.190855 | true                     |",
+            "| 2020-09-08 13:42:29 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 13:42:29 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29 | 2020-09-08 12:42:29.190855 | true                     |",
+            "| 2020-09-08 12:42:29 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29 | 2020-09-08 11:42:29.190855 | true                     |",
+            "+---------------------+----------------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
+        let table_b = make_timestamp_table::<TimestampSecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+-------------------------+---------------------+--------------------------+",
+            "| ts                      | ts                  | table_a.ts Eq table_b.ts |",
+            "+-------------------------+---------------------+--------------------------+",
+            "| 2020-09-08 13:42:29.190 | 2020-09-08 13:42:29 | true                     |",
+            "| 2020-09-08 13:42:29.190 | 2020-09-08 12:42:29 | false                    |",
+            "| 2020-09-08 13:42:29.190 | 2020-09-08 11:42:29 | false                    |",
+            "| 2020-09-08 12:42:29.190 | 2020-09-08 13:42:29 | false                    |",
+            "| 2020-09-08 12:42:29.190 | 2020-09-08 12:42:29 | true                     |",
+            "| 2020-09-08 12:42:29.190 | 2020-09-08 11:42:29 | false                    |",
+            "| 2020-09-08 11:42:29.190 | 2020-09-08 13:42:29 | false                    |",
+            "| 2020-09-08 11:42:29.190 | 2020-09-08 12:42:29 | false                    |",
+            "| 2020-09-08 11:42:29.190 | 2020-09-08 11:42:29 | true                     |",
+            "+-------------------------+---------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
+        let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+-------------------------+----------------------------+--------------------------+",
+            "| ts                      | ts                         | table_a.ts Eq table_b.ts |",
+            "+-------------------------+----------------------------+--------------------------+",
+            "| 2020-09-08 13:42:29.190 | 2020-09-08 13:42:29.190855 | true                     |",
+            "| 2020-09-08 13:42:29.190 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 13:42:29.190 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29.190 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29.190 | 2020-09-08 12:42:29.190855 | true                     |",
+            "| 2020-09-08 12:42:29.190 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190 | 2020-09-08 11:42:29.190855 | true                     |",
+            "+-------------------------+----------------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
+        let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+-------------------------+----------------------------+--------------------------+",
+            "| ts                      | ts                         | table_a.ts Eq table_b.ts |",
+            "+-------------------------+----------------------------+--------------------------+",
+            "| 2020-09-08 13:42:29.190 | 2020-09-08 13:42:29.190855 | true                     |",
+            "| 2020-09-08 13:42:29.190 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 13:42:29.190 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29.190 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29.190 | 2020-09-08 12:42:29.190855 | true                     |",
+            "| 2020-09-08 12:42:29.190 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190 | 2020-09-08 11:42:29.190855 | true                     |",
+            "+-------------------------+----------------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
+        let table_b = make_timestamp_table::<TimestampSecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+----------------------------+---------------------+--------------------------+",
+            "| ts                         | ts                  | table_a.ts Eq table_b.ts |",
+            "+----------------------------+---------------------+--------------------------+",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 13:42:29 | true                     |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 12:42:29 | false                    |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 11:42:29 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 13:42:29 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 12:42:29 | true                     |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 11:42:29 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 13:42:29 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 12:42:29 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 11:42:29 | true                     |",
+            "+----------------------------+---------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
+        let table_b = make_timestamp_table::<TimestampMillisecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+----------------------------+-------------------------+--------------------------+",
+            "| ts                         | ts                      | table_a.ts Eq table_b.ts |",
+            "+----------------------------+-------------------------+--------------------------+",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 13:42:29.190 | true                     |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 12:42:29.190 | false                    |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 11:42:29.190 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 13:42:29.190 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 12:42:29.190 | true                     |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 11:42:29.190 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 13:42:29.190 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 12:42:29.190 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 11:42:29.190 | true                     |",
+            "+----------------------------+-------------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
+        let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+----------------------------+----------------------------+--------------------------+",
+            "| ts                         | ts                         | table_a.ts Eq table_b.ts |",
+            "+----------------------------+----------------------------+--------------------------+",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 13:42:29.190855 | true                     |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 12:42:29.190855 | true                     |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 11:42:29.190855 | true                     |",
+            "+----------------------------+----------------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
+        let table_b = make_timestamp_table::<TimestampSecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+----------------------------+---------------------+--------------------------+",
+            "| ts                         | ts                  | table_a.ts Eq table_b.ts |",
+            "+----------------------------+---------------------+--------------------------+",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 13:42:29 | true                     |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 12:42:29 | false                    |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 11:42:29 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 13:42:29 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 12:42:29 | true                     |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 11:42:29 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 13:42:29 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 12:42:29 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 11:42:29 | true                     |",
+            "+----------------------------+---------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
+        let table_b = make_timestamp_table::<TimestampMillisecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+----------------------------+-------------------------+--------------------------+",
+            "| ts                         | ts                      | table_a.ts Eq table_b.ts |",
+            "+----------------------------+-------------------------+--------------------------+",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 13:42:29.190 | true                     |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 12:42:29.190 | false                    |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 11:42:29.190 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 13:42:29.190 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 12:42:29.190 | true                     |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 11:42:29.190 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 13:42:29.190 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 12:42:29.190 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 11:42:29.190 | true                     |",
+            "+----------------------------+-------------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    {
+        let mut ctx = ExecutionContext::new();
+        let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
+        let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
+        ctx.register_table("table_a", table_a)?;
+        ctx.register_table("table_b", table_b)?;
+
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let actual = execute_to_batches(&mut ctx, sql).await;
+        let expected = vec![
+            "+----------------------------+----------------------------+--------------------------+",
+            "| ts                         | ts                         | table_a.ts Eq table_b.ts |",
+            "+----------------------------+----------------------------+--------------------------+",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 13:42:29.190855 | true                     |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 13:42:29.190855 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 12:42:29.190855 | true                     |",
+            "| 2020-09-08 12:42:29.190855 | 2020-09-08 11:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 13:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 12:42:29.190855 | false                    |",
+            "| 2020-09-08 11:42:29.190855 | 2020-09-08 11:42:29.190855 | true                     |",
+            "+----------------------------+----------------------------+--------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
