@@ -377,13 +377,13 @@ macro_rules! binary_array_op {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
             }
-            DataType::Timestamp(TimeUnit::Second, None) => {
+            DataType::Timestamp(TimeUnit::Second, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampSecondArray)
             }
             DataType::Date32 => {
