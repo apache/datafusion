@@ -50,14 +50,14 @@ force_hash_collisions = []
 avro = ["avro-rs", "num-traits"]
 
 [dependencies]
-ahash = "0.7"
+ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.11", features = ["raw"] }
 arrow = { version = "6.4.0", features = ["prettyprint"] }
 parquet = { version = "6.4.0", features = ["arrow"] }
 sqlparser = "0.13"
 paste = "^1.0"
 num_cpus = "1.13.0"
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false }
 async-trait = "0.1.41"
 futures = "0.3"
 pin-project-lite= "^0.2.7"
