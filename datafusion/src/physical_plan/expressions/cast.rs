@@ -360,22 +360,6 @@ mod tests {
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
-
-        generic_test_cast!(
-            Int32Array,
-            DataType::Int32,
-            vec![1, 2, 3, 4, 5],
-            UInt32Array,
-            DataType::UInt32,
-            vec![
-                Some(1_u32),
-                Some(2_u32),
-                Some(3_u32),
-                Some(4_u32),
-                Some(5_u32)
-            ],
-            DEFAULT_DATAFUSION_CAST_OPTIONS
-        );
         Ok(())
     }
 
