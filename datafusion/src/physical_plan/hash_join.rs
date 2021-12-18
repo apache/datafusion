@@ -919,10 +919,17 @@ fn produce_from_matched(
     left_data: &JoinLeftData,
     unmatched: bool,
 ) -> ArrowResult<RecordBatch> {
-    let indices =
-        UInt64Array::from_iter_values((0..visited_left_side.len()).filter_map(|v| {
-            (unmatched ^ visited_left_side.get_bit(v)).then(|| v as u64)
-        }));
+    let indices = if unmatched {
+        UInt64Array::from_iter_values(
+            (0..visited_left_side.len())
+                .filter_map(|v| (!visited_left_side.get_bit(v)).then(|| v as u64)),
+        )
+    } else {
+        UInt64Array::from_iter_values(
+            (0..visited_left_side.len())
+                .filter_map(|v| (visited_left_side.get_bit(v)).then(|| v as u64)),
+        )
+    };
 
     // generate batches by taking values from the left side and generating columns filled with null on the right side
     let num_rows = indices.len();
