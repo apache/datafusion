@@ -47,9 +47,8 @@ pub async fn new_standalone_executor(
 
     let server = FlightServiceServer::new(service);
     // Let the OS assign a random, free port
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let listener = TcpListener::bind("localhost:0").await?;
     let addr = listener.local_addr()?;
-    let host = addr.ip().to_string();
     info!(
         "Ballista v{} Rust Executor listening on {:?}",
         BALLISTA_VERSION, addr
@@ -61,7 +60,7 @@ pub async fn new_standalone_executor(
     );
     let executor_meta = ExecutorRegistration {
         id: Uuid::new_v4().to_string(), // assign this executor a unique ID
-        optional_host: Some(OptionalHost::Host(host)),
+        optional_host: Some(OptionalHost::Host("localhost".to_string())),
         port: addr.port() as u32,
     };
     tokio::spawn(execution_loop::poll_loop(
