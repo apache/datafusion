@@ -28,14 +28,16 @@ use crate::execution_plans::{
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 use crate::serde::protobuf::ShuffleReaderPartition;
 use crate::serde::scheduler::PartitionLocation;
-use crate::serde::{from_proto_binary_op, proto_error, protobuf};
+use crate::serde::{from_proto_binary_op, proto_error, protobuf, str_to_byte};
 use crate::{convert_box_required, convert_required, into_required};
+use chrono::{TimeZone, Utc};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::catalog::{
     CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
 };
-use datafusion::datasource::object_store::ObjectStoreRegistry;
-use datafusion::datasource::FilePartition;
+use datafusion::datasource::object_store::local::LocalFileSystem;
+use datafusion::datasource::object_store::{FileMeta, ObjectStoreRegistry, SizedFile};
+use datafusion::datasource::PartitionedFile;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
@@ -43,12 +45,13 @@ use datafusion::logical_plan::{
     window_frames::WindowFrame, DFSchema, Expr, JoinConstraint, JoinType,
 };
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
-use datafusion::physical_plan::avro::{AvroExec, AvroReadOptions};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::file_format::{
+    AvroExec, CsvExec, ParquetExec, PhysicalPlanConfig,
+};
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::PartitionMode;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion::physical_plan::parquet::ParquetPartition;
 use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
@@ -57,7 +60,6 @@ use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     coalesce_batches::CoalesceBatchesExec,
     cross_join::CrossJoinExec,
-    csv::CsvExec,
     empty::EmptyExec,
     expressions::{
         col, Avg, BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr,
@@ -67,14 +69,13 @@ use datafusion::physical_plan::{
     functions::{self, BuiltinScalarFunction, ScalarFunctionExpr},
     hash_join::HashJoinExec,
     limit::{GlobalLimitExec, LocalLimitExec},
-    parquet::ParquetExec,
     projection::ProjectionExec,
     repartition::RepartitionExec,
     sort::{SortExec, SortOptions},
     Partitioning,
 };
 use datafusion::physical_plan::{
-    AggregateExpr, ExecutionPlan, PhysicalExpr, Statistics, WindowExpr,
+    AggregateExpr, ColumnStatistics, ExecutionPlan, PhysicalExpr, Statistics, WindowExpr,
 };
 use datafusion::prelude::CsvReadOptions;
 use log::debug;
@@ -118,56 +119,21 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     .try_into()?;
                 Ok(Arc::new(FilterExec::try_new(predicate, input)?))
             }
-            PhysicalPlanType::CsvScan(scan) => {
-                let schema = Arc::new(convert_required!(scan.schema)?);
-                let options = CsvReadOptions::new()
-                    .has_header(scan.has_header)
-                    .file_extension(&scan.file_extension)
-                    .delimiter(scan.delimiter.as_bytes()[0])
-                    .schema(&schema);
-                let projection = scan.projection.iter().map(|i| *i as usize).collect();
-                Ok(Arc::new(CsvExec::try_new(
-                    &scan.path,
-                    options,
-                    Some(projection),
-                    scan.batch_size as usize,
-                    None,
-                )?))
-            }
+            PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
+                scan.base_conf.as_ref().unwrap().try_into()?,
+                scan.has_header,
+                str_to_byte(&scan.delimiter)?,
+            ))),
             PhysicalPlanType::ParquetScan(scan) => {
-                let partitions = scan
-                    .partitions
-                    .iter()
-                    .map(|p| p.try_into())
-                    .collect::<Result<Vec<ParquetPartition>, _>>()?;
-                let schema = Arc::new(convert_required!(scan.schema)?);
-                let projection = scan.projection.iter().map(|i| *i as usize).collect();
                 Ok(Arc::new(ParquetExec::new(
-                    partitions,
-                    schema,
-                    Some(projection),
-                    Statistics::default(),
-                    ExecutionPlanMetricsSet::new(),
-                    None,
-                    scan.batch_size as usize,
+                    scan.base_conf.as_ref().unwrap().try_into()?,
+                    // TODO predicate should be de-serialized
                     None,
                 )))
             }
-            PhysicalPlanType::AvroScan(scan) => {
-                let schema = Arc::new(convert_required!(scan.schema)?);
-                let options = AvroReadOptions {
-                    schema: Some(schema),
-                    file_extension: &scan.file_extension,
-                };
-                let projection = scan.projection.iter().map(|i| *i as usize).collect();
-                Ok(Arc::new(AvroExec::try_from_path(
-                    &scan.path,
-                    options,
-                    Some(projection),
-                    scan.batch_size as usize,
-                    None,
-                )?))
-            }
+            PhysicalPlanType::AvroScan(scan) => Ok(Arc::new(AvroExec::new(
+                scan.base_conf.as_ref().unwrap().try_into()?,
+            ))),
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> =
                     convert_box_required!(coalesce_batches.input)?;
@@ -398,6 +364,7 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                     on,
                     &join_type.into(),
                     partition_mode,
+                    &hashjoin.null_equals_null,
                 )?))
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
@@ -497,23 +464,6 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
     }
 }
 
-impl TryInto<ParquetPartition> for &protobuf::ParquetPartition {
-    type Error = BallistaError;
-
-    fn try_into(self) -> Result<ParquetPartition, Self::Error> {
-        let files = self
-            .files
-            .iter()
-            .map(|f| f.try_into())
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(ParquetPartition::new(
-            files,
-            self.index as usize,
-            ExecutionPlanMetricsSet::new(),
-        ))
-    }
-}
-
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
         Column::new(&c.name, c.index as usize)
@@ -558,6 +508,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha256 => BuiltinScalarFunction::SHA256,
             ScalarFunction::Sha384 => BuiltinScalarFunction::SHA384,
             ScalarFunction::Sha512 => BuiltinScalarFunction::SHA512,
+            ScalarFunction::Digest => BuiltinScalarFunction::Digest,
             ScalarFunction::Ln => BuiltinScalarFunction::Ln,
             ScalarFunction::Totimestampmillis => BuiltinScalarFunction::ToTimestampMillis,
         }
@@ -742,5 +693,109 @@ pub fn parse_protobuf_hash_partitioning(
             )))
         }
         None => Ok(None),
+    }
+}
+
+impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
+    type Error = BallistaError;
+
+    fn try_from(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
+        Ok(PartitionedFile {
+            file_meta: FileMeta {
+                sized_file: SizedFile {
+                    path: val.path.clone(),
+                    size: val.size,
+                },
+                last_modified: if val.last_modified_ns == 0 {
+                    None
+                } else {
+                    Some(Utc.timestamp_nanos(val.last_modified_ns as i64))
+                },
+            },
+            partition_values: val
+                .partition_values
+                .iter()
+                .map(|v| v.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl TryFrom<&protobuf::FileGroup> for Vec<PartitionedFile> {
+    type Error = BallistaError;
+
+    fn try_from(val: &protobuf::FileGroup) -> Result<Self, Self::Error> {
+        val.files
+            .iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<_>, _>>()
+    }
+}
+
+impl From<&protobuf::ColumnStats> for ColumnStatistics {
+    fn from(cs: &protobuf::ColumnStats) -> ColumnStatistics {
+        ColumnStatistics {
+            null_count: Some(cs.null_count as usize),
+            max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
+            min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
+            distinct_count: Some(cs.distinct_count as usize),
+        }
+    }
+}
+
+impl TryInto<Statistics> for &protobuf::Statistics {
+    type Error = BallistaError;
+
+    fn try_into(self) -> Result<Statistics, Self::Error> {
+        let column_statistics = self
+            .column_stats
+            .iter()
+            .map(|s| s.into())
+            .collect::<Vec<_>>();
+        Ok(Statistics {
+            num_rows: Some(self.num_rows as usize),
+            total_byte_size: Some(self.total_byte_size as usize),
+            // No column statistic (None) is encoded with empty array
+            column_statistics: if column_statistics.is_empty() {
+                None
+            } else {
+                Some(column_statistics)
+            },
+            is_exact: self.is_exact,
+        })
+    }
+}
+
+impl TryInto<PhysicalPlanConfig> for &protobuf::FileScanExecConf {
+    type Error = BallistaError;
+
+    fn try_into(self) -> Result<PhysicalPlanConfig, Self::Error> {
+        let schema = Arc::new(convert_required!(self.schema)?);
+        let projection = self
+            .projection
+            .iter()
+            .map(|i| *i as usize)
+            .collect::<Vec<_>>();
+        let projection = if projection.is_empty() {
+            None
+        } else {
+            Some(projection)
+        };
+        let statistics = convert_required!(self.statistics)?;
+
+        Ok(PhysicalPlanConfig {
+            object_store: Arc::new(LocalFileSystem {}),
+            file_schema: schema,
+            file_groups: self
+                .file_groups
+                .iter()
+                .map(|f| f.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            statistics,
+            projection,
+            batch_size: self.batch_size as usize,
+            limit: self.limit.as_ref().map(|sl| sl.limit as usize),
+            table_partition_cols: vec![],
+        })
     }
 }

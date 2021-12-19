@@ -22,17 +22,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ballista_core::datasource::DfTableAdapter;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::{
     execution_plans::{ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec},
     serde::scheduler::PartitionLocation,
 };
-use datafusion::execution::context::ExecutionContext;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use log::info;
 
 type PartialQueryStageResult = (Arc<dyn ExecutionPlan>, Vec<Arc<ShuffleWriterExec>>);
@@ -57,14 +57,15 @@ impl DistributedPlanner {
     /// Returns a vector of ExecutionPlans, where the root node is a [ShuffleWriterExec].
     /// Plans that depend on the input of other plans will have leaf nodes of type [UnresolvedShuffleExec].
     /// A [ShuffleWriterExec] is created whenever the partitioning changes.
-    pub fn plan_query_stages(
-        &mut self,
-        job_id: &str,
+    pub async fn plan_query_stages<'a>(
+        &'a mut self,
+        job_id: &'a str,
         execution_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Vec<Arc<ShuffleWriterExec>>> {
         info!("planning query stages");
-        let (new_plan, mut stages) =
-            self.plan_query_stages_internal(job_id, execution_plan)?;
+        let (new_plan, mut stages) = self
+            .plan_query_stages_internal(job_id, execution_plan)
+            .await?;
         stages.push(create_shuffle_writer(
             job_id,
             self.next_stage_id(),
@@ -77,94 +78,95 @@ impl DistributedPlanner {
     /// Returns a potentially modified version of the input execution_plan along with the resulting query stages.
     /// This function is needed because the input execution_plan might need to be modified, but it might not hold a
     /// complete query stage (its parent might also belong to the same stage)
-    fn plan_query_stages_internal(
-        &mut self,
-        job_id: &str,
+    fn plan_query_stages_internal<'a>(
+        &'a mut self,
+        job_id: &'a str,
         execution_plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<PartialQueryStageResult> {
-        // recurse down and replace children
-        if execution_plan.children().is_empty() {
-            return Ok((execution_plan, vec![]));
-        }
-
-        let mut stages = vec![];
-        let mut children = vec![];
-        for child in execution_plan.children() {
-            let (new_child, mut child_stages) =
-                self.plan_query_stages_internal(job_id, child.clone())?;
-            children.push(new_child);
-            stages.append(&mut child_stages);
-        }
-
-        if let Some(adapter) = execution_plan.as_any().downcast_ref::<DfTableAdapter>() {
-            let ctx = ExecutionContext::new();
-            Ok((ctx.create_physical_plan(&adapter.logical_plan)?, stages))
-        } else if let Some(coalesce) = execution_plan
-            .as_any()
-            .downcast_ref::<CoalescePartitionsExec>()
-        {
-            let shuffle_writer = create_shuffle_writer(
-                job_id,
-                self.next_stage_id(),
-                children[0].clone(),
-                None,
-            )?;
-            let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
-                shuffle_writer.stage_id(),
-                shuffle_writer.schema(),
-                shuffle_writer.output_partitioning().partition_count(),
-                shuffle_writer
-                    .shuffle_output_partitioning()
-                    .map(|p| p.partition_count())
-                    .unwrap_or_else(|| {
-                        shuffle_writer.output_partitioning().partition_count()
-                    }),
-            ));
-            stages.push(shuffle_writer);
-            Ok((
-                coalesce.with_new_children(vec![unresolved_shuffle])?,
-                stages,
-            ))
-        } else if let Some(repart) =
-            execution_plan.as_any().downcast_ref::<RepartitionExec>()
-        {
-            match repart.output_partitioning() {
-                Partitioning::Hash(_, _) => {
-                    let shuffle_writer = create_shuffle_writer(
-                        job_id,
-                        self.next_stage_id(),
-                        children[0].clone(),
-                        Some(repart.partitioning().to_owned()),
-                    )?;
-                    let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
-                        shuffle_writer.stage_id(),
-                        shuffle_writer.schema(),
-                        shuffle_writer.output_partitioning().partition_count(),
-                        shuffle_writer
-                            .shuffle_output_partitioning()
-                            .map(|p| p.partition_count())
-                            .unwrap_or_else(|| {
-                                shuffle_writer.output_partitioning().partition_count()
-                            }),
-                    ));
-                    stages.push(shuffle_writer);
-                    Ok((unresolved_shuffle, stages))
-                }
-                _ => {
-                    // remove any non-hash repartition from the distributed plan
-                    Ok((children[0].clone(), stages))
-                }
+    ) -> BoxFuture<'a, Result<PartialQueryStageResult>> {
+        async move {
+            // recurse down and replace children
+            if execution_plan.children().is_empty() {
+                return Ok((execution_plan, vec![]));
             }
-        } else if let Some(window) =
-            execution_plan.as_any().downcast_ref::<WindowAggExec>()
-        {
-            Err(BallistaError::NotImplemented(format!(
-                "WindowAggExec with window {:?}",
-                window
-            )))
-        } else {
-            Ok((execution_plan.with_new_children(children)?, stages))
+
+            let mut stages = vec![];
+            let mut children = vec![];
+            for child in execution_plan.children() {
+                let (new_child, mut child_stages) = self
+                    .plan_query_stages_internal(job_id, child.clone())
+                    .await?;
+                children.push(new_child);
+                stages.append(&mut child_stages);
+            }
+
+            if let Some(coalesce) = execution_plan
+                .as_any()
+                .downcast_ref::<CoalescePartitionsExec>()
+            {
+                let shuffle_writer = create_shuffle_writer(
+                    job_id,
+                    self.next_stage_id(),
+                    children[0].clone(),
+                    None,
+                )?;
+                let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
+                    shuffle_writer.stage_id(),
+                    shuffle_writer.schema(),
+                    shuffle_writer.output_partitioning().partition_count(),
+                    shuffle_writer
+                        .shuffle_output_partitioning()
+                        .map(|p| p.partition_count())
+                        .unwrap_or_else(|| {
+                            shuffle_writer.output_partitioning().partition_count()
+                        }),
+                ));
+                stages.push(shuffle_writer);
+                Ok((
+                    coalesce.with_new_children(vec![unresolved_shuffle])?,
+                    stages,
+                ))
+            } else if let Some(repart) =
+                execution_plan.as_any().downcast_ref::<RepartitionExec>()
+            {
+                match repart.output_partitioning() {
+                    Partitioning::Hash(_, _) => {
+                        let shuffle_writer = create_shuffle_writer(
+                            job_id,
+                            self.next_stage_id(),
+                            children[0].clone(),
+                            Some(repart.partitioning().to_owned()),
+                        )?;
+                        let unresolved_shuffle = Arc::new(UnresolvedShuffleExec::new(
+                            shuffle_writer.stage_id(),
+                            shuffle_writer.schema(),
+                            shuffle_writer.output_partitioning().partition_count(),
+                            shuffle_writer
+                                .shuffle_output_partitioning()
+                                .map(|p| p.partition_count())
+                                .unwrap_or_else(|| {
+                                    shuffle_writer.output_partitioning().partition_count()
+                                }),
+                        ));
+                        stages.push(shuffle_writer);
+                        Ok((unresolved_shuffle, stages))
+                    }
+                    _ => {
+                        // remove any non-hash repartition from the distributed plan
+                        Ok((children[0].clone(), stages))
+                    }
+                }
+            } else if let Some(window) =
+                execution_plan.as_any().downcast_ref::<WindowAggExec>()
+            {
+                Err(BallistaError::NotImplemented(format!(
+                    "WindowAggExec with window {:?}",
+                    window
+                )))
+            } else {
+                Ok((execution_plan.with_new_children(children)?, stages))
+            }
         }
+        .boxed()
     }
 
     /// Generate a new stage ID
@@ -267,25 +269,29 @@ mod test {
         };
     }
 
-    #[test]
-    fn distributed_hash_aggregate_plan() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata")?;
+    #[tokio::test]
+    async fn distributed_hash_aggregate_plan() -> Result<(), BallistaError> {
+        let mut ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
-        let df = ctx.sql(
-            "select l_returnflag, sum(l_extendedprice * 1) as sum_disc_price
+        let df = ctx
+            .sql(
+                "select l_returnflag, sum(l_extendedprice * 1) as sum_disc_price
             from lineitem
             group by l_returnflag
             order by l_returnflag",
-        )?;
+            )
+            .await?;
 
         let plan = df.to_logical_plan();
         let plan = ctx.optimize(&plan)?;
-        let plan = ctx.create_physical_plan(&plan)?;
+        let plan = ctx.create_physical_plan(&plan).await?;
 
         let mut planner = DistributedPlanner::new();
         let job_uuid = Uuid::new_v4();
-        let stages = planner.plan_query_stages(&job_uuid.to_string(), plan)?;
+        let stages = planner
+            .plan_query_stages(&job_uuid.to_string(), plan)
+            .await?;
         for stage in &stages {
             println!("{}", displayable(stage.as_ref()).indent().to_string());
         }
@@ -350,13 +356,14 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn distributed_join_plan() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata")?;
+    #[tokio::test]
+    async fn distributed_join_plan() -> Result<(), BallistaError> {
+        let mut ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 12
-        let df = ctx.sql(
-            "select
+        let df = ctx
+            .sql(
+                "select
     l_shipmode,
     sum(case
             when o_orderpriority = '1-URGENT'
@@ -387,15 +394,18 @@ group by
 order by
     l_shipmode;
 ",
-        )?;
+            )
+            .await?;
 
         let plan = df.to_logical_plan();
         let plan = ctx.optimize(&plan)?;
-        let plan = ctx.create_physical_plan(&plan)?;
+        let plan = ctx.create_physical_plan(&plan).await?;
 
         let mut planner = DistributedPlanner::new();
         let job_uuid = Uuid::new_v4();
-        let stages = planner.plan_query_stages(&job_uuid.to_string(), plan)?;
+        let stages = planner
+            .plan_query_stages(&job_uuid.to_string(), plan)
+            .await?;
         for stage in &stages {
             println!("{}", displayable(stage.as_ref()).indent().to_string());
         }
@@ -521,25 +531,29 @@ order by
         Ok(())
     }
 
-    #[test]
-    fn roundtrip_serde_hash_aggregate() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata")?;
+    #[tokio::test]
+    async fn roundtrip_serde_hash_aggregate() -> Result<(), BallistaError> {
+        let mut ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
-        let df = ctx.sql(
-            "select l_returnflag, sum(l_extendedprice * 1) as sum_disc_price
+        let df = ctx
+            .sql(
+                "select l_returnflag, sum(l_extendedprice * 1) as sum_disc_price
             from lineitem
             group by l_returnflag
             order by l_returnflag",
-        )?;
+            )
+            .await?;
 
         let plan = df.to_logical_plan();
         let plan = ctx.optimize(&plan)?;
-        let plan = ctx.create_physical_plan(&plan)?;
+        let plan = ctx.create_physical_plan(&plan).await?;
 
         let mut planner = DistributedPlanner::new();
         let job_uuid = Uuid::new_v4();
-        let stages = planner.plan_query_stages(&job_uuid.to_string(), plan)?;
+        let stages = planner
+            .plan_query_stages(&job_uuid.to_string(), plan)
+            .await?;
 
         let partial_hash = stages[0].children()[0].clone();
         let partial_hash_serde = roundtrip_operator(partial_hash.clone())?;

@@ -27,34 +27,44 @@
 # arrow-datafusion/.github_changelog_generator
 #
 # Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log.sh <PROJECT> <FROM_VER> <TO_VER>
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log.sh <PROJECT> <SINCE_TAG> <EXTRA_ARGS...>
 
 set -e
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 
-if [[ "$#" -ne 3 ]]; then
-    echo "USAGE: $0 PROJECT FROM_VER TO_VER"
+echo $1
+
+if [[ "$#" -lt 2 ]]; then
+    echo "USAGE: $0 PROJECT SINCE_TAG EXTRA_ARGS..."
     exit 1
 fi
 
 PROJECT=$1
-FROM_VER=$2
-TO_VER=$3
+SINCE_TAG=$2
+shift 2
+
 OUTPUT_PATH="${PROJECT}/CHANGELOG.md"
 
 pushd ${SOURCE_TOP_DIR}
+
+# reset content in changelog
+git co "${SINCE_TAG}" "${OUTPUT_PATH}"
+# remove license header so github-changelog-generator has a clean base to append
+sed -i '1,18d' "${OUTPUT_PATH}"
+
 docker run -it --rm \
     -e CHANGELOG_GITHUB_TOKEN=$CHANGELOG_GITHUB_TOKEN \
     -v "$(pwd)":/usr/local/src/your-app \
-    githubchangeloggenerator/github-changelog-generator \
+    githubchangeloggenerator/github-changelog-generator:1.16.2 \
     --user apache \
     --project arrow-datafusion \
-    --since-tag "${FROM_VER}" \
+    --since-tag "${SINCE_TAG}" \
     --include-labels "${PROJECT}" \
+    --base "${OUTPUT_PATH}" \
     --output "${OUTPUT_PATH}" \
-    --future-release "${TO_VER}"
+    "$@"
 
 sed -i "s/\\\n/\n\n/" "${OUTPUT_PATH}"
 

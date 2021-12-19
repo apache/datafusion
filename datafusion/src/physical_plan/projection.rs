@@ -38,7 +38,6 @@ use super::expressions::Column;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use async_trait::async_trait;
-
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 
@@ -63,18 +62,22 @@ impl ProjectionExec {
     ) -> Result<Self> {
         let input_schema = input.schema();
 
-        let fields: Result<Vec<_>> = expr
+        let fields: Result<Vec<Field>> = expr
             .iter()
-            .map(|(e, name)| {
-                Ok(Field::new(
-                    name,
-                    e.data_type(&input_schema)?,
-                    e.nullable(&input_schema)?,
-                ))
+            .map(|(e, name)| match input_schema.field_with_name(name) {
+                Ok(f) => Ok(f.clone()),
+                Err(_) => {
+                    let dt = e.data_type(&input_schema)?;
+                    let nullable = e.nullable(&input_schema)?;
+                    Ok(Field::new(name, dt, nullable))
+                }
             })
             .collect();
 
-        let schema = Arc::new(Schema::new(fields?));
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields?,
+            input_schema.metadata().clone(),
+        ));
 
         Ok(Self {
             expr,
@@ -260,32 +263,47 @@ impl RecordBatchStream for ProjectionStream {
 mod tests {
 
     use super::*;
-    use crate::physical_plan::csv::{CsvExec, CsvReadOptions};
+    use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::expressions::{self, col};
+    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::scalar::ScalarValue;
-    use crate::test;
+    use crate::test::{self};
+    use crate::test_util;
     use futures::future;
 
     #[tokio::test]
     async fn project_first_column() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let path = test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
+        let (_, files) =
+            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
 
-        let csv = CsvExec::try_new(
-            &path,
-            CsvReadOptions::new().schema(&schema),
-            None,
-            1024,
-            None,
-        )?;
+        let csv = CsvExec::new(
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: Arc::clone(&schema),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            true,
+            b',',
+        );
 
         // pick column c1 and name it column c1 in the output schema
         let projection = ProjectionExec::try_new(
             vec![(col("c1", &schema)?, "c1".to_string())],
             Arc::new(csv),
         )?;
+
+        let col_field = projection.schema.field(0);
+        let col_metadata = col_field.metadata().clone().unwrap().clone();
+        let data: &str = &col_metadata["testing"];
+        assert_eq!(data, "test");
 
         let mut partition_count = 0;
         let mut row_count = 0;

@@ -69,6 +69,17 @@ impl PartialEq for ScalarUDF {
     }
 }
 
+impl PartialOrd for ScalarUDF {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let c = self.name.partial_cmp(&other.name);
+        if matches!(c, Some(std::cmp::Ordering::Equal)) {
+            self.signature.partial_cmp(&other.signature)
+        } else {
+            c
+        }
+    }
+}
+
 impl ScalarUDF {
     /// Create a new ScalarUDF
     pub fn new(
@@ -99,13 +110,13 @@ impl ScalarUDF {
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDF.
 pub fn create_physical_expr(
     fun: &ScalarUDF,
-    args: &[Arc<dyn PhysicalExpr>],
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     // coerce
-    let args = coerce(args, input_schema, &fun.signature)?;
+    let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &fun.signature)?;
 
-    let arg_types = args
+    let coerced_exprs_types = coerced_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
@@ -113,7 +124,7 @@ pub fn create_physical_expr(
     Ok(Arc::new(ScalarFunctionExpr::new(
         &fun.name,
         fun.fun.clone(),
-        args,
-        (fun.return_type)(&arg_types)?.as_ref(),
+        coerced_phy_exprs,
+        (fun.return_type)(&coerced_exprs_types)?.as_ref(),
     )))
 }

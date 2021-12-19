@@ -32,15 +32,18 @@ async fn main() -> Result<()> {
         "aggregate_test_100",
         &format!("{}/csv/aggregate_test_100.csv", testdata),
         CsvReadOptions::new(),
-    )?;
+    )
+    .await?;
 
     // execute the query
-    let df = ctx.sql(
-        "SELECT c1, MIN(c12), MAX(c12) \
+    let df = ctx
+        .sql(
+            "SELECT c1, MIN(c12), MAX(c12) \
         FROM aggregate_test_100 \
         WHERE c11 > 0.1 AND c11 < 0.9 \
         GROUP BY c1",
-    )?;
+        )
+        .await?;
 
     // print the results
     df.show().await?;

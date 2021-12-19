@@ -28,6 +28,7 @@ use crate::error::{DataFusionError, Result};
 use arrow::array::*;
 use arrow::error::ArrowError;
 use hashbrown::HashMap;
+use lazy_static::lazy_static;
 use regex::Regex;
 
 macro_rules! downcast_string_arg {
@@ -51,13 +52,13 @@ pub fn regexp_match<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let values = downcast_string_arg!(args[0], "string", T);
             let regex = downcast_string_arg!(args[1], "pattern", T);
             Ok(regexp_matches(values, regex, None).map(|x| Arc::new(x) as Arc<dyn Array>)?)
-        },
+        }
         3 => {
             let values = downcast_string_arg!(args[0], "string", T);
             let regex = downcast_string_arg!(args[1], "pattern", T);
             let flags = Some(downcast_string_arg!(args[2], "flags", T));
             Ok(regexp_matches(values, regex, flags).map(|x| Arc::new(x) as Arc<dyn Array>)?)
-        },
+        }
         other => Err(DataFusionError::Internal(format!(
             "regexp_match was called with {} arguments. It requires at least 2 and at most 3.",
             other
@@ -311,5 +312,54 @@ mod tests {
 
         assert_eq!(expected, result);
         Ok(())
+    }
+
+    #[test]
+    fn test_case_sensitive_regexp_match() {
+        let values = StringArray::from(vec!["abc"; 5]);
+        let patterns =
+            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
+        let mut expected_builder = ListBuilder::new(elem_builder);
+        expected_builder.values().append_value("a").unwrap();
+        expected_builder.append(true).unwrap();
+        expected_builder.append(false).unwrap();
+        expected_builder.values().append_value("b").unwrap();
+        expected_builder.append(true).unwrap();
+        expected_builder.append(false).unwrap();
+        expected_builder.append(false).unwrap();
+        let expected = expected_builder.finish();
+
+        let re = regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns)]).unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_case_insensitive_regexp_match() {
+        let values = StringArray::from(vec!["abc"; 5]);
+        let patterns =
+            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+        let flags = StringArray::from(vec!["i"; 5]);
+
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
+        let mut expected_builder = ListBuilder::new(elem_builder);
+        expected_builder.values().append_value("a").unwrap();
+        expected_builder.append(true).unwrap();
+        expected_builder.values().append_value("a").unwrap();
+        expected_builder.append(true).unwrap();
+        expected_builder.values().append_value("b").unwrap();
+        expected_builder.append(true).unwrap();
+        expected_builder.values().append_value("b").unwrap();
+        expected_builder.append(true).unwrap();
+        expected_builder.append(false).unwrap();
+        let expected = expected_builder.finish();
+
+        let re =
+            regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+                .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
     }
 }

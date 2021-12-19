@@ -213,6 +213,7 @@ fn default_field_name(dt: &DataType) -> &str {
         DataType::Struct(_) => "struct",
         DataType::Union(_) => "union",
         DataType::Dictionary(_, _) => "map",
+        DataType::Map(_, _) => unimplemented!("Map support not implemented"),
         DataType::Decimal(_, _) => "decimal",
     }
 }

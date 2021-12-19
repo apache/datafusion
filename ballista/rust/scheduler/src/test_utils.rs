@@ -19,13 +19,13 @@ use ballista_core::error::Result;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
-use datafusion::physical_plan::csv::CsvReadOptions;
+use datafusion::prelude::CsvReadOptions;
 
 pub const TPCH_TABLES: &[&str] = &[
     "part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation", "region",
 ];
 
-pub fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
+pub async fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
     let default_shuffle_partitions = 2;
     let config =
         ExecutionConfig::new().with_target_partitions(default_shuffle_partitions);
@@ -38,7 +38,7 @@ pub fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
             .has_header(false)
             .file_extension(".tbl");
         let dir = format!("{}/{}", path, table);
-        ctx.register_csv(table, &dir, options)?;
+        ctx.register_csv(table, &dir, options).await?;
     }
     Ok(ctx)
 }

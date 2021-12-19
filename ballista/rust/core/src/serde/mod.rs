@@ -115,6 +115,10 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Sum => AggregateFunction::Sum,
             protobuf::AggregateFunction::Avg => AggregateFunction::Avg,
             protobuf::AggregateFunction::Count => AggregateFunction::Count,
+            protobuf::AggregateFunction::ApproxDistinct => {
+                AggregateFunction::ApproxDistinct
+            }
+            protobuf::AggregateFunction::ArrayAgg => AggregateFunction::ArrayAgg,
         }
     }
 }
@@ -341,4 +345,18 @@ impl From<JoinConstraint> for protobuf::JoinConstraint {
             JoinConstraint::Using => protobuf::JoinConstraint::Using,
         }
     }
+}
+
+fn byte_to_string(b: u8) -> Result<String, BallistaError> {
+    let b = &[b];
+    let b = std::str::from_utf8(b)
+        .map_err(|_| BallistaError::General("Invalid CSV delimiter".to_owned()))?;
+    Ok(b.to_owned())
+}
+
+fn str_to_byte(s: &str) -> Result<u8, BallistaError> {
+    if s.len() != 1 {
+        return Err(BallistaError::General("Invalid CSV delimiter".to_owned()));
+    }
+    Ok(s.as_bytes()[0])
 }

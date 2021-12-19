@@ -16,13 +16,16 @@
 // under the License.
 
 use std::pin::Pin;
+use std::sync::Arc;
 
+use arrow_flight::SchemaAsIpc;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::ListingOptions;
+use datafusion::datasource::object_store::local::LocalFileSystem;
 use futures::Stream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 
-use datafusion::datasource::parquet::ParquetTable;
-use datafusion::datasource::TableProvider;
 use datafusion::prelude::*;
 
 use arrow::io::ipc::write::WriteOptions;
@@ -67,7 +70,12 @@ impl FlightService for FlightServiceImpl {
     ) -> Result<Response<SchemaResult>, Status> {
         let request = request.into_inner();
 
-        let table = ParquetTable::try_new(&request.path[0], num_cpus::get()).unwrap();
+        let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
+
+        let schema = listing_options
+            .infer_schema(Arc::new(LocalFileSystem {}), &request.path[0])
+            .await
+            .unwrap();
 
         let schema_result =
             arrow::io::flight::serialize_schema_to_result(table.schema().as_ref());
@@ -94,10 +102,11 @@ impl FlightService for FlightServiceImpl {
                     "alltypes_plain",
                     &format!("{}/alltypes_plain.parquet", testdata),
                 )
+                .await
                 .map_err(to_tonic_err)?;
 
                 // create the DataFrame
-                let df = ctx.sql(sql).map_err(to_tonic_err)?;
+                let df = ctx.sql(sql).await.map_err(to_tonic_err)?;
 
                 // execute the query
                 let results = df.collect().await.map_err(to_tonic_err)?;

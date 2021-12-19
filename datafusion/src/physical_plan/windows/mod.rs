@@ -22,7 +22,8 @@ use crate::logical_plan::window_frames::WindowFrame;
 use crate::physical_plan::{
     aggregates,
     expressions::{
-        dense_rank, lag, lead, rank, Literal, NthValue, PhysicalSortExpr, RowNumber,
+        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue,
+        PhysicalSortExpr, RowNumber,
     },
     type_coercion::coerce,
     window_functions::{
@@ -63,11 +64,9 @@ pub fn create_window_expr(
             window_frame,
         )),
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
-            fun.clone(),
             create_built_in_window_expr(fun, args, input_schema, name)?,
             partition_by,
             order_by,
-            window_frame,
         )),
     })
 }
@@ -95,6 +94,8 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name)),
         BuiltInWindowFunction::Rank => Arc::new(rank(name)),
         BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name)),
+        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
+        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
         BuiltInWindowFunction::Lag => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
@@ -172,25 +173,37 @@ pub(crate) fn find_ranges_in_range<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::aggregates::AggregateFunction;
-    use crate::physical_plan::collect;
-    use crate::physical_plan::csv::{CsvExec, CsvReadOptions};
     use crate::physical_plan::expressions::col;
-    use crate::test;
+    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
+    use crate::physical_plan::{collect, Statistics};
+    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::{self, assert_is_pending};
+    use crate::test_util::{self, aggr_test_schema};
     use arrow::array::*;
-    use arrow::datatypes::SchemaRef;
+    use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
+    use futures::FutureExt;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
-        let schema = test::aggr_test_schema();
-        let path = test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
-        let csv = CsvExec::try_new(
-            &path,
-            CsvReadOptions::new().schema(&schema),
-            None,
-            1024,
-            None,
-        )?;
+        let schema = test_util::aggr_test_schema();
+        let (_, files) =
+            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
+        let csv = CsvExec::new(
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: aggr_test_schema(),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            true,
+            b',',
+        );
 
         let input = Arc::new(csv);
         Ok((input, schema))
@@ -252,6 +265,37 @@ mod tests {
         let min = columns[2].as_any().downcast_ref::<Int8Array>().unwrap();
         assert_eq!(min.value(0), -117);
         assert_eq!(min.value(99), -117);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drop_cancel() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
+        let refs = blocking_exec.refs();
+        let window_agg_exec = Arc::new(WindowAggExec::try_new(
+            vec![create_window_expr(
+                &WindowFunction::AggregateFunction(AggregateFunction::Count),
+                "count".to_owned(),
+                &[col("a", &schema)?],
+                &[],
+                &[],
+                Some(WindowFrame::default()),
+                schema.as_ref(),
+            )?],
+            blocking_exec,
+            schema,
+        )?);
+
+        let fut = collect(window_agg_exec);
+        let mut fut = fut.boxed();
+
+        assert_is_pending(&mut fut);
+        drop(fut);
+        assert_strong_count_converges_to_zero(refs).await;
 
         Ok(())
     }

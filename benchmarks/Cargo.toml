@@ -18,13 +18,14 @@
 [package]
 name = "arrow-benchmarks"
 description = "Apache Arrow Benchmarks"
-version = "4.0.0-SNAPSHOT"
-edition = "2018"
+version = "5.0.0"
+edition = "2021"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 license = "Apache-2.0"
 publish = false
+rust-version = "1.57"
 
 [features]
 simd = ["datafusion/simd"]
@@ -37,7 +38,7 @@ ballista = { path = "../ballista/rust/client" }
 structopt = { version = "0.3", default-features = false }
 tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread"] }
 futures = "0.3"
-env_logger = "^0.8"
+env_logger = "0.9"
 mimalloc = { version = "0.1", optional = true, default-features = false }
 snmalloc-rs = {version = "0.2", optional = true, features= ["cache-friendly"] }
 

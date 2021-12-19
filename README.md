@@ -55,6 +55,8 @@ Here are some of the projects known to use DataFusion:
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [datafusion-python](https://pypi.org/project/datafusion)
+- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
+- [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
 - [delta-rs](https://github.com/delta-io/delta-rs)
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [ROAPI](https://github.com/roapi/roapi)
@@ -75,10 +77,10 @@ use datafusion::arrow::record_batch::RecordBatch;
 async fn main() -> datafusion::error::Result<()> {
   // register the table
   let mut ctx = ExecutionContext::new();
-  ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new())?;
+  ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
 
   // create a plan to run a SQL query
-  let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")?;
+  let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
 
   // execute and print results
   df.show().await?;
@@ -96,7 +98,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 async fn main() -> datafusion::error::Result<()> {
   // create the dataframe
   let mut ctx = ExecutionContext::new();
-  let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
+  let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 
   let df = df.filter(col("a").lt_eq(col("b")))?
           .aggregate(vec![col("a")], vec![min(col("b"))])?;
@@ -125,12 +127,12 @@ To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-datafusion = "5.0.0"
+datafusion = "6.0.0"
 ```
 
 ## Using DataFusion as a binary
 
-DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](datafusion/docs/cli.md) for more information.
+DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](https://arrow.apache.org/datafusion/cli/index.html) for more information.
 
 # Status
 
@@ -157,6 +159,7 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
 - [x] Common math functions
 - [x] cast
 - [x] try_cast
+- [x] [`VALUES` lists](https://www.postgresql.org/docs/current/queries-values.html)
 - Postgres compatible String functions
   - [x] ascii
   - [x] bit_length
@@ -188,6 +191,8 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
   - [x] trim
 - Miscellaneous/Boolean functions
   - [x] nullif
+- Approximation functions
+  - [x] approx_distinct
 - Common date/time functions
   - [ ] Basic date functions
   - [ ] Basic time functions
@@ -208,11 +213,13 @@ DataFusion also includes a simple command-line interactive SQL utility. See the 
 - [ ] Lists
 - [x] Subqueries
 - [x] Common table expressions
-- [ ] Set Operations
+- [x] Set Operations
   - [x] UNION ALL
-  - [ ] UNION
-  - [ ] INTERSECT
-  - [ ] MINUS
+  - [x] UNION
+  - [x] INTERSECT
+  - [x] INTERSECT ALL
+  - [x] EXCEPT
+  - [x] EXCEPT ALL
 - [x] Joins
   - [x] INNER JOIN
   - [x] LEFT JOIN
@@ -244,6 +251,10 @@ DataFusion is designed to be extensible at all points. To that end, you can prov
 - [x] User Defined `Optimizer` passes (plan rewrites)
 - [x] User Defined `LogicalPlan` nodes
 - [x] User Defined `ExecutionPlan` nodes
+
+## Rust Version Compatbility
+
+This crate is tested with the latest stable version of Rust. We do not currrently test against other, older versions of the Rust compiler.
 
 # Supported SQL
 
@@ -333,7 +344,7 @@ are mapped to Arrow types according to the following table
 | `SMALLINT`    | `Int16`                           |
 | `INT`         | `Int32`                           |
 | `BIGINT`      | `Int64`                           |
-| `REAL`        | `Float64`                         |
+| `REAL`        | `Float32`                         |
 | `DOUBLE`      | `Float64`                         |
 | `BOOLEAN`     | `Boolean`                         |
 | `DATE`        | `Date32`                          |
@@ -346,11 +357,15 @@ are mapped to Arrow types according to the following table
 | `CUSTOM`      | _Not yet supported_               |
 | `ARRAY`       | _Not yet supported_               |
 
+# Roadmap
+
+Please see [Roadmap](docs/source/specification/roadmap.md) for information of where the project is headed.
+
 # Architecture Overview
 
 There is no formal document describing DataFusion's architecture yet, but the following presentations offer a good overview of its different components and how they interact together.
 
-- (March 2021): The DataFusion architecture is described in _Query Engine Design and the Rust-Based DataFusion in Apache Arrow_: [recording](https://www.youtube.com/watch?v=K6eCAVEk4kU) (DataFusion content starts ~ 15 minutes in) and [slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
+- (March 2021): The DataFusion architecture is described in _Query Engine Design and the Rust-Based DataFusion in Apache Arrow_: [recording](https://www.youtube.com/watch?v=K6eCAVEk4kU) (DataFusion content starts [~ 15 minutes in](https://www.youtube.com/watch?v=K6eCAVEk4kU&t=875s)) and [slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
 - (Feburary 2021): How DataFusion is used within the Ballista Project is described in \*Ballista: Distributed Compute with Rust and Apache Arrow: [recording](https://www.youtube.com/watch?v=ZZHQaOap9pQ)
 
 # Developer's guide

@@ -21,7 +21,7 @@
 
 ## Dependencies
 
-It's recommended to install build dependencies and build the the documentation
+It's recommended to install build dependencies and build the documentation
 inside a Python virtualenv.
 
 - Python
@@ -33,3 +33,14 @@ inside a Python virtualenv.
 ```bash
 make html
 ```
+
+## Release
+
+The documentation is served through the
+[arrow-site](https://github.com/apache/arrow-site/) repo. To release a new
+version of the docs, follow these steps:
+
+- Run `make html` inside `docs` folder to generate the docs website inside the `build/html` folder.
+- Clone the arrow-site repo and checkout to the `asf-site` branch
+- Copy build artifacts into `arrow-site` repo's `datafusion` folder: `'cp' -rT ./build/html/ ../arrow-site/datafusion/`
+- Commit changes in `arrow-site` and send a PR.

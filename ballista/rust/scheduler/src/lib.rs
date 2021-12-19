@@ -22,6 +22,13 @@ pub mod planner;
 #[cfg(feature = "sled")]
 mod standalone;
 pub mod state;
+
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::object_store::{local::LocalFileSystem, ObjectStore};
+
+use futures::StreamExt;
+
 #[cfg(feature = "sled")]
 pub use standalone::new_standalone_scheduler;
 
@@ -40,10 +47,10 @@ use std::{fmt, net::IpAddr};
 use ballista_core::serde::protobuf::{
     execute_query_params::Query, executor_registration::OptionalHost, job_status,
     scheduler_grpc_server::SchedulerGrpc, task_status, ExecuteQueryParams,
-    ExecuteQueryResult, FailedJob, FilePartitionMetadata, FileType,
-    GetFileMetadataParams, GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult,
-    JobStatus, PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob,
-    TaskDefinition, TaskStatus,
+    ExecuteQueryResult, FailedJob, FileType, GetFileMetadataParams,
+    GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult, JobStatus,
+    PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob, TaskDefinition,
+    TaskStatus,
 };
 use ballista_core::serde::scheduler::ExecutorMeta;
 
@@ -82,7 +89,6 @@ use self::state::{ConfigBackendClient, SchedulerState};
 use ballista_core::config::BallistaConfig;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use datafusion::datasource::parquet::ParquetTableDescriptor;
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -272,6 +278,10 @@ impl SchedulerGrpc for SchedulerServer {
         &self,
         request: Request<GetFileMetadataParams>,
     ) -> std::result::Result<Response<GetFileMetadataResult>, tonic::Status> {
+        // TODO support multiple object stores
+        let obj_store = LocalFileSystem {};
+        // TODO shouldn't this take a ListingOption object as input?
+
         let GetFileMetadataParams { path, file_type } = request.into_inner();
 
         let file_type: FileType = file_type.try_into().map_err(|e| {
@@ -280,34 +290,34 @@ impl SchedulerGrpc for SchedulerServer {
             tonic::Status::internal(msg)
         })?;
 
-        match file_type {
-            FileType::Parquet => {
-                let parquet_desc = ParquetTableDescriptor::new(&path).map_err(|e| {
-                    let msg = format!("Error opening parquet files: {}", e);
-                    error!("{}", msg);
-                    tonic::Status::internal(msg)
-                })?;
-
-                let partitions = parquet_desc
-                    .descriptor
-                    .partition_files
-                    .iter()
-                    .map(|pf| FilePartitionMetadata {
-                        filename: vec![pf.path.clone()],
-                    })
-                    .collect();
-
-                //TODO include statistics and any other info needed to reconstruct ParquetExec
-                Ok(Response::new(GetFileMetadataResult {
-                    schema: Some(parquet_desc.schema().as_ref().into()),
-                    partitions,
-                }))
-            }
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::Parquet => Ok(Arc::new(ParquetFormat::default())),
             //TODO implement for CSV
             _ => Err(tonic::Status::unimplemented(
                 "get_file_metadata unsupported file type",
             )),
-        }
+        }?;
+
+        let file_metas = obj_store.list_file(&path).await.map_err(|e| {
+            let msg = format!("Error listing files: {}", e);
+            error!("{}", msg);
+            tonic::Status::internal(msg)
+        })?;
+
+        let obj_readers = file_metas.map(move |f| obj_store.file_reader(f?.sized_file));
+
+        let schema = file_format
+            .infer_schema(Box::pin(obj_readers))
+            .await
+            .map_err(|e| {
+                let msg = format!("Error infering schema: {}", e);
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?;
+
+        Ok(Response::new(GetFileMetadataResult {
+            schema: Some(schema.as_ref().into()),
+        }))
     }
 
     async fn execute_query(
@@ -343,7 +353,7 @@ impl SchedulerGrpc for SchedulerServer {
                     //TODO we can't just create a new context because we need a context that has
                     // tables registered from previous SQL statements that have been executed
                     let mut ctx = create_datafusion_context(&config);
-                    let df = ctx.sql(&sql).map_err(|e| {
+                    let df = ctx.sql(&sql).await.map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
                         tonic::Status::internal(msg)
@@ -418,6 +428,7 @@ impl SchedulerGrpc for SchedulerServer {
 
                 let plan = fail_job!(datafusion_ctx
                     .create_physical_plan(&optimized_plan)
+                    .await
                     .map_err(|e| {
                         let msg = format!("Could not create physical plan: {}", e);
                         error!("{}", msg);
@@ -447,6 +458,7 @@ impl SchedulerGrpc for SchedulerServer {
                 let mut planner = DistributedPlanner::new();
                 let stages = fail_job!(planner
                     .plan_query_stages(&job_id_spawn, plan)
+                    .await
                     .map_err(|e| {
                         let msg = format!("Could not plan query stages: {}", e);
                         error!("{}", msg);

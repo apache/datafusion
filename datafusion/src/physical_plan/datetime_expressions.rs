@@ -36,7 +36,7 @@ use chrono::prelude::{DateTime, Utc};
 use chrono::Datelike;
 use chrono::Duration;
 use chrono::Timelike;
-use std::convert::TryInto;
+use std::borrow::Borrow;
 
 /// given a function `op` that maps a `&str` to a Result of an arrow native type,
 /// returns a `PrimitiveArray` after the application
@@ -50,7 +50,6 @@ pub(crate) fn unary_string_to_primitive_function<'a, T, O, F>(
     args: &[&'a dyn Array],
     op: F,
     name: &str,
-    data_type: DataType,
 ) -> Result<PrimitiveArray<O>>
 where
     O: NativeType,
@@ -75,20 +74,14 @@ where
     // first map is the iterator, second is for the `Option<_>`
     array
         .iter()
-        .map(|x| x.map(|x| op(x)).transpose())
-        .collect::<Result<PrimitiveArray<O>>>()
-        .map(|x| x.to(data_type))
+        .map(|x| x.map(op.borrow()).transpose())
+        .collect()
 }
 
 // given an function that maps a `&str` to a arrow native type,
 // returns a `ColumnarValue` where the function is applied to either a `ArrayRef` or `ScalarValue`
 // depending on the `args`'s variant.
-fn handle<'a, O, F>(
-    args: &'a [ColumnarValue],
-    op: F,
-    name: &str,
-    data_type: DataType,
-) -> Result<ColumnarValue>
+fn handle<'a, O, F>(args: &'a [ColumnarValue], op: F, name: &str) -> Result<ColumnarValue>
 where
     O: NativeType,
     ScalarValue: From<Option<O>>,
@@ -97,20 +90,10 @@ where
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<i32, O, _>(
-                    &[a.as_ref()],
-                    op,
-                    name,
-                    data_type,
-                )?,
+                unary_string_to_primitive_function::<i32, O, _>(&[a.as_ref()], op, name)?,
             ))),
             DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<i64, O, _>(
-                    &[a.as_ref()],
-                    op,
-                    name,
-                    data_type,
-                )?,
+                unary_string_to_primitive_function::<i64, O, _>(&[a.as_ref()], op, name)?,
             ))),
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",

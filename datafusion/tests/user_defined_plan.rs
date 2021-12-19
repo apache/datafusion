@@ -86,12 +86,13 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::execution::context::ExecutionProps;
-use datafusion::logical_plan::DFSchemaRef;
+use datafusion::logical_plan::plan::{Extension, Sort};
+use datafusion::logical_plan::{DFSchemaRef, Limit};
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.
 async fn exec_sql(ctx: &mut ExecutionContext, sql: &str) -> Result<String> {
-    let df = ctx.sql(sql)?;
+    let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
     Ok(write(&batches))
 }
@@ -108,6 +109,22 @@ async fn setup_table(mut ctx: ExecutionContext) -> Result<ExecutionContext> {
     assert_eq!(expected, actual, "Creating table");
     Ok(ctx)
 }
+
+async fn setup_table_without_schemas(
+    mut ctx: ExecutionContext,
+) -> Result<ExecutionContext> {
+    let sql = "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/customer.csv'";
+
+    let expected = vec!["++", "++"];
+
+    let s = exec_sql(&mut ctx, sql).await?;
+    let actual = s.lines().collect::<Vec<_>>();
+
+    assert_eq!(expected, actual, "Creating table");
+    Ok(ctx)
+}
+
+const QUERY1: &str = "SELECT * FROM sales limit 3";
 
 const QUERY: &str =
     "SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3";
@@ -142,6 +159,43 @@ async fn run_and_compare_query(
     Ok(())
 }
 
+// Run the query using the specified execution context and compare it
+// to the known result
+async fn run_and_compare_query_with_auto_schemas(
+    mut ctx: ExecutionContext,
+    description: &str,
+) -> Result<()> {
+    let expected = vec![
+        "+----------+----------+",
+        "| column_1 | column_2 |",
+        "+----------+----------+",
+        "| andrew   | 100      |",
+        "| jorge    | 200      |",
+        "| andy     | 150      |",
+        "+----------+----------+",
+    ];
+
+    let s = exec_sql(&mut ctx, QUERY1).await?;
+    let actual = s.lines().collect::<Vec<_>>();
+
+    assert_eq!(
+        expected,
+        actual,
+        "output mismatch for {}. Expectedn\n{}Actual:\n{}",
+        description,
+        expected.join("\n"),
+        s
+    );
+    Ok(())
+}
+
+#[tokio::test]
+// Run the query using default planners and optimizer
+async fn normal_query_without_schemas() -> Result<()> {
+    let ctx = setup_table_without_schemas(ExecutionContext::new()).await?;
+    run_and_compare_query_with_auto_schemas(ctx, "Default context").await
+}
+
 #[tokio::test]
 // Run the query using default planners and optimizer
 async fn normal_query() -> Result<()> {
@@ -163,9 +217,9 @@ async fn topk_plan() -> Result<()> {
     let mut ctx = setup_table(make_topk_context()).await?;
 
     let expected = vec![
-        "| logical_plan after topk                    | TopK: k=3                                                                                |",
-        "|                                            |   Projection: #sales.customer_id, #sales.revenue                                         |",
-        "|                                            |     TableScan: sales projection=Some([0, 1])                                             |",
+        "| logical_plan after topk                               | TopK: k=3                                                                                  |",
+        "|                                                       |   Projection: #sales.customer_id, #sales.revenue                                           |",
+        "|                                                       |     TableScan: sales projection=Some([0, 1])                                               |",
     ].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {}", QUERY);
@@ -202,10 +256,11 @@ fn make_topk_context() -> ExecutionContext {
 
 struct TopKQueryPlanner {}
 
+#[async_trait]
 impl QueryPlanner for TopKQueryPlanner {
     /// Given a `LogicalPlan` created from above, create an
     /// `ExecutionPlan` suitable for execution
-    fn create_physical_plan(
+    async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
         ctx_state: &ExecutionContextState,
@@ -216,7 +271,9 @@ impl QueryPlanner for TopKQueryPlanner {
                 TopKPlanner {},
             )]);
         // Delegate most work of physical planning to the default physical planner
-        physical_planner.create_physical_plan(logical_plan, ctx_state)
+        physical_planner
+            .create_physical_plan(logical_plan, ctx_state)
+            .await
     }
 }
 
@@ -231,21 +288,21 @@ impl OptimizerRule for TopKOptimizerRule {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
-        if let LogicalPlan::Limit { ref n, ref input } = plan {
-            if let LogicalPlan::Sort {
+        if let LogicalPlan::Limit(Limit { ref n, ref input }) = plan {
+            if let LogicalPlan::Sort(Sort {
                 ref expr,
                 ref input,
-            } = **input
+            }) = **input
             {
                 if expr.len() == 1 {
                     // we found a sort with a single sort expr, replace with a a TopK
-                    return Ok(LogicalPlan::Extension {
+                    return Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(TopKPlanNode {
                             k: *n,
                             input: self.optimize(input.as_ref(), execution_props)?,
                             expr: expr[0].clone(),
                         }),
-                    });
+                    }));
                 }
             }
         }

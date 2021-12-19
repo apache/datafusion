@@ -153,6 +153,7 @@ enum ScalarFunction {
   SHA512 = 33;
   LN = 34;
   TOTIMESTAMPMILLIS = 35;
+  DIGEST = 36;
 }
 
 message ScalarFunctionNode {
@@ -166,6 +167,8 @@ enum AggregateFunction {
   SUM = 2;
   AVG = 3;
   COUNT = 4;
+  APPROX_DISTINCT = 5;
+  ARRAY_AGG = 6;
 }
 
 message AggregateExprNode {
@@ -239,8 +242,7 @@ message SortExprNode {
 // LogicalPlan is a nested type
 message LogicalPlanNode {
   oneof LogicalPlanType {
-    CsvTableScanNode csv_scan = 1;
-    ParquetTableScanNode parquet_scan = 2;
+    ListingTableScanNode listing_scan = 1;
     ProjectionNode projection = 3;
     SelectionNode selection = 4;
     LimitNode limit = 5;
@@ -254,23 +256,12 @@ message LogicalPlanNode {
     WindowNode window = 13;
     AnalyzeNode analyze = 14;
     CrossJoinNode cross_join = 15;
-    AvroTableScanNode avro_scan = 16;
+    ValuesNode values = 16;
   }
 }
 
 message ProjectionColumns {
   repeated string columns = 1;
-}
-
-message CsvTableScanNode {
-  string table_name = 1;
-  string path = 2;
-  bool has_header = 3;
-  string delimiter = 4;
-  string file_extension = 5;
-  ProjectionColumns projection = 6;
-  Schema schema = 7;
-  repeated LogicalExprNode filters = 8;
 }
 
 message Statistics {
@@ -282,34 +273,45 @@ message Statistics {
 
 message PartitionedFile {
   string path = 1;
-  Statistics statistics = 2;
+  uint64 size = 2;
+  uint64 last_modified_ns = 3;
+  repeated ScalarValue partition_values = 4;
 }
 
-message TableDescriptor {
-  string path = 1;
-  repeated PartitionedFile partition_files = 2;
-  Schema schema = 3;
+message CsvFormat {
+  bool has_header = 1;
+  string delimiter = 2;
 }
 
-message ParquetTableScanNode {
-  string table_name = 1;
-  TableDescriptor table_desc = 2;
-  ProjectionColumns projection = 3;
-  repeated LogicalExprNode filters = 4;
+message ParquetFormat {
+  bool enable_pruning = 1;
 }
 
-message AvroTableScanNode {
+message AvroFormat {}
+
+message ListingTableScanNode {
   string table_name = 1;
   string path = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
   Schema schema = 5;
   repeated LogicalExprNode filters = 6;
+  repeated string table_partition_cols = 7;
+  bool collect_stat = 8;
+  uint32 target_partitions = 9;
+  oneof FileFormatType {
+    CsvFormat csv = 10;
+    ParquetFormat parquet = 11;
+    AvroFormat avro = 12;
+  }
 }
 
 message ProjectionNode {
   LogicalPlanNode input = 1;
   repeated LogicalExprNode expr = 2;
+  oneof optional_alias {
+    string alias = 3;
+  }
 }
 
 message SelectionNode {
@@ -317,12 +319,12 @@ message SelectionNode {
   LogicalExprNode expr = 2;
 }
 
-message SortNode{
+message SortNode {
   LogicalPlanNode input = 1;
   repeated LogicalExprNode expr = 2;
 }
 
-message RepartitionNode{
+message RepartitionNode {
   LogicalPlanNode input = 1;
   oneof partition_method {
     uint64 round_robin = 2;
@@ -335,11 +337,11 @@ message HashRepartition {
   uint64 partition_count = 2;
 }
 
-message EmptyRelationNode{
+message EmptyRelationNode {
   bool produce_one_row = 1;
 }
 
-message CreateExternalTableNode{
+message CreateExternalTableNode {
   string name = 1;
   string location = 2;
   FileType file_type = 3;
@@ -347,7 +349,14 @@ message CreateExternalTableNode{
   DfSchema schema = 5;
 }
 
-enum FileType{
+// a node containing data for defining values list. unlike in SQL where it's two dimensional, here
+// the list is flattened, and with the field n_cols it can be parsed and partitioned into rows
+message ValuesNode {
+  uint64 n_cols = 1;
+  repeated LogicalExprNode values_list = 2;
+}
+
+enum FileType {
   NdJson = 0;
   Parquet = 1;
   CSV = 2;
@@ -427,6 +436,7 @@ message JoinNode {
   JoinConstraint join_constraint = 4;
   repeated Column left_join_column = 5;
   repeated Column right_join_column = 6;
+  bool null_equals_null = 7;
 }
 
 message CrossJoinNode {
@@ -597,40 +607,37 @@ message FilterExecNode {
   PhysicalExprNode expr = 2;
 }
 
-message ParquetPartition {
-  uint32 index = 1;
-  repeated PartitionedFile files = 2;
+message FileGroup {
+  repeated PartitionedFile files = 1;
+}
+
+message ScanLimit {
+  // wrap into a message to make it optional
+  uint32 limit = 1;
+}
+
+message FileScanExecConf {
+  repeated FileGroup file_groups = 1;
+  Schema schema = 2;
+  uint32 batch_size = 3;
+  repeated uint32 projection = 4;
+  ScanLimit limit = 5;
+  Statistics statistics = 6;
+  repeated string table_partition_cols = 7;
 }
 
 message ParquetScanExecNode {
-  repeated ParquetPartition partitions = 1;
-  Schema schema = 2;
-  repeated uint32 projection = 3;
-  uint32 batch_size = 4;
+  FileScanExecConf base_conf = 1;
 }
 
 message CsvScanExecNode {
-  string path = 1;
-  repeated uint32 projection = 2;
-  Schema schema = 3;
-  string file_extension = 4;
-  bool has_header = 5;
-  uint32 batch_size = 6;
-  string delimiter = 7;
-
-  // partition filenames
-  repeated string filename = 8;
+  FileScanExecConf base_conf = 1;
+  bool has_header = 2;
+  string delimiter = 3;
 }
 
 message AvroScanExecNode {
-  string path = 1;
-  repeated uint32 projection = 2;
-  Schema schema = 3;
-  string file_extension = 4;
-  uint32 batch_size = 5;
-
-  // partition filenames
-  repeated string filename = 8;
+  FileScanExecConf base_conf = 1;
 }
 
 enum PartitionMode {
@@ -644,6 +651,7 @@ message HashJoinExecNode {
   repeated JoinOn on = 3;
   JoinType join_type = 4;
   PartitionMode partition_mode = 6;
+  bool null_equals_null = 7;
 }
 
 message CrossJoinExecNode {
@@ -945,7 +953,6 @@ message GetFileMetadataParams {
 
 message GetFileMetadataResult {
   Schema schema = 1;
-  repeated FilePartitionMetadata partitions = 2;
 }
 
 message FilePartitionMetadata {

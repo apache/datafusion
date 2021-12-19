@@ -21,6 +21,7 @@
 //! see also https://www.postgresql.org/docs/current/functions-window.html
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::functions::{TypeSignature, Volatility};
 use crate::physical_plan::{
     aggregates, aggregates::AggregateFunction, functions::Signature,
     type_coercion::data_types, windows::find_ranges_in_range, PhysicalExpr,
@@ -34,7 +35,7 @@ use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 /// WindowFunction
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub enum WindowFunction {
     /// window function that leverages an aggregate function
     AggregateFunction(AggregateFunction),
@@ -89,7 +90,7 @@ impl fmt::Display for WindowFunction {
 }
 
 /// An aggregate function that is part of a built-in window function
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub enum BuiltInWindowFunction {
     /// number of the current row within its partition, counting from 1
     RowNumber,
@@ -147,11 +148,16 @@ impl FromStr for BuiltInWindowFunction {
 }
 
 /// Returns the datatype of the window function
-pub fn return_type(fun: &WindowFunction, arg_types: &[DataType]) -> Result<DataType> {
+pub fn return_type(
+    fun: &WindowFunction,
+    input_expr_types: &[DataType],
+) -> Result<DataType> {
     match fun {
-        WindowFunction::AggregateFunction(fun) => aggregates::return_type(fun, arg_types),
+        WindowFunction::AggregateFunction(fun) => {
+            aggregates::return_type(fun, input_expr_types)
+        }
         WindowFunction::BuiltInWindowFunction(fun) => {
-            return_type_for_built_in(fun, arg_types)
+            return_type_for_built_in(fun, input_expr_types)
         }
     }
 }
@@ -159,13 +165,13 @@ pub fn return_type(fun: &WindowFunction, arg_types: &[DataType]) -> Result<DataT
 /// Returns the datatype of the built-in window function
 pub(super) fn return_type_for_built_in(
     fun: &BuiltInWindowFunction,
-    arg_types: &[DataType],
+    input_expr_types: &[DataType],
 ) -> Result<DataType> {
     // Note that this function *must* return the same type that the respective physical expression returns
     // or the execution panics.
 
     // verify that this is a valid set of data types for this function
-    data_types(arg_types, &signature_for_built_in(fun))?;
+    data_types(input_expr_types, &signature_for_built_in(fun))?;
 
     match fun {
         BuiltInWindowFunction::RowNumber
@@ -179,7 +185,7 @@ pub(super) fn return_type_for_built_in(
         | BuiltInWindowFunction::Lead
         | BuiltInWindowFunction::FirstValue
         | BuiltInWindowFunction::LastValue
-        | BuiltInWindowFunction::NthValue => Ok(arg_types[0].clone()),
+        | BuiltInWindowFunction::NthValue => Ok(input_expr_types[0].clone()),
     }
 }
 
@@ -199,19 +205,22 @@ pub(super) fn signature_for_built_in(fun: &BuiltInWindowFunction) -> Signature {
         | BuiltInWindowFunction::Rank
         | BuiltInWindowFunction::DenseRank
         | BuiltInWindowFunction::PercentRank
-        | BuiltInWindowFunction::CumeDist => Signature::Any(0),
-        BuiltInWindowFunction::Lag | BuiltInWindowFunction::Lead => {
-            Signature::OneOf(vec![
-                Signature::Any(1),
-                Signature::Any(2),
-                Signature::Any(3),
-            ])
-        }
+        | BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
+        BuiltInWindowFunction::Lag | BuiltInWindowFunction::Lead => Signature::one_of(
+            vec![
+                TypeSignature::Any(1),
+                TypeSignature::Any(2),
+                TypeSignature::Any(3),
+            ],
+            Volatility::Immutable,
+        ),
         BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
-            Signature::Any(1)
+            Signature::any(1, Volatility::Immutable)
         }
-        BuiltInWindowFunction::Ntile => Signature::Exact(vec![DataType::UInt64]),
-        BuiltInWindowFunction::NthValue => Signature::Any(2),
+        BuiltInWindowFunction::Ntile => {
+            Signature::exact(vec![DataType::UInt64], Volatility::Immutable)
+        }
+        BuiltInWindowFunction::NthValue => Signature::any(2, Volatility::Immutable),
     }
 }
 
@@ -427,6 +436,15 @@ mod tests {
         assert_eq!(DataType::Utf8, observed);
 
         let observed = return_type(&fun, &[DataType::Float64, DataType::UInt64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_percent_rank_return_type() -> Result<()> {
+        let fun = WindowFunction::from_str("percent_rank")?;
+        let observed = return_type(&fun, &[])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())

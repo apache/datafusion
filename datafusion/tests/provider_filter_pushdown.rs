@@ -108,6 +108,7 @@ struct CustomProvider {
     one_batch: RecordBatch,
 }
 
+#[async_trait]
 impl TableProvider for CustomProvider {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -117,7 +118,7 @@ impl TableProvider for CustomProvider {
         self.zero_batch.schema().clone()
     }
 
-    fn scan(
+    async fn scan(
         &self,
         _: &Option<Vec<usize>>,
         _: usize,
@@ -170,7 +171,8 @@ async fn assert_provider_row_count(value: i64, expected_count: u64) -> Result<()
 
     ctx.register_table("data", Arc::new(provider))?;
     let sql_results = ctx
-        .sql(&format!("select count(*) from data where flag = {}", value))?
+        .sql(&format!("select count(*) from data where flag = {}", value))
+        .await?
         .collect()
         .await?;
 

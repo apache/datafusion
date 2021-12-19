@@ -22,6 +22,7 @@ use datafusion::arrow::{
     record_batch::RecordBatch,
 };
 
+use datafusion::physical_plan::functions::Volatility;
 use datafusion::{error::Result, logical_plan::create_udaf, physical_plan::Accumulator};
 use datafusion::{prelude::*, scalar::ScalarValue};
 use std::sync::Arc;
@@ -137,6 +138,7 @@ async fn main() -> Result<()> {
         DataType::Float64,
         // the return type; DataFusion expects this to match the type returned by `evaluate`.
         Arc::new(DataType::Float64),
+        Volatility::Immutable,
         // This is the accumulator factory; DataFusion uses it to create new accumulators.
         Arc::new(|| Ok(Box::new(GeometricMean::new()))),
         // This is the description of the state. `state()` must match the types here.

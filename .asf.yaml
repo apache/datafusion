@@ -22,12 +22,17 @@ notifications:
   jira_options: link label worklog
 github:
   description: "Apache Arrow DataFusion and Ballista query engines"
-  homepage: https://arrow.apache.org/
+  homepage: https://arrow.apache.org/datafusion
   labels:
-    datafusion
-    ballista
-    bug
-    performance
+    - arrow
+    - big-data
+    - dataframe
+    - datafusion
+    - olap
+    - python
+    - query-engine
+    - rust
+    - sql
   enabled_merge_buttons:
     squash: true
     merge: false

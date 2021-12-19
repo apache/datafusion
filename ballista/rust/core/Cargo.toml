@@ -37,15 +37,16 @@ hashbrown = "0.11"
 log = "0.4"
 prost = "0.9"
 serde = {version = "1", features = ["derive"]}
-sqlparser = "0.10.0"
+sqlparser = "0.13"
 tokio = "1.0"
 tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
+chrono = "0.4"
 
 arrow-format = { version = "0.3", features = ["flight-data", "flight-service"] }
 arrow = { package = "arrow2", version="0.8", features = ["io_ipc", "io_flight"] }
 
-datafusion = { path = "../../../datafusion", version = "5.1.0" }
+datafusion = { path = "../../../datafusion", version = "6.0.0" }
 
 [dev-dependencies]
 tempfile = "3"

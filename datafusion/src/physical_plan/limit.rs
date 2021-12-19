@@ -385,26 +385,34 @@ mod tests {
     use common::collect;
 
     use super::*;
+    use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
-    use crate::physical_plan::csv::{CsvExec, CsvReadOptions};
-    use crate::test;
+    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
+    use crate::{test, test_util};
 
     #[tokio::test]
     async fn limit() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = test_util::aggr_test_schema();
 
         let num_partitions = 4;
-        let path =
+        let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", num_partitions)?;
 
-        let csv = CsvExec::try_new(
-            &path,
-            CsvReadOptions::new().schema(&schema),
-            None,
-            1024,
-            None,
-        )?;
+        let csv = CsvExec::new(
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: schema,
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            true,
+            b',',
+        );
 
         // input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);

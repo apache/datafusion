@@ -77,7 +77,7 @@ test_files = set(root.glob("*.sql"))
 
 class TestPsqlParity:
     def test_tests_count(self):
-        assert len(test_files) == 15, "tests are missed"
+        assert len(test_files) == 21, "tests are missed"
 
     @pytest.mark.parametrize("fname", test_files)
     def test_sql_file(self, fname):

@@ -35,11 +35,15 @@ Ballista can be deployed as a standalone cluster and also supports [Kubernetes](
 case, the scheduler can be configured to use [etcd](https://etcd.io/) as a backing store to (eventually) provide
 redundancy in the case of a scheduler failing.
 
+## Rust Version Compatbility
+
+This crate is tested with the latest stable version of Rust. We do not currrently test against other, older versions of the Rust compiler.
+
 ## Starting a cluster
 
 There are numerous ways to start a Ballista cluster, including support for Docker and
 Kubernetes. For full documentation, refer to the
-[DataFusion User Guide](https://github.com/apache/arrow-datafusion/tree/master/docs/user-guide)
+[DataFusion User Guide](https://arrow.apache.org/datafusion/user-guide/introduction.html)
 
 A simple way to start a local cluster for testing purposes is to use cargo to install
 the scheduler and executor crates.
@@ -76,6 +80,15 @@ RUST_LOG=info ballista-executor --bind-port 50052 -c 4
 Ballista provides a `BallistaContext` as a starting point for creating queries. DataFrames can be created
 by invoking the `read_csv`, `read_parquet`, and `sql` methods.
 
+To build a simple ballista example, add the following dependencies to your `Cargo.toml` file:
+
+```toml
+[dependencies]
+ballista = "0.6"
+datafusion = "6.0"
+tokio = "1.0"
+```
+
 The following example runs a simple aggregate SQL query against a CSV file from the
 [New York Taxi and Limousine Commission](https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page)
 data set.
@@ -100,7 +113,7 @@ async fn main() -> Result<()> {
        "tripdata",
        "/path/to/yellow_tripdata_2020-01.csv",
        CsvReadOptions::new(),
-   )?;
+   ).await?;
 
    // execute the query
    let df = ctx.sql(
@@ -108,7 +121,7 @@ async fn main() -> Result<()> {
        FROM tripdata
        GROUP BY passenger_count
        ORDER BY passenger_count",
-   )?;
+   ).await?;
 
    // collect the results and print them to stdout
    let results = df.collect().await?;
@@ -116,3 +129,5 @@ async fn main() -> Result<()> {
    Ok(())
 }
 ```
+
+More [examples](https://github.com/apache/arrow-datafusion/tree/master/ballista-examples) can be found in the arrow-datafusion repository.

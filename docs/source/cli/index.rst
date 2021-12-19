@@ -23,6 +23,24 @@ The Arrow DataFusion CLI is a command-line interactive SQL utility that allows
 queries to be executed against CSV and Parquet files. It is a convenient way to
 try DataFusion out with your own data sources.
 
+Install and run using Homebrew (on MacOS)
+=========================================
+
+The easiest way to give DataFusion CLI a spin is via Homebrew (on MacOS). Install it as any other pre-built software like this:
+
+.. code-block:: bash
+
+    brew install datafusion
+    # ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/manifests/5.0.0
+    # ######################################################################## 100.0%
+    # ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/blobs/sha256:9ecc8a01be47ceb9a53b39976696afa87c0a8
+    # ==> Downloading from https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:9ecc8a01be47ceb9a53b39976
+    # ######################################################################## 100.0%
+    # ==> Pouring datafusion--5.0.0.big_sur.bottle.tar.gz
+    # 🍺  /usr/local/Cellar/datafusion/5.0.0: 9 files, 17.4MB
+
+    datafusion-cli
+
 Run using Cargo
 ===============
 
@@ -53,7 +71,7 @@ Usage
 
 .. code-block:: bash
 
-    DataFusion 5.0.0-SNAPSHOT
+    DataFusion 5.1.0-SNAPSHOT
     DataFusion is an in-memory query engine that uses Apache Arrow as the memory model. It supports executing SQL queries
     against CSV and Parquet files as well as querying directly against in-memory data.
 
@@ -68,8 +86,10 @@ Usage
     OPTIONS:
         -c, --batch-size <batch-size>    The batch size of each query, or use DataFusion default
         -p, --data-path <data-path>      Path to your data, default to current directory
-        -f, --file <file>                Execute commands from file, then exit
+        -f, --file <file>...             Execute commands from file(s), then exit
             --format <format>            Output format [default: table]  [possible values: csv, tsv, table, json, ndjson]
+            --host <host>                Ballista scheduler host
+            --port <port>                Ballista scheduler port
 
 Type `exit` or `quit` to exit the CLI.
 

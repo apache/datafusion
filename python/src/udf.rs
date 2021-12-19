@@ -15,46 +15,84 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use pyo3::{prelude::*, types::PyTuple};
 
-use datafusion::{arrow::array, physical_plan::functions::make_scalar_function};
-
+use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::pyarrow::PyArrowConvert;
 use datafusion::error::DataFusionError;
-use datafusion::physical_plan::functions::ScalarFunctionImplementation;
+use datafusion::logical_plan;
+use datafusion::physical_plan::functions::{
+    make_scalar_function, ScalarFunctionImplementation,
+};
+use datafusion::physical_plan::udf::ScalarUDF;
 
-use crate::to_py::to_py_array;
-use crate::to_rust::to_rust;
+use crate::expression::PyExpr;
+use crate::utils::parse_volatility;
 
-/// creates a DataFusion's UDF implementation from a python function that expects pyarrow arrays
-/// This is more efficient as it performs a zero-copy of the contents.
-pub fn array_udf(func: PyObject) -> ScalarFunctionImplementation {
+/// Create a DataFusion's UDF implementation from a python function
+/// that expects pyarrow arrays. This is more efficient as it performs
+/// a zero-copy of the contents.
+fn to_rust_function(func: PyObject) -> ScalarFunctionImplementation {
     make_scalar_function(
-        move |args: &[array::ArrayRef]| -> Result<array::ArrayRef, DataFusionError> {
+        move |args: &[ArrayRef]| -> Result<ArrayRef, DataFusionError> {
             Python::with_gil(|py| {
                 // 1. cast args to Pyarrow arrays
-                // 2. call function
-                // 3. cast to arrow::array::Array
-
-                // 1.
                 let py_args = args
                     .iter()
-                    .map(|arg| {
-                        // remove unwrap
-                        to_py_array(arg, py).unwrap()
-                    })
+                    .map(|arg| arg.data().to_owned().to_pyarrow(py).unwrap())
                     .collect::<Vec<_>>();
                 let py_args = PyTuple::new(py, py_args);
 
-                // 2.
+                // 2. call function
                 let value = func.as_ref(py).call(py_args, None);
                 let value = match value {
                     Ok(n) => Ok(n),
                     Err(error) => Err(DataFusionError::Execution(format!("{:?}", error))),
                 }?;
 
-                let array = to_rust(value).unwrap();
+                // 3. cast to arrow::array::Array
+                let array = ArrayRef::from_pyarrow(value).unwrap();
                 Ok(array)
             })
         },
     )
+}
+
+/// Represents a PyScalarUDF
+#[pyclass(name = "ScalarUDF", module = "datafusion", subclass)]
+#[derive(Debug, Clone)]
+pub struct PyScalarUDF {
+    pub(crate) function: ScalarUDF,
+}
+
+#[pymethods]
+impl PyScalarUDF {
+    #[new(name, func, input_types, return_type, volatility)]
+    fn new(
+        name: &str,
+        func: PyObject,
+        input_types: Vec<DataType>,
+        return_type: DataType,
+        volatility: &str,
+    ) -> PyResult<Self> {
+        let function = logical_plan::create_udf(
+            name,
+            input_types,
+            Arc::new(return_type),
+            parse_volatility(volatility)?,
+            to_rust_function(func),
+        );
+        Ok(Self { function })
+    }
+
+    /// creates a new PyExpr with the call of the udf
+    #[call]
+    #[args(args = "*")]
+    fn __call__(&self, args: Vec<PyExpr>) -> PyResult<PyExpr> {
+        let args = args.iter().map(|e| e.expr.clone()).collect();
+        Ok(self.function.call(args).into())
+    }
 }

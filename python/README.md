@@ -142,10 +142,8 @@ source venv/bin/activate
 python -m pip install -U pip
 # if python -V gives python 3.7
 python -m pip install -r requirements-37.txt
-# if python -V gives python 3.8
-python -m pip install -r requirements-38.txt
-# if python -V gives python 3.9
-python -m pip install -r requirements-39.txt
+# if python -V gives python 3.8/3.9/3.10
+python -m pip install -r requirements.txt
 ```
 
 Whenever rust code changes (your changes or via `git pull`):
@@ -166,16 +164,14 @@ python -m pip install pip-tools
 
 # change requirements.in and then run
 python -m piptools compile --generate-hashes -o requirements-37.txt
-# or run this is you are on python 3.8
-python -m piptools compile --generate-hashes -o requirements-38.txt
-# or run this is you are on python 3.9
-python -m piptools compile --generate-hashes -o requirements-39.txt
+# or run this is you are on python 3.8/3.9/3.10
+python -m piptools compile --generate-hashes -o requirements.txt
 ```
 
 To update dependencies, run with `-U`
 
 ```bash
-python -m piptools compile -U --generate-hashes -o requirements-39.txt
+python -m piptools compile -U --generate-hashes -o requirements-310.txt
 ```
 
 More details [here](https://github.com/jazzband/pip-tools)

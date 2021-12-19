@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::*;
+use async_trait::async_trait;
 
 use crate::datasource::TableProvider;
 use crate::error::Result;
@@ -39,6 +40,7 @@ impl EmptyTable {
     }
 }
 
+#[async_trait]
 impl TableProvider for EmptyTable {
     fn as_any(&self) -> &dyn Any {
         self
@@ -48,7 +50,7 @@ impl TableProvider for EmptyTable {
         self.schema.clone()
     }
 
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         _batch_size: usize,

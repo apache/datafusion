@@ -17,22 +17,30 @@
 
 [package]
 name = "datafusion-python"
-version = "0.3.0"
+version = "0.4.0"
 homepage = "https://github.com/apache/arrow"
 repository = "https://github.com/apache/arrow"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 description = "Build and run queries against data"
 readme = "README.md"
 license = "Apache-2.0"
-edition = "2018"
+edition = "2021"
+rust-version = "1.57"
 
 [dependencies]
-libc = "0.2"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 rand = "0.7"
-pyo3 = { version = "0.14.1", features = ["extension-module", "abi3", "abi3-py36"] }
-datafusion = { path = "../datafusion", version = "5.1.0" }
+pyo3 = { version = "0.14", features = ["extension-module", "abi3", "abi3-py36"] }
+datafusion = { path = "../datafusion", version = "6.0.0", features = ["pyarrow"] }
+uuid = { version = "0.8", features = ["v4"] }
 
 [lib]
-name = "datafusion"
+name = "_internal"
 crate-type = ["cdylib"]
+
+[package.metadata.maturin]
+name = "datafusion._internal"
+
+[profile.release]
+lto = true
+codegen-units = 1

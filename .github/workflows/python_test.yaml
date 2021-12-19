@@ -25,8 +25,8 @@ jobs:
       - uses: actions/checkout@v2
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install nightly-2021-09-07
-          rustup default nightly-2021-09-07
+          rustup toolchain install nightly-2021-10-23
+          rustup default nightly-2021-10-23
           rustup component add rustfmt
       - name: Cache Cargo
         uses: actions/cache@v2
@@ -40,23 +40,23 @@ jobs:
           key: target-maturin-cache-
       - uses: actions/setup-python@v2
         with:
-          python-version: "3.9"
+          python-version: "3.10"
       - name: Create Virtualenv
         run: |
           python -m venv venv
           source venv/bin/activate
-          pip install -r python/requirements-39.txt
+          pip install -r python/requirements.txt
       - name: Run Linters
         run: |
           source venv/bin/activate
-          flake8 python
-          black --line-length 79 --check python
+          flake8 python --ignore=E501
+          black --line-length 79 --diff --check python
       - name: Run tests
         run: |
           source venv/bin/activate
           cd python
           maturin develop
-          pytest -v .
+          RUST_BACKTRACE=1 pytest -v .
         env:
           CARGO_HOME: "/home/runner/.cargo"
           CARGO_TARGET_DIR: "/home/runner/target"

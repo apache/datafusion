@@ -102,7 +102,7 @@ pub struct Statistics {
     /// Statistics on a column level
     pub column_statistics: Option<Vec<ColumnStatistics>>,
     /// If true, any field that is `Some(..)` is the actual value in the data provided by the operator (it is not
-    /// an estimate). Any or all other fields might still be None, in which case no information is known.  
+    /// an estimate). Any or all other fields might still be None, in which case no information is known.
     /// if false, any field that is `Some(..)` may contain an inexact estimate and may not be the actual value.
     pub is_exact: bool,
 }
@@ -193,31 +193,34 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 /// use datafusion::prelude::*;
 /// use datafusion::physical_plan::displayable;
 ///
-/// // Hard code target_partitions as it appears in the RepartitionExec output
-/// let config = ExecutionConfig::new()
-///     .with_target_partitions(3);
-/// let mut ctx = ExecutionContext::with_config(config);
+/// #[tokio::main]
+/// async fn main() {
+///   // Hard code target_partitions as it appears in the RepartitionExec output
+///   let config = ExecutionConfig::new()
+///       .with_target_partitions(3);
+///   let mut ctx = ExecutionContext::with_config(config);
 ///
-/// // register the a table
-/// ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).unwrap();
+///   // register the a table
+///   ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await.unwrap();
 ///
-/// // create a plan to run a SQL query
-/// let plan = ctx
-///    .create_logical_plan("SELECT a FROM example WHERE a < 5")
-///    .unwrap();
-/// let plan = ctx.optimize(&plan).unwrap();
-/// let physical_plan = ctx.create_physical_plan(&plan).unwrap();
+///   // create a plan to run a SQL query
+///   let plan = ctx
+///      .create_logical_plan("SELECT a FROM example WHERE a < 5")
+///      .unwrap();
+///   let plan = ctx.optimize(&plan).unwrap();
+///   let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
 ///
-/// // Format using display string
-/// let displayable_plan = displayable(physical_plan.as_ref());
-/// let plan_string = format!("{}", displayable_plan.indent());
+///   // Format using display string
+///   let displayable_plan = displayable(physical_plan.as_ref());
+///   let plan_string = format!("{}", displayable_plan.indent());
 ///
-/// assert_eq!("ProjectionExec: expr=[a@0 as a]\
-///            \n  CoalesceBatchesExec: target_batch_size=4096\
-///            \n    FilterExec: a@0 < 5\
-///            \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
-///            \n        CsvExec: source=Path(tests/example.csv: [tests/example.csv]), has_header=true",
-///             plan_string.trim());
+///   assert_eq!("ProjectionExec: expr=[a@0 as a]\
+///              \n  CoalesceBatchesExec: target_batch_size=4096\
+///              \n    FilterExec: a@0 < 5\
+///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
+///              \n        CsvExec: files=[tests/example.csv], has_header=true, batch_size=8192, limit=None",
+///               plan_string.trim());
+/// }
 /// ```
 ///
 pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
@@ -608,31 +611,31 @@ pub trait Accumulator: Send + Sync + Debug {
 pub mod aggregates;
 pub mod analyze;
 pub mod array_expressions;
-pub mod avro;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
+mod coercion_rule;
 pub mod common;
 pub mod cross_join;
 #[cfg(feature = "crypto_expressions")]
 pub mod crypto_expressions;
-pub mod csv;
 pub mod datetime_expressions;
 pub mod display;
 pub mod distinct_expressions;
 pub mod empty;
 pub mod explain;
 pub mod expressions;
+pub mod file_format;
 pub mod filter;
 pub mod functions;
 pub mod hash_aggregate;
 pub mod hash_join;
 pub mod hash_utils;
-pub mod json;
+pub(crate) mod hyperloglog;
+pub mod join_utils;
 pub mod limit;
 pub mod math_expressions;
 pub mod memory;
 pub mod metrics;
-pub mod parquet;
 pub mod planner;
 pub mod projection;
 #[cfg(feature = "regex_expressions")]
@@ -640,7 +643,6 @@ pub mod regex_expressions;
 pub mod repartition;
 pub mod sort;
 pub mod sort_preserving_merge;
-pub mod source;
 pub mod stream;
 pub mod string_expressions;
 pub mod type_coercion;
@@ -650,5 +652,6 @@ pub mod udf;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
 pub mod union;
+pub mod values;
 pub mod window_functions;
 pub mod windows;

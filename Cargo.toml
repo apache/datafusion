@@ -30,5 +30,9 @@ members = [
 
 exclude = ["python"]
 
+[profile.release]
+lto = true
+codegen-units = 1
+
 [patch.crates-io]
 arrow2 = { git = "https://github.com/jorgecarleitao/arrow2.git", rev = "f2c7503bc171a4c75c0af9905823c8795bd17f9b" }

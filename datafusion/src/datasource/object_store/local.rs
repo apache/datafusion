@@ -17,7 +17,8 @@
 
 //! Object store that represents the Local File System.
 
-use std::fs::Metadata;
+use std::fs::{self, File, Metadata};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -26,8 +27,11 @@ use futures::{stream, AsyncRead, StreamExt};
 use crate::datasource::object_store::{
     FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
+use crate::datasource::PartitionedFile;
 use crate::error::DataFusionError;
 use crate::error::Result;
+
+use super::{ObjectReaderStream, SizedFile};
 
 #[derive(Debug)]
 /// Local File System as Object Store.
@@ -47,17 +51,17 @@ impl ObjectStore for LocalFileSystem {
         todo!()
     }
 
-    fn file_reader(&self, file: FileMeta) -> Result<Arc<dyn ObjectReader>> {
+    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 }
 
 struct LocalFileReader {
-    file: FileMeta,
+    file: SizedFile,
 }
 
 impl LocalFileReader {
-    fn new(file: FileMeta) -> Result<Self> {
+    fn new(file: SizedFile) -> Result<Self> {
         Ok(Self { file })
     }
 }
@@ -68,8 +72,25 @@ impl ObjectReader for LocalFileReader {
         &self,
         _start: u64,
         _length: usize,
-    ) -> Result<Arc<dyn AsyncRead>> {
-        todo!()
+    ) -> Result<Box<dyn AsyncRead>> {
+        todo!(
+            "implement once async file readers are available (arrow-rs#78, arrow-rs#111)"
+        )
+    }
+
+    fn sync_chunk_reader(
+        &self,
+        start: u64,
+        length: usize,
+    ) -> Result<Box<dyn Read + Send + Sync>> {
+        // A new file descriptor is opened for each chunk reader.
+        // This okay because chunks are usually fairly large.
+        let mut file = File::open(&self.file.path)?;
+        file.seek(SeekFrom::Start(start))?;
+
+        let file = BufReader::new(file.take(length as u64));
+
+        Ok(Box::new(file))
     }
 
     fn length(&self) -> u64 {
@@ -80,9 +101,11 @@ impl ObjectReader for LocalFileReader {
 async fn list_all(prefix: String) -> Result<FileMetaStream> {
     fn get_meta(path: String, metadata: Metadata) -> FileMeta {
         FileMeta {
-            path,
+            sized_file: SizedFile {
+                path,
+                size: metadata.len(),
+            },
             last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
-            size: metadata.len(),
         }
     }
 
@@ -133,6 +156,34 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
     }
 }
 
+/// Create a stream of `ObjectReader` by converting each file in the `files` vector
+/// into instances of `LocalFileReader`
+pub fn local_object_reader_stream(files: Vec<String>) -> ObjectReaderStream {
+    Box::pin(futures::stream::iter(files).map(|f| Ok(local_object_reader(f))))
+}
+
+/// Helper method to convert a file location to a `LocalFileReader`
+pub fn local_object_reader(file: String) -> Arc<dyn ObjectReader> {
+    LocalFileSystem
+        .file_reader(local_unpartitioned_file(file).file_meta.sized_file)
+        .expect("File not found")
+}
+
+/// Helper method to fetch the file size and date at given path and create a `FileMeta`
+pub fn local_unpartitioned_file(file: String) -> PartitionedFile {
+    let metadata = fs::metadata(&file).expect("Local file metadata");
+    PartitionedFile {
+        file_meta: FileMeta {
+            sized_file: SizedFile {
+                size: metadata.len(),
+                path: file,
+            },
+            last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
+        },
+        partition_values: vec![],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,8 +214,8 @@ mod tests {
         let mut files = list_all(tmp.path().to_str().unwrap().to_string()).await?;
         while let Some(file) = files.next().await {
             let file = file?;
-            assert_eq!(file.size, 0);
-            all_files.insert(file.path);
+            assert_eq!(file.size(), 0);
+            all_files.insert(file.path().to_owned());
         }
 
         assert_eq!(all_files.len(), 3);

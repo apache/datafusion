@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rust:latest as builder
+FROM rust:1.57 as builder
 
 COPY ./datafusion /usr/src/datafusion
 
@@ -29,7 +29,7 @@ RUN rustup component add rustfmt
 
 RUN cargo build --release
 
-FROM debian:buster-slim
+FROM debian:bullseye-slim
 
 COPY --from=builder /usr/src/datafusion-cli/target/release/datafusion-cli /usr/local/bin
 

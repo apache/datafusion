@@ -20,6 +20,7 @@
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tempfile::TempDir;
@@ -50,19 +51,24 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
 }
 
 /// Generated partitioned copy of a CSV file
-pub fn create_partitioned_csv(filename: &str, partitions: usize) -> Result<String> {
+pub fn create_partitioned_csv(
+    filename: &str,
+    partitions: usize,
+) -> Result<(String, Vec<Vec<PartitionedFile>>)> {
     let testdata = crate::test_util::arrow_test_data();
     let path = format!("{}/csv/{}", testdata, filename);
 
     let tmp_dir = TempDir::new()?;
 
     let mut writers = vec![];
+    let mut files = vec![];
     for i in 0..partitions {
         let filename = format!("partition-{}.csv", i);
         let filename = tmp_dir.path().join(&filename);
 
         let writer = BufWriter::new(File::create(&filename).unwrap());
         writers.push(writer);
+        files.push(filename);
     }
 
     let f = File::open(&path)?;
@@ -87,26 +93,12 @@ pub fn create_partitioned_csv(filename: &str, partitions: usize) -> Result<Strin
         w.flush().unwrap();
     }
 
-    Ok(tmp_dir.into_path().to_str().unwrap().to_string())
-}
+    let groups = files
+        .into_iter()
+        .map(|f| vec![local_unpartitioned_file(f.to_str().unwrap().to_owned())])
+        .collect::<Vec<_>>();
 
-/// Get the schema for the aggregate_test_* csv files
-pub fn aggr_test_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Utf8, false),
-        Field::new("c2", DataType::UInt32, false),
-        Field::new("c3", DataType::Int8, false),
-        Field::new("c4", DataType::Int16, false),
-        Field::new("c5", DataType::Int32, false),
-        Field::new("c6", DataType::Int64, false),
-        Field::new("c7", DataType::UInt8, false),
-        Field::new("c8", DataType::UInt16, false),
-        Field::new("c9", DataType::UInt32, false),
-        Field::new("c10", DataType::UInt64, false),
-        Field::new("c11", DataType::Float32, false),
-        Field::new("c12", DataType::Float64, false),
-        Field::new("c13", DataType::Utf8, false),
-    ]))
+    Ok((tmp_dir.into_path().to_str().unwrap().to_string(), groups))
 }
 
 /// some tests share a common table with different names
@@ -195,6 +187,27 @@ pub fn table_with_timestamps() -> Arc<dyn TableProvider> {
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
 }
 
+/// Return a new table which provide this decimal column
+pub fn table_with_decimal() -> Arc<dyn TableProvider> {
+    let batch_decimal = make_decimal();
+    let schema = batch_decimal.schema();
+    let partitions = vec![vec![batch_decimal]];
+    Arc::new(MemTable::try_new(schema, partitions).unwrap())
+}
+
+fn make_decimal() -> RecordBatch {
+    let mut decimal_builder = DecimalBuilder::new(20, 10, 3);
+    for i in 110000..110010 {
+        decimal_builder.append_value(i as i128).unwrap();
+    }
+    for i in 100000..100010 {
+        decimal_builder.append_value(-i as i128).unwrap();
+    }
+    let array = decimal_builder.finish();
+    let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
+    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
+}
+
 /// Return  record batch with all of the supported timestamp types
 /// values
 ///
@@ -276,6 +289,16 @@ pub fn make_timestamps() -> RecordBatch {
     .unwrap()
 }
 
+/// Asserts that given future is pending.
+pub fn assert_is_pending<'a, T>(fut: &mut Pin<Box<dyn Future<Output = T> + Send + 'a>>) {
+    let waker = futures::task::noop_waker();
+    let mut cx = futures::task::Context::from_waker(&waker);
+    let poll = fut.poll_unpin(&mut cx);
+
+    assert!(poll.is_pending());
+}
+
 pub mod exec;
+pub mod object_store;
 pub mod user_defined;
 pub mod variable;

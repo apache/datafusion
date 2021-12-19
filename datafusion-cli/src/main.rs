@@ -15,33 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![allow(bare_trait_objects)]
-
+use clap::{crate_version, App, Arg};
+use datafusion::error::Result;
+use datafusion::execution::context::ExecutionConfig;
+use datafusion_cli::{
+    context::Context,
+    exec,
+    print_format::{all_print_formats, PrintFormat},
+    print_options::PrintOptions,
+    DATAFUSION_CLI_VERSION,
+};
 use std::env;
 use std::fs::File;
-use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::Path;
-use std::time::Instant;
-
-use ballista::context::BallistaContext;
-use ballista::prelude::BallistaConfig;
-use clap::{crate_version, App, Arg};
-use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
-use datafusion_cli::{
-    print_format::{all_print_formats, PrintFormat},
-    PrintOptions, DATAFUSION_CLI_VERSION,
-};
-use rustyline::Editor;
-
-/// The CLI supports using a local DataFusion context or a distributed BallistaContext
-enum Context {
-    /// In-process execution with DataFusion
-    Local(ExecutionContext),
-    /// Distributed execution with Ballista
-    Remote(BallistaContext),
-}
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
@@ -139,17 +126,10 @@ pub async fn main() -> Result<()> {
         execution_config = execution_config.with_batch_size(batch_size);
     };
 
-    let ctx: Result<Context> = match (host, port) {
-        (Some(h), Some(p)) => {
-            let config: BallistaConfig = BallistaConfig::new()
-                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-            Ok(Context::Remote(BallistaContext::remote(h, p, &config)))
-        }
-        _ => Ok(Context::Local(ExecutionContext::with_config(
-            execution_config.clone(),
-        ))),
+    let mut ctx: Context = match (host, port) {
+        (Some(h), Some(p)) => Context::new_remote(h, p)?,
+        _ => Context::new_local(&execution_config),
     };
-    let mut ctx = ctx?;
 
     let format = matches
         .value_of("format")
@@ -157,7 +137,7 @@ pub async fn main() -> Result<()> {
         .parse::<PrintFormat>()
         .expect("Invalid format");
 
-    let print_options = PrintOptions { format, quiet };
+    let mut print_options = PrintOptions { format, quiet };
 
     if let Some(file_paths) = matches.values_of("file") {
         let files = file_paths
@@ -165,88 +145,13 @@ pub async fn main() -> Result<()> {
             .collect::<Vec<_>>();
         for file in files {
             let mut reader = BufReader::new(file);
-            exec_from_lines(&mut ctx, &mut reader, print_options.clone()).await;
+            exec::exec_from_lines(&mut ctx, &mut reader, &print_options).await;
         }
     } else {
-        exec_from_repl(&mut ctx, print_options).await;
+        exec::exec_from_repl(&mut ctx, &mut print_options).await;
     }
 
     Ok(())
-}
-
-async fn exec_from_lines(
-    ctx: &mut Context,
-    reader: &mut BufReader<File>,
-    print_options: PrintOptions,
-) {
-    let mut query = "".to_owned();
-
-    for line in reader.lines() {
-        match line {
-            Ok(line) if line.starts_with("--") => {
-                continue;
-            }
-            Ok(line) => {
-                let line = line.trim_end();
-                query.push_str(line);
-                if line.ends_with(';') {
-                    match exec_and_print(ctx, print_options.clone(), query).await {
-                        Ok(_) => {}
-                        Err(err) => println!("{:?}", err),
-                    }
-                    query = "".to_owned();
-                } else {
-                    query.push('\n');
-                }
-            }
-            _ => {
-                break;
-            }
-        }
-    }
-
-    // run the left over query if the last statement doesn't contain ‘;’
-    if !query.is_empty() {
-        match exec_and_print(ctx, print_options, query).await {
-            Ok(_) => {}
-            Err(err) => println!("{:?}", err),
-        }
-    }
-}
-
-async fn exec_from_repl(ctx: &mut Context, print_options: PrintOptions) {
-    let mut rl = Editor::<()>::new();
-    rl.load_history(".history").ok();
-
-    let mut query = "".to_owned();
-    loop {
-        match rl.readline("> ") {
-            Ok(ref line) if is_exit_command(line) && query.is_empty() => {
-                break;
-            }
-            Ok(ref line) if line.starts_with("--") => {
-                continue;
-            }
-            Ok(ref line) if line.trim_end().ends_with(';') => {
-                query.push_str(line.trim_end());
-                rl.add_history_entry(query.clone());
-                match exec_and_print(ctx, print_options.clone(), query).await {
-                    Ok(_) => {}
-                    Err(err) => println!("{:?}", err),
-                }
-                query = "".to_owned();
-            }
-            Ok(ref line) => {
-                query.push_str(line);
-                query.push('\n');
-            }
-            Err(_) => {
-                break;
-            }
-        }
-    }
-
-    rl.save_history(".history").ok();
 }
 
 fn is_valid_file(dir: String) -> std::result::Result<(), String> {
@@ -270,27 +175,4 @@ fn is_valid_batch_size(size: String) -> std::result::Result<(), String> {
         Ok(size) if size > 0 => Ok(()),
         _ => Err(format!("Invalid batch size '{}'", size)),
     }
-}
-
-fn is_exit_command(line: &str) -> bool {
-    let line = line.trim_end().to_lowercase();
-    line == "quit" || line == "exit"
-}
-
-async fn exec_and_print(
-    ctx: &mut Context,
-    print_options: PrintOptions,
-    sql: String,
-) -> Result<()> {
-    let now = Instant::now();
-
-    let df = match ctx {
-        Context::Local(datafusion) => datafusion.sql(&sql)?,
-        Context::Remote(ballista) => ballista.sql(&sql)?,
-    };
-
-    let results = df.collect().await?;
-    print_options.print_batches(&results, now)?;
-
-    Ok(())
 }
