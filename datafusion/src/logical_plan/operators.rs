@@ -127,6 +127,14 @@ impl ops::Div for Expr {
     }
 }
 
+impl ops::Rem for Expr {
+    type Output = Self;
+
+    fn rem(self, rhs: Self) -> Self {
+        binary_expr(self, Operator::Modulo, rhs)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::prelude::lit;
@@ -148,6 +156,10 @@ mod tests {
         assert_eq!(
             format!("{:?}", lit(1u32) / lit(2u32)),
             "UInt32(1) / UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) % lit(2u32)),
+            "UInt32(1) % UInt32(2)"
         );
     }
 }
