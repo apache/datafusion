@@ -137,7 +137,7 @@ impl DigestAlgorithm {
                         type_name::<Utf8Array<T>>()
                     ))
                 })?;
-        let array: ArrayRef = match self {
+        let array: Arc<dyn Array> = match self {
             Self::Md5 => digest_to_array!(Md5, input_value),
             Self::Sha224 => digest_to_array!(Sha224, input_value),
             Self::Sha256 => digest_to_array!(Sha256, input_value),
@@ -256,7 +256,7 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                         "Impossibly got non-binary array data from digest".into(),
                     )
                 })?;
-            let string_array: StringArray = binary_array
+            let string_array: Utf8Array<i32> = binary_array
                 .iter()
                 .map(|opt| opt.map(hex_encode::<_>))
                 .collect();

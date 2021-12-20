@@ -24,8 +24,7 @@ use arrow::array::{
     Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array, Utf8Array,
 };
-use arrow::datatypes::{DataType, Field, IntegerType, Schema, TimeUnit};
-use std::collections::HashSet;
+use arrow::datatypes::{DataType, IntegerType, TimeUnit};
 use std::sync::Arc;
 
 // Combines two hashes into one hash

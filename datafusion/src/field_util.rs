@@ -17,7 +17,9 @@
 
 //! Utility functions for complex field access
 
+use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{DataType, Field};
+use std::borrow::Borrow;
 
 use crate::error::{DataFusionError, Result};
 use crate::scalar::ScalarValue;
@@ -65,5 +67,32 @@ pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Fiel
             "The expression to get an indexed field is only valid for `List` types"
                 .to_string(),
         )),
+    }
+}
+
+/// Imitate arrow-rs StructArray behavior by extending arrow2 StructArray
+pub trait StructArrayExt {
+    /// Return field names in this struct array
+    fn column_names(&self) -> Vec<&str>;
+    /// Return child array whose field name equals to column_name
+    fn column_by_name(&self, column_name: &str) -> Option<&ArrayRef>;
+    /// Return the number of fields in this struct array
+    fn num_columns(&self) -> usize;
+}
+
+impl StructArrayExt for StructArray {
+    fn column_names(&self) -> Vec<&str> {
+        self.fields().iter().map(|f| f.name.as_str()).collect()
+    }
+
+    fn column_by_name(&self, column_name: &str) -> Option<&ArrayRef> {
+        self.fields()
+            .iter()
+            .position(|c| c.name() == column_name)
+            .map(|pos| self.values()[pos].borrow())
+    }
+
+    fn num_columns(&self) -> usize {
+        self.fields().len()
     }
 }

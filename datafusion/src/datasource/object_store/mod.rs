@@ -21,7 +21,7 @@ pub mod local;
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
@@ -32,6 +32,12 @@ use futures::{AsyncRead, Stream, StreamExt};
 use local::LocalFileSystem;
 
 use crate::error::{DataFusionError, Result};
+
+/// Both Read and Seek
+pub trait ReadSeek: Read + Seek {}
+
+impl<R: Read + Seek> ReadSeek for std::io::BufReader<R> {}
+impl<R: AsRef<[u8]>> ReadSeek for std::io::Cursor<R> {}
 
 /// Object Reader for one file in an object store.
 ///
@@ -51,9 +57,7 @@ pub trait ObjectReader: Send + Sync {
     ) -> Result<Box<dyn Read + Send + Sync>>;
 
     /// Get reader for the entire file
-    fn sync_reader(&self) -> Result<Box<dyn Read + Send + Sync>> {
-        self.sync_chunk_reader(0, self.length() as usize)
-    }
+    fn sync_reader(&self) -> Result<Box<dyn ReadSeek + Send + Sync>>;
 
     /// Get the size of the file
     fn length(&self) -> u64;

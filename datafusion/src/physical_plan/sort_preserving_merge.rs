@@ -670,8 +670,6 @@ mod tests {
     use crate::arrow::array::*;
     use crate::arrow::datatypes::*;
     use crate::arrow::io::print;
-    use crate::assert_batches_eq;
-    use crate::datasource::CsvReadOptions;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};

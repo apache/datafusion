@@ -21,6 +21,7 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
+use crate::datasource::object_store::ReadSeek;
 use crate::{
     datasource::{object_store::ObjectStore, PartitionedFile},
     physical_plan::RecordBatchStream,
@@ -33,7 +34,6 @@ use arrow::{
 };
 use futures::Stream;
 use std::{
-    io::Read,
     iter,
     pin::Pin,
     sync::Arc,
@@ -48,12 +48,15 @@ pub type BatchIter = Box<dyn Iterator<Item = ArrowResult<RecordBatch>> + Send + 
 /// A closure that creates a file format reader (iterator over `RecordBatch`) from a `Read` object
 /// and an optional number of required records.
 pub trait FormatReaderOpener:
-    FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter + Send + Unpin + 'static
+    FnMut(Box<dyn ReadSeek + Send + Sync>, &Option<usize>) -> BatchIter
+    + Send
+    + Unpin
+    + 'static
 {
 }
 
 impl<T> FormatReaderOpener for T where
-    T: FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter
+    T: FnMut(Box<dyn ReadSeek + Send + Sync>, &Option<usize>) -> BatchIter
         + Send
         + Unpin
         + 'static
@@ -124,7 +127,7 @@ impl<F: FormatReaderOpener> FileStream<F> {
                     self.object_store
                         .file_reader(f.file_meta.sized_file)
                         .and_then(|r| r.sync_reader())
-                        .map_err(|e| ArrowError::ExternalError(Box::new(e)))
+                        .map_err(|e| ArrowError::External("".to_owned(), Box::new(e)))
                         .and_then(|f| {
                             self.batch_iter = (self.file_reader)(f, &self.remain);
                             self.next_batch().transpose()
@@ -161,10 +164,10 @@ impl<F: FormatReaderOpener> Stream for FileStream<F> {
                         let len = *remain;
                         *remain = 0;
                         Some(Ok(RecordBatch::try_new(
-                            item.schema(),
+                            item.schema().clone(),
                             item.columns()
                                 .iter()
-                                .map(|column| column.slice(0, len))
+                                .map(|column| column.slice(0, len).into())
                                 .collect(),
                         )?))
                     }
@@ -197,7 +200,7 @@ mod tests {
     async fn create_and_collect(limit: Option<usize>) -> Vec<RecordBatch> {
         let records = vec![make_partition(3), make_partition(2)];
 
-        let source_schema = records[0].schema();
+        let source_schema = records[0].schema().clone();
 
         let reader = move |_file, _remain: &Option<usize>| {
             // this reader returns the same batch regardless of the file

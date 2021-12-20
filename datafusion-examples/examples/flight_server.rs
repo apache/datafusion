@@ -18,7 +18,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use arrow_flight::SchemaAsIpc;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::object_store::local::LocalFileSystem;
@@ -78,7 +77,7 @@ impl FlightService for FlightServiceImpl {
             .unwrap();
 
         let schema_result =
-            arrow::io::flight::serialize_schema_to_result(table.schema().as_ref());
+            arrow::io::flight::serialize_schema_to_result(schema.as_ref());
 
         Ok(Response::new(schema_result))
     }

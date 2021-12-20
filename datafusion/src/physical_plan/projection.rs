@@ -74,10 +74,7 @@ impl ProjectionExec {
             })
             .collect();
 
-        let schema = Arc::new(Schema::new_with_metadata(
-            fields?,
-            input_schema.metadata().clone(),
-        ));
+        let schema = Arc::new(Schema::new_from(fields?, input_schema.metadata().clone()));
 
         Ok(Self {
             expr,

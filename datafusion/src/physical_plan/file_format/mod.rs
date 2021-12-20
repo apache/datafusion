@@ -25,20 +25,22 @@ mod parquet;
 
 pub use self::parquet::ParquetExec;
 use arrow::{
-    array::{ArrayData, ArrayRef, DictionaryArray, UInt8BufferBuilder},
-    buffer::Buffer,
-    datatypes::{DataType, Field, Schema, SchemaRef, UInt8Type},
+    array::{ArrayRef, DictionaryArray},
+    datatypes::{DataType, Field, Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
 pub use csv::CsvExec;
 pub use json::NdJsonExec;
+use std::iter;
 
 use crate::{
     datasource::{object_store::ObjectStore, PartitionedFile},
     scalar::ScalarValue,
 };
+use arrow::array::UInt8Array;
+use arrow::datatypes::IntegerType;
 use lazy_static::lazy_static;
 use std::{
     collections::HashMap,
@@ -51,7 +53,8 @@ use super::{ColumnStatistics, Statistics};
 
 lazy_static! {
     /// The datatype used for all partitioning columns for now
-    pub static ref DEFAULT_PARTITION_COLUMN_DATATYPE: DataType = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8));
+    pub static ref DEFAULT_PARTITION_COLUMN_DATATYPE: DataType =
+        DataType::Dictionary(IntegerType::UInt8, Box::new(DataType::Utf8));
 }
 
 /// The base configurations to provide when creating a physical plan for
@@ -177,7 +180,7 @@ struct PartitionColumnProjector {
     /// An Arrow buffer initialized to zeros that represents the key array of all partition
     /// columns (partition columns are materialized by dictionary arrays with only one
     /// value in the dictionary, thus all the keys are equal to zero).
-    key_buffer_cache: Option<Buffer>,
+    key_array_cache: Option<UInt8Array>,
     /// Mapping between the indexes in the list of partition columns and the target
     /// schema. Sorted by index in the target schema so that we can iterate on it to
     /// insert the partition columns in the target record batch.
@@ -203,7 +206,7 @@ impl PartitionColumnProjector {
 
         Self {
             projected_partition_indexes,
-            key_buffer_cache: None,
+            key_array_cache: None,
             projected_schema,
         }
     }
@@ -221,7 +224,7 @@ impl PartitionColumnProjector {
             self.projected_schema.fields().len() - self.projected_partition_indexes.len();
 
         if file_batch.columns().len() != expected_cols {
-            return Err(ArrowError::SchemaError(format!(
+            return Err(ArrowError::ExternalFormat(format!(
                 "Unexpected batch schema from file, expected {} cols but got {}",
                 expected_cols,
                 file_batch.columns().len()
@@ -233,7 +236,7 @@ impl PartitionColumnProjector {
             cols.insert(
                 sidx,
                 create_dict_array(
-                    &mut self.key_buffer_cache,
+                    &mut self.key_array_cache,
                     &partition_values[pidx],
                     file_batch.num_rows(),
                 ),
@@ -244,7 +247,7 @@ impl PartitionColumnProjector {
 }
 
 fn create_dict_array(
-    key_buffer_cache: &mut Option<Buffer>,
+    key_array_cache: &mut Option<UInt8Array>,
     val: &ScalarValue,
     len: usize,
 ) -> ArrayRef {
@@ -252,27 +255,15 @@ fn create_dict_array(
     let dict_vals = val.to_array();
 
     // build keys array
-    let sliced_key_buffer = match key_buffer_cache {
-        Some(buf) if buf.len() >= len => buf.slice(buf.len() - len),
-        _ => {
-            let mut key_buffer_builder = UInt8BufferBuilder::new(len);
-            key_buffer_builder.advance(len); // keys are all 0
-            key_buffer_cache.insert(key_buffer_builder.finish()).clone()
-        }
+    let sliced_keys = match key_array_cache {
+        Some(buf) if buf.len() >= len => buf.slice(0, len),
+        _ => key_array_cache
+            .insert(UInt8Array::from_trusted_len_values_iter(
+                iter::repeat(0).take(len),
+            ))
+            .clone(),
     };
-
-    // create data type
-    let data_type =
-        DataType::Dictionary(Box::new(DataType::UInt8), Box::new(val.get_datatype()));
-
-    debug_assert_eq!(data_type, *DEFAULT_PARTITION_COLUMN_DATATYPE);
-
-    // assemble pieces together
-    let mut builder = ArrayData::builder(data_type)
-        .len(len)
-        .add_buffer(sliced_key_buffer);
-    builder = builder.add_child_data(dict_vals.data().clone());
-    Arc::new(DictionaryArray::<UInt8Type>::from(builder.build().unwrap()))
+    Arc::new(DictionaryArray::<u8>::from_data(sliced_keys, dict_vals))
 }
 
 #[cfg(test)]
@@ -371,7 +362,7 @@ mod tests {
             vec!["year".to_owned(), "month".to_owned(), "day".to_owned()];
         // create a projected schema
         let conf = config_for_projection(
-            file_batch.schema(),
+            file_batch.schema().clone(),
             // keep all cols from file and 2 from partitioning
             Some(vec![
                 0,

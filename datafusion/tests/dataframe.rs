@@ -89,8 +89,8 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
-            Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
+            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
         ],
     )
     .unwrap();

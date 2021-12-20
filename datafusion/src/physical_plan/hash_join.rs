@@ -54,7 +54,6 @@ use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream,
 };
-use crate::arrow::datatypes::TimeUnit;
 use crate::physical_plan::coalesce_batches::concat_batches;
 use crate::physical_plan::PhysicalExpr;
 use log::debug;
@@ -688,8 +687,8 @@ fn build_join_indexes(
                             &keys_values,
                             *null_equals_null,
                         )? {
-                            left_indices.append(i);
-                            right_indices.append(row as u32);
+                            left_indices.push(i);
+                            right_indices.push(row as u32);
                         }
                     }
                 }
@@ -726,8 +725,8 @@ fn build_join_indexes(
                             &keys_values,
                             *null_equals_null,
                         )? {
-                            left_indices.append_value(i)?;
-                            right_indices.append_value(row as u32)?;
+                            left_indices.push(i);
+                            right_indices.push(row as u32);
                         }
                     }
                 };
@@ -845,48 +844,9 @@ fn equal_rows(
             DataType::Float64 => {
                 equal_rows_elem!(Float64Array, l, r, left, right, null_equals_null)
             }
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => {
-                    equal_rows_elem!(
-                        TimestampSecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Millisecond => {
-                    equal_rows_elem!(
-                        TimestampMillisecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Microsecond => {
-                    equal_rows_elem!(
-                        TimestampMicrosecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Nanosecond => {
-                    equal_rows_elem!(
-                        TimestampNanosecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-            },
+            DataType::Timestamp(_, None) => {
+                equal_rows_elem!(Int64Array, l, r, left, right, null_equals_null)
+            }
             DataType::Utf8 => {
                 equal_rows_elem!(StringArray, l, r, left, right, null_equals_null)
             }
@@ -944,7 +904,7 @@ fn produce_from_matched(
             }
             JoinSide::Right => {
                 let datatype = schema.field(idx).data_type();
-                new_null_array(datatype, num_rows).into()
+                new_null_array(datatype.clone(), num_rows).into()
             }
         };
 

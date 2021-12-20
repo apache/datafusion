@@ -22,8 +22,12 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use arrow::{datatypes::SchemaRef, json};
+use arrow::datatypes::SchemaRef;
+use arrow::error::Result as ArrowResult;
+use arrow::io::json;
+use arrow::record_batch::RecordBatch;
 use std::any::Any;
+use std::io::Read;
 use std::sync::Arc;
 
 use super::file_stream::{BatchIter, FileStream};
@@ -47,6 +51,19 @@ impl NdJsonExec {
             projected_schema,
             projected_statistics,
         }
+    }
+}
+
+// TODO: implement iterator in upstream json::Reader type
+struct JsonBatchReader<R: Read> {
+    reader: json::Reader<R>,
+}
+
+impl<R: Read> Iterator for JsonBatchReader<R> {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.reader.next().transpose()
     }
 }
 
@@ -90,12 +107,14 @@ impl ExecutionPlan for NdJsonExec {
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.
         let fun = move |file, _remaining: &Option<usize>| {
-            Box::new(json::Reader::new(
-                file,
-                Arc::clone(&file_schema),
-                batch_size,
-                proj.clone(),
-            )) as BatchIter
+            Box::new(JsonBatchReader {
+                reader: json::Reader::new(
+                    file,
+                    Arc::clone(&file_schema),
+                    batch_size,
+                    proj.clone(),
+                ),
+            }) as BatchIter
         };
 
         Ok(Box::pin(FileStream::new(

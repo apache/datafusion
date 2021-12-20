@@ -232,7 +232,7 @@ pub use arrow;
 
 mod arrow_temporal_util;
 
-pub(crate) mod field_util;
+pub mod field_util;
 
 #[cfg(feature = "pyarrow")]
 mod pyarrow;

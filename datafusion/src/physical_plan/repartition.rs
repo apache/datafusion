@@ -488,6 +488,7 @@ impl RecordBatchStream for RepartitionStream {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    type StringArray = Utf8Array<i32>;
 
     use super::*;
     use crate::{

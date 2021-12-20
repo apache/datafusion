@@ -187,7 +187,7 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<f64>,
     ) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(data));
+        let arr: ArrayRef = Arc::new(Int32Array::from_slice(data.as_slice()));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
@@ -196,7 +196,7 @@ mod tests {
             .evaluate_with_rank(vec![range], ranks)?;
         assert_eq!(1, result.len());
         let result = result[0].as_any().downcast_ref::<Float64Array>().unwrap();
-        let result = result.values();
+        let result = result.values().as_slice();
         assert_eq!(expected, result);
         Ok(())
     }

@@ -91,6 +91,7 @@ features = ["io_csv", "io_json", "io_parquet", "io_parquet_compression", "io_ipc
 criterion = "0.3"
 tempfile = "3"
 doc-comment = "0.3"
+parquet-format-async-temp = "0"
 
 [[bench]]
 name = "aggregate_query_sql"

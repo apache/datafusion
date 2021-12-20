@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
+use arrow::io::csv;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -96,18 +97,30 @@ impl FileFormat for CsvFormat {
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(std::usize::MAX);
 
         while let Some(obj_reader) = readers.next().await {
-            let mut reader = obj_reader?.sync_reader()?;
-            let (schema, records_read) = arrow::csv::reader::infer_reader_schema(
+            let mut reader = csv::read::ReaderBuilder::new()
+                .delimiter(self.delimiter)
+                .has_headers(self.has_header)
+                .from_reader(obj_reader?.sync_reader()?);
+
+            let schema = csv::read::infer_schema(
                 &mut reader,
-                self.delimiter,
                 Some(records_to_read),
                 self.has_header,
+                &csv::read::infer,
             )?;
-            if records_read == 0 {
-                continue;
-            }
+
+            // if records_read == 0 {
+            //     continue;
+            // }
+            // schemas.push(schema.clone());
+            // records_to_read -= records_read;
+            // if records_to_read == 0 {
+            //     break;
+            // }
+            //
+            // FIXME: return recods_read from infer_schema
             schemas.push(schema.clone());
-            records_to_read -= records_read;
+            records_to_read -= records_to_read;
             if records_to_read == 0 {
                 break;
             }
@@ -133,8 +146,6 @@ impl FileFormat for CsvFormat {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::StringArray;
-
     use super::*;
     use crate::{
         datasource::{
@@ -146,6 +157,7 @@ mod tests {
         },
         physical_plan::collect,
     };
+    use arrow::array::Utf8Array;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
@@ -206,7 +218,7 @@ mod tests {
                 "c7: Int64",
                 "c8: Int64",
                 "c9: Int64",
-                "c10: Int64",
+                "c10: Float64",
                 "c11: Float64",
                 "c12: Float64",
                 "c13: Utf8"
@@ -231,7 +243,7 @@ mod tests {
         let array = batches[0]
             .column(0)
             .as_any()
-            .downcast_ref::<StringArray>()
+            .downcast_ref::<Utf8Array<i32>>()
             .unwrap();
         let mut values: Vec<&str> = vec![];
         for i in 0..5 {

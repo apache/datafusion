@@ -26,7 +26,6 @@ use crate::{
 };
 use clap::SubCommand;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};
 use rustyline::config::Config;
 use rustyline::error::ReadlineError;

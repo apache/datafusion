@@ -17,21 +17,20 @@
 
 //! Common unit test utility methods
 
+use crate::datasource::object_store::local::local_unpartitioned_file;
+use crate::datasource::{MemTable, PartitionedFile, TableProvider};
+use crate::error::Result;
+use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
+use arrow::array::*;
+use arrow::datatypes::*;
+use arrow::record_batch::RecordBatch;
+use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
 use std::pin::Pin;
 use std::sync::Arc;
-
 use tempfile::TempDir;
-
-use arrow::array::*;
-use arrow::datatypes::*;
-use arrow::record_batch::RecordBatch;
-
-use crate::datasource::{MemTable, TableProvider};
-use crate::error::Result;
-use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 
 pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let dual_schema = Arc::new(Schema::new(vec![
@@ -190,20 +189,20 @@ pub fn table_with_timestamps() -> Arc<dyn TableProvider> {
 /// Return a new table which provide this decimal column
 pub fn table_with_decimal() -> Arc<dyn TableProvider> {
     let batch_decimal = make_decimal();
-    let schema = batch_decimal.schema();
+    let schema = batch_decimal.schema().clone();
     let partitions = vec![vec![batch_decimal]];
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
 }
 
 fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = DecimalBuilder::new(20, 10, 3);
+    let mut data = Vec::new();
     for i in 110000..110010 {
-        decimal_builder.append_value(i as i128).unwrap();
+        data.push(Some(i as i128));
     }
     for i in 100000..100010 {
-        decimal_builder.append_value(-i as i128).unwrap();
+        data.push(Some(-i as i128));
     }
-    let array = decimal_builder.finish();
+    let array = PrimitiveArray::<i128>::from(data).to(DataType::Decimal(10, 3));
     let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
 }

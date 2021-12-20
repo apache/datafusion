@@ -57,7 +57,7 @@ impl ValuesExec {
             schema
                 .fields()
                 .iter()
-                .map(|field| new_null_array(field.data_type(), 1))
+                .map(|field| new_null_array(field.data_type().clone(), 1).into())
                 .collect::<Vec<_>>(),
         )?;
         let arr = (0..n_col)
@@ -81,6 +81,7 @@ impl ValuesExec {
                     })
                     .collect::<Result<Vec<_>>>()
                     .and_then(ScalarValue::iter_to_array)
+                    .map(Arc::from)
             })
             .collect::<Result<Vec<_>>>()?;
         let batch = RecordBatch::try_new(schema.clone(), arr)?;

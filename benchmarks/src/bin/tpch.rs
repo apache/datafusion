@@ -25,14 +25,12 @@ use std::{
     time::Instant,
 };
 
-<<<<<<< HEAD
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::io::print;
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::datasource::parquet::ParquetTable;
-use ballista::context::BallistaContext;
-use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
 
+use datafusion::datasource::{
+    listing::{ListingOptions, ListingTable},
+    object_store::local::LocalFileSystem,
+};
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
@@ -45,13 +43,6 @@ use datafusion::{
 };
 use datafusion::{
     arrow::record_batch::RecordBatch, datasource::file_format::parquet::ParquetFormat,
-};
-use datafusion::{
-    arrow::util::pretty,
-    datasource::{
-        listing::{ListingOptions, ListingTable},
-        object_store::local::LocalFileSystem,
-    },
 };
 
 use arrow::io::parquet::write::{Compression, Version, WriteOptions};

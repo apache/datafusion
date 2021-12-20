@@ -304,14 +304,15 @@ mod tests {
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
         let result = common::collect(optimized.execute(0).await?).await?;
-        assert_eq!(result[0].schema(), Arc::new(Schema::new(vec![col])));
+        assert_eq!(result[0].schema(), &Arc::new(Schema::new(vec![col])));
         assert_eq!(
             result[0]
                 .column(0)
                 .as_any()
                 .downcast_ref::<UInt64Array>()
                 .unwrap()
-                .values(),
+                .values()
+                .as_slice(),
             &[count]
         );
         Ok(())

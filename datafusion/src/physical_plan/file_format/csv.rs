@@ -22,9 +22,12 @@ use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::csv;
 use arrow::datatypes::SchemaRef;
+use arrow::error::Result as ArrowResult;
+use arrow::io::csv;
+use arrow::record_batch::RecordBatch;
 use std::any::Any;
+use std::io::Read;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -70,6 +73,88 @@ impl CsvExec {
     }
 }
 
+// CPU-intensive task
+fn deserialize(
+    rows: &[csv::read::ByteRecord],
+    projection: Option<&Vec<usize>>,
+    schema: &SchemaRef,
+) -> ArrowResult<RecordBatch> {
+    csv::read::deserialize_batch(
+        rows,
+        schema.fields(),
+        projection.map(|p| p.as_slice()),
+        0,
+        csv::read::deserialize_column,
+    )
+}
+
+struct CsvBatchReader<R: Read> {
+    reader: csv::read::Reader<R>,
+    current_read: usize,
+    batch_size: usize,
+    rows: Vec<csv::read::ByteRecord>,
+    limit: Option<usize>,
+    projection: Option<Vec<usize>>,
+    schema: SchemaRef,
+}
+
+impl<R: Read> CsvBatchReader<R> {
+    fn new(
+        reader: csv::read::Reader<R>,
+        schema: SchemaRef,
+        batch_size: usize,
+        limit: Option<usize>,
+        projection: Option<Vec<usize>>,
+    ) -> Self {
+        let rows = vec![csv::read::ByteRecord::default(); batch_size];
+        Self {
+            reader,
+            schema,
+            current_read: 0,
+            rows,
+            batch_size,
+            limit,
+            projection,
+        }
+    }
+}
+
+impl<R: Read> Iterator for CsvBatchReader<R> {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let batch_size = match self.limit {
+            Some(limit) => {
+                if self.current_read >= limit {
+                    return None;
+                }
+                self.batch_size.min(limit - self.current_read)
+            }
+            None => self.batch_size,
+        };
+        let rows_read =
+            csv::read::read_rows(&mut self.reader, 0, &mut self.rows[..batch_size]);
+
+        match rows_read {
+            Ok(rows_read) => {
+                if rows_read > 0 {
+                    self.current_read += rows_read;
+
+                    let batch = deserialize(
+                        &self.rows[..rows_read],
+                        self.projection.as_ref(),
+                        &self.schema,
+                    );
+                    Some(batch)
+                } else {
+                    None
+                }
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
 #[async_trait]
 impl ExecutionPlan for CsvExec {
     /// Return a reference to Any that can be used for downcasting
@@ -108,21 +193,21 @@ impl ExecutionPlan for CsvExec {
 
     async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
         let batch_size = self.base_config.batch_size;
-        let file_schema = Arc::clone(&self.base_config.file_schema);
+        let file_schema = self.base_config.file_schema.clone();
         let file_projection = self.base_config.file_column_projection_indices();
         let has_header = self.has_header;
         let delimiter = self.delimiter;
-        let start_line = if has_header { 1 } else { 0 };
 
-        let fun = move |file, remaining: &Option<usize>| {
-            let bounds = remaining.map(|x| (0, x + start_line));
-            Box::new(csv::Reader::new(
-                file,
-                Arc::clone(&file_schema),
-                has_header,
-                Some(delimiter),
+        let fun = move |freader, remaining: &Option<usize>| {
+            let reader = csv::read::ReaderBuilder::new()
+                .delimiter(delimiter)
+                .has_headers(has_header)
+                .from_reader(freader);
+            Box::new(CsvBatchReader::new(
+                reader,
+                file_schema.clone(),
                 batch_size,
-                bounds,
+                *remaining,
                 file_projection.clone(),
             )) as BatchIter
         };
@@ -213,7 +298,7 @@ mod tests {
             "+----+-----+------------+",
         ];
 
-        crate::assert_batches_eq!(expected, &[batch.slice(0, 5)]);
+        crate::assert_batches_eq!(expected, &[batch_slice(&batch, 0, 5)]);
         Ok(())
     }
 
@@ -311,7 +396,24 @@ mod tests {
             "| b  | 2021-10-26 |",
             "+----+------------+",
         ];
-        crate::assert_batches_eq!(expected, &[batch.slice(0, 5)]);
+        crate::assert_batches_eq!(expected, &[batch_slice(&batch, 0, 5)]);
         Ok(())
+    }
+
+    fn batch_slice(batch: &RecordBatch, offset: usize, length: usize) -> RecordBatch {
+        let schema = batch.schema().clone();
+        if schema.fields().is_empty() {
+            assert_eq!(offset + length, 0);
+            return RecordBatch::new_empty(schema);
+        }
+        assert!((offset + length) <= batch.num_rows());
+
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|column| column.slice(offset, length).into())
+            .collect();
+
+        RecordBatch::try_new(schema, columns).unwrap()
     }
 }

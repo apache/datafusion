@@ -81,7 +81,12 @@ where
 // given an function that maps a `&str` to a arrow native type,
 // returns a `ColumnarValue` where the function is applied to either a `ArrayRef` or `ScalarValue`
 // depending on the `args`'s variant.
-fn handle<'a, O, F>(args: &'a [ColumnarValue], op: F, name: &str) -> Result<ColumnarValue>
+fn handle<'a, O, F>(
+    args: &'a [ColumnarValue],
+    op: F,
+    name: &str,
+    data_type: DataType,
+) -> Result<ColumnarValue>
 where
     O: NativeType,
     ScalarValue: From<Option<O>>,
@@ -90,10 +95,12 @@ where
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<i32, O, _>(&[a.as_ref()], op, name)?,
+                unary_string_to_primitive_function::<i32, O, _>(&[a.as_ref()], op, name)?
+                    .to(data_type),
             ))),
             DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<i64, O, _>(&[a.as_ref()], op, name)?,
+                unary_string_to_primitive_function::<i64, O, _>(&[a.as_ref()], op, name)?
+                    .to(data_type),
             ))),
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
