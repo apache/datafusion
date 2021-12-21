@@ -1703,7 +1703,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Projection: TimestampNanosecond(1599566400000000000) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
+        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test projection=None"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
@@ -1780,7 +1780,7 @@ mod tests {
         // expect the same timestamp appears in both exprs
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected = format!(
-            "Projection: TimestampNanosecond({}) AS now(), TimestampNanosecond({}) AS t2\
+            "Projection: TimestampNanosecond({}, Some(\"UTC\")) AS now(), TimestampNanosecond({}, Some(\"UTC\")) AS t2\
             \n  TableScan: test projection=None",
             time.timestamp_nanos(),
             time.timestamp_nanos()
