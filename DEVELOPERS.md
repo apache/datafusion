@@ -40,6 +40,57 @@ Testing setup:
 - `export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data/`
 - `export ARROW_TEST_DATA=$(pwd)/testing/data/`
 
+
+## Test Organization
+
+DataFusion has several levels of tests in its [Test
+Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
+and tries to follow [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
+
+This section highlights the most important test modules that exist
+
+### Unit tests
+
+Tests for the code in an individual module are defined in the same source file with a `test` module, following Rust convention
+
+For example, the logic for pruning predicates is defined in [pruning.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion/src/physical_optimizer/pruning.rs#L708) using the
+
+```rust
+#[cfg(test)]
+mod tests {
+...
+}
+```
+
+
+### Rust Integration Tests
+
+There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests) directory.
+
+You can run these tests individually using a command such as
+
+```shell
+cargo test -p datafusion --tests sql
+```
+
+The tests are:
+[sql.rs](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests/sql.rs) tests DataFusion's ability to run SQL queries. This test
+
+XXXX FILL IN OTHERS HERE XXXX
+
+
+### SQL / Postgres Integration Tests
+
+The [integration-tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/integration-tests] directory contains a harness that runs certain queries against both
+
+Run this via:
+
+```shell
+???? TODO ADD INSTRUCITONS HOW TO RUN IT HERE ????
+```
+
+
+
 ## How to add a new scalar function
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
