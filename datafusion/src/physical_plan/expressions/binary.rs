@@ -45,13 +45,10 @@ use arrow::record_batch::RecordBatch;
 
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Operator;
+use crate::physical_plan::coercion_rule::binary_rule::coerce_types;
 use crate::physical_plan::expressions::try_cast;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
-
-use super::coercion::{
-    eq_coercion, like_coercion, numerical_coercion, order_coercion, string_coercion,
-};
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
 // See https://github.com/apache/arrow-rs/issues/960
@@ -198,6 +195,7 @@ macro_rules! compute_bool_op {
 }
 
 /// Invoke a compute kernel on a data array and a scalar value
+/// LEFT is array, RIGHT is scalar value
 macro_rules! compute_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
         use std::convert::TryInto;
@@ -318,6 +316,9 @@ macro_rules! binary_primitive_array_op_scalar {
 macro_rules! binary_array_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
+            // DataType::Decimal(_,_) => {
+            //
+            // }
             DataType::Int8 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array),
@@ -501,56 +502,6 @@ macro_rules! compute_utf8_flag_op_scalar {
     }};
 }
 
-/// Coercion rules for all binary operators. Returns the output type
-/// of applying `op` to an argument of `lhs_type` and `rhs_type`.
-fn common_binary_type(
-    lhs_type: &DataType,
-    op: &Operator,
-    rhs_type: &DataType,
-) -> Result<DataType> {
-    // This result MUST be compatible with `binary_coerce`
-    let result = match op {
-        Operator::And | Operator::Or => match (lhs_type, rhs_type) {
-            // logical binary boolean operators can only be evaluated in bools
-            (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
-            _ => None,
-        },
-        // logical equality operators have their own rules, and always return a boolean
-        Operator::Eq | Operator::NotEq => eq_coercion(lhs_type, rhs_type),
-        // "like" operators operate on strings and always return a boolean
-        Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
-        // order-comparison operators have their own rules
-        Operator::Lt | Operator::Gt | Operator::GtEq | Operator::LtEq => {
-            order_coercion(lhs_type, rhs_type)
-        }
-        // for math expressions, the final value of the coercion is also the return type
-        // because coercion favours higher information types
-        Operator::Plus
-        | Operator::Minus
-        | Operator::Modulo
-        | Operator::Divide
-        | Operator::Multiply => numerical_coercion(lhs_type, rhs_type),
-        Operator::RegexMatch
-        | Operator::RegexIMatch
-        | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch => string_coercion(lhs_type, rhs_type),
-        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
-            eq_coercion(lhs_type, rhs_type)
-        }
-    };
-
-    // re-write the error message of failed coercions to include the operator's information
-    match result {
-        None => Err(DataFusionError::Plan(
-            format!(
-                "'{:?} {} {:?}' can't be evaluated because there isn't a common type to coerce the types to",
-                lhs_type, op, rhs_type
-            ),
-        )),
-        Some(t) => Ok(t)
-    }
-}
-
 /// Returns the return type of a binary operator or an error when the binary operator cannot
 /// perform the computation between the argument's types, even after type coercion.
 ///
@@ -562,7 +513,7 @@ pub fn binary_operator_data_type(
 ) -> Result<DataType> {
     // validate that it is possible to perform the operation on incoming types.
     // (or the return datatype cannot be inferred)
-    let common_type = common_binary_type(lhs_type, op, rhs_type)?;
+    let result_type = coerce_types(lhs_type, op, rhs_type)?;
 
     match op {
         // operators that return a boolean
@@ -587,7 +538,7 @@ pub fn binary_operator_data_type(
         | Operator::Minus
         | Operator::Divide
         | Operator::Multiply
-        | Operator::Modulo => Ok(common_type),
+        | Operator::Modulo => Ok(result_type),
     }
 }
 
@@ -725,13 +676,17 @@ impl BinaryExpr {
         array: &ArrayRef,
     ) -> Result<Option<Result<ArrayRef>>> {
         let scalar_result = match &self.op {
-            Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), gt),
+            // '<' reverse to '>='
+            Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), gt_eq),
+            // '<=' reverse to '>'
             Operator::LtEq => {
-                binary_array_op_scalar!(array, scalar.clone(), gt_eq)
+                binary_array_op_scalar!(array, scalar.clone(), gt)
             }
-            Operator::Gt => binary_array_op_scalar!(array, scalar.clone(), lt),
+            // '>' reverse to '<='
+            Operator::Gt => binary_array_op_scalar!(array, scalar.clone(), lt_eq),
+            // '>=' reverse to '<'
             Operator::GtEq => {
-                binary_array_op_scalar!(array, scalar.clone(), lt_eq)
+                binary_array_op_scalar!(array, scalar.clone(), lt)
             }
             Operator::Eq => binary_array_op_scalar!(array, scalar.clone(), eq),
             Operator::NotEq => {
@@ -867,11 +822,11 @@ fn binary_cast(
     let lhs_type = &lhs.data_type(input_schema)?;
     let rhs_type = &rhs.data_type(input_schema)?;
 
-    let cast_type = common_binary_type(lhs_type, op, rhs_type)?;
+    let result_type = coerce_types(lhs_type, op, rhs_type)?;
 
     Ok((
-        try_cast(lhs, input_schema, cast_type.clone())?,
-        try_cast(rhs, input_schema, cast_type)?,
+        try_cast(lhs, input_schema, result_type.clone())?,
+        try_cast(rhs, input_schema, result_type)?,
     ))
 }
 
@@ -903,8 +858,9 @@ mod tests {
         l: Arc<dyn PhysicalExpr>,
         op: Operator,
         r: Arc<dyn PhysicalExpr>,
+        input_schema: &Schema,
     ) -> Arc<dyn PhysicalExpr> {
-        Arc::new(BinaryExpr::new(l, op, r))
+        binary(l, op, r, input_schema).unwrap()
     }
 
     #[test]
@@ -917,7 +873,12 @@ mod tests {
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
 
         // expression: "a < b"
-        let lt = binary_simple(col("a", &schema)?, Operator::Lt, col("b", &schema)?);
+        let lt = binary_simple(
+            col("a", &schema)?,
+            Operator::Lt,
+            col("b", &schema)?,
+            &schema,
+        );
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
 
@@ -947,9 +908,20 @@ mod tests {
 
         // expression: "a < b OR a == b"
         let expr = binary_simple(
-            binary_simple(col("a", &schema)?, Operator::Lt, col("b", &schema)?),
+            binary_simple(
+                col("a", &schema)?,
+                Operator::Lt,
+                col("b", &schema)?,
+                &schema,
+            ),
             Operator::Or,
-            binary_simple(col("a", &schema)?, Operator::Eq, col("b", &schema)?),
+            binary_simple(
+                col("a", &schema)?,
+                Operator::Eq,
+                col("b", &schema)?,
+                &schema,
+            ),
+            &schema,
         );
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
@@ -1421,7 +1393,8 @@ mod tests {
         op: Operator,
         expected: PrimitiveArray<T>,
     ) -> Result<()> {
-        let arithmetic_op = binary_simple(col("a", &schema)?, op, col("b", &schema)?);
+        let arithmetic_op =
+            binary_simple(col("a", &schema)?, op, col("b", &schema)?, &schema);
         let batch = RecordBatch::try_new(schema, data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
 
@@ -1436,7 +1409,8 @@ mod tests {
         op: Operator,
         expected: BooleanArray,
     ) -> Result<()> {
-        let arithmetic_op = binary_simple(col("a", &schema)?, op, col("b", &schema)?);
+        let arithmetic_op =
+            binary_simple(col("a", &schema)?, op, col("b", &schema)?, &schema);
         let data: Vec<ArrayRef> = vec![Arc::new(left), Arc::new(right)];
         let batch = RecordBatch::try_new(schema, data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
@@ -1448,14 +1422,14 @@ mod tests {
     // Test `scalar <op> arr` produces expected
     fn apply_logic_op_scalar_arr(
         schema: &SchemaRef,
-        scalar: bool,
+        scalar: &ScalarValue,
         arr: &ArrayRef,
         op: Operator,
         expected: &BooleanArray,
     ) -> Result<()> {
-        let scalar = lit(scalar.into());
+        let scalar = lit(scalar.clone());
 
-        let arithmetic_op = binary_simple(scalar, op, col("a", schema)?);
+        let arithmetic_op = binary_simple(scalar, op, col("a", schema)?, schema);
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.as_ref(), expected);
@@ -1467,13 +1441,13 @@ mod tests {
     fn apply_logic_op_arr_scalar(
         schema: &SchemaRef,
         arr: &ArrayRef,
-        scalar: bool,
+        scalar: &ScalarValue,
         op: Operator,
         expected: &BooleanArray,
     ) -> Result<()> {
-        let scalar = lit(scalar.into());
+        let scalar = lit(scalar.clone());
 
-        let arithmetic_op = binary_simple(col("a", schema)?, op, scalar);
+        let arithmetic_op = binary_simple(col("a", schema)?, op, scalar, schema);
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.as_ref(), expected);
@@ -1639,12 +1613,40 @@ mod tests {
     fn eq_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::Eq, &expected).unwrap();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::Eq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::Eq, &expected).unwrap();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::Eq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1670,14 +1672,40 @@ mod tests {
     fn neq_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::NotEq, &expected).unwrap();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::NotEq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::NotEq, &expected)
-            .unwrap();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::NotEq, &expected)
-            .unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1703,16 +1731,44 @@ mod tests {
     fn lt_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(false), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::Lt, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::Lt, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::Lt, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(false)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::Lt, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1738,16 +1794,44 @@ mod tests {
     fn lt_eq_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::LtEq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(true)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::LtEq, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::LtEq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::LtEq, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1773,16 +1857,44 @@ mod tests {
     fn gt_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::Gt, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(false)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::Gt, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::Gt, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::Gt, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1808,16 +1920,44 @@ mod tests {
     fn gt_eq_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(true), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::GtEq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::GtEq, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::GtEq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(true)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::GtEq, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1859,21 +1999,6 @@ mod tests {
     }
 
     #[test]
-    fn test_coersion_error() -> Result<()> {
-        let expr =
-            common_binary_type(&DataType::Float32, &Operator::Plus, &DataType::Utf8);
-
-        if let Err(DataFusionError::Plan(e)) = expr {
-            assert_eq!(e, "'Float32 + Utf8' can't be evaluated because there isn't a common type to coerce the types to");
-            Ok(())
-        } else {
-            Err(DataFusionError::Internal(
-                "Coercion should have returned an DataFusionError::Internal".to_string(),
-            ))
-        }
-    }
-
-    #[test]
     fn relatively_deeply_nested() {
         // Reproducer for https://github.com/apache/arrow-datafusion/issues/419
 
@@ -1891,7 +2016,7 @@ mod tests {
         let expr = (0..tree_depth)
             .into_iter()
             .map(|_| col("a", schema.as_ref()).unwrap())
-            .reduce(|l, r| binary_simple(l, Operator::Plus, r))
+            .reduce(|l, r| binary_simple(l, Operator::Plus, r, &schema))
             .unwrap();
 
         let result = expr
@@ -1904,5 +2029,45 @@ mod tests {
             .map(|i| i.map(|i| i * tree_depth))
             .collect();
         assert_eq!(result.as_ref(), &expected);
+    }
+
+    #[test]
+    fn comparison_decimal_test() -> Result<()> {
+        let comparison_operation = [
+            Operator::Eq,
+            Operator::NotEq,
+            Operator::Lt,
+            Operator::LtEq,
+            Operator::Gt,
+            Operator::GtEq,
+        ];
+
+        // scalar value compare with array
+        let decimal_scalar = ScalarValue::Decimal128(Some(123_456), 10, 3);
+        // i8 array comparison with decimal scalar value
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int8, true)]));
+        let array = Arc::new(Int8Array::from(vec![Some(1), None])) as ArrayRef;
+        let expect_result = BooleanArray::from(vec![Some(false), None]);
+
+        // scalar == array
+        let result = apply_logic_op_scalar_arr(
+            &schema,
+            &decimal_scalar,
+            &array,
+            Operator::Eq,
+            &expect_result,
+        )
+        .unwrap();
+        // array == scalar
+        let result = apply_logic_op_arr_scalar(
+            &schema,
+            &array,
+            &decimal_scalar,
+            Operator::Eq,
+            &expect_result,
+        )
+        .unwrap();
+        // array compare with array
+        Ok(())
     }
 }

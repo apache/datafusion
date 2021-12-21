@@ -20,3 +20,4 @@
 //! Aggregate function rule
 
 pub(crate) mod aggregate_rule;
+pub(crate) mod binary_rule;
