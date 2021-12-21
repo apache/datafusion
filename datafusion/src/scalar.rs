@@ -20,6 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
+    compute::kernels::cast::cast,
     datatypes::{
         ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
         Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit,
@@ -82,13 +83,13 @@ pub enum ScalarValue {
     /// Date stored as a signed 64bit int
     Date64(Option<i64>),
     /// Timestamp Second
-    TimestampSecond(Option<i64>),
+    TimestampSecond(Option<i64>, Option<String>),
     /// Timestamp Milliseconds
-    TimestampMillisecond(Option<i64>),
+    TimestampMillisecond(Option<i64>, Option<String>),
     /// Timestamp Microseconds
-    TimestampMicrosecond(Option<i64>),
+    TimestampMicrosecond(Option<i64>, Option<String>),
     /// Timestamp Nanoseconds
-    TimestampNanosecond(Option<i64>),
+    TimestampNanosecond(Option<i64>, Option<String>),
     /// Interval with YearMonth unit
     IntervalYearMonth(Option<i32>),
     /// Interval with DayTime unit
@@ -155,14 +156,14 @@ impl PartialEq for ScalarValue {
             (Date32(_), _) => false,
             (Date64(v1), Date64(v2)) => v1.eq(v2),
             (Date64(_), _) => false,
-            (TimestampSecond(v1), TimestampSecond(v2)) => v1.eq(v2),
-            (TimestampSecond(_), _) => false,
-            (TimestampMillisecond(v1), TimestampMillisecond(v2)) => v1.eq(v2),
-            (TimestampMillisecond(_), _) => false,
-            (TimestampMicrosecond(v1), TimestampMicrosecond(v2)) => v1.eq(v2),
-            (TimestampMicrosecond(_), _) => false,
-            (TimestampNanosecond(v1), TimestampNanosecond(v2)) => v1.eq(v2),
-            (TimestampNanosecond(_), _) => false,
+            (TimestampSecond(v1, _), TimestampSecond(v2, _)) => v1.eq(v2),
+            (TimestampSecond(_, _), _) => false,
+            (TimestampMillisecond(v1, _), TimestampMillisecond(v2, _)) => v1.eq(v2),
+            (TimestampMillisecond(_, _), _) => false,
+            (TimestampMicrosecond(v1, _), TimestampMicrosecond(v2, _)) => v1.eq(v2),
+            (TimestampMicrosecond(_, _), _) => false,
+            (TimestampNanosecond(v1, _), TimestampNanosecond(v2, _)) => v1.eq(v2),
+            (TimestampNanosecond(_, _), _) => false,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.eq(v2),
             (IntervalYearMonth(_), _) => false,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.eq(v2),
@@ -241,14 +242,20 @@ impl PartialOrd for ScalarValue {
             (Date32(_), _) => None,
             (Date64(v1), Date64(v2)) => v1.partial_cmp(v2),
             (Date64(_), _) => None,
-            (TimestampSecond(v1), TimestampSecond(v2)) => v1.partial_cmp(v2),
-            (TimestampSecond(_), _) => None,
-            (TimestampMillisecond(v1), TimestampMillisecond(v2)) => v1.partial_cmp(v2),
-            (TimestampMillisecond(_), _) => None,
-            (TimestampMicrosecond(v1), TimestampMicrosecond(v2)) => v1.partial_cmp(v2),
-            (TimestampMicrosecond(_), _) => None,
-            (TimestampNanosecond(v1), TimestampNanosecond(v2)) => v1.partial_cmp(v2),
-            (TimestampNanosecond(_), _) => None,
+            (TimestampSecond(v1, _), TimestampSecond(v2, _)) => v1.partial_cmp(v2),
+            (TimestampSecond(_, _), _) => None,
+            (TimestampMillisecond(v1, _), TimestampMillisecond(v2, _)) => {
+                v1.partial_cmp(v2)
+            }
+            (TimestampMillisecond(_, _), _) => None,
+            (TimestampMicrosecond(v1, _), TimestampMicrosecond(v2, _)) => {
+                v1.partial_cmp(v2)
+            }
+            (TimestampMicrosecond(_, _), _) => None,
+            (TimestampNanosecond(v1, _), TimestampNanosecond(v2, _)) => {
+                v1.partial_cmp(v2)
+            }
+            (TimestampNanosecond(_, _), _) => None,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.partial_cmp(v2),
             (IntervalYearMonth(_), _) => None,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.partial_cmp(v2),
@@ -305,10 +312,10 @@ impl std::hash::Hash for ScalarValue {
             }
             Date32(v) => v.hash(state),
             Date64(v) => v.hash(state),
-            TimestampSecond(v) => v.hash(state),
-            TimestampMillisecond(v) => v.hash(state),
-            TimestampMicrosecond(v) => v.hash(state),
-            TimestampNanosecond(v) => v.hash(state),
+            TimestampSecond(v, _) => v.hash(state),
+            TimestampMillisecond(v, _) => v.hash(state),
+            TimestampMicrosecond(v, _) => v.hash(state),
+            TimestampNanosecond(v, _) => v.hash(state),
             IntervalYearMonth(v) => v.hash(state),
             IntervalDayTime(v) => v.hash(state),
             Struct(v, t) => {
@@ -342,6 +349,19 @@ fn get_dict_value<K: ArrowDictionaryKeyType>(
     })?;
 
     Ok((dict_array.values(), Some(values_index)))
+}
+
+macro_rules! typed_cast_tz {
+    ($array:expr, $index:expr, $ARRAYTYPE:ident, $SCALAR:ident, $TZ:expr) => {{
+        let array = $array.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
+        ScalarValue::$SCALAR(
+            match array.is_null($index) {
+                true => None,
+                false => Some(array.value($index).into()),
+            },
+            $TZ.clone(),
+        )
+    }};
 }
 
 macro_rules! typed_cast {
@@ -392,25 +412,25 @@ macro_rules! build_timestamp_list {
             Some(values) => {
                 let values = values.as_ref();
                 match $TIME_UNIT {
-                    TimeUnit::Second => build_values_list!(
+                    TimeUnit::Second => build_values_list_tz!(
                         TimestampSecondBuilder,
                         TimestampSecond,
                         values,
                         $SIZE
                     ),
-                    TimeUnit::Microsecond => build_values_list!(
+                    TimeUnit::Microsecond => build_values_list_tz!(
                         TimestampMillisecondBuilder,
                         TimestampMillisecond,
                         values,
                         $SIZE
                     ),
-                    TimeUnit::Millisecond => build_values_list!(
+                    TimeUnit::Millisecond => build_values_list_tz!(
                         TimestampMicrosecondBuilder,
                         TimestampMicrosecond,
                         values,
                         $SIZE
                     ),
-                    TimeUnit::Nanosecond => build_values_list!(
+                    TimeUnit::Nanosecond => build_values_list_tz!(
                         TimestampNanosecondBuilder,
                         TimestampNanosecond,
                         values,
@@ -445,6 +465,29 @@ macro_rules! build_values_list {
     }};
 }
 
+macro_rules! build_values_list_tz {
+    ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
+        let mut builder = ListBuilder::new($VALUE_BUILDER_TY::new($VALUES.len()));
+
+        for _ in 0..$SIZE {
+            for scalar_value in $VALUES {
+                match scalar_value {
+                    ScalarValue::$SCALAR_TY(Some(v), _) => {
+                        builder.values().append_value(v.clone()).unwrap()
+                    }
+                    ScalarValue::$SCALAR_TY(None, _) => {
+                        builder.values().append_null().unwrap();
+                    }
+                    _ => panic!("Incompatible ScalarValue for list"),
+                };
+            }
+            builder.append(true).unwrap();
+        }
+
+        builder.finish()
+    }};
+}
+
 macro_rules! build_array_from_option {
     ($DATA_TYPE:ident, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
         match $EXPR {
@@ -460,7 +503,12 @@ macro_rules! build_array_from_option {
     }};
     ($DATA_TYPE:ident, $ENUM:expr, $ENUM2:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
         match $EXPR {
-            Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
+            Some(value) => {
+                let array: ArrayRef = Arc::new($ARRAY_TYPE::from_value(*value, $SIZE));
+                // Need to call cast to cast to final data type with timezone/extra param
+                cast(&array, &DataType::$DATA_TYPE($ENUM, $ENUM2))
+                    .expect("cannot do temporal cast")
+            }
             None => new_null_array(&DataType::$DATA_TYPE($ENUM, $ENUM2), $SIZE),
         }
     }};
@@ -508,17 +556,17 @@ impl ScalarValue {
             ScalarValue::Decimal128(_, precision, scale) => {
                 DataType::Decimal(*precision, *scale)
             }
-            ScalarValue::TimestampSecond(_) => {
-                DataType::Timestamp(TimeUnit::Second, None)
+            ScalarValue::TimestampSecond(_, tz_opt) => {
+                DataType::Timestamp(TimeUnit::Second, tz_opt.clone())
             }
-            ScalarValue::TimestampMillisecond(_) => {
-                DataType::Timestamp(TimeUnit::Millisecond, None)
+            ScalarValue::TimestampMillisecond(_, tz_opt) => {
+                DataType::Timestamp(TimeUnit::Millisecond, tz_opt.clone())
             }
-            ScalarValue::TimestampMicrosecond(_) => {
-                DataType::Timestamp(TimeUnit::Microsecond, None)
+            ScalarValue::TimestampMicrosecond(_, tz_opt) => {
+                DataType::Timestamp(TimeUnit::Microsecond, tz_opt.clone())
             }
-            ScalarValue::TimestampNanosecond(_) => {
-                DataType::Timestamp(TimeUnit::Nanosecond, None)
+            ScalarValue::TimestampNanosecond(_, tz_opt) => {
+                DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
             }
             ScalarValue::Float32(_) => DataType::Float32,
             ScalarValue::Float64(_) => DataType::Float64,
@@ -583,9 +631,10 @@ impl ScalarValue {
                 | ScalarValue::Utf8(None)
                 | ScalarValue::LargeUtf8(None)
                 | ScalarValue::List(None, _)
-                | ScalarValue::TimestampMillisecond(None)
-                | ScalarValue::TimestampMicrosecond(None)
-                | ScalarValue::TimestampNanosecond(None)
+                | ScalarValue::TimestampSecond(None, _)
+                | ScalarValue::TimestampMillisecond(None, _)
+                | ScalarValue::TimestampMicrosecond(None, _)
+                | ScalarValue::TimestampNanosecond(None, _)
                 | ScalarValue::Struct(None, _)
                 | ScalarValue::Decimal128(None, _, _) // For decimal type, the value is null means ScalarValue::Decimal128 is null.
         )
@@ -650,6 +699,28 @@ impl ScalarValue {
                     let array = scalars
                         .map(|sv| {
                             if let ScalarValue::$SCALAR_TY(v) = sv {
+                                Ok(v)
+                            } else {
+                                Err(DataFusionError::Internal(format!(
+                                    "Inconsistent types in ScalarValue::iter_to_array. \
+                                     Expected {:?}, got {:?}",
+                                    data_type, sv
+                                )))
+                            }
+                        })
+                        .collect::<Result<$ARRAY_TY>>()?;
+
+                    Arc::new(array)
+                }
+            }};
+        }
+
+        macro_rules! build_array_primitive_tz {
+            ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
+                {
+                    let array = scalars
+                        .map(|sv| {
+                            if let ScalarValue::$SCALAR_TY(v, _) = sv {
                                 Ok(v)
                             } else {
                                 Err(DataFusionError::Internal(format!(
@@ -775,17 +846,17 @@ impl ScalarValue {
             DataType::LargeBinary => build_array_string!(LargeBinaryArray, LargeBinary),
             DataType::Date32 => build_array_primitive!(Date32Array, Date32),
             DataType::Date64 => build_array_primitive!(Date64Array, Date64),
-            DataType::Timestamp(TimeUnit::Second, None) => {
-                build_array_primitive!(TimestampSecondArray, TimestampSecond)
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                build_array_primitive_tz!(TimestampSecondArray, TimestampSecond)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, None) => {
-                build_array_primitive!(TimestampMillisecondArray, TimestampMillisecond)
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                build_array_primitive_tz!(TimestampMillisecondArray, TimestampMillisecond)
             }
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                build_array_primitive!(TimestampMicrosecondArray, TimestampMicrosecond)
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                build_array_primitive_tz!(TimestampMicrosecondArray, TimestampMicrosecond)
             }
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                build_array_primitive!(TimestampNanosecondArray, TimestampNanosecond)
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                build_array_primitive_tz!(TimestampNanosecondArray, TimestampNanosecond)
             }
             DataType::Interval(IntervalUnit::DayTime) => {
                 build_array_primitive!(IntervalDayTimeArray, IntervalDayTime)
@@ -1036,35 +1107,35 @@ impl ScalarValue {
             ScalarValue::UInt64(e) => {
                 build_array_from_option!(UInt64, UInt64Array, e, size)
             }
-            ScalarValue::TimestampSecond(e) => build_array_from_option!(
+            ScalarValue::TimestampSecond(e, tz_opt) => build_array_from_option!(
                 Timestamp,
                 TimeUnit::Second,
-                None,
+                tz_opt.clone(),
                 TimestampSecondArray,
                 e,
                 size
             ),
-            ScalarValue::TimestampMillisecond(e) => build_array_from_option!(
+            ScalarValue::TimestampMillisecond(e, tz_opt) => build_array_from_option!(
                 Timestamp,
                 TimeUnit::Millisecond,
-                None,
+                tz_opt.clone(),
                 TimestampMillisecondArray,
                 e,
                 size
             ),
 
-            ScalarValue::TimestampMicrosecond(e) => build_array_from_option!(
+            ScalarValue::TimestampMicrosecond(e, tz_opt) => build_array_from_option!(
                 Timestamp,
                 TimeUnit::Microsecond,
-                None,
+                tz_opt.clone(),
                 TimestampMicrosecondArray,
                 e,
                 size
             ),
-            ScalarValue::TimestampNanosecond(e) => build_array_from_option!(
+            ScalarValue::TimestampNanosecond(e, tz_opt) => build_array_from_option!(
                 Timestamp,
                 TimeUnit::Nanosecond,
-                None,
+                tz_opt.clone(),
                 TimestampNanosecondArray,
                 e,
                 size
@@ -1251,27 +1322,41 @@ impl ScalarValue {
             DataType::Date64 => {
                 typed_cast!(array, index, Date64Array, Date64)
             }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                typed_cast!(array, index, TimestampSecondArray, TimestampSecond)
+            DataType::Timestamp(TimeUnit::Second, tz_opt) => {
+                typed_cast_tz!(
+                    array,
+                    index,
+                    TimestampSecondArray,
+                    TimestampSecond,
+                    tz_opt
+                )
             }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                typed_cast!(
+            DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
+                typed_cast_tz!(
                     array,
                     index,
                     TimestampMillisecondArray,
-                    TimestampMillisecond
+                    TimestampMillisecond,
+                    tz_opt
                 )
             }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                typed_cast!(
+            DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
+                typed_cast_tz!(
                     array,
                     index,
                     TimestampMicrosecondArray,
-                    TimestampMicrosecond
+                    TimestampMicrosecond,
+                    tz_opt
                 )
             }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                typed_cast!(array, index, TimestampNanosecondArray, TimestampNanosecond)
+            DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
+                typed_cast_tz!(
+                    array,
+                    index,
+                    TimestampNanosecondArray,
+                    TimestampNanosecond,
+                    tz_opt
+                )
             }
             DataType::Dictionary(index_type, _) => {
                 let (values, values_index) = match **index_type {
@@ -1407,16 +1492,16 @@ impl ScalarValue {
             ScalarValue::Date64(val) => {
                 eq_array_primitive!(array, index, Date64Array, val)
             }
-            ScalarValue::TimestampSecond(val) => {
+            ScalarValue::TimestampSecond(val, _) => {
                 eq_array_primitive!(array, index, TimestampSecondArray, val)
             }
-            ScalarValue::TimestampMillisecond(val) => {
+            ScalarValue::TimestampMillisecond(val, _) => {
                 eq_array_primitive!(array, index, TimestampMillisecondArray, val)
             }
-            ScalarValue::TimestampMicrosecond(val) => {
+            ScalarValue::TimestampMicrosecond(val, _) => {
                 eq_array_primitive!(array, index, TimestampMicrosecondArray, val)
             }
-            ScalarValue::TimestampNanosecond(val) => {
+            ScalarValue::TimestampNanosecond(val, _) => {
                 eq_array_primitive!(array, index, TimestampNanosecondArray, val)
             }
             ScalarValue::IntervalYearMonth(val) => {
@@ -1565,10 +1650,10 @@ impl TryFrom<ScalarValue> for i64 {
         match value {
             ScalarValue::Int64(Some(inner_value))
             | ScalarValue::Date64(Some(inner_value))
-            | ScalarValue::TimestampNanosecond(Some(inner_value))
-            | ScalarValue::TimestampMicrosecond(Some(inner_value))
-            | ScalarValue::TimestampMillisecond(Some(inner_value))
-            | ScalarValue::TimestampSecond(Some(inner_value)) => Ok(inner_value),
+            | ScalarValue::TimestampNanosecond(Some(inner_value), _)
+            | ScalarValue::TimestampMicrosecond(Some(inner_value), _)
+            | ScalarValue::TimestampMillisecond(Some(inner_value), _)
+            | ScalarValue::TimestampSecond(Some(inner_value), _) => Ok(inner_value),
             _ => Err(DataFusionError::Internal(format!(
                 "Cannot convert {:?} to {}",
                 value,
@@ -1610,17 +1695,17 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::LargeUtf8 => ScalarValue::LargeUtf8(None),
             DataType::Date32 => ScalarValue::Date32(None),
             DataType::Date64 => ScalarValue::Date64(None),
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                ScalarValue::TimestampSecond(None)
+            DataType::Timestamp(TimeUnit::Second, tz_opt) => {
+                ScalarValue::TimestampSecond(None, tz_opt.clone())
             }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                ScalarValue::TimestampMillisecond(None)
+            DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
+                ScalarValue::TimestampMillisecond(None, tz_opt.clone())
             }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                ScalarValue::TimestampMicrosecond(None)
+            DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
+                ScalarValue::TimestampMicrosecond(None, tz_opt.clone())
             }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                ScalarValue::TimestampNanosecond(None)
+            DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
+                ScalarValue::TimestampNanosecond(None, tz_opt.clone())
             }
             DataType::Dictionary(_index_type, value_type) => {
                 value_type.as_ref().try_into()?
@@ -1667,10 +1752,10 @@ impl fmt::Display for ScalarValue {
             ScalarValue::UInt16(e) => format_option!(f, e)?,
             ScalarValue::UInt32(e) => format_option!(f, e)?,
             ScalarValue::UInt64(e) => format_option!(f, e)?,
-            ScalarValue::TimestampSecond(e) => format_option!(f, e)?,
-            ScalarValue::TimestampMillisecond(e) => format_option!(f, e)?,
-            ScalarValue::TimestampMicrosecond(e) => format_option!(f, e)?,
-            ScalarValue::TimestampNanosecond(e) => format_option!(f, e)?,
+            ScalarValue::TimestampSecond(e, _) => format_option!(f, e)?,
+            ScalarValue::TimestampMillisecond(e, _) => format_option!(f, e)?,
+            ScalarValue::TimestampMicrosecond(e, _) => format_option!(f, e)?,
+            ScalarValue::TimestampNanosecond(e, _) => format_option!(f, e)?,
             ScalarValue::Utf8(e) => format_option!(f, e)?,
             ScalarValue::LargeUtf8(e) => format_option!(f, e)?,
             ScalarValue::Binary(e) => match e {
@@ -1742,15 +1827,17 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::UInt16(_) => write!(f, "UInt16({})", self),
             ScalarValue::UInt32(_) => write!(f, "UInt32({})", self),
             ScalarValue::UInt64(_) => write!(f, "UInt64({})", self),
-            ScalarValue::TimestampSecond(_) => write!(f, "TimestampSecond({})", self),
-            ScalarValue::TimestampMillisecond(_) => {
-                write!(f, "TimestampMillisecond({})", self)
+            ScalarValue::TimestampSecond(_, tz_opt) => {
+                write!(f, "TimestampSecond({}, {:?})", self, tz_opt)
             }
-            ScalarValue::TimestampMicrosecond(_) => {
-                write!(f, "TimestampMicrosecond({})", self)
+            ScalarValue::TimestampMillisecond(_, tz_opt) => {
+                write!(f, "TimestampMillisecond({}, {:?})", self, tz_opt)
             }
-            ScalarValue::TimestampNanosecond(_) => {
-                write!(f, "TimestampNanosecond({})", self)
+            ScalarValue::TimestampMicrosecond(_, tz_opt) => {
+                write!(f, "TimestampMicrosecond({}, {:?})", self, tz_opt)
+            }
+            ScalarValue::TimestampNanosecond(_, tz_opt) => {
+                write!(f, "TimestampNanosecond({}, {:?})", self, tz_opt)
             }
             ScalarValue::Utf8(None) => write!(f, "Utf8({})", self),
             ScalarValue::Utf8(Some(_)) => write!(f, "Utf8(\"{}\")", self),
@@ -1802,25 +1889,25 @@ impl ScalarType<f32> for Float32Type {
 
 impl ScalarType<i64> for TimestampSecondType {
     fn scalar(r: Option<i64>) -> ScalarValue {
-        ScalarValue::TimestampSecond(r)
+        ScalarValue::TimestampSecond(r, None)
     }
 }
 
 impl ScalarType<i64> for TimestampMillisecondType {
     fn scalar(r: Option<i64>) -> ScalarValue {
-        ScalarValue::TimestampMillisecond(r)
+        ScalarValue::TimestampMillisecond(r, None)
     }
 }
 
 impl ScalarType<i64> for TimestampMicrosecondType {
     fn scalar(r: Option<i64>) -> ScalarValue {
-        ScalarValue::TimestampMicrosecond(r)
+        ScalarValue::TimestampMicrosecond(r, None)
     }
 }
 
 impl ScalarType<i64> for TimestampNanosecondType {
     fn scalar(r: Option<i64>) -> ScalarValue {
-        ScalarValue::TimestampNanosecond(r)
+        ScalarValue::TimestampNanosecond(r, None)
     }
 }
 
@@ -2007,6 +2094,23 @@ mod tests {
         }};
     }
 
+    /// Creates array directly and via ScalarValue and ensures they are the same
+    /// but for variants that carry a timezone field.
+    macro_rules! check_scalar_iter_tz {
+        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr) => {{
+            let scalars: Vec<_> = $INPUT
+                .iter()
+                .map(|v| ScalarValue::$SCALAR_T(*v, None))
+                .collect();
+
+            let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
+
+            let expected: ArrayRef = Arc::new($ARRAYTYPE::from($INPUT));
+
+            assert_eq!(&array, &expected);
+        }};
+    }
+
     /// Creates array directly and via ScalarValue and ensures they
     /// are the same, for string  arrays
     macro_rules! check_scalar_iter_string {
@@ -2060,22 +2164,22 @@ mod tests {
         check_scalar_iter!(UInt32, UInt32Array, vec![Some(1), None, Some(3)]);
         check_scalar_iter!(UInt64, UInt64Array, vec![Some(1), None, Some(3)]);
 
-        check_scalar_iter!(
+        check_scalar_iter_tz!(
             TimestampSecond,
             TimestampSecondArray,
             vec![Some(1), None, Some(3)]
         );
-        check_scalar_iter!(
+        check_scalar_iter_tz!(
             TimestampMillisecond,
             TimestampMillisecondArray,
             vec![Some(1), None, Some(3)]
         );
-        check_scalar_iter!(
+        check_scalar_iter_tz!(
             TimestampMicrosecond,
             TimestampMicrosecondArray,
             vec![Some(1), None, Some(3)]
         );
-        check_scalar_iter!(
+        check_scalar_iter_tz!(
             TimestampNanosecond,
             TimestampNanosecondArray,
             vec![Some(1), None, Some(3)]
@@ -2156,6 +2260,10 @@ mod tests {
         // Since ScalarValues are used in a non trivial number of places,
         // making it larger means significant more memory consumption
         // per distinct value.
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(std::mem::size_of::<ScalarValue>(), 64);
+
+        #[cfg(target_arch = "amd64")]
         assert_eq!(std::mem::size_of::<ScalarValue>(), 48);
     }
 
@@ -2201,6 +2309,17 @@ mod tests {
                 TestCase {
                     array: Arc::new($INPUT.iter().collect::<$ARRAY_TY>()),
                     scalars: $INPUT.iter().map(|v| ScalarValue::$SCALAR_TY(*v)).collect(),
+                }
+            }};
+
+            ($INPUT:expr, $ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr) => {{
+                let tz = $TZ;
+                TestCase {
+                    array: Arc::new($INPUT.iter().collect::<$ARRAY_TY>()),
+                    scalars: $INPUT
+                        .iter()
+                        .map(|v| ScalarValue::$SCALAR_TY(*v, tz.clone()))
+                        .collect(),
                 }
             }};
         }
@@ -2267,10 +2386,49 @@ mod tests {
             make_binary_test_case!(str_vals, LargeBinaryArray, LargeBinary),
             make_test_case!(i32_vals, Date32Array, Date32),
             make_test_case!(i64_vals, Date64Array, Date64),
-            make_test_case!(i64_vals, TimestampSecondArray, TimestampSecond),
-            make_test_case!(i64_vals, TimestampMillisecondArray, TimestampMillisecond),
-            make_test_case!(i64_vals, TimestampMicrosecondArray, TimestampMicrosecond),
-            make_test_case!(i64_vals, TimestampNanosecondArray, TimestampNanosecond),
+            make_test_case!(i64_vals, TimestampSecondArray, TimestampSecond, None),
+            make_test_case!(
+                i64_vals,
+                TimestampSecondArray,
+                TimestampSecond,
+                Some("UTC".to_owned())
+            ),
+            make_test_case!(
+                i64_vals,
+                TimestampMillisecondArray,
+                TimestampMillisecond,
+                None
+            ),
+            make_test_case!(
+                i64_vals,
+                TimestampMillisecondArray,
+                TimestampMillisecond,
+                Some("UTC".to_owned())
+            ),
+            make_test_case!(
+                i64_vals,
+                TimestampMicrosecondArray,
+                TimestampMicrosecond,
+                None
+            ),
+            make_test_case!(
+                i64_vals,
+                TimestampMicrosecondArray,
+                TimestampMicrosecond,
+                Some("UTC".to_owned())
+            ),
+            make_test_case!(
+                i64_vals,
+                TimestampNanosecondArray,
+                TimestampNanosecond,
+                None
+            ),
+            make_test_case!(
+                i64_vals,
+                TimestampNanosecondArray,
+                TimestampNanosecond,
+                Some("UTC".to_owned())
+            ),
             make_test_case!(i32_vals, IntervalYearMonthArray, IntervalYearMonth),
             make_test_case!(i64_vals, IntervalDayTimeArray, IntervalDayTime),
             make_str_dict_test_case!(str_vals, Int8Type, Utf8),
@@ -2896,5 +3054,31 @@ mod tests {
         let expected = outer_builder.finish();
 
         assert_eq!(array, &expected);
+    }
+
+    #[test]
+    fn scalar_timestamp_ns_utc_timezone() {
+        let scalar = ScalarValue::TimestampNanosecond(
+            Some(1599566400000000000),
+            Some("UTC".to_owned()),
+        );
+
+        assert_eq!(
+            scalar.get_datatype(),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_owned()))
+        );
+
+        let array = scalar.to_array();
+        assert_eq!(array.len(), 1);
+        assert_eq!(
+            array.data_type(),
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_owned()))
+        );
+
+        let newscalar = ScalarValue::try_from_array(&array, 0).unwrap();
+        assert_eq!(
+            newscalar.get_datatype(),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_owned()))
+        );
     }
 }

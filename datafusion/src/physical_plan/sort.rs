@@ -29,7 +29,7 @@ use crate::physical_plan::{
 };
 pub use arrow::compute::SortOptions;
 use arrow::compute::{lexsort_to_indices, take, SortColumn, TakeOptions};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, error::ArrowError};
@@ -200,6 +200,15 @@ fn sort_batch(
             .map_err(DataFusionError::into_arrow_external_error)?,
         None,
     )?;
+
+    let schema = Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .zip(batch.columns().iter().map(|col| col.data_type()))
+            .map(|(field, ty)| Field::new(field.name(), ty.clone(), field.is_nullable()))
+            .collect::<Vec<_>>(),
+    ));
 
     // reorder all rows based on sorted indices
     RecordBatch::try_new(

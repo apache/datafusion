@@ -329,16 +329,16 @@ macro_rules! binary_array_op_scalar {
             DataType::Float32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, StringArray),
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
             }
-            DataType::Timestamp(TimeUnit::Second, None) => {
+            DataType::Timestamp(TimeUnit::Second, _) => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampSecondArray)
             }
             DataType::Date32 => {
@@ -374,16 +374,16 @@ macro_rules! binary_array_op {
             DataType::Float32 => compute_op!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_op!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
             }
-            DataType::Timestamp(TimeUnit::Second, None) => {
+            DataType::Timestamp(TimeUnit::Second, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampSecondArray)
             }
             DataType::Date32 => {
@@ -541,12 +541,14 @@ fn common_binary_type(
 
     // re-write the error message of failed coercions to include the operator's information
     match result {
-        None => Err(DataFusionError::Plan(
+        None => {
+            Err(DataFusionError::Plan(
             format!(
                 "'{:?} {} {:?}' can't be evaluated because there isn't a common type to coerce the types to",
                 lhs_type, op, rhs_type
             ),
-        )),
+        ))
+        },
         Some(t) => Ok(t)
     }
 }
