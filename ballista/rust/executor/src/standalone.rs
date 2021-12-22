@@ -20,6 +20,7 @@ use std::sync::Arc;
 use arrow_flight::flight_service_server::FlightServiceServer;
 use ballista_core::{
     error::Result,
+    serde::protobuf::executor_registration::OptionalHost,
     serde::protobuf::{scheduler_grpc_client::SchedulerGrpcClient, ExecutorRegistration},
     BALLISTA_VERSION,
 };
@@ -59,7 +60,7 @@ pub async fn new_standalone_executor(
     );
     let executor_meta = ExecutorRegistration {
         id: Uuid::new_v4().to_string(), // assign this executor a unique ID
-        optional_host: None,
+        optional_host: Some(OptionalHost::Host("localhost".to_string())),
         port: addr.port() as u32,
     };
     tokio::spawn(execution_loop::poll_loop(
