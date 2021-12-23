@@ -71,7 +71,7 @@ pub struct ParquetExec {
     projected_schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Optional predicate builder
+    /// Optional predicate for pruning row groups
     pruning_predicate: Option<PruningPredicate>,
 }
 
