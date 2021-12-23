@@ -39,7 +39,7 @@ use crate::{
     },
 };
 use log::debug;
-use std::fs;
+use std::{fs, time::Instant};
 use std::path::Path;
 use std::string::String;
 use std::sync::Arc;
@@ -798,9 +798,17 @@ impl ExecutionContext {
 
         let mut new_plan = plan.clone();
         debug!("Logical plan:\n {:?}", plan);
+        let mut execution_times = Vec::with_capacity(optimizers.len());
         for optimizer in optimizers {
+            let start = Instant::now();
             new_plan = optimizer.optimize(&new_plan, execution_props)?;
+            let duration = start.elapsed();
+            execution_times.push(( optimizer.name(), duration));
             observer(&new_plan, optimizer.as_ref());
+        }
+
+        for (name, duration) in &execution_times{
+            println!("[{}]={}us", name, duration.as_micros());
         }
         debug!("Optimized logical plan:\n {:?}", new_plan);
         Ok(new_plan)

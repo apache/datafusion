@@ -33,9 +33,9 @@ exclude = ["python"]
 
 
 #[profile.release]
-#opt-level=1
+#opt-level=2
 #lto=false
 
 [profile.release]
-lto = true
+lto = "fat"
 codegen-units = 1

@@ -9,80 +9,6 @@ use datafusion::error::Result as DFResult;
 
 
 
-define_language! {
-    pub enum TokomakExpr {
-        "+" = Plus([Id;2]),
-        "-" = Minus([Id;2]),
-        "*" = Multiply([Id;2]),
-        "/" = Divide([Id;2]),
-        "%" = Modulus([Id;2]),
-        
-        "or" = Or([Id;2]),
-        "and" = And([Id;2]),
-        "=" = Eq([Id;2]),
-        "<>" = NotEq([Id;2]),
-        "<" = Lt([Id;2]),
-        "<=" = LtEq([Id;2]),
-        ">" = Gt([Id;2]),
-        ">=" = GtEq([Id;2]),
-        "regex_match"=RegexMatch([Id;2]),
-        "regex_imatch"=RegexIMatch([Id;2]),
-        "regex_not_match"=RegexNotMatch([Id;2]),
-        "regex_not_imatch"=RegexNotIMatch([Id;2]),
-        "is_distinct"=IsDistinctFrom([Id;2]),
-        "is_not_distinct"=IsNotDistinctFrom([Id;2]),
-    
-        "not" = Not(Id),
-    
-    
-        "is_not_null" = IsNotNull(Id),
-        "is_null" = IsNull(Id),
-        "negative" = Negative(Id),
-        //expr low high 
-        "between" = Between([Id;3]),
-        "between_inverted" = BetweenInverted([Id;3]),
-
-        "like" = Like([Id;2]),
-        "not_like" = NotLike([Id;2]),
-        "in_list" = InList([Id; 2]),
-        "not_in_list" = NotInList([Id; 2]),
-        "list" = List(Vec<Id>),
-    
-        //ScalarValue types
-        ScalarBuiltin(BuiltinScalarFunction),
-        AggregateBuiltin(AggregateFunction),
-        WindowBuiltin(WindowFunction),
-        Scalar(TokomakScalar),
-    
-        //THe fist expression for all of the function call types must be the corresponding function type
-        //For UDFs this is a string, which is looked up in the ExecutionProps
-        //The last expression must be a List and is the arguments for the function.
-        "call" = ScalarBuiltinCall(FunctionCall),
-        "call_udf"=ScalarUDFCall(FunctionCall),
-        "call_agg" = AggregateBuiltinCall(FunctionCall),
-        "call_agg_distinct"=AggregateBuiltinDistinctCall(FunctionCall),
-        "call_udaf" = AggregateUDFCall(FunctionCall),
-        //For window fuctions index 1 is the window partition
-        //index 2 is the window order
-        "call_win" = WindowBuiltinCallUnframed(WindowBuiltinCallUnframed),
-        //For a framed window function index 3 is the frame parameters
-        "call_win_framed" = WindowBuiltinCallFramed(WindowBuiltinCallFramed),
-        //Last Id of the Sort node MUST be a SortSpec
-        "sort_expr" = Sort(SortExpr),
-        SortSpec(SortSpec),
-        ScalarUDF(ScalarUDFName),
-        AggregateUDF(UDAFName),
-        
-        Column(TokomakColumn),
-        WindowFrame(WindowFrame),
-        // cast id as expr. Type is encoded as symbol
-        "cast" = Cast([Id;2]),
-        "try_cast" = TryCast([Id;2]),
-    }
-    }
-    
-
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub struct BetweenExpr([Id;3]);
 impl BetweenExpr{
@@ -137,7 +63,8 @@ impl LanguageChildren for FunctionCall{
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
 pub struct TokomakColumn{
     pub relation: Option<Symbol>,
-    pub name: Symbol
+    pub name: Symbol,
+    flat_name: Symbol,
 }
 impl Display for TokomakColumn{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -150,10 +77,21 @@ impl Display for TokomakColumn{
 
 
 impl TokomakColumn{
-    pub fn new(relation: Option<impl Into<Symbol>>, name: impl Into<Symbol>)->Self{
-        TokomakColumn{relation: relation.map(|r| r.into()),name: name.into()}
+    fn create_flat_name(relation: Option<Symbol>, name: Symbol)->Symbol{
+        Symbol::from_str(match &relation {
+            Some(r) => format!("{}.{}", r, name),
+            None => name.as_str().to_string(),
+        }.as_str()).unwrap()
     }
-}
+    pub fn flat_name(&self) -> Symbol {
+        self.flat_name
+    }
+    pub fn new(relation: Option<impl Into<Symbol>>, name: impl Into<Symbol>)->Self{
+        let relation = relation.map(|r| r.into());
+        let name = name.into();
+        TokomakColumn{relation ,name, flat_name: Self::create_flat_name(relation, name) }
+    }
+} 
 
 
 impl FromStr for TokomakColumn{
@@ -253,7 +191,6 @@ impl CaseExprIfElse{
         self.0[0]
     }
     pub fn then(&self)->Id{
-        let test = Self::new(0.into(), 0.into() ,None).r#else();
         self.0[1]
     }
     pub fn r#else(&self)->Option<Id>{
@@ -408,33 +345,5 @@ impl LanguageChildren for SortExpr{
 
     fn as_mut_slice(&mut self) -> &mut [Id] {
         &mut self.0[..]
-    }
-}
-
-
-impl TokomakExpr {
-    #[allow(dead_code)]
-    pub(crate) fn can_convert_to_scalar_value(&self) -> bool {
-        matches!(self, TokomakExpr::Scalar(_))
-    }
-}
-
-impl TryInto<ScalarValue> for &TokomakExpr {
-    type Error = DataFusionError;
-
-    fn try_into(self) -> Result<ScalarValue, Self::Error> {
-        match self {
-            TokomakExpr::Scalar(s) => Ok(s.clone().into()),
-            e => Err(DataFusionError::Internal(format!(
-                "Could not convert {:?} to scalar",
-                e
-            ))),
-        }
-    }
-}
-
-impl From<ScalarValue> for TokomakExpr {
-    fn from(v: ScalarValue) -> Self {
-        TokomakExpr::Scalar(v.into())
     }
 }

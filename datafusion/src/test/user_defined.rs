@@ -43,6 +43,7 @@ impl Debug for TestUserDefinedPlanNode {
 }
 
 impl UserDefinedLogicalNode for TestUserDefinedPlanNode {
+    
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -73,5 +74,9 @@ impl UserDefinedLogicalNode for TestUserDefinedPlanNode {
         Arc::new(TestUserDefinedPlanNode {
             input: inputs[0].clone(),
         })
+    }
+
+    fn name(&self)->&'static str {
+        "TestUserDefined"
     }
 }

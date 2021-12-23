@@ -24,9 +24,9 @@ define_language! {
         "utf8" =Utf8,
         "largeutf8"=LargeUtf8,
         "time<s>"=TimestampSecond,
-        "time<m>)"=TimestampMillisecond,
-        "time<u>)"=TimestampMicrosecond,
-        "time<n>)"=TimestampNanosecond,
+        "time<ms>"=TimestampMillisecond,
+        "time<us>"=TimestampMicrosecond,
+        "time<ns>"=TimestampNanosecond,
         "interval<yearmonth>"=IntervalYearMonth,
         "interval<daytime>"=IntervalDayTime,
     }
@@ -78,6 +78,7 @@ impl From<TokomakDataType> for DataType{
         }
     }
 }
+
 
 
 impl TryFrom<DataType> for TokomakDataType {

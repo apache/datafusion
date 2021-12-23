@@ -26,7 +26,7 @@ repository = "https://github.com/apache/arrow-datafusion"
 
 
 [dependencies]
-datafusion = { path = "../datafusion", version = "5.1.0" }
+datafusion = { path = "../datafusion", version = "6.0.0" }
 ordered-float="2.0"
 log="^0.4"
 egg = "0.7"
@@ -34,3 +34,5 @@ tokio="^1"
 indexmap = "1"
 fxhash = "0.2"
 
+[features]
+invariant_verification=[]

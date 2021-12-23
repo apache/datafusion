@@ -334,6 +334,9 @@ impl Debug for TopKPlanNode {
 }
 
 impl UserDefinedLogicalNode for TopKPlanNode {
+    fn name(&self)->&'static str{
+        "TopK"
+    }
     fn as_any(&self) -> &dyn Any {
         self
     }

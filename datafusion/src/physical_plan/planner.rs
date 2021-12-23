@@ -1859,6 +1859,9 @@ mod tests {
     }
 
     impl UserDefinedLogicalNode for NoOpExtensionNode {
+        fn name(&self)->&'static str{
+            "NoOp"
+        }
         fn as_any(&self) -> &dyn Any {
             self
         }

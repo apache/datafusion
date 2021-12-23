@@ -4,8 +4,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 
-use crate::logical_plan::{Column, DFSchema, Expr, JoinConstraint, JoinType, LogicalPlan};
-use crate::optimizer::constant_folding::Simplifier;
+use crate::logical_plan::plan::{Aggregate, Analyze, Window, Sort, Projection, Join, Filter};
+use crate::logical_plan::{Column, DFSchema, Expr, JoinConstraint, JoinType, LogicalPlan, Limit, Repartition, CrossJoin, Union};
+use crate::optimizer::simplify_expressions::Simplifier;
 use crate::scalar::ScalarValue;
 
 use super::optimizer::OptimizerRule;
@@ -32,14 +33,14 @@ impl OptimizerRule for CrossJoinElminator{
         execution_props: &crate::execution::context::ExecutionProps,
     ) -> crate::error::Result<crate::logical_plan::LogicalPlan> {
         let p = match plan{
-            crate::logical_plan::LogicalPlan::Filter { predicate, input } =>{
+            LogicalPlan::Filter ( Filter{predicate, input} )=>{
                 let new_plan = match input.as_ref(){
-                    crate::logical_plan::LogicalPlan::CrossJoin { left, right, schema } => {
+                    crate::logical_plan::LogicalPlan::CrossJoin(CrossJoin { left, right, schema } )=> {
                         let all_schemas = input.all_schemas();
                         find_join_keys(left, right,predicate, all_schemas).map(|(new_filter_predicate, join_keys)|{    
                             
-                            let new_input = LogicalPlan::Join{left:left.clone(), right:right.clone(), join_type: JoinType::Inner, join_constraint: JoinConstraint::On, on:join_keys,schema:schema.clone()};
-                            LogicalPlan::Filter{predicate: new_filter_predicate, input: Arc::new(new_input)}
+                            let new_input = LogicalPlan::Join(Join{left:left.clone(), right:right.clone(), join_type: JoinType::Inner, join_constraint: JoinConstraint::On, on:join_keys,schema:schema.clone(), null_equals_null: false});
+                            LogicalPlan::Filter(Filter{predicate: new_filter_predicate, input: Arc::new(new_input)})
                         })
                     },
                     _ => None
@@ -52,28 +53,28 @@ impl OptimizerRule for CrossJoinElminator{
                     None => utils::from_plan(plan,&plan.expressions(), &[self.optimize(input, execution_props)?])?
                 }
             },
-            LogicalPlan::Analyze { input,.. } |
-            LogicalPlan::Window { input,.. } |
-            LogicalPlan::Aggregate { input,.. }|
-            LogicalPlan::Sort { input,.. }  |
-            LogicalPlan::Limit {  input,.. } |
-            LogicalPlan::Repartition { input, .. } |
-            LogicalPlan::Projection {  input, .. } => utils::from_plan(plan,&plan.expressions(), &[self.optimize(input, execution_props)?])?,
-            LogicalPlan::Join { left, right, on, join_type, join_constraint, schema } => {
+            LogicalPlan::Analyze ( Analyze{input,..}) |
+            LogicalPlan::Window(Window { input,.. }) |
+            LogicalPlan::Aggregate(Aggregate { input,.. })|
+            LogicalPlan::Sort(Sort { input,.. }  )|
+            LogicalPlan::Limit(Limit {  input,.. } )|
+            LogicalPlan::Repartition(Repartition { input, .. }) |
+            LogicalPlan::Projection(Projection {  input, .. } )=> utils::from_plan(plan,&plan.expressions(), &[self.optimize(input, execution_props)?])?,
+            LogicalPlan::Join(Join{ left, right, on, join_type, join_constraint, schema, null_equals_null } )=> {
                 
                 let left = Arc::new(self.optimize(left, execution_props)?);
                 let right = Arc::new(self.optimize(right, execution_props)?);
-                LogicalPlan::Join{left, right, on: on.clone(), join_type: *join_type, join_constraint: *join_constraint, schema: schema.clone()}
+                LogicalPlan::Join(Join{left, right, on: on.clone(), join_type: *join_type, join_constraint: *join_constraint, schema: schema.clone(), null_equals_null:*null_equals_null})
             },
-            LogicalPlan::CrossJoin { left, right, schema } => {
+            LogicalPlan::CrossJoin (CrossJoin{ left, right, schema } )=> {
                 let left = Arc::new(self.optimize(left, execution_props)?);
                 let right = Arc::new(self.optimize(right, execution_props)?);
-                LogicalPlan::CrossJoin{left, right,schema: schema.clone()}
+                LogicalPlan::CrossJoin(CrossJoin{left, right,schema: schema.clone()})
 
             },
-            LogicalPlan::Union { inputs, schema, alias } => {
+            LogicalPlan::Union (Union{ inputs, schema, alias, .. } )=> {
                 let inputs = inputs.iter().map(|p| self.optimize(p, execution_props)).collect::<Result<Vec<_>,_>>()?;
-                LogicalPlan::Union{inputs, schema: schema.clone(), alias: alias.clone()}
+                LogicalPlan::Union(Union{inputs, schema: schema.clone(), alias: alias.clone()})
             },
             LogicalPlan::TableScan { ..} |
             LogicalPlan::EmptyRelation { .. } |
@@ -81,7 +82,9 @@ impl OptimizerRule for CrossJoinElminator{
             LogicalPlan::Values { ..} |
             LogicalPlan::Explain { .. } => plan.clone(),
             
-            LogicalPlan::Extension { .. } => plan.clone()
+            LogicalPlan::Extension { .. }|
+            LogicalPlan::CreateMemoryTable(_)|
+            LogicalPlan::DropTable(_) => plan.clone(),
             
         };
         Ok(p)

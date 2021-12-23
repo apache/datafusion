@@ -22,7 +22,7 @@ use std::{fs, iter::Iterator, path::{Path, PathBuf}, sync::Arc, time::{Duration,
 use ballista::context::BallistaContext;
 use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
 
-use datafusion::{datasource::{MemTable, TableProvider}, optimizer::{constant_folding::ConstantFolding, common_subexpr_eliminate::CommonSubexprEliminate, eliminate_limit::EliminateLimit, projection_push_down::ProjectionPushDown, filter_push_down::FilterPushDown, simplify_expressions::SimplifyExpressions, limit_push_down::LimitPushDown}};
+use datafusion::{datasource::{MemTable, TableProvider}, optimizer::{filter_push_down::FilterPushDown, projection_push_down::ProjectionPushDown, common_subexpr_eliminate::CommonSubexprEliminate}};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::parquet::basic::Compression;
@@ -46,7 +46,7 @@ use datafusion::{
 };
 
 use structopt::StructOpt;
-use tokomak::{RunnerSettings, Tokomak, EXPR_SIMPLIFICATION_RULES, PLAN_SIMPLIFICATION_RULES} ;
+use tokomak::{RunnerSettings, Tokomak, ALL_RULES} ;
 
 #[cfg(feature = "snmalloc")]
 #[global_allocator]
@@ -130,6 +130,9 @@ struct DataFusionBenchmarkOpt {
     /// Load the data into a MemTable before executing the query
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
+
+    #[structopt(short="t", long="tokomak")]
+    tokomak:bool
 }
 
 #[derive(Debug, StructOpt)]
@@ -195,32 +198,40 @@ async fn main() -> Result<()> {
     }
 }
 
+fn get_tokomak_opt_seconds()->f64{
+    const DEFAULT_TIME: f64 = 0.5;
+    let str_time = std::env::var("TOKOMAK_OPT_TIME").unwrap_or_else(|_| format!("{}",DEFAULT_TIME));
+    let opt_seconds: f64 = str_time.parse().unwrap_or(DEFAULT_TIME);
+    println!("Tokomak optimizer will run for {}s",opt_seconds);
+    opt_seconds 
+}
+
+
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let mut settings = RunnerSettings::new();
     println!("Setup up runner settings");
     settings
-        .with_iter_limit(100)
-        .with_node_limit(200_000)
-        .with_time_limit(Duration::from_secs_f64(0.1));
-    let tokomak_optimizer = Tokomak::with_builtin_rules(settings, EXPR_SIMPLIFICATION_RULES | PLAN_SIMPLIFICATION_RULES);
-    let config = ExecutionConfig::new()
+        .with_iter_limit(1000)
+        .with_node_limit(1_000_000)
+        .with_time_limit(Duration::from_secs_f64(get_tokomak_opt_seconds()));
+    let tokomak_optimizer = Tokomak::with_builtin_rules(settings, ALL_RULES);
+    let mut config = ExecutionConfig::new()
         .with_target_partitions(opt.partitions)
-        .with_batch_size(opt.batch_size)
-        .with_optimizer_rules(vec![
-            Arc::new(ConstantFolding::new()),
-            Arc::new(ProjectionPushDown::new()),
-            Arc::new(FilterPushDown::new()),
-            Arc::new(tokomak_optimizer), 
-            Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(EliminateLimit::new()),
-            Arc::new(ProjectionPushDown::new()),
-            Arc::new(FilterPushDown::new()),
-
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(LimitPushDown::new())
-
+        .with_batch_size(opt.batch_size);
+    if opt.tokomak{
+        println!("Adding tokomak optimizer");
+        config = config.with_optimizer_rules(vec![
+                Arc::new(tokomak_optimizer), 
+                Arc::new(CommonSubexprEliminate::new()),
+                Arc::new(ProjectionPushDown::new()),
+                Arc::new(FilterPushDown::new()),
+               
             ]);
+    }else{
+        println!("Did not add tokomak optimizer");
+    }
+
     let mut ctx = ExecutionContext::with_config(config);
 
     // register tables
@@ -353,7 +364,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
 
 fn get_query_sql(query: usize) -> Result<String> {
     if query > 0 && query < 23 {
-        let filename = format!("queries/q{}.sql", query);
+        let filename = format!("/home/patrick/dev/rust/arrow-datafusion/benchmarks/queries/q{}.sql", query);
         Ok(fs::read_to_string(&filename).expect("failed to read query"))
     } else {
         Err(DataFusionError::Plan(
@@ -375,11 +386,14 @@ async fn execute_query(
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
     }
+    let start = Instant::now();
     let plan = ctx.optimize(plan)?;
-    
+    let elapsed = start.elapsed().as_secs_f64()*1000.0;
+    println!("Spent {:.2} ms optimizing", elapsed);
     if debug {
         println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
+    //std::process::exit(0);
     let physical_plan = ctx.create_physical_plan(&plan).await?;
     if debug {
         println!(
@@ -1076,6 +1090,7 @@ mod tests {
                 path: PathBuf::from(path.to_string()),
                 file_format: "tbl".to_string(),
                 mem_table: false,
+                tokomak: false
             };
             let actual = benchmark_datafusion(opt).await?;
 

@@ -394,14 +394,16 @@ impl LogicalPlanBuilder {
             DFSchema::try_from_qualified_schema(&table_name, &schema)
         })?;
 
-        let table_scan = LogicalPlan::TableScan {
-            table_name,
-            source: provider,
-            projected_schema: Arc::new(projected_schema),
-            projection,
-            filters,
-            limit,
-        };
+        let table_scan = LogicalPlan::TableScan (
+            TableScan{
+                table_name,
+                source: provider,
+                projected_schema: Arc::new(projected_schema),
+                projection,
+                filters,
+                limit,
+            }
+        );
         Ok(Self::from(table_scan))
     }
 

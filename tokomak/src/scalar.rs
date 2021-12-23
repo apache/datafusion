@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use datafusion::{error::DataFusionError, scalar::ScalarValue};
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, TimeUnit, IntervalUnit};
 use ordered_float::OrderedFloat;
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum TokomakScalar {
@@ -56,7 +56,8 @@ pub enum TokomakScalar {
     IntervalDayTime(Option<i64>),
     /// Scalar Struct
     #[allow(clippy::box_vec)]
-    Struct(Option<Box<Vec<TokomakScalar>>>, Box<Vec<Field>>)
+    Struct(Option<Box<Vec<TokomakScalar>>>, Box<Vec<Field>>),
+    Decimal128(Option<i128>, usize, usize),
 }
 
 //This is mostly for convience's sake when testing the optimizer so this implmentation is shoddy
@@ -157,6 +158,8 @@ impl From<ScalarValue> for TokomakScalar {
                 let fields = fields.map(|f|Box::new( f.into_iter().map(TokomakScalar::from).collect()));
                 TokomakScalar::Struct(fields, datatypes)
             },
+            ScalarValue::Decimal128(v, scale, precision) => TokomakScalar::Decimal128(v, scale,precision),
+            
         }
     }
 }
@@ -206,6 +209,7 @@ impl From<TokomakScalar> for ScalarValue {
                 let fields = fields.map(|f| Box::new(f.into_iter().map(ScalarValue::from).collect()));
                 ScalarValue::Struct(fields, datatypes)
             },
+            TokomakScalar::Decimal128(v,s,p)=>ScalarValue::Decimal128(v,s,p),
         }
     }
 }
@@ -218,6 +222,74 @@ macro_rules! format_option {
         }
     }};
 }
+
+impl TokomakScalar{
+    pub fn is_null(&self)->bool{
+        match self{
+            TokomakScalar::Boolean(None)|
+            TokomakScalar::Float32(None)|
+            TokomakScalar::Float64(None)|
+            TokomakScalar::Int8(None)|
+            TokomakScalar::Int16(None)|
+            TokomakScalar::Int32(None)|
+            TokomakScalar::Int64(None)|
+            TokomakScalar::UInt8(None)|
+            TokomakScalar::UInt16(None)|
+            TokomakScalar::UInt32(None)|
+            TokomakScalar::UInt64(None)|
+            TokomakScalar::Utf8(None)|
+            TokomakScalar::LargeUtf8(None)|
+            TokomakScalar::Binary(None)|
+            TokomakScalar::LargeBinary(None)|
+            TokomakScalar::List(None, _)|
+            TokomakScalar::Date32(None)|
+            TokomakScalar::Date64(None) |
+            TokomakScalar::TimestampSecond(None)|
+            TokomakScalar::TimestampMillisecond(None)|
+            TokomakScalar::TimestampMicrosecond(None) |
+            TokomakScalar::TimestampNanosecond(None) |
+            TokomakScalar::IntervalYearMonth(None) |
+            TokomakScalar::IntervalDayTime(None) |
+            TokomakScalar::Struct(None, _) |
+            TokomakScalar::Decimal128(None, _, _)=>true,
+            _=>false,
+        }
+    }
+    pub fn datatype(&self)->DataType{
+        match self{
+            TokomakScalar::Boolean(_) => DataType::Boolean,
+            TokomakScalar::Float32(_) => DataType::Float32,
+            TokomakScalar::Float64(_) => DataType::Float64,
+            TokomakScalar::Int8(_) => DataType::Int8,
+            TokomakScalar::Int16(_) => DataType::Int16,
+            TokomakScalar::Int32(_) => DataType::Int32,
+            TokomakScalar::Int64(_) => DataType::Int64,
+            TokomakScalar::UInt8(_) => DataType::UInt8,
+            TokomakScalar::UInt16(_) => DataType::UInt16,
+            TokomakScalar::UInt32(_) => DataType::UInt32,
+            TokomakScalar::UInt64(_) => DataType::UInt64,
+            TokomakScalar::Utf8(_) => DataType::Utf8,
+            TokomakScalar::LargeUtf8(_) => DataType::LargeUtf8,
+            TokomakScalar::Binary(_) => DataType::Binary,
+            TokomakScalar::LargeBinary(_) => DataType::LargeBinary,
+            TokomakScalar::List(v,dt) => {
+                let contains_null = v.as_ref().map(|l| l.iter().any(|i| i.is_null())).unwrap_or(true);
+                DataType::List(Field::new("", dt.as_ref().clone(), contains_null).into())
+            },
+            TokomakScalar::Date32(_) => DataType::Date32,
+            TokomakScalar::Date64(_) => DataType::Date64,
+            TokomakScalar::TimestampSecond(_) => DataType::Timestamp(TimeUnit::Second, None),
+            TokomakScalar::TimestampMillisecond(_) => DataType::Timestamp(TimeUnit::Millisecond, None),
+            TokomakScalar::TimestampMicrosecond(_) => DataType::Timestamp(TimeUnit::Microsecond, None),
+            TokomakScalar::TimestampNanosecond(_) => DataType::Timestamp(TimeUnit::Nanosecond, None),
+            TokomakScalar::IntervalYearMonth(_) => DataType::Interval(IntervalUnit::YearMonth),
+            TokomakScalar::IntervalDayTime(_) => DataType::Interval(IntervalUnit::DayTime),
+            TokomakScalar::Struct(_, dt) => DataType::Struct(dt.clone().to_vec()),
+            &TokomakScalar::Decimal128(_,s,p)=>DataType::Decimal(s,p),
+        }
+    } 
+}
+
 
 impl std::fmt::Display for TokomakScalar {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -288,6 +360,9 @@ impl std::fmt::Display for TokomakScalar {
                 )?,
                 None => write!(f, "NULL")?,
             },
+            TokomakScalar::Decimal128(v, p, s) => {
+                write!(f, "{:?},{:?},{:?}", v, p, s)?;
+            }
         };
 
         Ok(())
