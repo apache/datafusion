@@ -8,22 +8,22 @@ use egg::*;
 use log::info;
 
 use super::utils::*;
-
-fn generate_simplification_rules(
+ 
+pub(crate)fn generate_plan_simplification_rules(
 ) -> Result<Vec<Rewrite<TokomakLogicalPlan, TokomakAnalysis>>, DataFusionError> {
-    let predicate: Var = "?pred".parse().unwrap();
+    let _predicate: Var = "?pred".parse().unwrap();
     //let col: Var = "?col".parse().unwrap();
     let l: Var = "?l".parse().unwrap();
     let r: Var = "?r".parse().unwrap();
     let lcol: Var = "?lcol".parse().unwrap();
     let rcol: Var = "?rcol".parse().unwrap();
     //let val: Var = "?val".parse().unwrap();
-    let t1: Var = "?t1".parse().unwrap();
-    let t2: Var = "?t2".parse().unwrap();
-    let t3: Var = "?t3".parse().unwrap();
+    let _t1: Var = "?t1".parse().unwrap();
+    let _t2: Var = "?t2".parse().unwrap();
+    let _t3: Var = "?t3".parse().unwrap();
     let c1: Var = "?c1".parse().unwrap();
     let c2: Var = "?c2".parse().unwrap();
-    let c3: Var = "?c3".parse().unwrap();
+    let _c3: Var = "?c3".parse().unwrap();
 
     let newkeys = "?newkeys".parse().unwrap();
 
@@ -182,110 +182,17 @@ fn inner_join_cross_join_through(
     }
 }
 
-fn cross_to_inner_lower_join_keys(
-    l: Var,
-    r: Var,
-    keys: Var,
-    inner_keys: Var,
-    outer_keys: Var,
-) -> impl Fn(&mut EGraph<TokomakLogicalPlan, TokomakAnalysis>, &mut Subst) -> Option<()> {
-    move |egraph: &mut EGraph<TokomakLogicalPlan, TokomakAnalysis>,
-          subst: &mut Subst|
-          -> Option<()> {
-        assert!(egraph[subst[keys]].nodes.len() == 1);
-        let join_keys = match &egraph[subst[keys]].nodes[0] {
-            TokomakLogicalPlan::JoinKeys(k) => &k.0,
-            _ => return None,
-        };
-        let lschema = get_plan_schema(egraph, subst, l)?;
-        let rschema = get_plan_schema(egraph, subst, r)?;
-        let mut inner_join_keys = Vec::new();
-        let mut outer_join_keys = Vec::with_capacity(join_keys.len());
-        assert!(join_keys.len() % 2 == 0);
-        for ids in join_keys.chunks_exact(2) {
-            let lkey = ids[0];
-            let rkey = ids[1];
-            assert!(egraph[lkey].nodes.len() == 1);
-            assert!(egraph[rkey].nodes.len() == 1);
-            let lcol = match &egraph[lkey].nodes[0] {
-                TokomakLogicalPlan::Column(c) => c,
-                p => panic!("Found non-column value in inner join keys: {:?}", p),
-            };
-            let rcol = match &egraph[rkey].nodes[0] {
-                TokomakLogicalPlan::Column(c) => c,
-                p => panic!("Found non-column value in inner join keys: {:?}", p),
-            };
-            if let (Some(_), Some(_)) =
-                (get_field(lschema, lcol), get_field(rschema, rcol))
-            {
-                inner_join_keys.push(lkey);
-                inner_join_keys.push(rkey);
-            } else if let (Some(_), Some(_)) =
-                (get_field(lschema, rcol), get_field(rschema, lcol))
-            {
-                inner_join_keys.push(rkey);
-                inner_join_keys.push(lkey);
-            } else {
-                outer_join_keys.push(lkey);
-                outer_join_keys.push(rkey);
-            }
-        }
-        if inner_join_keys.is_empty() {
-            return None;
-        }
-        let inner_keys_id = egraph.add(TokomakLogicalPlan::JoinKeys(
-            crate::plan::JoinKeys::from_vec(inner_join_keys),
-        ));
-        let outer_keys_id = egraph.add(TokomakLogicalPlan::JoinKeys(
-            crate::plan::JoinKeys::from_vec(outer_join_keys),
-        ));
-        subst.insert(inner_keys, inner_keys_id);
-        subst.insert(outer_keys, outer_keys_id);
-        Some(())
-    }
-}
-
-fn log_tables(table: Var) -> impl Condition<TokomakLogicalPlan, TokomakAnalysis> {
-    move |egraph: &mut EGraph<TokomakLogicalPlan, TokomakAnalysis>,
-          id: Id,
-          subst: &Subst|
-          -> bool {
-        let eclass = &egraph[subst[table]];
-        let scan_of_parts = eclass
-            .nodes
-            .iter()
-            .flat_map(|p| match p {
-                TokomakLogicalPlan::TableScan(t) => egraph[t.name()]
-                    .nodes
-                    .iter()
-                    .flat_map(|p| match p {
-                        TokomakLogicalPlan::Str(s) => Some(s),
-                        _ => None,
-                    })
-                    .next(),
-                _ => None,
-            })
-            .next();
-        if scan_of_parts.is_some() {
-            let mut inner_joins = Vec::new();
-            for node in &eclass.nodes {
-                let push = match node {
-                    TokomakLogicalPlan::InnerJoin(_) => true,
-                    _ => false,
-                };
-                if push {
-                    inner_joins.push(node.clone())
-                }
-            }
-        }
-        false
-    }
-}
-
 impl Tokomak {
     pub(crate) fn add_plan_simplification_rules(&mut self) {
-        let rules = generate_simplification_rules().unwrap();
+        let rules = generate_plan_simplification_rules().unwrap();
         self.rules.extend(rules);
+        info!("There are now {} rules", self.rules.len());
+        self.added_builtins |= PLAN_SIMPLIFICATION_RULES;
+    }
+
+    pub(crate) fn add_filtered_plan_simplification_rules<F: Fn(&Rewrite<TokomakLogicalPlan, TokomakAnalysis>)->bool>(&mut self, filter: &F){
+        let rules = generate_plan_simplification_rules().unwrap();
+        self.rules.extend(rules.into_iter().filter(|f| (filter)(f)));
         info!("There are now {} rules", self.rules.len());
         self.added_builtins |= PLAN_SIMPLIFICATION_RULES;
     }

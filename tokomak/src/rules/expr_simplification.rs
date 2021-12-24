@@ -1,15 +1,16 @@
+//! Contains rules for expression simplification
 use crate::{
     pattern::{pattern, transforming_pattern, twoway_pattern},
     plan::TokomakLogicalPlan,
-    Tokomak, EXPR_SIMPLIFICATION_RULES,
+    Tokomak, EXPR_SIMPLIFICATION_RULES, TokomakAnalysis,
 };
 
 use super::utils::*;
 use datafusion::error::DataFusionError;
-use egg::{rewrite as rw, *};
+use egg::*;
 use log::info;
 
-fn generate_simplification_rules<A: Analysis<TokomakLogicalPlan> + 'static>(
+pub(crate) fn generate_expr_simplification_rules<A: Analysis<TokomakLogicalPlan> + 'static>(
 ) -> Result<Vec<Rewrite<TokomakLogicalPlan, A>>, DataFusionError> {
     let a: Var = "?a".parse().unwrap();
     //let b: Var = "?b".parse().unwrap();
@@ -228,8 +229,8 @@ impl<
         egraph: &mut EGraph<TokomakLogicalPlan, A>,
         eclass: Id,
         subst: &Subst,
-        searcher_ast: Option<&PatternAst<TokomakLogicalPlan>>,
-        rule_name: Symbol,
+        _searcher_ast: Option<&PatternAst<TokomakLogicalPlan>>,
+        _rule_name: Symbol,
     ) -> Vec<Id> {
         // "(+ ?x (+ ?y ?z))" =>"(+ (+ ?x ?y) ?z)"
         let inner = (self.f)([subst[self.x], subst[self.y]]); // (+ ?x ?y)
@@ -247,7 +248,7 @@ impl<
         &self,
         egraph: &mut EGraph<TokomakLogicalPlan, A>,
         matches: &[SearchMatches<TokomakLogicalPlan>],
-        rule_name: Symbol,
+        _rule_name: Symbol,
     ) -> Vec<Id> {
         let mut added = vec![];
         for mat in matches {
@@ -312,8 +313,8 @@ impl<
         egraph: &mut EGraph<TokomakLogicalPlan, A>,
         eclass: Id,
         subst: &Subst,
-        searcher_ast: Option<&PatternAst<TokomakLogicalPlan>>,
-        rule_name: Symbol,
+        _searcher_ast: Option<&PatternAst<TokomakLogicalPlan>>,
+        _rule_name: Symbol,
     ) -> Vec<Id> {
         let node = (self.f)([subst[self.r], subst[self.l]]);
         let id = egraph.add(node);
@@ -328,7 +329,7 @@ impl<
         &self,
         egraph: &mut EGraph<TokomakLogicalPlan, A>,
         matches: &[SearchMatches<TokomakLogicalPlan>],
-        rule_name: Symbol,
+        _rule_name: Symbol,
     ) -> Vec<Id> {
         let mut added = vec![];
         for mat in matches {
@@ -345,8 +346,15 @@ impl<
 }
 
 impl Tokomak {
+    pub(crate) fn add_filtered_expr_simplification_rules<F: Fn(&Rewrite<TokomakLogicalPlan, TokomakAnalysis>)->bool>(&mut self,f: &F){
+        let rules = generate_expr_simplification_rules().unwrap();
+        self.rules.extend(rules.into_iter().filter(|r| (f)(r)));
+        info!("There are now {} rules", self.rules.len());
+        self.added_builtins |= EXPR_SIMPLIFICATION_RULES;
+    }
+
     pub(crate) fn add_expr_simplification_rules(&mut self) {
-        let rules = generate_simplification_rules().unwrap();
+        let rules = generate_expr_simplification_rules().unwrap();
         self.rules.extend(rules);
         info!("There are now {} rules", self.rules.len());
         self.added_builtins |= EXPR_SIMPLIFICATION_RULES;

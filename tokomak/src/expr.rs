@@ -1,33 +1,26 @@
-use super::datatype::TokomakDataType;
-use super::scalar::TokomakScalar;
-use crate::{ScalarUDFName, SortSpec, UDAFName};
-use datafusion::error::Result as DFResult;
-use datafusion::{
-    arrow::datatypes::DataType,
-    error::DataFusionError,
-    logical_plan::{window_frames::WindowFrame, Column},
-    physical_plan::{
-        aggregates::AggregateFunction, functions::BuiltinScalarFunction, sort::SortExec,
-        window_functions::WindowFunction,
-    },
-    scalar::ScalarValue,
-};
+//! Contains structs which represent more complex expressions in the TokomakLogicalPlan
+use datafusion::logical_plan::Column;
 use egg::*;
 use std::convert::TryInto;
-use std::{fmt::Display, str::FromStr, sync::Arc};
+use std::{fmt::Display, str::FromStr};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+///Represents a Between expr. 3 members in order expr:Expr, low:expr, high:Expr
 pub struct BetweenExpr([Id; 3]);
 impl BetweenExpr {
+    ///Create new BetweenExpr
     pub fn new(expr: Id, low: Id, high: Id) -> Self {
         Self([expr, low, high])
     }
+    ///Return the input expr id
     pub fn expr(&self) -> Id {
         self.0[0]
     }
+    ///Return the id of low
     pub fn low(&self) -> Id {
         self.0[1]
     }
+    ///Return the id of high
     pub fn high(&self) -> Id {
         self.0[2]
     }
@@ -43,15 +36,18 @@ impl LanguageChildren for BetweenExpr{
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-
+///Represents a ScalarBuiltin, AggregateBuiltin, ScalarUDF, and AggregateUDF call: [func_name, args:elist]
 pub struct FunctionCall([Id; 2]);
 impl FunctionCall {
+    ///Create FunctionCall
     pub fn new(func: Id, args: Id) -> Self {
         Self([func, args])
     }
+    ///Id of the name
     pub fn fun(&self) -> Id {
         self.0[0]
     }
+    ///Id of the argument list
     pub fn args(&self) -> Id {
         self.0[1]
     }
@@ -66,10 +62,13 @@ impl LanguageChildren for FunctionCall{
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
+
+///Counterpart to datafusion's column type with egg::Symbols to decrease size of Column and reduce heap allocations. 
 pub struct TokomakColumn {
+    ///Relation name
     pub relation: Option<Symbol>,
+    ///Column name
     pub name: Symbol,
-    flat_name: Symbol,
 }
 impl Display for TokomakColumn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -81,26 +80,13 @@ impl Display for TokomakColumn {
 }
 
 impl TokomakColumn {
-    fn create_flat_name(relation: Option<Symbol>, name: Symbol) -> Symbol {
-        Symbol::from_str(
-            match &relation {
-                Some(r) => format!("{}.{}", r, name),
-                None => name.as_str().to_string(),
-            }
-            .as_str(),
-        )
-        .unwrap()
-    }
-    pub fn flat_name(&self) -> Symbol {
-        self.flat_name
-    }
+    ///Create new TokomakColumn
     pub fn new(relation: Option<impl Into<Symbol>>, name: impl Into<Symbol>) -> Self {
         let relation = relation.map(|r| r.into());
         let name = name.into();
         TokomakColumn {
             relation,
             name,
-            flat_name: Self::create_flat_name(relation, name),
         }
     }
 }
@@ -120,7 +106,7 @@ impl From<Column> for TokomakColumn {
 }
 impl From<&Column> for TokomakColumn {
     fn from(c: &Column) -> Self {
-        TokomakColumn::new(c.relation.as_ref().map(|s| s.as_str()), c.name.as_str())
+        TokomakColumn::new(c.relation.as_deref(), c.name.as_str())
     }
 }
 
@@ -132,129 +118,27 @@ impl From<&TokomakColumn> for Column {
     }
 }
 
-/// Represents case expression with the form
-///
-/// CASE expression
-///     WHEN value THEN result
-///     [WHEN ...]
-///     [ELSE result]
-/// END
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-
-pub struct CaseExprLiteral(Box<[Id]>);
-
-impl CaseExprLiteral {
-    pub fn new(expr: Id, when: Id, then: Id, r#else: Option<Id>) -> Self {
-        Self(Vec::into_boxed_slice(match r#else {
-            Some(else_id) => vec![expr, when, then, else_id],
-            None => vec![expr, when, then],
-        }))
-    }
-
-    pub fn expr(&self) -> Id {
-        self.0[0]
-    }
-    pub fn when(&self) -> Id {
-        self.0[1]
-    }
-    pub fn then(&self) -> Id {
-        self.0[2]
-    }
-    pub fn r#else(&self) -> Option<Id> {
-        if self.0.len() == 3 {
-            None
-        } else {
-            Some(self.0[3])
-        }
-    }
-}
-#[rustfmt::skip]
-impl LanguageChildren for CaseExprLiteral{
-    fn len(&self) -> usize { self.0.len() }
-    fn can_be_length(n: usize) -> bool { n == 3 || n == 4 }
-    fn from_vec(v: Vec<Id>) -> Self { Self(v.into_boxed_slice()) }
-    fn as_slice(&self) -> &[Id] { &self.0[..] }
-    fn as_mut_slice(&mut self) -> &mut [Id] { &mut self.0[..] }
-}
-
-///The CaseExprIfElse represents a case expression of the form
-/// CASE WHEN condition THEN result
-///      [WHEN ...]
-///      [ELSE result]
-/// END
-/// When and then must always be the same length and
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-
-pub struct CaseExprIfElse(Box<[Id]>);
-
-impl CaseExprIfElse {
-    pub fn new(when: Id, then: Id, r#else: Option<Id>) -> Self {
-        let ids = match r#else {
-            Some(else_id) => vec![when, then, else_id],
-            None => vec![when, then],
-        };
-        Self(ids.into_boxed_slice())
-    }
-    pub fn when(&self) -> Id {
-        self.0[0]
-    }
-    pub fn then(&self) -> Id {
-        self.0[1]
-    }
-    pub fn r#else(&self) -> Option<Id> {
-        if self.0.len() == 3 {
-            Some(self.0[2])
-        } else {
-            None
-        }
-    }
-}
-
-#[rustfmt::skip]
-impl LanguageChildren for CaseExprIfElse{
-    fn len(&self) -> usize { self.0.len() }
-    fn can_be_length(n: usize) -> bool { n == 2 || n == 3 }
-    fn from_vec(v: Vec<Id>) -> Self { Self(v.into_boxed_slice()) }
-    fn as_slice(&self) -> &[Id] { &self.0[..] }
-    fn as_mut_slice(&mut self) -> &mut [Id] { &mut self.0[..] }
-}
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub struct InListExpr([Id; 2]);
-impl InListExpr {
-    pub fn new(expr: Id, list: Id) -> Self {
-        Self([expr, list])
-    }
-    pub fn expr(&self) -> Id {
-        self.0[0]
-    }
-    pub fn list(&self) -> Id {
-        self.0[1]
-    }
-}
-#[rustfmt::skip]
-impl LanguageChildren for InListExpr{
-    fn len(&self) -> usize { self.0.len() }
-    fn can_be_length(n: usize) -> bool { n == 2 }
-    fn from_vec(v: Vec<Id>) -> Self { Self([v[0], v[1]]) }
-    fn as_slice(&self) -> &[Id] { &self.0[..] }
-    fn as_mut_slice(&mut self) -> &mut [Id] { &mut self.0[..] }
-}
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+///Unframed windowed function call: [fun:WindowBuiltin, args:elist, partition_by:elist, order_by:elist]
 pub struct WindowBuiltinCallUnframed([Id; 4]);
 impl WindowBuiltinCallUnframed {
+    ///Create new unframed window call
     pub fn new(fun: Id, args: Id, partition: Id, order_by: Id) -> Self {
         Self([fun, args, partition, order_by])
     }
+    ///Builtin window function id
     pub fn fun(&self) -> Id {
         self.0[0]
     }
+    ///Argument list id
     pub fn args_list(&self) -> Id {
         self.0[1]
     }
+    ///Partition list id
     pub fn partition_list(&self) -> Id {
         self.0[2]
     }
+    ///Order list id
     pub fn order_by_list(&self) -> Id {
         self.0[3]
     }
@@ -269,24 +153,31 @@ impl LanguageChildren for WindowBuiltinCallUnframed{
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+///Framed windowed function call: [fun:WindowBuiltin, args:elist, partition_by:elist, order_by:elist]
+
 pub struct WindowBuiltinCallFramed([Id; 5]);
 impl WindowBuiltinCallFramed {
+    ///Create new framed window call
     pub fn new(fun: Id, args: Id, partition: Id, order_by: Id, frame: Id) -> Self {
         Self([fun, args, partition, order_by, frame])
     }
+    ///Builtin window function
     pub fn fun(&self) -> Id {
         self.0[0]
     }
+    ///Argument elist id
     pub fn args_list(&self) -> Id {
         self.0[1]
     }
-
+    ///Partition elist id
     pub fn partition_list(&self) -> Id {
         self.0[2]
     }
+    ///Order by elist id
     pub fn order_by_list(&self) -> Id {
         self.0[3]
     }
+    ///Window frame id
     pub fn frame(&self) -> Id {
         self.0[4]
     }
@@ -300,14 +191,18 @@ impl LanguageChildren for WindowBuiltinCallFramed{
     fn as_mut_slice(&mut self) -> &mut [Id] { &mut self.0[..] }
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+///Represents a CastExpression: [expr:Expr, dt:TokomakDataType]
 pub struct CastExpr([Id; 2]);
 impl CastExpr {
+    ///Creates a new CastExpr
     pub fn new(expr: Id, cast_type: Id) -> Self {
         Self([expr, cast_type])
     }
+    ///Input expr id
     pub fn expr(&self) -> Id {
         self.0[0]
     }
+    ///Cast to type id
     pub fn cast_type(&self) -> Id {
         self.0[1]
     }
@@ -322,16 +217,19 @@ impl LanguageChildren for CastExpr{
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+///SortExpr
 pub struct SortExpr([Id; 2]);
 
 impl SortExpr {
+    ///Create new SortExpr
     pub fn new(expr: Id, sort_spec: Id) -> Self {
         Self([expr, sort_spec])
     }
+    ///Input expr id
     pub fn expr(&self) -> Id {
         self.0[0]
     }
-
+    ///Expresion SortSpec
     pub fn sort_spec(&self) -> Id {
         self.0[1]
     }
@@ -341,16 +239,7 @@ impl SortExpr {
 impl LanguageChildren for SortExpr{
     fn len(&self) -> usize {2}
     fn can_be_length(n: usize) -> bool {n == 2}
-
-    fn from_vec(v: Vec<Id>) -> Self {
-        Self([v[0], v[1]])
-    }
-
-    fn as_slice(&self) -> &[Id] {
-        &self.0[..]
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [Id] {
-        &mut self.0[..]
-    }
+    fn from_vec(v: Vec<Id>) -> Self { Self([v[0], v[1]]) }
+    fn as_slice(&self) -> &[Id] { &self.0[..] }
+    fn as_mut_slice(&mut self) -> &mut [Id] { &mut self.0[..] }
 }

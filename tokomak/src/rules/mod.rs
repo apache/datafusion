@@ -1,5 +1,6 @@
-use egg::Analysis;
 
-pub mod expr_simplification;
-pub mod plan_simplification;
+
+mod expr_simplification;
+mod plan_simplification;
+
 pub mod utils;

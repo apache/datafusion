@@ -1,9 +1,9 @@
-use std::rc::Rc;
-
+//! Contains TokomakScalar and conversion functions.
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion::{error::DataFusionError, scalar::ScalarValue};
 use ordered_float::OrderedFloat;
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+///Represents a ScalarValue in the EGraph
 pub enum TokomakScalar {
     /// true or false value
     Boolean(Option<bool>),
@@ -36,7 +36,7 @@ pub enum TokomakScalar {
     /// large binary
     LargeBinary(Option<Box<[u8]>>),
     /// list of nested ScalarValue (boxed to reduce size_of(ScalarValue))
-    #[allow(clippy::box_vec)]
+    #[allow(clippy::box_collection)]
     List(Option<Box<Vec<TokomakScalar>>>, Box<DataType>),
     /// Date stored as a signed 32bit int
     Date32(Option<i32>),
@@ -55,8 +55,9 @@ pub enum TokomakScalar {
     /// Interval with DayTime unit
     IntervalDayTime(Option<i64>),
     /// Scalar Struct
-    #[allow(clippy::box_vec)]
+    #[allow(clippy::box_collection)]
     Struct(Option<Box<Vec<TokomakScalar>>>, Box<Vec<Field>>),
+    /// Decimal value
     Decimal128(Option<i128>, usize, usize),
 }
 
@@ -232,37 +233,39 @@ macro_rules! format_option {
 }
 
 impl TokomakScalar {
+    ///Returns true if the scalar is null of any variant
     pub fn is_null(&self) -> bool {
-        match self {
+        matches!(
+            self,
             TokomakScalar::Boolean(None)
-            | TokomakScalar::Float32(None)
-            | TokomakScalar::Float64(None)
-            | TokomakScalar::Int8(None)
-            | TokomakScalar::Int16(None)
-            | TokomakScalar::Int32(None)
-            | TokomakScalar::Int64(None)
-            | TokomakScalar::UInt8(None)
-            | TokomakScalar::UInt16(None)
-            | TokomakScalar::UInt32(None)
-            | TokomakScalar::UInt64(None)
-            | TokomakScalar::Utf8(None)
-            | TokomakScalar::LargeUtf8(None)
-            | TokomakScalar::Binary(None)
-            | TokomakScalar::LargeBinary(None)
-            | TokomakScalar::List(None, _)
-            | TokomakScalar::Date32(None)
-            | TokomakScalar::Date64(None)
-            | TokomakScalar::TimestampSecond(None)
-            | TokomakScalar::TimestampMillisecond(None)
-            | TokomakScalar::TimestampMicrosecond(None)
-            | TokomakScalar::TimestampNanosecond(None)
-            | TokomakScalar::IntervalYearMonth(None)
-            | TokomakScalar::IntervalDayTime(None)
-            | TokomakScalar::Struct(None, _)
-            | TokomakScalar::Decimal128(None, _, _) => true,
-            _ => false,
-        }
+                | TokomakScalar::Float32(None)
+                | TokomakScalar::Float64(None)
+                | TokomakScalar::Int8(None)
+                | TokomakScalar::Int16(None)
+                | TokomakScalar::Int32(None)
+                | TokomakScalar::Int64(None)
+                | TokomakScalar::UInt8(None)
+                | TokomakScalar::UInt16(None)
+                | TokomakScalar::UInt32(None)
+                | TokomakScalar::UInt64(None)
+                | TokomakScalar::Utf8(None)
+                | TokomakScalar::LargeUtf8(None)
+                | TokomakScalar::Binary(None)
+                | TokomakScalar::LargeBinary(None)
+                | TokomakScalar::List(None, _)
+                | TokomakScalar::Date32(None)
+                | TokomakScalar::Date64(None)
+                | TokomakScalar::TimestampSecond(None)
+                | TokomakScalar::TimestampMillisecond(None)
+                | TokomakScalar::TimestampMicrosecond(None)
+                | TokomakScalar::TimestampNanosecond(None)
+                | TokomakScalar::IntervalYearMonth(None)
+                | TokomakScalar::IntervalDayTime(None)
+                | TokomakScalar::Struct(None, _)
+                | TokomakScalar::Decimal128(None, _, _)
+        )
     }
+    ///Return the arrow datatype of the TokomakScalar
     pub fn datatype(&self) -> DataType {
         match self {
             TokomakScalar::Boolean(_) => DataType::Boolean,

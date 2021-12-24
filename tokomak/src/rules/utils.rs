@@ -1,25 +1,15 @@
+//! Contains utilities for writing rewrites that require more complex conditions
+
 use crate::{
     expr::TokomakColumn,
-    plan::{JoinKeys, Table, TableScan, TokomakLogicalPlan},
-    scalar::TokomakScalar,
+    plan::{JoinKeys, TokomakLogicalPlan},
     TokomakAnalysis,
 };
-use datafusion::arrow::datatypes::DataType;
-use datafusion::{
-    arrow::ffi::ArrowArrayRef,
-    datasource::TableProvider,
-    error::DataFusionError,
-    execution::context::ExecutionProps,
-    logical_plan::{DFField, DFSchema, Expr, Operator},
-    physical_plan::expressions::{BinaryExpr, CastExpr},
-    scalar::ScalarValue,
-};
+
+use datafusion::logical_plan::{DFField, DFSchema};
+
 use egg::*;
-
-use std::{convert::TryInto, sync::Arc};
-
-type DFResult<T> = Result<T, DataFusionError>;
-
+///Logs the results of the condition
 pub fn log_results<A: Analysis<TokomakLogicalPlan>>(
     name: String,
     c: impl Condition<TokomakLogicalPlan, A>,
@@ -30,7 +20,7 @@ pub fn log_results<A: Analysis<TokomakLogicalPlan>>(
         res
     }
 }
-
+/// l && r of Condition
 pub fn and<A: Analysis<TokomakLogicalPlan>>(
     l: impl Condition<TokomakLogicalPlan, A>,
     r: impl Condition<TokomakLogicalPlan, A>,
@@ -39,7 +29,7 @@ pub fn and<A: Analysis<TokomakLogicalPlan>>(
         l.check(egraph, id, subst) && r.check(egraph, id, subst)
     }
 }
-
+///l || r of Condition
 pub fn or<A: Analysis<TokomakLogicalPlan>>(
     l: impl Condition<TokomakLogicalPlan, A>,
     r: impl Condition<TokomakLogicalPlan, A>,
@@ -49,14 +39,7 @@ pub fn or<A: Analysis<TokomakLogicalPlan>>(
     }
 }
 
-pub fn not<A: Analysis<TokomakLogicalPlan>>(
-    inner: impl Condition<TokomakLogicalPlan, A>,
-) -> impl Fn(&mut EGraph<TokomakLogicalPlan, A>, Id, &Subst) -> bool {
-    move |egraph: &mut EGraph<TokomakLogicalPlan, A>, id: Id, subst: &Subst| {
-        !inner.check(egraph, id, subst)
-    }
-}
-
+///Extracts the JoinKeys bound to keys or None if the eclass was not JoinKeys.
 pub fn get_join_keys<A: Analysis<TokomakLogicalPlan>>(
     egraph: &EGraph<TokomakLogicalPlan, A>,
     keys: Id,
@@ -66,7 +49,7 @@ pub fn get_join_keys<A: Analysis<TokomakLogicalPlan>>(
         _ => None,
     }
 }
-
+///Swaps the order of keys from left,right -> right,left and binds the results to output
 pub fn revers_keys<A: Analysis<TokomakLogicalPlan>>(
     join_keys: Var,
     output: Var,
@@ -98,7 +81,7 @@ pub fn revers_keys<A: Analysis<TokomakLogicalPlan>>(
         Some(())
     }
 }
-
+///Converts TokomakLogicalPlan::JoinKeys to a filter predicate
 pub fn keys_to_predicate<A: Analysis<TokomakLogicalPlan>>(
     join_keys: Var,
 ) -> impl Fn(&mut EGraph<TokomakLogicalPlan, A>, &Subst) -> Option<Id> {
@@ -125,6 +108,8 @@ pub fn keys_to_predicate<A: Analysis<TokomakLogicalPlan>>(
         Some(predicate)
     }
 }
+
+///Returns true if the var bound is a TokomakScalar
 pub fn is_scalar(
     var: Var,
 ) -> impl Fn(&mut EGraph<TokomakLogicalPlan, TokomakAnalysis>, Id, &Subst) -> bool {
@@ -142,7 +127,7 @@ pub fn is_scalar(
             .is_some()
     }
 }
-
+///Gets the schema of the eclass bound to plan or returns None
 pub fn get_plan_schema<'a>(
     egraph: &'a EGraph<TokomakLogicalPlan, TokomakAnalysis>,
     subst: &Subst,
@@ -153,7 +138,7 @@ pub fn get_plan_schema<'a>(
         _ => None,
     }
 }
-
+///Gets the column expression bound to col or returns None if it was of a different type.
 pub fn get_column(
     egraph: &EGraph<TokomakLogicalPlan, TokomakAnalysis>,
     subst: &Subst,
@@ -171,7 +156,7 @@ pub fn get_column(
 
     Some(column?.clone())
 }
-
+///Gets the field from the schema that corresponds to the column or returns None if it could not be found. 
 pub fn get_field<'a>(schema: &'a DFSchema, col: &TokomakColumn) -> Option<&'a DFField> {
     match col.relation {
         Some(q) => schema
@@ -180,11 +165,11 @@ pub fn get_field<'a>(schema: &'a DFSchema, col: &TokomakColumn) -> Option<&'a DF
         None => schema.field_with_unqualified_name(col.name.as_str()).ok(),
     }
 }
-
+///Checks if the TokomakColumn is from the schema
 pub fn col_from_plan(schema: &DFSchema, col: &TokomakColumn) -> bool {
     get_field(schema, col).is_some()
 }
-
+///Checks if the col var is from the plan bound to the plan var
 pub fn is_column_from_plan(
     col: Var,
     plan: Var,
@@ -220,6 +205,7 @@ pub fn is_column_from_plan(
     }
 }
 
+///prints the result of the wrapped Condition to stdout
 pub fn log(
     name: String,
     c: impl Condition<TokomakLogicalPlan, TokomakAnalysis>,
@@ -233,7 +219,7 @@ pub fn log(
         res
     }
 }
-
+///Prints the result of the wrapped Condition to stdout if it was successful
 pub fn log_success(
     name: String,
     c: impl Condition<TokomakLogicalPlan, TokomakAnalysis>,
@@ -249,7 +235,7 @@ pub fn log_success(
         res
     }
 }
-
+///Adds left_col and right_col to join_keys if they are from different plan schemas. Adds the created JoinKeys to Subst as output.
 pub fn add_to_keys(
     left_table: Var,
     right_table: Var,
@@ -267,11 +253,11 @@ pub fn add_to_keys(
         let mut rcol = get_column(eg, substs, right_col)?;
 
         let (l, r) = if let (Some(_), Some(_)) =
-            (get_field(&lschema, &lcol), get_field(&rschema, &rcol))
+            (get_field(lschema, &lcol), get_field(rschema, &rcol))
         {
             (left_col, right_col)
         } else if let (Some(_), Some(_)) =
-            (get_field(&lschema, &rcol), get_field(&rschema, &lcol))
+            (get_field(lschema, &rcol), get_field(rschema, &lcol))
         {
             std::mem::swap(&mut lcol, &mut rcol);
             (right_col, left_col)
@@ -310,6 +296,8 @@ pub fn add_to_keys(
     }
 }
 
+
+///Appends a scalar value to EList
 pub fn append_in_list<A: Analysis<TokomakLogicalPlan> + 'static>(
     list_var: Var,
     item_var: Var,
@@ -327,15 +315,13 @@ pub fn append_in_list<A: Analysis<TokomakLogicalPlan> + 'static>(
         if lists.is_empty() {
             return None;
         }
+        assert!(eg[substs[item_var]].nodes.len() == 1);
         //Check if it has a scalar representation
-        eg[substs[item_var]]
-            .nodes
-            .iter()
-            .flat_map(|f| match f {
-                TokomakLogicalPlan::Scalar(s) => Some(()),
-                _ => None,
-            })
-            .next()?;
+        match &eg[substs[item_var]].nodes[0]{
+            TokomakLogicalPlan::Scalar(_)=>(),
+            _=>return None,
+        }
+
 
         lists.sort_by_key(|l| l.len());
         let longest = lists.last().unwrap();
@@ -347,8 +333,8 @@ pub fn append_in_list<A: Analysis<TokomakLogicalPlan> + 'static>(
         Some(())
     }
 }
-
-pub fn append<A: Analysis<TokomakLogicalPlan> + 'static>(
+///Appends the id bound to item_var to list_var. item_var must be an expression.
+pub fn append_to_elist<A: Analysis<TokomakLogicalPlan> + 'static>(
     list_var: Var,
     item_var: Var,
 ) -> impl Fn(&mut EGraph<TokomakLogicalPlan, A>, &Subst) -> Option<Id> {
@@ -372,3 +358,31 @@ pub fn append<A: Analysis<TokomakLogicalPlan> + 'static>(
         Some(eg.add(TokomakLogicalPlan::EList(new_list.into_boxed_slice())))
     }
 }
+
+
+///Appends the id bound to item_var to list_var. item_var must be a plan
+pub fn append_to_plist<A: Analysis<TokomakLogicalPlan> + 'static>(
+    list_var: Var,
+    item_var: Var,
+) -> impl Fn(&mut EGraph<TokomakLogicalPlan, A>, &Subst) -> Option<Id> {
+    move |eg: &mut EGraph<TokomakLogicalPlan, A>, substs: &Subst| -> Option<Id> {
+        let mut lists = eg[substs[list_var]]
+            .nodes
+            .iter()
+            .flat_map(|node| match node {
+                TokomakLogicalPlan::PList(list) => Some(list),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if lists.is_empty() {
+            return None;
+        }
+        lists.sort_by_key(|l| l.len());
+        let longest = lists.last().unwrap();
+        let mut new_list = Vec::with_capacity(longest.len() + 1);
+        new_list.extend(longest.iter().cloned());
+        new_list.push(eg[substs[item_var]].id);
+        Some(eg.add(TokomakLogicalPlan::PList(new_list.into_boxed_slice())))
+    }
+}
+

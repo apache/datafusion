@@ -1,38 +1,32 @@
-#![allow(missing_docs)]
-#![allow(unused_imports)]
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
-#![allow(unused_must_use)]
+#![deny(missing_docs)]
+
+//! This crate contains the equality graph optimizer Tokomak. It uses [egg](https://github.com/egraphs-good/egg).
+
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::logical_plan::plan::Join;
+
 use datafusion::physical_plan::aggregates::return_type as aggregate_return_type;
 use datafusion::physical_plan::expressions::binary_operator_data_type;
 use datafusion::physical_plan::functions::return_type as scalar_return_type;
 use datafusion::physical_plan::udaf::AggregateUDF;
 use datafusion::physical_plan::udf::ScalarUDF;
 use datafusion::physical_plan::window_functions::return_type as window_return_type;
-use datafusion::physical_plan::PhysicalExpr;
+
 use datafusion::{logical_plan::LogicalPlan, optimizer::optimizer::OptimizerRule};
-use log::debug;
-use log::{error, info, warn};
-use plan::{convert_to_df_plan, CaseIf, CaseLit, TableScan, TokomakLogicalPlan};
-use scalar::TokomakScalar;
-use std::convert::TryInto;
+
+use log::info;
+use plan::{convert_to_df_plan, CaseIf, CaseLit, TokomakLogicalPlan};
+
 use std::fmt::Display;
-use std::fmt::Write;
 use std::hash::Hash;
-use std::marker::PhantomData;
+
 use std::str::FromStr;
 use std::time::Duration;
 
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::context::ExecutionProps;
-use datafusion::logical_plan::{
-    build_join_schema, Column, DFField, DFSchema, Expr, JoinType, Partitioning,
-};
-use datafusion::{logical_plan::Operator, optimizer::utils};
+use datafusion::logical_plan::Operator;
+use datafusion::logical_plan::{build_join_schema, DFField, DFSchema, JoinType};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -42,18 +36,15 @@ pub mod datatype;
 pub mod expr;
 pub mod pattern;
 pub mod plan;
-pub mod rules;
+mod rules;
+pub use rules::utils as utils;
 pub mod scalar;
 
-use datafusion::datasource::TableProvider;
 use datatype::TokomakDataType;
-use expr::{
-    BetweenExpr, CastExpr, FunctionCall, InListExpr, WindowBuiltinCallFramed,
-    WindowBuiltinCallUnframed,
-};
-use std::collections::HashSet;
-use std::rc::Rc;
 
+use std::collections::HashSet;
+
+///TokomakAnalysis contains datatype and schema caches as well as the udf and udaf registries
 pub struct TokomakAnalysis {
     datatype_cache: HashSet<RefCount<DataType>, fxhash::FxBuildHasher>,
     boolean_dt: RefCount<DataType>,
@@ -77,29 +68,22 @@ impl Default for TokomakAnalysis {
     }
 }
 
-pub fn tokomak_analysis_unexpected_node(
-    parent: &str,
-    expected: &str,
-    node: &TokomakLogicalPlan,
-) -> DataFusionError {
-    DataFusionError::Internal(format!(
-        "[TokomakOptimizer] {} expected {} found {}",
-        parent, expected, node
-    ))
-}
-///Tokomak internal error
-pub fn tint_err(msg: String) -> Result<(), DataFusionError> {
-    Err(DataFusionError::Internal(msg))
-}
+//TODO: Check if Rc would work instead of Arc
+type RefCount<T> = Arc<T>; 
 
 #[derive(Debug, Clone)]
+///Each EClass in the EGraph is assigned a TData. Only supporting nodes such as EList should be marked as None.
+/// All other nodes should be able do derive their data from their children's data.
 pub enum TData {
+    ///Holds a reference counted DataType.
     DataType(RefCount<DataType>),
+    ///Reference counted schema with the fields sorted by name. Never use the column index from these schemas and never use the nullability information
+    /// in the schema in an optimization rule as it is unsound.
     Schema(RefCount<DFSchema>),
+    ///This should only be assigned to supporting nodes such as EList or PList. 
     None,
 }
 
-type RefCount<T> = Arc<T>;
 
 impl TokomakAnalysis {
     fn get_boolean(egraph: &EGraph<TokomakLogicalPlan, Self>) -> TData {
@@ -112,9 +96,9 @@ impl TokomakAnalysis {
         egraph: &EGraph<TokomakLogicalPlan, Self>,
         id: &Id,
     ) -> Option<RefCount<DataType>> {
-        match Self::get_data(egraph, &id) {
+        match Self::get_data(egraph, id) {
             TData::Schema(_) | TData::None => None,
-            TData::DataType(dt) => Some(dt.clone()),
+            TData::DataType(dt) => Some(dt),
         }
     }
 
@@ -124,7 +108,7 @@ impl TokomakAnalysis {
     ) -> Option<RefCount<DFSchema>> {
         match Self::get_data(egraph, &id) {
             TData::DataType(_) | TData::None => None,
-            TData::Schema(s) => Some(s.clone()),
+            TData::Schema(s) => Some(s),
         }
     }
     fn get_projection(
@@ -227,9 +211,9 @@ impl TokomakAnalysis {
         [l, r]: &[Id; 2],
     ) -> TData {
         let ldt = Self::get_datatype(egraph, l)
-            .expect(format!("Binop {} could not get left datatype", op).as_str());
+            .unwrap_or_else(|| panic!("Binop {} could not get left datatype", op));
         let rdt = Self::get_datatype(egraph, r)
-            .expect(format!("Binop {} could not get right datatype", op).as_str());
+            .unwrap_or_else(|| panic!("Binop {} could not get right datatype", op));
         let dt = binary_operator_data_type(&ldt, &op, &rdt).unwrap();
         TData::DataType(Self::check_datatype_cache(egraph, dt))
     }
@@ -286,7 +270,7 @@ impl TokomakAnalysis {
 
     fn make_window(
         egraph: &EGraph<TokomakLogicalPlan, Self>,
-        [input, window_exprs]: &[Id; 2],
+        [_input, window_exprs]: &[Id; 2],
     ) -> TData {
         assert!(egraph[*window_exprs].nodes.len() == 1);
         let aggr_exprs = match &egraph[*window_exprs].nodes[0] {
@@ -323,10 +307,13 @@ impl TokomakAnalysis {
         TData::Schema(s)
     }
 
-    fn make_case_lit(egraph: &EGraph<TokomakLogicalPlan, Self>, case: &CaseLit) -> TData {
+    fn make_case_lit(
+        _egraph: &EGraph<TokomakLogicalPlan, Self>,
+        _case: &CaseLit,
+    ) -> TData {
         TData::None
     }
-    fn make_case_if(egraph: &EGraph<TokomakLogicalPlan, Self>, case: &CaseIf) -> TData {
+    fn make_case_if(_egraph: &EGraph<TokomakLogicalPlan, Self>, _case: &CaseIf) -> TData {
         TData::None
     }
     fn make_impl(
@@ -369,7 +356,7 @@ impl TokomakAnalysis {
 
                 TData::Schema(Self::check_schema_cache(egraph, schema))
             }
-            TokomakLogicalPlan::Union([inputs, alias]) => {
+            TokomakLogicalPlan::Union([inputs, _alias]) => {
                 assert!(egraph[*inputs].nodes.len() == 1);
                 let plan_list = match &egraph[*inputs].nodes[0] {
                     TokomakLogicalPlan::PList(list) => list,
@@ -387,8 +374,8 @@ impl TokomakAnalysis {
             TokomakLogicalPlan::Hash([input, _exprs, _size]) => {
                 Self::get_data(egraph, input)
             }
-            TokomakLogicalPlan::RoundRobinBatch([input, size]) => get_data(input),
-            TokomakLogicalPlan::Sort([input, sort_exprs]) => get_data(input),
+            TokomakLogicalPlan::RoundRobinBatch([input, _size]) => get_data(input),
+            TokomakLogicalPlan::Sort([input, _sort_exprs]) => get_data(input),
 
             TokomakLogicalPlan::Plus(b) => make_binop(Operator::Plus, b),
             TokomakLogicalPlan::Minus(b) => make_binop(Operator::Minus, b),
@@ -580,7 +567,6 @@ impl TokomakAnalysis {
             | TokomakLogicalPlan::WindowFrame(_)
             | TokomakLogicalPlan::AggregateUDF(_)
             | TokomakLogicalPlan::Values(_)
-            | TokomakLogicalPlan::Schema(_)
             | TokomakLogicalPlan::Type(_)
             | TokomakLogicalPlan::JoinKeys(_)
             | TokomakLogicalPlan::Str(_)
@@ -588,9 +574,11 @@ impl TokomakAnalysis {
         };
         data
     }
+    //TODO: implement invariant check
+    #[allow(dead_code)]
     fn test_invariants(
-        egraph: &EGraph<TokomakLogicalPlan, Self>,
-        enode: &TokomakLogicalPlan,
+        _egraph: &EGraph<TokomakLogicalPlan, Self>,
+        _enode: &TokomakLogicalPlan,
     ) {
         todo!()
     }
@@ -675,7 +663,6 @@ impl<T:CustomTokomakAnalysis> TokomakAnalysis<T>{
 */
 use std::fmt::Debug;
 
-use crate::expr::SortExpr;
 /*
 #[derive(Debug)]
 pub struct TokomakAnalysisData{
@@ -754,6 +741,7 @@ impl CustomTokomakAnalysis for (){
 
 */
 
+///The equality graph based optimizer
 pub struct Tokomak {
     rules: Vec<Rewrite<TokomakLogicalPlan, TokomakAnalysis>>,
     added_builtins: BuiltinRulesFlag,
@@ -762,6 +750,7 @@ pub struct Tokomak {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+///Flag that can be used to enable prebuilt rule sets
 pub struct BuiltinRulesFlag(pub(crate) u32);
 impl std::ops::BitOr for BuiltinRulesFlag {
     type Output = BuiltinRulesFlag;
@@ -786,16 +775,17 @@ impl std::ops::BitOrAssign for BuiltinRulesFlag {
 
 const ALL_BUILTIN_RULES: [BuiltinRulesFlag; 2] =
     [EXPR_SIMPLIFICATION_RULES, PLAN_SIMPLIFICATION_RULES];
-
+///Flag to enable expression simplification rules
 pub const EXPR_SIMPLIFICATION_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0x1);
+///Flag to enable plan simplification rules
 pub const PLAN_SIMPLIFICATION_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0x2);
 const NO_RULES: BuiltinRulesFlag = BuiltinRulesFlag(0);
-
+///Flag that will enable all builtin rules
 pub const ALL_RULES: BuiltinRulesFlag = {
     let mut idx = 0;
     let mut flag = 0;
     while idx < ALL_BUILTIN_RULES.len() {
-        flag |=  ALL_BUILTIN_RULES[idx].0;
+        flag |= ALL_BUILTIN_RULES[idx].0;
         idx += 1;
     }
     BuiltinRulesFlag(flag)
@@ -812,72 +802,19 @@ impl Default for BuiltinRulesFlag {
     }
 }
 
-pub struct TokomakScheduler {
-    period_length: usize,
-    //default_match_limit: usize,
-    //default_ban_length: usize,
-    //plan_rules: indexmap::IndexMap<Symbol, RuleStats, fxhash::FxBuildHasher>,
-    //expr_rules: indexmap::IndexMap<Symbol, RuleStats, fxhash::FxBuildHasher>,
-}
-impl TokomakScheduler {
-    fn new() -> Self {
-        TokomakScheduler { period_length: 3 }
-    }
-}
-
-#[derive(Debug)]
-struct RuleStats {
-    times_applied: usize,
-    banned_until: usize,
-    times_banned: usize,
-    match_limit: usize,
-    ban_length: usize,
-}
-
-impl<A: Analysis<TokomakLogicalPlan>> RewriteScheduler<TokomakLogicalPlan, A>
-    for TokomakScheduler
-{
-    fn can_stop(&mut self, _iteration: usize) -> bool {
-        true
-    }
-
-    fn search_rewrite<'a>(
-        &mut self,
-        iteration: usize,
-        egraph: &EGraph<TokomakLogicalPlan, A>,
-        rewrite: &'a Rewrite<TokomakLogicalPlan, A>,
-    ) -> Vec<SearchMatches<'a, TokomakLogicalPlan>> {
-        let is_plan_iter = iteration % self.period_length == 0;
-        self.period_length += 1;
-        if is_plan_iter {
-            if !rewrite.name.as_str().starts_with("plan") {
-                return vec![];
-            }
-        } else {
-            if !rewrite.name.as_str().starts_with("expr") {
-                return vec![];
-            }
-        }
-        rewrite.search(egraph)
-    }
-
-    fn apply_rewrite(
-        &mut self,
-        _iteration: usize,
-        egraph: &mut EGraph<TokomakLogicalPlan, A>,
-        rewrite: &Rewrite<TokomakLogicalPlan, A>,
-        matches: Vec<SearchMatches<TokomakLogicalPlan>>,
-    ) -> usize {
-        rewrite.apply(egraph, &matches).len()
-    }
-}
 #[derive(Default)]
+///Allows setting limits on resource usage for the TokomakOptimzer on a per run basis.
 pub struct RunnerSettings {
+    ///The number of iterations that the optimizer will run. Defaults to 30.
     pub iter_limit: Option<usize>,
+    ///The maximum allowed number of nodes in the egraph. Defaults to 10,000
     pub node_limit: Option<usize>,
+    ///The maximum time that each full run is allowed to take. Note that this is checked at the end of an iteration so the optimizer can exceed this by the 
+    /// length of a full iteration. Defaults to 5 seconds.
     pub time_limit: Option<Duration>,
 }
 impl RunnerSettings {
+    #[allow(missing_docs)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -898,23 +835,23 @@ impl RunnerSettings {
         runner
         //.with_scheduler(SimpleScheduler)
     }
-
+    ///Sets the iteration limit
     pub fn with_iter_limit(&mut self, iter_limit: usize) -> &mut Self {
         self.iter_limit = Some(iter_limit);
         self
     }
-
+    ///Sets the node limit
     pub fn with_node_limit(&mut self, node_limit: usize) -> &mut Self {
         self.node_limit = Some(node_limit);
         self
     }
-
+    ///Sets the time limit
     pub fn with_time_limit(&mut self, time_limit: Duration) -> &mut Self {
         self.time_limit = Some(time_limit);
         self
     }
 
-    pub fn optimize_plan<C: CostFunction<TokomakLogicalPlan>>(
+    fn optimize_plan<C: CostFunction<TokomakLogicalPlan>>(
         &self,
         root: Id,
         egraph: EGraph<TokomakLogicalPlan, TokomakAnalysis>,
@@ -959,13 +896,7 @@ impl RunnerSettings {
         info!("Took {:.2}s selecting the best plan", elapsed.as_secs_f64());
         info!("The lowest cost was {:?}", cost);
         let start = Instant::now();
-        let plan = convert_to_df_plan(
-            &plan,
-            &runner.egraph.analysis,
-            &eclass_ids,
-            &runner.egraph,
-        )
-        .unwrap();
+        let plan = convert_to_df_plan(&plan, &eclass_ids, &runner.egraph).unwrap();
         let elapsed = start.elapsed();
         info!(
             "Took {:.2}s converting back to datafusion logical plan",
@@ -974,7 +905,6 @@ impl RunnerSettings {
         Ok(plan)
     }
 }
-
 
 impl OptimizerRule for Tokomak {
     fn optimize(
@@ -1040,10 +970,23 @@ impl Tokomak {
             }
         }
     }
+    ///Adds builtin rules to the optimizer only if the filter Fn returns true.
+    pub fn add_filtered_builtin_rules<F: Fn(&Rewrite<TokomakLogicalPlan, TokomakAnalysis>)->bool>(&mut self, builtin_rules: BuiltinRulesFlag, filter: F){
+        for rule in ALL_BUILTIN_RULES {
+            //If the current flag is set and the ruleset has not been added to optimizer already
+            if builtin_rules.is_set(rule) && !self.added_builtins.is_set(rule) {
+                match rule {
+                    EXPR_SIMPLIFICATION_RULES => self.add_filtered_expr_simplification_rules(&filter),
+                    PLAN_SIMPLIFICATION_RULES => self.add_filtered_plan_simplification_rules(&filter),
+                    _ => panic!("Found invalid rule flag"),
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
-pub struct TokomakCost {
+struct TokomakCost {
     plan_height: u32,
     cost: u64,
 }
@@ -1059,8 +1002,7 @@ impl PartialOrd for TokomakCost {
 }
 
 struct DefaultCostFunc;
-const PLAN_NODE_COST: u64 = 0x1 << 20; //1_000_000;
-const EXPR_NODE_COST: u64 = 0x1 << 10;
+const PLAN_NODE_COST: u64 = 0x1 << 20;
 impl CostFunction<TokomakLogicalPlan> for DefaultCostFunc {
     type Cost = TokomakCost;
 
@@ -1084,7 +1026,7 @@ impl CostFunction<TokomakLogicalPlan> for DefaultCostFunc {
         let mut cost = enode.fold(
             TokomakCost {
                 cost: 0,
-                plan_height: plan_height,
+                plan_height,
             },
             |mut sum, id| {
                 let child_cost = costs(id);
@@ -1127,7 +1069,6 @@ impl CostFunction<TokomakLogicalPlan> for DefaultCostFunc {
             TokomakLogicalPlan::RoundRobinBatch(_) => 0,
             //These are supporting
             TokomakLogicalPlan::Table(_)
-            | TokomakLogicalPlan::Schema(_)
             | TokomakLogicalPlan::Values(_)
             | TokomakLogicalPlan::TableProject(_)
             | TokomakLogicalPlan::Str(_)
@@ -1199,10 +1140,15 @@ impl CostFunction<TokomakLogicalPlan> for DefaultCostFunc {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///Sort spec of SortExpr
 pub enum SortSpec {
+    ///Ascending
     Asc,
+    ///Descending
     Desc,
+    ///Ascending nulls first
     AscNullsFirst,
+    ///Descending nulls first
     DescNullsFirst,
 }
 
@@ -1234,14 +1180,10 @@ impl Display for SortSpec {
     }
 }
 
-pub type Identifier = Symbol;
-#[derive(Debug)]
-pub enum UDF {
-    Scalar(Arc<ScalarUDF>),
-    Aggregate(Arc<AggregateUDF>),
-}
+
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+///Name of UDF. 
 pub struct UDFName(pub Symbol);
 
 impl Display for UDFName {
@@ -1269,7 +1211,7 @@ impl FromStr for UDFName {
     }
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-
+///Name of Scalar UDF. Represented in the egraph is udf[<name>]. For the udf pow this would be udf[pow]
 pub struct ScalarUDFName(pub Symbol);
 impl FromStr for ScalarUDFName {
     type Err = ();
@@ -1300,7 +1242,7 @@ impl Display for ScalarUDFName {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-
+///Represented in the egraph as udaf[<name>]. For the udaf sum_times_2 this would be udaf[sum_times_2]
 pub struct UDAFName(pub Symbol);
 impl FromStr for UDAFName {
     type Err = ();

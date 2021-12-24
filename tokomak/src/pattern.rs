@@ -1,19 +1,13 @@
-use crate::{plan::TokomakLogicalPlan, Tokomak, TokomakAnalysis};
-use datafusion::{arrow::datatypes::DataType, error::DataFusionError};
+//!Contains some convienience functions for creating rewrites
+
+use crate::plan::TokomakLogicalPlan;
+use datafusion::error::DataFusionError;
 use egg::{
-    Analysis, Applier, Condition, ConditionalApplier, EClass, EGraph, FromOp, Id,
-    Language, LanguageChildren, RecExpr, RecExprParseError, Rewrite, SearchMatches,
-    Searcher, Subst, Var,
-};
-use log::debug;
-use std::{
-    cmp::Ordering,
-    collections::{BinaryHeap, HashSet},
-    marker::PhantomData,
-    mem::{discriminant, Discriminant},
-    str::FromStr,
+    Analysis, Applier, Condition, ConditionalApplier, EGraph, Id, Rewrite, Subst, Var,
 };
 
+use std::{marker::PhantomData, str::FromStr};
+///Searches using the pattern in search. Then runs transform. All vars added to the Subst by the transform must be in bound_vars.
 pub fn transforming_pattern<A, TR>(
     name: &str,
     search: &str,
@@ -42,16 +36,12 @@ where
             ))
         })?;
     let applier = ModifyingApplier::new(name, inner_applier, transform, bound_vars)?;
-    let res =
-        Rewrite::<TokomakLogicalPlan, A>::new(name, searcher, applier).map_err(|e| {
-            DataFusionError::Plan(format!(
-                "Rule '{}' could not create rewrite: {}",
-                name, e
-            ))
-        });
-    return res;
-}
 
+    Rewrite::<TokomakLogicalPlan, A>::new(name, searcher, applier).map_err(|e| {
+        DataFusionError::Plan(format!("Rule '{}' could not create rewrite: {}", name, e))
+    })
+}
+///Creates to rules one search->applier and the other from applier->searcher.
 pub fn twoway_pattern<A: Analysis<TokomakLogicalPlan>>(
     name: &str,
     search: &str,
@@ -92,7 +82,7 @@ pub fn twoway_pattern<A: Analysis<TokomakLogicalPlan>>(
             })?;
     Ok([forwards, backwards])
 }
-
+///Creates a oneway rule search->applier
 pub fn pattern<A: Analysis<TokomakLogicalPlan>>(
     name: &str,
     search: &str,
@@ -114,7 +104,7 @@ pub fn pattern<A: Analysis<TokomakLogicalPlan>>(
         DataFusionError::Plan(format!("Rule '{}' could not create rewrite: {}", name, e))
     })
 }
-
+///Creates a Rewrite that only applies the applier pattern when condition returns true
 pub fn conditional_rule<
     A: Analysis<TokomakLogicalPlan>,
     COND: Condition<TokomakLogicalPlan, A> + 'static + Send + Sync,
@@ -142,7 +132,7 @@ pub fn conditional_rule<
     })
 }
 
-pub struct ModifyingApplier<A, APP, TR>
+struct ModifyingApplier<A, APP, TR>
 where
     A: Analysis<TokomakLogicalPlan>,
     APP: Applier<TokomakLogicalPlan, A>,
@@ -159,7 +149,7 @@ where
     APP: Applier<TokomakLogicalPlan, A>,
     TR: Fn(&mut EGraph<TokomakLogicalPlan, A>, &mut Subst) -> Option<()>,
 {
-    pub fn new(
+    fn new(
         rule_name: &str,
         inner_applier: APP,
         transform: TR,
@@ -167,10 +157,11 @@ where
     ) -> Result<Self, DataFusionError> {
         use std::collections::HashMap;
         use std::fmt::Write;
-        let mut bound_set = bound_vars
-            .iter()
-            .map(|v| (v.clone(), false))
-            .collect::<HashMap<Var, bool, fxhash::FxBuildHasher>>();
+        let mut bound_set = bound_vars.iter().map(|v| (*v, false)).collect::<HashMap<
+            Var,
+            bool,
+            fxhash::FxBuildHasher,
+        >>();
         let mut inner_bound_vars = inner_applier.vars();
         let mut unbound_vars = Vec::new();
         for i in (0..inner_bound_vars.len()).rev() {

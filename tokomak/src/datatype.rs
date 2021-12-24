@@ -1,3 +1,7 @@
+//! This module contains TokomakDataType and the conversion functions TokomakDatType<->DataType
+
+
+
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::error::DataFusionError;
 use egg::*;
@@ -6,6 +10,8 @@ use std::str::FromStr;
 
 define_language! {
     #[derive(Copy)]
+    ///Representation of Tokomak datatype. Not all datatypess are supported yet.
+    #[allow(missing_docs)]
     pub enum TokomakDataType {
         "date32" = Date32,
         "date64" = Date64,
